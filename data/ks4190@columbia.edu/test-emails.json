@@ -1,0 +1,58 @@
+{
+  "emails": [
+    {
+      "id": "test-email-1",
+      "subject": "Homework #3 Extension",
+      "from": "Joe Smith <arigold@columbia.edu>",
+      "date": "2025-08-27T22:21:23.000Z",
+      "body": "Hi Karthik,\n\nI wanted to reach out to ask if I could have an extension on Homework #3 - I have been feeling sick this weekend and would sincerely appreciate the extra time.\n\nThanks,\nAri",
+      "snippet": "I wanted to reach out to ask if I could have an extension on Homework #3",
+      "category": "Teaching & Student Support"
+    },
+    {
+      "id": "test-email-2",
+      "subject": "Homework #5 Link",
+      "from": "Dana Gordon <danagordon@columbia.edu>",
+      "date": "2025-08-27T22:21:23.000Z",
+      "body": "Hi Karthik,\n\nI forgot to include my link in my coursework submission for Homework #5, I've pasted it here.\n\nThanks,\nDana",
+      "snippet": "I forgot to include my link in my coursework submission for Homework #5",
+      "category": "Teaching & Student Support"
+    },
+    {
+      "id": "test-email-3",
+      "subject": "homework 5!",
+      "from": "Johnny Drama <johnnydrama@columbia.edu>",
+      "date": "2025-08-27T22:21:23.000Z",
+      "body": "ahh coursework dropped my link for Homework #5, I've linked it here for you!",
+      "snippet": "ahh coursework dropped my link for Homework #5, I've linked it here for you!",
+      "category": "Teaching & Student Support"
+    },
+    {
+      "id": "test-email-4",
+      "subject": "Religious observance and HW5 deadline",
+      "from": "Vinnie Chase <vinniechase@columbia.edu>",
+      "date": "2025-08-27T22:21:23.000Z",
+      "body": "Hi Karthik,\n\nDue to a religious holiday, I won't be able to work from Friday sundown to Saturday night. Could I submit HW5 on Sunday without penalty? Happy to provide documentation if needed.\n\nBest,\nVince",
+      "snippet": "Due to a religious holiday, I won't be able to work from Friday sundown to Saturday night",
+      "category": "Teaching & Student Support"
+    },
+    {
+      "id": "test-email-5",
+      "subject": "Extension request for Project 1 (recruiting)",
+      "from": "Turtle <turtle@columbia.edu>",
+      "date": "2025-08-27T22:21:23.000Z",
+      "body": "Hi Karthik,\n\nI have three onsite interviews next week and I'm worried about meeting the project deadline. Would a 48-hour extension be possible? If not, could I use two late days on the project?\nThank you,\n\nTurtle",
+      "snippet": "I have three onsite interviews next week and I'm worried about meeting the project deadline",
+      "category": "Teaching & Student Support"
+    },
+    {
+      "id": "test-email-6",
+      "subject": "Post Operation Check-In",
+      "from": "Lionel Metz <lionelmetz@ucsf.edu>",
+      "date": "2025-08-27T22:21:23.000Z",
+      "body": "Hi Karthik,\n\nI just wanted to check in to see how your symptoms were. Please schedule an appointment with me later this week for us to chat.\n\nBest,\nDr. Metz",
+      "snippet": "I just wanted to check in to see how your symptoms were",
+      "category": "General & Administrative"
+    }
+  ]
+}
