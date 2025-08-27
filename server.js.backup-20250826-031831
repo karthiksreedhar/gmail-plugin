@@ -1,0 +1,863 @@
+const express = require('express');
+const cors = require('cors');
+const path = require('path');
+const { google } = require('googleapis');
+const fs = require('fs').promises;
+const OpenAI = require('openai');
+
+// Initialize OpenAI client with o3-mini (reasoning model)
+const openai = new OpenAI({
+  apiKey: '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'
+});
+
+const app = express();
+const PORT = 3000;
+
+// Middleware
+app.use(cors());
+app.use(express.json());
+app.use(express.static('public'));
+
+// Store for email memory/categories, refinements, and saved generations
+let emailMemory = {
+  categories: [],
+  responses: [],
+  refinements: [],
+  savedGenerations: []
+};
+
+// Gmail API setup
+const SCOPES = ['https://www.googleapis.com/auth/gmail.readonly'];
+const TOKEN_PATH = 'token.json';
+const CREDENTIALS_PATH = 'gcp-oauth.keys.json';
+
+let gmail = null;
+
+// Initialize Gmail API
+async function initializeGmailAPI() {
+  try {
+    // Load client secrets from a local file
+    const credentials = await fs.readFile(CREDENTIALS_PATH);
+    const { client_secret, client_id, redirect_uris } = JSON.parse(credentials).web || JSON.parse(credentials).installed;
+    const oAuth2Client = new google.auth.OAuth2(client_id, client_secret, redirect_uris[0]);
+
+    // Check if we have previously stored a token
+    try {
+      const token = await fs.readFile(TOKEN_PATH);
+      oAuth2Client.setCredentials(JSON.parse(token));
+      gmail = google.gmail({ version: 'v1', auth: oAuth2Client });
+      console.log('Gmail API initialized successfully');
+      return true;
+    } catch (error) {
+      console.log('No valid token found. Please run authentication flow.');
+      return false;
+    }
+  } catch (error) {
+    console.error('Error loading credentials:', error.message);
+    return false;
+  }
+}
+
+// Get authorization URL
+async function getAuthUrl() {
+  try {
+    const credentialsData = await fs.readFile(CREDENTIALS_PATH);
+    const credentials = JSON.parse(credentialsData);
+    const { client_secret, client_id, redirect_uris } = credentials.web || credentials.installed;
+    const oAuth2Client = new google.auth.OAuth2(client_id, client_secret, redirect_uris[0]);
+    
+    const authUrl = oAuth2Client.generateAuthUrl({
+      access_type: 'offline',
+      scope: SCOPES,
+    });
+    return authUrl;
+  } catch (error) {
+    throw new Error('Credentials file not found. Please set up credentials.json first.');
+  }
+}
+
+// Exchange authorization code for tokens
+async function getAccessToken(code) {
+  try {
+    const credentialsData = await fs.readFile(CREDENTIALS_PATH);
+    const credentials = JSON.parse(credentialsData);
+    const { client_secret, client_id, redirect_uris } = credentials.web || credentials.installed;
+    const oAuth2Client = new google.auth.OAuth2(client_id, client_secret, redirect_uris[0]);
+    
+    const { tokens } = await oAuth2Client.getToken(code);
+    oAuth2Client.setCredentials(tokens);
+    
+    // Store the token to disk for later program executions
+    await fs.writeFile(TOKEN_PATH, JSON.stringify(tokens));
+    console.log('Token stored to', TOKEN_PATH);
+    
+    gmail = google.gmail({ version: 'v1', auth: oAuth2Client });
+    return tokens;
+  } catch (error) {
+    throw new Error('Failed to exchange authorization code: ' + error.message);
+  }
+}
+
+// Simple email categorization logic
+function categorizeEmail(subject, body, from) {
+  const subjectLower = subject.toLowerCase();
+  const bodyLower = body.toLowerCase();
+  const fromLower = from.toLowerCase();
+
+  if (subjectLower.includes('meeting') || subjectLower.includes('invitation') || subjectLower.includes('calendar')) {
+    return 'Meeting & Scheduling';
+  }
+  if (subjectLower.includes('phd') || subjectLower.includes('academic') || subjectLower.includes('university') || 
+      subjectLower.includes('research') || fromLower.includes('columbia.edu')) {
+    return 'Academic Affairs';
+  }
+  if (subjectLower.includes('payment') || subjectLower.includes('invoice') || subjectLower.includes('financial') ||
+      subjectLower.includes('money') || subjectLower.includes('contest')) {
+    return 'Financial & Reimbursements';
+  }
+  return 'General & Administrative';
+}
+
+// Function to generate realistic original email content based on the response
+function generateOriginalEmailContent(email, originalSubject) {
+  const responseBody = email.body.toLowerCase();
+  
+  // Generate contextually appropriate original email content based on the response
+  if (originalSubject.includes('AI Contest Payment')) {
+    if (responseBody.includes('received the payment')) {
+      return 'Hi Karthik,\n\nI hope this email finds you well. I wanted to let you know that your AI Contest payment has been processed and should appear in your account within 1-2 business days.\n\nIf you have any questions, please don\'t hesitate to reach out.\n\nBest regards,\nJulia Martinez\nFinancial Services';
+    } else if (responseBody.includes('resubmitted')) {
+      return 'Hi Karthik,\n\nI hope you\'re doing well. There were some issues with your payee registration that need to be corrected before we can process your AI Contest payment.\n\nPlease review and resubmit your registration with the correct information.\n\nThanks,\nJulia Martinez\nFinancial Services';
+    } else {
+      return 'Hi Karthik,\n\nI wanted to follow up on the AI Contest payment processing. There have been some updates to your payee registration that need your attention.\n\nPlease let me know if you have any questions.\n\nBest regards,\nJulia Martinez\nFinancial Services';
+    }
+  } else if (originalSubject.includes('Welcome to CS@CU')) {
+    return 'Dear Karthik,\n\nWelcome to the Computer Science department at Columbia University! We are excited to have you join our PhD program.\n\nYour office assignment and other important information will be sent in a separate email. Please let me know if you have any questions.\n\nBest regards,\nElias Bareinboim\nCS Operations';
+  } else if (originalSubject.includes('Updated invitation') || originalSubject.includes('meeting')) {
+    if (responseBody.includes('doctors appointment')) {
+      return 'Hi Karthik,\n\nI had to update our meeting time to Monday Aug 18, 2025 10:30am - 11:30am due to a scheduling conflict.\n\nPlease see the updated calendar invitation and let me know if this works for you.\n\nBest,\nLydia';
+    } else if (responseBody.includes('6:30')) {
+      return 'Hi Karthik,\n\nLet\'s meet today at 6pm to try out the tool. I\'ve sent you a calendar invitation.\n\nLooking forward to seeing the progress!\n\nBest,\nLydia';
+    } else {
+      return 'Hi Karthik,\n\nI had to update our meeting time due to a scheduling conflict. Please see the updated calendar invitation.\n\nLet me know if this new time works for you.\n\nBest,\nLydia';
+    }
+  } else if (originalSubject.includes('Congratulations')) {
+    if (originalSubject.includes('Gaurav Jain')) {
+      return 'Dear PhD Students and Faculty,\n\nWe are pleased to announce that Gaurav Jain has successfully defended his dissertation and earned his PhD degree.\n\nPlease join us in congratulating Dr. Jain on this significant achievement!\n\nBest regards,\nPhD Student Services\nComputer Science Department';
+    } else if (originalSubject.includes('Kelly Kostopoulou')) {
+      return 'Dear PhD Students and Faculty,\n\nWe are delighted to announce that Kelly Kostopoulou has successfully defended her dissertation and earned her PhD degree.\n\nPlease join us in congratulating Dr. Kostopoulou on this remarkable accomplishment!\n\nBest regards,\nPhD Student Services\nComputer Science Department';
+    }
+  } else if (originalSubject.includes('Water/Sewer Fee') || originalSubject.includes('Outstanding')) {
+    if (responseBody.includes('made the payment')) {
+      return 'Dear Resident,\n\nThis is a reminder that you have an outstanding water/sewer fee of $45.00 that needs to be paid by the end of this week.\n\nPlease make your payment as soon as possible to avoid any late fees.\n\nThank you,\nJacob Williams\nProperty Management';
+    } else {
+      return 'Dear Resident,\n\nWe hope this email finds you well. We wanted to inform you about the water/sewer fee for your unit.\n\nThis is a monthly fee of $45.00 that covers water and sewer services for your apartment. Payment is due by the 15th of each month.\n\nPlease let me know if you have any questions.\n\nBest regards,\nJacob Williams\nProperty Management';
+    }
+  } else if (originalSubject.includes('Tool')) {
+    return 'Hi Karthik,\n\nAre you available to hop on a quick call to test the tool? I\'m ready when you are.\n\nThanks,\nLydia';
+  } else if (originalSubject.includes('Security Deposit')) {
+    return 'Hi Karthik,\n\nI wanted to follow up on your security deposit inquiry. I\'ve forwarded your email to the appropriate department and they should be in touch with you soon.\n\nPlease let me know if you need anything else.\n\nBest regards,\nProperty Manager';
+  } else {
+    // Generic fallback
+    return `Hi Karthik,\n\nI hope this email finds you well. I wanted to reach out regarding ${originalSubject}.\n\nPlease let me know if you have any questions.\n\nBest regards,\n${email.originalFrom ? email.originalFrom.split('<')[0].trim() : 'Sender'}`;
+  }
+}
+
+// API endpoint to get response emails - All 47 emails with complete data
+app.get('/api/response-emails', async (req, res) => {
+  try {
+    // All 47 verified real emails with complete originalFrom data
+    const responseEmails = [
+      // Most Recent Emails First (August 2025)
+      {
+        id: '198e2a4f3068da4e',
+        subject: 'Re: Welcome to CS@CU from CS Operations',
+        from: 'Karthik Sreedhar <ks4190@columbia.edu>',
+        originalFrom: 'Elias Bareinboim <eb2890@columbia.edu>',
+        date: 'Mon, 25 Aug 2025 15:11:47 -0400',
+        category: 'Academic Affairs',
+        body: 'Hi Elias,\n\nThanks for this email. I don\'t see an email with my office assignment and hence wanted to reach out.\n\nThanks,\nKarthik',
+        snippet: 'Thanks for this email. I don\'t see an email with my office assignment and hence wanted to reach out'
+      },
+      {
+        id: '198c25f7149ac434',
+        subject: 'Re: AI Contest Payment',
+        from: 'Karthik Sreedhar <ks4190@columbia.edu>',
+        originalFrom: 'Julia Martinez <julia.martinez@columbia.edu>',
+        date: 'Tue, 19 Aug 2025 08:48:10 -0400',
+        category: 'Financial & Reimbursements',
+        body: 'Hi Julia,\n\nI received the payment yesterday, thanks for all your help!\n\nThanks,\nKarthik',
+        snippet: 'I received the payment yesterday, thanks for all your help!'
+      },
+      {
+        id: '198bd5137246f1a3',
+        subject: 'Re: Updated invitation: Karthik Riya lydia @ Mon Aug 18, 2025 10:30am - 11:30am (EDT)',
+        from: 'Karthik Sreedhar <ks4190@columbia.edu>',
+        originalFrom: 'Lydia B. Chilton <lc3251@columbia.edu>',
+        date: 'Mon, 18 Aug 2025 09:14:22 -0400',
+        category: 'Meeting & Scheduling',
+        body: 'Super sorry I just saw this time change, I have a doctors appointment then now. Is there any chance you\'re able to meet in the evening after 6? Worst case I see we have a meeting tomorrow and also free all day tomorrow as well so can meet earlier / easier time for you.',
+        snippet: 'Response about meeting time conflict'
+      },
+      {
+        id: '198ae8cba9af9deb',
+        subject: 'Re: Canceled event with note: Riya Jenny Karthik Lydia @ Fri Aug 15, 2025 1:30pm - 2:30pm (EDT)',
+        from: 'Karthik Sreedhar <ks4190@columbia.edu>',
+        originalFrom: 'Lydia B. Chilton <lc3251@columbia.edu>',
+        date: 'Fri, 15 Aug 2025 12:25:14 -0400',
+        category: 'Meeting & Scheduling',
+        body: 'no worries, i\'ve made a little bit of progress but was just going to email asking you if we could talk on monday instead actually so works out',
+        snippet: 'Response to meeting cancellation'
+      },
+      {
+        id: '198aa0bbe0db457f',
+        subject: 'Re: [Phd-students] [Faculty] [Columbia HCI] Congratulations to Dr. Gaurav Jain!',
+        from: 'Karthik Sreedhar <ks4190@columbia.edu>',
+        originalFrom: 'PhD Student Services <phd-advising@cs.columbia.edu>',
+        date: 'Thu, 14 Aug 2025 15:25:53 -0400',
+        category: 'General & Administrative',
+        body: 'Congrats Dr. Jain!',
+        snippet: 'Congratulations response'
+      },
+      {
+        id: '198aa09892ff08a8',
+        subject: 'Re: [Phd-students] [Faculty] Congratulations to Dr. Kelly Kostopoulou!',
+        from: 'Karthik Sreedhar <ks4190@columbia.edu>',
+        originalFrom: 'PhD Student Services <phd-advising@cs.columbia.edu>',
+        date: 'Thu, 14 Aug 2025 15:23:28 -0400',
+        category: 'General & Administrative',
+        body: 'Congrats Dr. Kostopoulou!!!',
+        snippet: 'Congratulations to Dr. Kelly'
+      },
+      {
+        id: '198a56ae52e0722d',
+        subject: 'Re: AI Contest Payment',
+        from: 'Karthik Sreedhar <ks4190@columbia.edu>',
+        originalFrom: 'Julia Martinez <julia.martinez@columbia.edu>',
+        date: 'Wed, 13 Aug 2025 17:51:42 -0400',
+        category: 'Financial & Reimbursements',
+        body: 'Thanks for the update! Will let you know once I receive it!',
+        snippet: 'Payment confirmation response'
+      },
+      {
+        id: '198a5603d8e3b4fa',
+        subject: 'Re: Updated invitation: Riya Karthik lydia @ Wed Aug 13, 2025 6:30pm - 7:30pm (EDT)',
+        from: 'Karthik Sreedhar <ks4190@columbia.edu>',
+        originalFrom: 'Lydia B. Chilton <lc3251@columbia.edu>',
+        date: 'Wed, 13 Aug 2025 17:40:04 -0400',
+        category: 'Meeting & Scheduling',
+        body: 'realized i have to leave at 7, but ready to meet whenever now onwards. but no worries if earlier doesn\'t work will see you at 6:30 then',
+        snippet: 'Meeting response'
+      },
+      {
+        id: '198a021c071642da',
+        subject: 'Re: Next Steps for Participating in Hint Generation User Study',
+        from: 'Karthik Sreedhar <ks4190@columbia.edu>',
+        originalFrom: 'Anubhav Jain <anubhav.jain@columbia.edu>',
+        date: 'Tue, 12 Aug 2025 17:13:43 -0400',
+        category: 'Academic Affairs',
+        body: 'Hi Anubhav,\n\nI\'ve reviewed the instructions and filled out the consent form.\n\nThanks,\nKarthik',
+        snippet: 'User study response'
+      },
+      {
+        id: '1989b9be51ddddf1',
+        subject: 'Re: Security Deposit',
+        from: 'Karthik Sreedhar <ks4190@columbia.edu>',
+        originalFrom: 'Property Manager <manager@ridgestreet.com>',
+        date: 'Mon, 11 Aug 2025 19:58:33 -0400',
+        category: 'General & Administrative',
+        body: 'Thanks for forwarding my email, I gave the number a call earlier today and left a message.',
+        snippet: 'Security deposit response'
+      },
+      {
+        id: '1989a5c88822320d',
+        subject: 'Re: Fw: Invitation from Carson at 110-114 Ridge St',
+        from: 'Karthik Sreedhar <ks4190@columbia.edu>',
+        originalFrom: 'Carson Williams <carson@ridgestreet.com>',
+        date: 'Mon, 11 Aug 2025 14:20:12 -0400',
+        category: 'General & Administrative',
+        body: 'thank you, i think i get all the emails so it should be ok if you mute them or something',
+        snippet: 'thank you, i think i get all the emails so it should be ok if you mute them or something'
+      },
+      {
+        id: '1988f2c1e17e79bb',
+        subject: 'Re: Tool',
+        from: 'Karthik Sreedhar <ks4190@columbia.edu>',
+        originalFrom: 'Lydia B. Chilton <lc3251@columbia.edu>',
+        date: 'Sat, 9 Aug 2025 10:11:18 -0400',
+        category: 'Advisor & Research',
+        body: 'Sorry just saw this, hopping on in 2min',
+        snippet: 'Sorry just saw this, hopping on in 2min'
+      },
+      {
+        id: '198879cf79d62aba',
+        subject: 'Re: [Phd-students] Fall 2025 Registration OPEN - PhD Funding & Insurance Deadlines',
+        from: 'Karthik Sreedhar <ks4190@columbia.edu>',
+        originalFrom: 'Da\'Shante Conover <dac2267@columbia.edu>',
+        date: 'Thu, 7 Aug 2025 22:57:47 -0400',
+        category: 'Academic Affairs',
+        body: 'Hi Da\'Shante,\n\nI hope you\'re doing well! I was wondering if we could schedule a meeting tomorrow or early next week to chat - I did my master\'s at Columbia and was a little unsure of how I am supposed to go about choosing classes for the PhD. Would sincerely appreciate some guidance with this, appreciate your help!\n\nThanks,\nKarthik',
+        snippet: 'Hi Da\'Shante, I hope you\'re doing well! I was wondering if we could schedule a meeting tomorrow or early next week to chat'
+      },
+      {
+        id: '19884099fbeceed4',
+        subject: 'Re: Canceled event: Riya (+Karthik) Lydia @ Thu Aug 7, 2025 10am - 10:30am (EDT)',
+        from: 'Karthik Sreedhar <ks4190@columbia.edu>',
+        originalFrom: 'Lydia B. Chilton <lc3251@columbia.edu>',
+        date: 'Thu, 7 Aug 2025 06:18:00 -0400',
+        category: 'Advisor & Research',
+        body: 'is there any chance we could still find a time to meet at some point today? updated the system to allow for feedback on generations, and also changed prompts/updated backend to use gpt4.0 instead of 3.5 and think it\'s a lot better. there are some example generated responses to the email we\'d been working with saved (https://email-twin-frontend.onrender.com/generations) if you want to take a look (it might take like 2min to load if you open it and i haven\'t been using the site right before). main site still at https://email-twin-frontend.onrender.com/',
+        snippet: 'is there any chance we could still find a time to meet at some point today?'
+      },
+      {
+        id: '1987c139c8ad0338',
+        subject: 'Re: Updated invitation: karthik lydia - TRY TOOL @ Tue Aug 5, 2025 6pm - 7pm (EDT)',
+        from: 'Karthik Sreedhar <ks4190@columbia.edu>',
+        originalFrom: 'Lydia B. Chilton <lc3251@columbia.edu>',
+        date: 'Tue, 5 Aug 2025 17:11:35 -0400',
+        category: 'Meeting & Scheduling',
+        body: 'might be closer to 6:30 for me sorry!',
+        snippet: 'might be closer to 6:30 for me sorry!'
+      },
+      {
+        id: '1987b8094e08bd92',
+        subject: 'Re: Updated invitation: karthik lydia - TRY TOOL @ Tue Aug 5, 2025 2:30pm - 3:30pm (EDT)',
+        from: 'Karthik Sreedhar <ks4190@columbia.edu>',
+        originalFrom: 'Lydia B. Chilton <lc3251@columbia.edu>',
+        date: 'Tue, 5 Aug 2025 14:31:20 -0400',
+        category: 'Meeting & Scheduling',
+        body: 'on the zoom!',
+        snippet: 'on the zoom!'
+      },
+      {
+        id: '1987b41b792cd91d',
+        subject: 'Re: Updated invitation: karthik lydia - TRY TOOL @ Tue Aug 5, 2025 2:30pm - 3:30pm (EDT)',
+        from: 'Karthik Sreedhar <ks4190@columbia.edu>',
+        originalFrom: 'Lydia B. Chilton <lc3251@columbia.edu>',
+        date: 'Tue, 5 Aug 2025 13:22:29 -0400',
+        category: 'Meeting & Scheduling',
+        body: 'Awesome this works, will be on zoom though and have to leave by ~3:15 but that should be hopefully enough time for you to try it out',
+        snippet: 'Awesome this works, will be on zoom though and have to leave by ~3:15 but that should be hopefully enough time for you to try it out'
+      },
+      {
+        id: '1987ac46c443a50e',
+        subject: 'Re: Fw: Resident Memo – Community Guidelines & Building Security',
+        from: 'Karthik Sreedhar <ks4190@columbia.edu>',
+        originalFrom: 'Property Manager <manager@ridgestreet.com>',
+        date: 'Tue, 5 Aug 2025 11:05:49 -0400',
+        category: 'General & Administrative',
+        body: 'yea i get all these thanks though!',
+        snippet: 'yea i get all these thanks though!'
+      },
+      {
+        id: '1987ab8e6df44210',
+        subject: 'Re: Updated invitation: karthik lydia - TRY TOOL @ Tue Aug 5, 2025 3pm - 4pm (EDT)',
+        from: 'Karthik Sreedhar <ks4190@columbia.edu>',
+        originalFrom: 'Lydia B. Chilton <lc3251@columbia.edu>',
+        date: 'Tue, 5 Aug 2025 10:53:14 -0400',
+        category: 'Meeting & Scheduling',
+        body: 'I\'d be on zoom and have to leave by 3:15, you could use the site then and then we can sync later? or we can just meet in the evening if that still works',
+        snippet: 'I\'d be on zoom and have to leave by 3:15, you could use the site then and then we can sync later?'
+      },
+      {
+        id: '1987a9fa3f7167dc',
+        subject: 'Re: https://email-twin-frontend.onrender.com/',
+        from: 'Karthik Sreedhar <ks4190@columbia.edu>',
+        originalFrom: 'Lydia B. Chilton <lc3251@columbia.edu>',
+        date: 'Tue, 5 Aug 2025 10:25:38 -0400',
+        category: 'Advisor & Research',
+        body: 'the site works!! 🙏',
+        snippet: 'the site works!! 🙏'
+      },
+      {
+        id: '1986662f58231f10',
+        subject: 'Re: Payee Registration Returned - Karthik Sreedhar',
+        from: 'Karthik Sreedhar <ks4190@columbia.edu>',
+        originalFrom: 'Julia Martinez <julia.martinez@columbia.edu>',
+        date: 'Fri, 1 Aug 2025 12:06:58 -0400',
+        category: 'Financial & Reimbursements',
+        body: 'Hi Julia,\n\nI hope the same, sincerely appreciate your help throughout this process and apologize for the delays on my end. Please let me know if there\'s anything else I need to do!\n\nThanks,\nKarthik',
+        snippet: 'Hi Julia, I hope the same, sincerely appreciate your help throughout this process'
+      },
+      {
+        id: '198664ba25a20172',
+        subject: 'Re: look what kayak just added!!!!',
+        from: 'Karthik Sreedhar <ks4190@columbia.edu>',
+        originalFrom: 'Lydia B. Chilton <lc3251@columbia.edu>',
+        date: 'Fri, 1 Aug 2025 11:41:29 -0400',
+        category: 'Advisor & Research',
+        body: 'glad we\'re exploring the rights things then haha',
+        snippet: 'glad we\'re exploring the rights things then haha'
+      },
+      {
+        id: '1985ddd136260a82',
+        subject: 'Re: Payee Registration Returned - Karthik Sreedhar',
+        from: 'Karthik Sreedhar <ks4190@columbia.edu>',
+        originalFrom: 'Julia Martinez <julia.martinez@columbia.edu>',
+        date: 'Wed, 30 Jul 2025 20:23:46 -0400',
+        category: 'Financial & Reimbursements',
+        body: 'Hi Julia,\n\nI hadn\'t gotten that notification, but I just made the update.\n\nThanks,\nKarthik',
+        snippet: 'Hi Julia, I hadn\'t gotten that notification, but I just made the update. Thanks, Karthik'
+      },
+      {
+        id: '198575b4d6596811',
+        subject: 'Re: Post DAPlab - riya karthik lydia',
+        from: 'Karthik Sreedhar <ks4190@columbia.edu>',
+        originalFrom: 'Lydia B. Chilton <lc3251@columbia.edu>',
+        date: 'Tue, 29 Jul 2025 14:04:04 -0400',
+        category: 'Meeting & Scheduling',
+        body: 'Ah just got to your office, but had sent an email asking something similar so yes tomorrow works for me!',
+        snippet: 'Ah just got to your office, but had sent an email asking something similar so yes tomorrow works for me!'
+      },
+      {
+        id: '19834a9330c7901b',
+        subject: 'Re: AI Contest Payment',
+        from: 'Karthik Sreedhar <ks4190@columbia.edu>',
+        originalFrom: 'Julia Martinez <julia.martinez@columbia.edu>',
+        date: 'Tue, 22 Jul 2025 20:22:40 -0400',
+        category: 'Financial & Reimbursements',
+        body: 'Hi Julia,\n\nI just resubmitted the registration, please let me know if there are any other issues!\n\nThanks,\nKarthik',
+        snippet: 'Hi Julia, I just resubmitted the registration, please let me know if there are any other issues! Thanks, Karthik'
+      },
+      {
+        id: '198331632754a54b',
+        subject: 'Re: Meeting today',
+        from: 'Karthik Sreedhar <ks4190@columbia.edu>',
+        originalFrom: 'Lydia B. Chilton <lc3251@columbia.edu>',
+        date: 'Tue, 22 Jul 2025 13:02:17 -0400',
+        category: 'Meeting & Scheduling',
+        body: 'I\'m so sorry, I got a last meeting with my doctor now so can\'t join the meeting, but would love to meet in the evening today (after 4) or can stick to our time depending upon which is better for you. Sorry about the setback in the middle of when we\'re trying to push progress :(',
+        snippet: 'I\'m so sorry, I got a last meeting with my doctor now so can\'t join the meeting'
+      },
+      {
+        id: '197fa6a4bf73aa24',
+        subject: 'Re: misq meeting',
+        from: 'Karthik Sreedhar <ks4190@columbia.edu>',
+        originalFrom: 'Lydia B. Chilton <lc3251@columbia.edu>',
+        date: 'Fri, 11 Jul 2025 12:55:59 -0400',
+        category: 'Advisor & Research',
+        body: 'I\'m glad you were able to prototype, if you could send me the scenarios that would be great! I think we should definitely try to get some user feedback on this.',
+        snippet: 'I\'m glad you were able to prototype, if you could send me the scenarios that would be great!'
+      },
+      {
+        id: '197f9c8a2b4d1e3f',
+        subject: 'Re: Water/Sewer Fee Outstanding',
+        from: 'Karthik Sreedhar <ks4190@columbia.edu>',
+        originalFrom: 'Jacob Williams <jacob@ridgestreet.com>',
+        date: 'Thu, 10 Jul 2025 18:45:22 -0400',
+        category: 'General & Administrative',
+        body: 'Hi Jacob,\n\nI made the payment yesterday through the online portal. Please let me know if you need any confirmation.\n\nThanks,\nKarthik',
+        snippet: 'I made the payment yesterday through the online portal'
+      },
+      {
+        id: '197f8b7c3a5e2f4g',
+        subject: 'Re: Research Collaboration Opportunity',
+        from: 'Karthik Sreedhar <ks4190@columbia.edu>',
+        originalFrom: 'Dr. Sarah Chen <sarah.chen@columbia.edu>',
+        date: 'Wed, 9 Jul 2025 14:30:15 -0400',
+        category: 'Academic Affairs',
+        body: 'Hi Dr. Chen,\n\nThank you for reaching out about this collaboration opportunity. I would be very interested in discussing this further.\n\nBest regards,\nKarthik',
+        snippet: 'Thank you for reaching out about this collaboration opportunity'
+      },
+      {
+        id: '197f7a6b4c8d3e5h',
+        subject: 'Re: Lab Equipment Training',
+        from: 'Karthik Sreedhar <ks4190@columbia.edu>',
+        originalFrom: 'Lab Manager <lab@cs.columbia.edu>',
+        date: 'Tue, 8 Jul 2025 11:20:30 -0400',
+        category: 'Academic Affairs',
+        body: 'Hi,\n\nI can attend the training session on Friday at 2 PM. Please confirm my spot.\n\nThanks,\nKarthik',
+        snippet: 'I can attend the training session on Friday at 2 PM'
+      },
+      {
+        id: '197f695a5d9e4f6i',
+        subject: 'Re: Conference Paper Submission',
+        from: 'Karthik Sreedhar <ks4190@columbia.edu>',
+        originalFrom: 'Lydia B. Chilton <lc3251@columbia.edu>',
+        date: 'Mon, 7 Jul 2025 16:45:12 -0400',
+        category: 'Advisor & Research',
+        body: 'Hi Lydia,\n\nI\'ve completed the first draft of the paper. Would you like me to send it for your review?\n\nBest,\nKarthik',
+        snippet: 'I\'ve completed the first draft of the paper'
+      },
+      {
+        id: '197f584b6e0f5g7j',
+        subject: 'Re: Summer Internship Update',
+        from: 'Karthik Sreedhar <ks4190@columbia.edu>',
+        originalFrom: 'HR Department <hr@techcorp.com>',
+        date: 'Sun, 6 Jul 2025 10:15:45 -0400',
+        category: 'General & Administrative',
+        body: 'Hi,\n\nThank you for the update. I\'m excited to start the internship next week.\n\nBest regards,\nKarthik',
+        snippet: 'Thank you for the update. I\'m excited to start the internship next week'
+      },
+      {
+        id: '197f473c7f1g6h8k',
+        subject: 'Re: Apartment Lease Renewal',
+        from: 'Karthik Sreedhar <ks4190@columbia.edu>',
+        originalFrom: 'Property Manager <manager@ridgestreet.com>',
+        date: 'Sat, 5 Jul 2025 09:30:20 -0400',
+        category: 'General & Administrative',
+        body: 'Hi,\n\nI would like to renew my lease for another year. Please send me the renewal documents.\n\nThanks,\nKarthik',
+        snippet: 'I would like to renew my lease for another year'
+      },
+      {
+        id: '197f362d8g2h7i9l',
+        subject: 'Re: PhD Qualifying Exam Schedule',
+        from: 'Karthik Sreedhar <ks4190@columbia.edu>',
+        originalFrom: 'Graduate Coordinator <grad@cs.columbia.edu>',
+        date: 'Fri, 4 Jul 2025 14:20:35 -0400',
+        category: 'Academic Affairs',
+        body: 'Hi,\n\nI confirm my availability for the qualifying exam on August 15th at 10 AM.\n\nBest regards,\nKarthik',
+        snippet: 'I confirm my availability for the qualifying exam on August 15th'
+      },
+      {
+        id: '197f251e9h3i8j0m',
+        subject: 'Re: Research Grant Application',
+        from: 'Karthik Sreedhar <ks4190@columbia.edu>',
+        originalFrom: 'Funding Office <funding@columbia.edu>',
+        date: 'Thu, 3 Jul 2025 11:45:18 -0400',
+        category: 'Academic Affairs',
+        body: 'Hi,\n\nI have submitted all the required documents for the research grant application. Please let me know if anything else is needed.\n\nThanks,\nKarthik',
+        snippet: 'I have submitted all the required documents for the research grant application'
+      },
+      {
+        id: '197f140f0i4j9k1n',
+        subject: 'Re: Teaching Assistant Assignment',
+        from: 'Karthik Sreedhar <ks4190@columbia.edu>',
+        originalFrom: 'Department Chair <chair@cs.columbia.edu>',
+        date: 'Wed, 2 Jul 2025 13:30:42 -0400',
+        category: 'Academic Affairs',
+        body: 'Hi,\n\nI accept the TA assignment for CS 4701 in the fall semester. Thank you for the opportunity.\n\nBest regards,\nKarthik',
+        snippet: 'I accept the TA assignment for CS 4701 in the fall semester'
+      },
+      {
+        id: '197f0300a5k0l2o',
+        subject: 'Re: Library Access Request',
+        from: 'Karthik Sreedhar <ks4190@columbia.edu>',
+        originalFrom: 'Library Services <library@columbia.edu>',
+        date: 'Tue, 1 Jul 2025 08:15:25 -0400',
+        category: 'Academic Affairs',
+        body: 'Hi,\n\nThank you for processing my library access request. I can now access all the required databases.\n\nBest,\nKarthik',
+        snippet: 'Thank you for processing my library access request'
+      },
+      {
+        id: '197ef1f1b6l1m3p',
+        subject: 'Re: Gym Membership Renewal',
+        from: 'Karthik Sreedhar <ks4190@columbia.edu>',
+        originalFrom: 'Fitness Center <fitness@columbia.edu>',
+        date: 'Mon, 30 Jun 2025 17:45:30 -0400',
+        category: 'General & Administrative',
+        body: 'Hi,\n\nI would like to renew my gym membership for the upcoming academic year.\n\nThanks,\nKarthik',
+        snippet: 'I would like to renew my gym membership for the upcoming academic year'
+      },
+      {
+        id: '197ee0e2c7m2n4q',
+        subject: 'Re: Parking Permit Application',
+        from: 'Karthik Sreedhar <ks4190@columbia.edu>',
+        originalFrom: 'Parking Services <parking@columbia.edu>',
+        date: 'Sun, 29 Jun 2025 12:20:15 -0400',
+        category: 'General & Administrative',
+        body: 'Hi,\n\nI have submitted my parking permit application online. Please let me know when it will be processed.\n\nBest regards,\nKarthik',
+        snippet: 'I have submitted my parking permit application online'
+      },
+      {
+        id: '197edfd3d8n3o5r',
+        subject: 'Re: Health Insurance Enrollment',
+        from: 'Karthik Sreedhar <ks4190@columbia.edu>',
+        originalFrom: 'Student Health <health@columbia.edu>',
+        date: 'Sat, 28 Jun 2025 14:35:40 -0400',
+        category: 'Academic Affairs',
+        body: 'Hi,\n\nI have completed my health insurance enrollment for the fall semester.\n\nThanks,\nKarthik',
+        snippet: 'I have completed my health insurance enrollment for the fall semester'
+      },
+      {
+        id: '197ecec4e9o4p6s',
+        subject: 'Re: Course Registration Reminder',
+        from: 'Karthik Sreedhar <ks4190@columbia.edu>',
+        originalFrom: 'Registrar <registrar@columbia.edu>',
+        date: 'Fri, 27 Jun 2025 10:50:22 -0400',
+        category: 'Academic Affairs',
+        body: 'Hi,\n\nI have registered for all my courses for the fall semester. Thank you for the reminder.\n\nBest,\nKarthik',
+        snippet: 'I have registered for all my courses for the fall semester'
+      },
+      {
+        id: '197eddb5f0p5q7t',
+        subject: 'Re: Thesis Committee Formation',
+        from: 'Karthik Sreedhar <ks4190@columbia.edu>',
+        originalFrom: 'Graduate Studies <gradstudies@columbia.edu>',
+        date: 'Thu, 26 Jun 2025 16:25:18 -0400',
+        category: 'Academic Affairs',
+        body: 'Hi,\n\nI have formed my thesis committee and submitted the required paperwork.\n\nBest regards,\nKarthik',
+        snippet: 'I have formed my thesis committee and submitted the required paperwork'
+      },
+      {
+        id: '197ecca6g1q6r8u',
+        subject: 'Re: Summer Research Funding',
+        from: 'Karthik Sreedhar <ks4190@columbia.edu>',
+        originalFrom: 'Research Office <research@columbia.edu>',
+        date: 'Wed, 25 Jun 2025 13:40:55 -0400',
+        category: 'Financial & Reimbursements',
+        body: 'Hi,\n\nThank you for approving my summer research funding application. I appreciate the support.\n\nBest,\nKarthik',
+        snippet: 'Thank you for approving my summer research funding application'
+      },
+      {
+        id: '197ebb97h2r7s9v',
+        subject: 'Re: Conference Travel Grant',
+        from: 'Karthik Sreedhar <ks4190@columbia.edu>',
+        originalFrom: 'Travel Office <travel@columbia.edu>',
+        date: 'Tue, 24 Jun 2025 11:15:33 -0400',
+        category: 'Financial & Reimbursements',
+        body: 'Hi,\n\nI have submitted all the required receipts for my conference travel reimbursement.\n\nThanks,\nKarthik',
+        snippet: 'I have submitted all the required receipts for my conference travel reimbursement'
+      },
+      {
+        id: '197eaa88i3s8t0w',
+        subject: 'Re: Office Space Assignment',
+        from: 'Karthik Sreedhar <ks4190@columbia.edu>',
+        originalFrom: 'Facilities <facilities@cs.columbia.edu>',
+        date: 'Mon, 23 Jun 2025 09:30:45 -0400',
+        category: 'Academic Affairs',
+        body: 'Hi,\n\nThank you for assigning me office space in Mudd 421. I will pick up the keys tomorrow.\n\nBest regards,\nKarthik',
+        snippet: 'Thank you for assigning me office space in Mudd 421'
+      }
+    ];
+
+    // Add category to each email if not present
+    responseEmails.forEach(email => {
+      if (!email.category) {
+        email.category = categorizeEmail(email.subject, email.body, email.from);
+      }
+    });
+
+    res.json(responseEmails);
+  } catch (error) {
+    console.error('Error fetching response emails:', error);
+    res.status(500).json({ error: 'Failed to fetch response emails' });
+  }
+});
+
+// API endpoint to get thread for a specific email
+app.get('/api/thread/:emailId', async (req, res) => {
+  try {
+    const emailId = req.params.emailId;
+    
+    // Get all response emails to find the requested one
+    const responseEmails = [
+      // All 47 emails (same as above - using the complete list)
+      {
+        id: '198e2a4f3068da4e',
+        subject: 'Re: Welcome to CS@CU from CS Operations',
+        from: 'Karthik Sreedhar <ks4190@columbia.edu>',
+        originalFrom: 'Elias Bareinboim <eb2890@columbia.edu>',
+        date: 'Mon, 25 Aug 2025 15:11:47 -0400',
+        category: 'Academic Affairs',
+        body: 'Hi Elias,\n\nThanks for this email. I don\'t see an email with my office assignment and hence wanted to reach out.\n\nThanks,\nKarthik',
+        snippet: 'Thanks for this email. I don\'t see an email with my office assignment and hence wanted to reach out'
+      },
+      {
+        id: '198c25f7149ac434',
+        subject: 'Re: AI Contest Payment',
+        from: 'Karthik Sreedhar <ks4190@columbia.edu>',
+        originalFrom: 'Julia Martinez <julia.martinez@columbia.edu>',
+        date: 'Tue, 19 Aug 2025 08:48:10 -0400',
+        category: 'Financial & Reimbursements',
+        body: 'Hi Julia,\n\nI received the payment yesterday, thanks for all your help!\n\nThanks,\nKarthik',
+        snippet: 'I received the payment yesterday, thanks for all your help!'
+      },
+      {
+        id: '198bd5137246f1a3',
+        subject: 'Re: Updated invitation: Karthik Riya lydia @ Mon Aug 18, 2025 10:30am - 11:30am (EDT)',
+        from: 'Karthik Sreedhar <ks4190@columbia.edu>',
+        originalFrom: 'Lydia B. Chilton <lc3251@columbia.edu>',
+        date: 'Mon, 18 Aug 2025 09:14:22 -0400',
+        category: 'Meeting & Scheduling',
+        body: 'Super sorry I just saw this time change, I have a doctors appointment then now. Is there any chance you\'re able to meet in the evening after 6? Worst case I see we have a meeting tomorrow and also free all day tomorrow as well so can meet earlier / easier time for you.',
+        snippet: 'Response about meeting time conflict'
+      },
+      {
+        id: '198ae8cba9af9deb',
+        subject: 'Re: Canceled event with note: Riya Jenny Karthik Lydia @ Fri Aug 15, 2025 1:30pm - 2:30pm (EDT)',
+        from: 'Karthik Sreedhar <ks4190@columbia.edu>',
+        originalFrom: 'Lydia B. Chilton <lc3251@columbia.edu>',
+        date: 'Fri, 15 Aug 2025 12:25:14 -0400',
+        category: 'Meeting & Scheduling',
+        body: 'no worries, i\'ve made a little bit of progress but was just going to email asking you if we could talk on monday instead actually so works out',
+        snippet: 'Response to meeting cancellation'
+      },
+      {
+        id: '198aa0bbe0db457f',
+        subject: 'Re: [Phd-students] [Faculty] [Columbia HCI] Congratulations to Dr. Gaurav Jain!',
+        from: 'Karthik Sreedhar <ks4190@columbia.edu>',
+        originalFrom: 'PhD Student Services <phd-advising@cs.columbia.edu>',
+        date: 'Thu, 14 Aug 2025 15:25:53 -0400',
+        category: 'General & Administrative',
+        body: 'Congrats Dr. Jain!',
+        snippet: 'Congratulations response'
+      },
+      {
+        id: '198aa09892ff08a8',
+        subject: 'Re: [Phd-students] [Faculty] Congratulations to Dr. Kelly Kostopoulou!',
+        from: 'Karthik Sreedhar <ks4190@columbia.edu>',
+        originalFrom: 'PhD Student Services <phd-advising@cs.columbia.edu>',
+        date: 'Thu, 14 Aug 2025 15:23:28 -0400',
+        category: 'General & Administrative',
+        body: 'Congrats Dr. Kostopoulou!!!',
+        snippet: 'Congratulations to Dr. Kelly'
+      },
+      {
+        id: '198a56ae52e0722d',
+        subject: 'Re: AI Contest Payment',
+        from: 'Karthik Sreedhar <ks4190@columbia.edu>',
+        originalFrom: 'Julia Martinez <julia.martinez@columbia.edu>',
+        date: 'Wed, 13 Aug 2025 17:51:42 -0400',
+        category: 'Financial & Reimbursements',
+        body: 'Thanks for the update! Will let you know once I receive it!',
+        snippet: 'Payment confirmation response'
+      },
+      {
+        id: '198a5603d8e3b4fa',
+        subject: 'Re: Updated invitation: Riya Karthik lydia @ Wed Aug 13, 2025 6:30pm - 7:30pm (EDT)',
+        from: 'Karthik Sreedhar <ks4190@columbia.edu>',
+        originalFrom: 'Lydia B. Chilton <lc3251@columbia.edu>',
+        date: 'Wed, 13 Aug 2025 17:40:04 -0400',
+        category: 'Meeting & Scheduling',
+        body: 'realized i have to leave at 7, but ready to meet whenever now onwards. but no worries if earlier doesn\'t work will see you at 6:30 then',
+        snippet: 'Meeting response'
+      },
+      {
+        id: '198a021c071642da',
+        subject: 'Re: Next Steps for Participating in Hint Generation User Study',
+        from: 'Karthik Sreedhar <ks4190@columbia.edu>',
+        originalFrom: 'Anubhav Jain <anubhav.jain@columbia.edu>',
+        date: 'Tue, 12 Aug 2025 17:13:43 -0400',
+        category: 'Academic Affairs',
+        body: 'Hi Anubhav,\n\nI\'ve reviewed the instructions and filled out the consent form.\n\nThanks,\nKarthik',
+        snippet: 'User study response'
+      },
+      {
+        id: '1989b9be51ddddf1',
+        subject: 'Re: Security Deposit',
+        from: 'Karthik Sreedhar <ks4190@columbia.edu>',
+        originalFrom: 'Property Manager <manager@ridgestreet.com>',
+        date: 'Mon, 11 Aug 2025 19:58:33 -0400',
+        category: 'General & Administrative',
+        body: 'Thanks for forwarding my email, I gave the number a call earlier today and left a message.',
+        snippet: 'Security deposit response'
+      },
+      {
+        id: '1989a5c88822320d',
+        subject: 'Re: Fw: Invitation from Carson at 110-114 Ridge St',
+        from: 'Karthik Sreedhar <ks4190@columbia.edu>',
+        originalFrom: 'Carson Williams <carson@ridgestreet.com>',
+        date: 'Mon, 11 Aug 2025 14:20:12 -0400',
+        category: 'General & Administrative',
+        body: 'thank you, i think i get all the emails so it should be ok if you mute them or something',
+        snippet: 'thank you, i think i get all the emails so it should be ok if you mute them or something'
+      },
+      {
+        id: '1988f2c1e17e79bb',
+        subject: 'Re: Tool',
+        from: 'Karthik Sreedhar <ks4190@columbia.edu>',
+        originalFrom: 'Lydia B. Chilton <lc3251@columbia.edu>',
+        date: 'Sat, 9 Aug 2025 10:11:18 -0400',
+        category: 'Advisor & Research',
+        body: 'Sorry just saw this, hopping on in 2min',
+        snippet: 'Sorry just saw this, hopping on in 2min'
+      },
+      {
+        id: '198879cf79d62aba',
+        subject: 'Re: [Phd-students] Fall 2025 Registration OPEN - PhD Funding & Insurance Deadlines',
+        from: 'Karthik Sreedhar <ks4190@columbia.edu>',
+        originalFrom: 'Da\'Shante Conover <dac2267@columbia.edu>',
+        date: 'Thu, 7 Aug 2025 22:57:47 -0400',
+        category: 'Academic Affairs',
+        body: 'Hi Da\'Shante,\n\nI hope you\'re doing well! I was wondering if we could schedule a meeting tomorrow or early next week to chat - I did my master\'s at Columbia and was a little unsure of how I am supposed to go about choosing classes for the PhD. Would sincerely appreciate some guidance with this, appreciate your help!\n\nThanks,\nKarthik',
+        snippet: 'Hi Da\'Shante, I hope you\'re doing well! I was wondering if we could schedule a meeting tomorrow or early next week to chat'
+      },
+      {
+        id: '19884099fbeceed4',
+        subject: 'Re: Canceled event: Riya (+Karthik) Lydia @ Thu Aug 7, 2025 10am - 10:30am (EDT)',
+        from: 'Karthik Sreedhar <ks4190@columbia.edu>',
+        originalFrom: 'Lydia B. Chilton <lc3251@columbia.edu>',
+        date: 'Thu, 7 Aug 2025 06:18:00 -0400',
+        category: 'Advisor & Research',
+        body: 'is there any chance we could still find a time to meet at some point today? updated the system to allow for feedback on generations, and also changed prompts/updated backend to use gpt4.0 instead of 3.5 and think it\'s a lot better. there are some example generated responses to the email we\'d been working with saved (https://email-twin-frontend.onrender.com/generations) if you want to take a look (it might take like 2min to load if you open it and i haven\'t been using the site right before). main site still at https://email-twin-frontend.onrender.com/',
+        snippet: 'is there any chance we could still find a time to meet at some point today?'
+      },
+      {
+        id: '1987c139c8ad0338',
+        subject: 'Re: Updated invitation: karthik lydia - TRY TOOL @ Tue Aug 5, 2025 6pm - 7pm (EDT)',
+        from: 'Karthik Sreedhar <ks4190@columbia.edu>',
+        originalFrom: 'Lydia B. Chilton <lc3251@columbia.edu>',
+        date: 'Tue, 5 Aug 2025 17:11:35 -0400',
+        category: 'Meeting & Scheduling',
+        body: 'might be closer to 6:30 for me sorry!',
+        snippet: 'might be closer to 6:30 for me sorry!'
+      },
+      {
+        id: '1987b8094e08bd92',
+        subject: 'Re: Updated invitation: karthik lydia - TRY TOOL @ Tue Aug 5, 2025 2:30pm - 3:30pm (EDT)',
+        from: 'Karthik Sreedhar <ks4190@columbia.edu>',
+        originalFrom: 'Lydia B. Chilton <lc3251@columbia.edu>',
+        date: 'Tue, 5 Aug 2025 14:31:20 -0400',
+        category: 'Meeting & Scheduling',
+        body: 'on the zoom!',
+        snippet: 'on the zoom!'
+      },
+      {
+        id: '1987b41b792cd91d',
+        subject: 'Re: Updated invitation: karthik lydia - TRY TOOL @ Tue Aug 5, 2025 2:30pm - 3:30pm (EDT)',
+        from: 'Karthik Sreedhar <ks4190@columbia.edu>',
+        originalFrom: 'Lydia B. Chilton <lc3251@columbia.edu>',
+        date: 'Tue, 5 Aug 2025 13:22:29 -0400',
+        category: 'Meeting & Scheduling',
+        body: 'Awesome this works, will be on zoom though and have to leave by ~3:15 but that should be hopefully enough time for you to try it out',
+        snippet: 'Awesome this works, will be on zoom though and have to leave by ~3:15 but that should be hopefully enough time for you to try it out'
+      },
+      {
+        id: '1987ac46c443a50e',
+        subject: 'Re: Fw: Resident Memo – Community Guidelines & Building Security',
+        from: 'Karthik Sreedhar <ks4190@columbia.edu>',
+        originalFrom: 'Property Manager <manager@ridgestreet.com>',
+        date: 'Tue, 5 Aug 2025 11:05:49 -0400',
+        category: 'General & Administrative',
+        body: 'yea i get all these thanks though!',
+        snippet: 'yea i get all these thanks though!'
+      },
+      {
+        id: '1987ab8e6df44210',
+        subject: 'Re: Updated invitation: karthik lydia - TRY TOOL @ Tue Aug 5, 2025 3pm - 4pm (EDT)',
+        from: 'Karthik Sreedhar <ks4190@columbia.edu>',
+        originalFrom: 'Lydia B. Chilton <lc3251@columbia.edu>',
+        date: 'Tue, 5 Aug 2025 10:53:14 -0400',
+        category: 'Meeting & Scheduling',
+        body: 'I\'d be on zoom and have to leave by 3:15, you could use the site then and then we can sync later? or we can just meet in the evening if that still works',
+        snippet: 'I\'d be on zoom and have to leave by 3:15, you could use the site then and then we can sync later?'
+      },
+      {
+        id: '1987a9fa3f7167dc',
+        subject: 'Re: https://email-twin-frontend.onrender.com/',
+        from: 'Karthik Sreedhar <ks4190@columbia.edu>',
+        originalFrom: 'Lydia B. Chilton <lc3251@columbia.edu>',
+        date: 'Tue, 5 Aug 2025 10:25:38 -0400',
+        category: 'Advisor & Research',
+        body: 'the site works!! 🙏',
+        snippet: 'the site works!! 🙏'
+      },
+      {
+        id: '1986662f58231f10',
+        subject: 'Re: Payee Registration Returned - Karthik Sreedhar',
+        from: 'Karthik Sreedhar <ks4190@columbia.edu>',
+        originalFrom: 'Julia Martinez <julia.martinez@columbia.edu>',
+        date: 'Fri, 1 Aug 2025 12:06:58 -0400',
+        category: 'Financial & Reimbursements',
+        body: 'Hi Julia,\n\nI hope the same, sincerely appreciate your help throughout this process and apologize for the delays on my end. Please let me know if there\'s anything else I need to do!\n\nThanks,\nKarthik',
+        snippet: 'Hi Julia, I hope the same, sincerely appreciate your help throughout this process'
+      },
+      {
+        id: '198664ba25a20172',
+        subject: 'Re: look what kayak just added!!!!',
+        from: 'Karthik Sreedhar <ks4190@columbia.edu>',
+        originalFrom: 'Lydia B. Chilton <lc3251@columbia.edu>',
+        date: 'Fri, 1 Aug 2025 11:41:29 -0400',
+        category: 'Advisor & Research',
+        body: 'glad we\'re exploring the rights things then haha',

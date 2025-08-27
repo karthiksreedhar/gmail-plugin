@@ -1,0 +1,3937 @@
+rh<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gmail Plugin - Response Email Tracker</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Google Sans', 'Roboto', Arial, sans-serif;
+            background-color: #ffffff;
+            color: #202124;
+            margin: 0;
+            padding: 0;
+            height: 100vh;
+            overflow: hidden;
+            position: relative;
+            top: 0;
+            left: 0;
+        }
+
+        html {
+            margin: 0;
+            padding: 0;
+            height: 100%;
+            position: relative;
+        }
+
+        .gmail-container {
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            margin: 0;
+            padding: 0;
+        }
+
+        .header {
+            background: #d2b48c;
+            border-bottom: 1px solid #e0e0e0;
+            padding: 16px 24px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            z-index: 100;
+            flex-shrink: 0;
+            margin: 0;
+            width: 100%;
+            box-sizing: border-box;
+        }
+
+        .header h1 {
+            font-size: 2.2em;
+            font-weight: 500;
+            color: #000000;
+            margin: 0;
+            text-align: center;
+            flex: 1;
+        }
+
+        .header-left-buttons {
+            display: flex;
+            gap: 12px;
+        }
+
+        .header-buttons {
+            display: flex;
+            gap: 12px;
+        }
+
+        .save-scenario-btn {
+            background: #28a745;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 1em;
+            transition: background-color 0.3s ease;
+            font-weight: 500;
+        }
+
+        .save-scenario-btn:hover {
+            background: #218838;
+        }
+
+        .load-scenario-btn {
+            background: #17a2b8;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 1em;
+            transition: background-color 0.3s ease;
+            font-weight: 500;
+        }
+
+        .load-scenario-btn:hover {
+            background: #138496;
+        }
+
+        .main-content {
+            display: flex;
+            flex: 1;
+            overflow: hidden;
+            margin-top: 72px;
+        }
+
+        .sidebar {
+            width: 480px;
+            background: #f5f0e8;
+            border-right: 1px solid #e0e0e0;
+            padding: 8px 0;
+            overflow-y: auto;
+            max-height: 100vh;
+        }
+
+        .sidebar-section {
+            padding: 0 16px;
+        }
+
+        .sidebar-section h3 {
+            font-size: 26px;
+            font-weight: 500;
+            color: #5f6368;
+            margin: 16px 0 8px 0;
+            text-transform: uppercase;
+            letter-spacing: 0.25px;
+            white-space: nowrap;
+        }
+
+        .category-list {
+            margin: 0;
+        }
+
+        .category-item {
+            display: flex;
+            align-items: center;
+            padding: 8px 12px;
+            border-radius: 0 20px 20px 0;
+            cursor: pointer;
+            transition: background-color 0.2s;
+            margin-right: 16px;
+        }
+
+        .category-item:hover {
+            background-color: #f1f3f4;
+        }
+
+        .category-item.active {
+            background-color: #fce8e6;
+            color: #d93025;
+            font-weight: 500;
+        }
+
+        .category-icon {
+            margin-right: 14px;
+            font-size: 22px;
+        }
+
+        .category-name {
+            flex: 1;
+            font-size: 22px;
+            white-space: nowrap;
+        }
+
+        .category-count {
+            font-size: 16px;
+            color: #5f6368;
+            background: #f1f3f4;
+            padding: 4px 10px;
+            border-radius: 12px;
+            min-width: 28px;
+            text-align: center;
+        }
+
+        .category-item.active .category-count {
+            background: #d93025;
+            color: white;
+        }
+
+        .content-area {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .stats-bar {
+            background: #ffffff;
+            border-bottom: 1px solid #e0e0e0;
+            padding: 12px 24px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .stats-info {
+            font-size: 18px;
+            color: #5f6368;
+        }
+
+        .stats-count {
+            font-weight: 400;
+        }
+
+        .email-list {
+            flex: 1;
+            background: #ffffff;
+            overflow-y: auto;
+        }
+
+        .email-item {
+            border-bottom: 1px solid #e0e0e0;
+            padding: 24px 28px;
+            cursor: pointer;
+            transition: background-color 0.1s;
+            display: flex;
+            align-items: center;
+        }
+
+        .email-item:hover {
+            background-color: #f1f3f4;
+        }
+
+        .email-item:last-child {
+            border-bottom: none;
+        }
+
+        .email-content {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .email-header {
+            display: flex;
+            align-items: center;
+            margin-bottom: 4px;
+        }
+
+        .email-from {
+            font-size: 22px;
+            font-weight: 400;
+            color: #202124;
+            margin-right: 8px;
+            white-space: nowrap;
+            overflow: visible;
+            max-width: none;
+            flex: 1;
+        }
+
+        .email-date {
+            font-size: 20px;
+            color: #5f6368;
+            margin-left: auto;
+            white-space: nowrap;
+        }
+
+        .email-subject {
+            font-size: 22px;
+            color: #202124;
+            margin-bottom: 6px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            font-weight: 400;
+        }
+
+        .email-category {
+            display: inline-block;
+            padding: 6px 14px;
+            border-radius: 14px;
+            font-size: 16px;
+            font-weight: 500;
+            text-transform: uppercase;
+            margin-top: 8px;
+        }
+
+        /* Light color category tags */
+        .category-teaching-\&-student-support { background: #e3f2fd; color: #1565c0; }
+        .category-research-\&-lab-work { background: #f3e5f5; color: #7b1fa2; }
+        .category-conferences { background: #fff3e0; color: #ef6c00; }
+        .category-university-administration { background: #e8f5e8; color: #2e7d32; }
+        .category-financial-\&-reimbursements { background: #e6f4ea; color: #137333; }
+        .category-networking { background: #fce4ec; color: #c2185b; }
+        .category-personal-\&-life-management { background: #f1f8e9; color: #558b2f; }
+        
+        /* Legacy category styles for backward compatibility */
+        .category-academic-affairs { background: #f3e5f5; color: #7b1fa2; }
+        .category-meeting-\&-scheduling { background: #e8f0fe; color: #1a73e8; }
+        .category-general-\&-administrative { background: #fef7e0; color: #f57c00; }
+        .category-academic-publishing-\&-conferences { background: #fff3e0; color: #ef6c00; }
+        .category-professional-networking-\&-opportunities { background: #fce4ec; color: #c2185b; }
+        .category-university-administration-\&-programs { background: #e8f5e8; color: #2e7d32; }
+
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #666;
+        }
+
+        .error {
+            background: #ffebee;
+            color: #c62828;
+            padding: 20px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+        }
+
+        .refresh-btn {
+            background: #667eea;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 1em;
+            transition: background-color 0.3s ease;
+        }
+
+        .refresh-btn:hover {
+            background: #5a67d8;
+        }
+
+        .generate-btn {
+            background: #667eea;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 1em;
+            transition: background-color 0.3s ease;
+        }
+
+        .generate-btn:hover {
+            background: #5a67d8;
+        }
+
+        .view-refinements-btn {
+            background: #ff6b35;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 1em;
+            transition: background-color 0.3s ease;
+        }
+
+        .view-refinements-btn:hover {
+            background: #e55a2b;
+        }
+
+        .view-saved-generations-btn {
+            background: #6f42c1;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 1em;
+            transition: background-color 0.3s ease;
+        }
+
+        .view-saved-generations-btn:hover {
+            background: #5a32a3;
+        }
+
+        .email-item {
+            cursor: pointer;
+        }
+
+        .email-item:hover {
+            background-color: #f8f9ff;
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+        }
+
+        /* Modal styles */
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0,0,0,0.5);
+            animation: fadeIn 0.3s ease;
+        }
+
+        .modal-content {
+            background-color: white;
+            margin: 5% auto;
+            padding: 0;
+            border-radius: 10px;
+            width: 90%;
+            max-width: 800px;
+            max-height: 80vh;
+            overflow-y: auto;
+            animation: slideIn 0.3s ease;
+        }
+
+        .modal-header {
+            background: linear-gradient(135deg, #d2b48c 0%, #c19a6b 100%);
+            color: white;
+            padding: 20px;
+            border-radius: 10px 10px 0 0;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .modal-title {
+            font-size: 1.2em;
+            font-weight: bold;
+            margin: 0;
+        }
+
+        .close {
+            color: white;
+            font-size: 28px;
+            font-weight: bold;
+            cursor: pointer;
+            border: none;
+            background: none;
+            padding: 0;
+            line-height: 1;
+        }
+
+        .close:hover {
+            opacity: 0.7;
+        }
+
+        .thread-container {
+            padding: 20px;
+        }
+
+        .thread-message {
+            border: 1px solid #eee;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            overflow: hidden;
+        }
+
+        .thread-message.response {
+            border-left: 4px solid #d2b48c;
+        }
+
+        .thread-message.original {
+            border-left: 4px solid #999;
+        }
+
+        .message-header {
+            background: #f5f3f0;
+            padding: 15px;
+            border-bottom: 1px solid #d2b48c;
+        }
+
+        .message-from {
+            font-weight: bold;
+            color: #333;
+            margin-bottom: 5px;
+        }
+
+        .message-to {
+            color: #666;
+            font-size: 0.9em;
+            margin-bottom: 5px;
+        }
+
+        .message-date {
+            color: #999;
+            font-size: 0.85em;
+        }
+
+        .message-body {
+            padding: 20px;
+            line-height: 1.6;
+            white-space: pre-wrap;
+        }
+
+        .response-badge {
+            display: inline-block;
+            background: #d2b48c;
+            color: white;
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 0.7em;
+            font-weight: bold;
+            text-transform: uppercase;
+            margin-left: 10px;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+
+        @keyframes slideIn {
+            from { transform: translateY(-50px); opacity: 0; }
+            to { transform: translateY(0); opacity: 1; }
+        }
+
+        /* Generate Response Modal Styles */
+        .generate-response-modal {
+            max-width: 1200px;
+            max-height: 70vh;
+            height: 70vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .generate-form-container {
+            padding: 20px;
+            overflow-y: auto;
+            flex: 1;
+            min-height: 0;
+        }
+
+        .select-email-btn {
+            background: #4285f4;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.9em;
+            margin-right: 10px;
+        }
+
+        .select-email-btn:hover {
+            background: #3367d6;
+        }
+
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 500;
+            color: #333;
+        }
+
+        .required {
+            color: #d93025;
+        }
+
+        .form-group input,
+        .form-group textarea {
+            width: 100%;
+            padding: 12px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            font-size: 14px;
+            font-family: inherit;
+            resize: vertical;
+        }
+
+        .form-group input:focus,
+        .form-group textarea:focus {
+            outline: none;
+            border-color: #4285f4;
+            box-shadow: 0 0 0 2px rgba(66, 133, 244, 0.2);
+        }
+
+        .form-actions {
+            text-align: center;
+            margin-top: 20px;
+        }
+
+        .generate-submit-btn,
+        .refine-btn {
+            background: #34a853;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 16px;
+            font-weight: 500;
+            transition: background-color 0.3s ease;
+        }
+
+        .generate-submit-btn:hover,
+        .refine-btn:hover {
+            background: #2d8f47;
+        }
+
+        .generate-submit-btn:disabled,
+        .refine-btn:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+
+        .btn-loading {
+            display: none;
+        }
+
+        /* Generated Response Area */
+        #generatedResponseArea {
+            margin-top: 30px;
+            border-top: 2px solid #d2b48c;
+            padding-top: 20px;
+        }
+
+        .response-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+
+        .response-header h3 {
+            margin: 0;
+            color: #333;
+        }
+
+        .edit-response-btn,
+        .copy-response-btn {
+            background: #667eea;
+            color: white;
+            border: none;
+            padding: 6px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+
+        .edit-response-btn:hover,
+        .copy-response-btn:hover {
+            background: #5a67d8;
+        }
+
+        .copy-response-btn {
+            background: #28a745;
+        }
+
+        .copy-response-btn:hover {
+            background: #218838;
+        }
+
+        .response-content {
+            background: #f8f9fa;
+            border: 1px solid #e9ecef;
+            border-radius: 6px;
+            padding: 15px;
+            margin-bottom: 15px;
+        }
+
+        .response-display {
+            line-height: 1.6;
+            color: #333;
+        }
+
+        .response-editor {
+            width: 100%;
+            min-height: 150px;
+            border: none;
+            background: transparent;
+            resize: vertical;
+            font-family: inherit;
+            font-size: 14px;
+            line-height: 1.6;
+        }
+
+        .response-editor:focus {
+            outline: none;
+        }
+
+        .response-actions {
+            text-align: right;
+        }
+
+        .save-edit-btn,
+        .cancel-edit-btn {
+            padding: 6px 12px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            margin-left: 8px;
+        }
+
+        .save-edit-btn {
+            background: #34a853;
+            color: white;
+        }
+
+        .save-edit-btn:hover {
+            background: #2d8f47;
+        }
+
+        .cancel-edit-btn {
+            background: #6c757d;
+            color: white;
+        }
+
+        .cancel-edit-btn:hover {
+            background: #5a6268;
+        }
+
+        /* Refine Section */
+        #refineSection {
+            margin-top: 20px;
+            border-top: 1px solid #e9ecef;
+            padding-top: 20px;
+        }
+
+        .refine-header h3 {
+            margin: 0 0 15px 0;
+            color: #333;
+        }
+
+        .refine-actions {
+            text-align: center;
+            margin-top: 15px;
+            display: flex;
+            gap: 15px;
+            justify-content: center;
+        }
+
+        .save-response-btn {
+            background: #28a745;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 16px;
+            font-weight: 500;
+            transition: background-color 0.3s ease;
+        }
+
+        .save-response-btn:hover {
+            background: #218838;
+        }
+
+        .save-response-btn:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+
+        /* Justification Section */
+        #justificationSection {
+            margin-top: 20px;
+            padding-top: 20px;
+        }
+
+        .justification-container {
+            border: 2px solid #d2b48c;
+            border-radius: 8px;
+            background: #fefefe;
+            overflow: hidden;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+
+        .justification-header {
+            display: flex;
+            align-items: center;
+            cursor: pointer;
+            padding: 15px 20px;
+            background: linear-gradient(135deg, #f8f6f3 0%, #f0ede8 100%);
+            border-bottom: 1px solid #d2b48c;
+            transition: background-color 0.2s ease;
+        }
+
+        .justification-header:hover {
+            background: linear-gradient(135deg, #f0ede8 0%, #e8e3dc 100%);
+        }
+
+        .justification-header h3 {
+            margin: 0;
+            color: #8b4513;
+            flex: 1;
+            font-size: 16px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .justification-toggle {
+            font-size: 16px;
+            color: #8b4513;
+            transition: transform 0.3s ease;
+            font-weight: bold;
+        }
+
+        .justification-toggle.expanded {
+            transform: rotate(-90deg);
+        }
+
+        .justification-content {
+            display: none;
+            background: #fefefe;
+            padding: 20px;
+            line-height: 1.6;
+        }
+
+        .justification-content ul {
+            margin: 0;
+            padding-left: 20px;
+        }
+
+        .justification-content li {
+            margin-bottom: 12px;
+            color: #444;
+            font-size: 14px;
+        }
+
+        .justification-content p {
+            margin: 0;
+            color: #666;
+            font-style: italic;
+        }
+
+        /* Select Email Modal Styles */
+        .select-email-modal {
+            max-width: 700px;
+            max-height: 80vh;
+        }
+
+        .select-email-container {
+            padding: 20px;
+        }
+
+        .email-search {
+            margin-bottom: 20px;
+        }
+
+        .email-search input {
+            width: 100%;
+            padding: 12px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            font-size: 14px;
+        }
+
+        .email-search input:focus {
+            outline: none;
+            border-color: #4285f4;
+            box-shadow: 0 0 0 2px rgba(66, 133, 244, 0.2);
+        }
+
+        .unreplied-emails-list {
+            max-height: 400px;
+            overflow-y: auto;
+            border: 1px solid #e9ecef;
+            border-radius: 6px;
+        }
+
+        .unreplied-email-item {
+            padding: 15px;
+            border-bottom: 1px solid #e9ecef;
+            cursor: pointer;
+            transition: background-color 0.2s ease;
+        }
+
+        .unreplied-email-item:hover {
+            background-color: #f8f9fa;
+        }
+
+        .unreplied-email-item:last-child {
+            border-bottom: none;
+        }
+
+        .unreplied-email-content {
+            width: 100%;
+        }
+
+        .unreplied-email-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+
+        .unreplied-email-from {
+            font-weight: 500;
+            color: #333;
+            font-size: 14px;
+        }
+
+        .unreplied-email-date {
+            color: #666;
+            font-size: 12px;
+        }
+
+        .unreplied-email-subject {
+            font-weight: 500;
+            color: #1a73e8;
+            margin-bottom: 8px;
+            font-size: 14px;
+        }
+
+        .unreplied-email-preview {
+            color: #666;
+            font-size: 13px;
+            line-height: 1.4;
+            margin-bottom: 10px;
+        }
+
+        .no-emails {
+            text-align: center;
+            padding: 40px;
+            color: #666;
+            font-style: italic;
+        }
+
+        /* View Refinements Modal Styles */
+        .view-refinements-modal {
+            max-width: 900px;
+            max-height: 80vh;
+        }
+
+        .refinements-container {
+            padding: 20px;
+            max-height: 60vh;
+            overflow-y: auto;
+        }
+
+        .refinements-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            padding-bottom: 15px;
+            border-bottom: 2px solid #ff6b35;
+        }
+
+        .refinements-count {
+            color: #666;
+            font-size: 14px;
+        }
+
+        .clear-all-btn {
+            background: #dc3545;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: background-color 0.3s ease;
+        }
+
+        .clear-all-btn:hover {
+            background: #c82333;
+        }
+
+        .clear-all-btn:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+
+        .refinement-item {
+            border: 1px solid #e9ecef;
+            border-radius: 8px;
+            margin-bottom: 15px;
+            overflow: hidden;
+            background: white;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+
+        .refinement-header {
+            background: #f8f9fa;
+            padding: 15px;
+            border-bottom: 1px solid #e9ecef;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .refinement-timestamp {
+            color: #666;
+            font-size: 12px;
+        }
+
+        .refinement-delete-btn {
+            background: #dc3545;
+            color: white;
+            border: none;
+            padding: 4px 8px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+        }
+
+        .refinement-delete-btn:hover {
+            background: #c82333;
+        }
+
+        .refinement-content {
+            padding: 15px;
+        }
+
+        .refinement-prompt {
+            background: #fff3cd;
+            border: 1px solid #ffeaa7;
+            border-radius: 4px;
+            padding: 10px;
+            margin-bottom: 15px;
+        }
+
+        .refinement-prompt-label {
+            font-weight: 600;
+            color: #856404;
+            font-size: 12px;
+            text-transform: uppercase;
+            margin-bottom: 5px;
+        }
+
+        .refinement-prompt-text {
+            color: #856404;
+            font-size: 14px;
+            line-height: 1.4;
+        }
+
+        .refinement-responses {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+        }
+
+        .refinement-response {
+            border: 1px solid #e9ecef;
+            border-radius: 4px;
+            padding: 10px;
+        }
+
+        .refinement-response-label {
+            font-weight: 600;
+            font-size: 12px;
+            text-transform: uppercase;
+            margin-bottom: 8px;
+        }
+
+        .refinement-original {
+            border-left: 4px solid #6c757d;
+        }
+
+        .refinement-original .refinement-response-label {
+            color: #6c757d;
+        }
+
+        .refinement-refined {
+            border-left: 4px solid #28a745;
+        }
+
+        .refinement-refined .refinement-response-label {
+            color: #28a745;
+        }
+
+        .refinement-response-text {
+            font-size: 13px;
+            line-height: 1.4;
+            color: #333;
+            white-space: pre-wrap;
+        }
+
+        .no-refinements {
+            text-align: center;
+            padding: 60px 20px;
+            color: #666;
+        }
+
+        .no-refinements-icon {
+            font-size: 48px;
+            margin-bottom: 15px;
+            opacity: 0.5;
+        }
+
+        .no-refinements-text {
+            font-size: 16px;
+            margin-bottom: 10px;
+        }
+
+        .no-refinements-subtext {
+            font-size: 14px;
+            color: #999;
+        }
+
+        /* View Saved Generations Modal Styles */
+        .view-saved-generations-modal {
+            max-width: 1000px;
+            max-height: 80vh;
+        }
+
+        .saved-generations-container {
+            padding: 20px;
+            max-height: 60vh;
+            overflow-y: auto;
+        }
+
+        .saved-generations-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            padding-bottom: 15px;
+            border-bottom: 2px solid #6f42c1;
+        }
+
+        .saved-generations-count {
+            color: #666;
+            font-size: 14px;
+        }
+
+        .saved-generation-item {
+            border: 1px solid #e9ecef;
+            border-radius: 8px;
+            margin-bottom: 15px;
+            overflow: hidden;
+            background: white;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+
+        .saved-generation-header {
+            background: #f8f9fa;
+            padding: 15px;
+            border-bottom: 1px solid #e9ecef;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .saved-generation-timestamp {
+            color: #666;
+            font-size: 12px;
+        }
+
+        .saved-generation-delete-btn {
+            background: #dc3545;
+            color: white;
+            border: none;
+            padding: 4px 8px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+        }
+
+        .saved-generation-delete-btn:hover {
+            background: #c82333;
+        }
+
+        .saved-generation-content {
+            padding: 15px;
+        }
+
+        .saved-generation-original-email {
+            background: #e3f2fd;
+            border: 1px solid #bbdefb;
+            border-radius: 4px;
+            padding: 10px;
+            margin-bottom: 15px;
+        }
+
+        .saved-generation-original-label {
+            font-weight: 600;
+            color: #1565c0;
+            font-size: 12px;
+            text-transform: uppercase;
+            margin-bottom: 8px;
+        }
+
+        .saved-generation-original-details {
+            font-size: 13px;
+            line-height: 1.4;
+            color: #1565c0;
+        }
+
+        .saved-generation-original-sender,
+        .saved-generation-original-subject {
+            margin-bottom: 5px;
+            font-weight: 500;
+        }
+
+        .saved-generation-original-body {
+            margin-top: 8px;
+            white-space: pre-wrap;
+            max-height: 100px;
+            overflow-y: auto;
+            background: rgba(255,255,255,0.5);
+            padding: 8px;
+            border-radius: 4px;
+        }
+
+        .saved-generation-response {
+            border: 1px solid #e9ecef;
+            border-radius: 4px;
+            padding: 10px;
+            border-left: 4px solid #6f42c1;
+        }
+
+        .saved-generation-response-label {
+            font-weight: 600;
+            color: #6f42c1;
+            font-size: 12px;
+            text-transform: uppercase;
+            margin-bottom: 8px;
+        }
+
+        .saved-generation-response-text {
+            font-size: 13px;
+            line-height: 1.4;
+            color: #333;
+            white-space: pre-wrap;
+        }
+
+        .no-saved-generations {
+            text-align: center;
+            padding: 60px 20px;
+            color: #666;
+        }
+
+        .no-saved-generations-icon {
+            font-size: 48px;
+            margin-bottom: 15px;
+            opacity: 0.5;
+        }
+
+        .no-saved-generations-text {
+            font-size: 16px;
+            margin-bottom: 10px;
+        }
+
+        .no-saved-generations-subtext {
+            font-size: 14px;
+            color: #999;
+        }
+
+        /* Custom Popup Modal Styles */
+        .popup-modal {
+            display: none;
+            position: fixed;
+            z-index: 2000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0,0,0,0.6);
+            animation: fadeIn 0.2s ease;
+        }
+
+        .popup-content {
+            background-color: white;
+            margin: 20% auto;
+            padding: 0;
+            border-radius: 12px;
+            width: 90%;
+            max-width: 450px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+            animation: popupSlideIn 0.3s ease;
+        }
+
+        .popup-header {
+            padding: 24px 24px 16px 24px;
+            border-bottom: 1px solid #e9ecef;
+            text-align: center;
+        }
+
+        .popup-title {
+            font-size: 18px;
+            font-weight: 600;
+            color: #333;
+            margin: 0;
+            text-align: center;
+        }
+
+        .popup-body {
+            padding: 20px 24px;
+            text-align: center;
+        }
+
+        .popup-message {
+            font-size: 14px;
+            color: #666;
+            line-height: 1.5;
+            margin: 0;
+            text-align: center;
+        }
+
+        .popup-actions {
+            padding: 16px 24px 24px 24px;
+            display: flex;
+            gap: 12px;
+            justify-content: center;
+        }
+
+        .popup-btn {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .popup-btn-primary {
+            background: #dc3545;
+            color: white;
+        }
+
+        .popup-btn-primary:hover {
+            background: #c82333;
+        }
+
+        .popup-btn-secondary {
+            background: #f8f9fa;
+            color: #6c757d;
+            border: 1px solid #dee2e6;
+        }
+
+        .popup-btn-secondary:hover {
+            background: #e9ecef;
+        }
+
+        .popup-btn-success {
+            background: #28a745;
+            color: white;
+        }
+
+        .popup-btn-success:hover {
+            background: #218838;
+        }
+
+        .popup-icon {
+            font-size: 24px;
+            margin-bottom: 12px;
+            display: block;
+        }
+
+        .popup-icon-success {
+            color: #28a745;
+        }
+
+        .popup-icon-warning {
+            color: #ffc107;
+        }
+
+        .popup-icon-danger {
+            color: #dc3545;
+        }
+
+        @keyframes popupSlideIn {
+            from { 
+                transform: translateY(-30px) scale(0.95); 
+                opacity: 0; 
+            }
+            to { 
+                transform: translateY(0) scale(1); 
+                opacity: 1; 
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="gmail-container">
+        <!-- Header -->
+        <div class="header">
+            <div class="header-left-buttons">
+                <button class="save-scenario-btn" onclick="saveScenario()">Save Scenario</button>
+                <button class="load-scenario-btn" onclick="showLoadScenarioModal()">Load Scenario</button>
+            </div>
+            <h1>Email Twin</h1>
+            <div class="header-buttons">
+                <button class="generate-btn" onclick="generateResponse()">Generate Response</button>
+                <button class="view-refinements-btn" onclick="showViewRefinementsModal()">View Refinements</button>
+                <button class="view-saved-generations-btn" onclick="showViewSavedGenerationsModal()">View Saved Generations</button>
+                <button class="refresh-btn" onclick="loadEmails()">🔄 Refresh Emails</button>
+            </div>
+        </div>
+
+        <!-- Main Content Area -->
+        <div class="main-content">
+            <!-- Left Sidebar -->
+            <div class="sidebar">
+                <div class="sidebar-section">
+                    <h3>System Generated Categories</h3>
+                    <div class="category-list">
+                        <div class="category-item active" onclick="filterByCategory('all')" id="viewAll">
+                            <span class="category-icon">📧</span>
+                            <span class="category-name">View All</span>
+                            <span class="category-count" id="allCount">-</span>
+                        </div>
+                        <div id="categoryList">
+                            <!-- Categories will be populated here -->
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="sidebar-section">
+                    <h3>People</h3>
+                    <div class="category-list">
+                        <div id="peopleList">
+                            <!-- People will be populated here -->
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Right Content Area -->
+            <div class="content-area">
+                <!-- Stats Bar -->
+                <div class="stats-bar">
+                    <div class="stats-info">
+                        <span id="currentFilter">All Emails</span>
+                        <span class="stats-count">(<span id="displayedCount">-</span> emails)</span>
+                    </div>
+                </div>
+
+                <!-- Email List -->
+                <div class="email-list">
+                    <div id="emailContainer">
+                        <div class="loading">Loading emails...</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Email Thread Modal -->
+    <div id="threadModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 class="modal-title" id="modalTitle">Email Thread</h2>
+                <button class="close" onclick="closeModal()">&times;</button>
+            </div>
+            <div class="thread-container" id="threadContainer">
+                <div class="loading">Loading thread...</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let allEmails = [];
+        let currentFilter = 'all';
+
+        async function loadEmails() {
+            const container = document.getElementById('emailContainer');
+            container.innerHTML = '<div class="loading">Loading emails...</div>';
+
+            try {
+                console.log('Fetching emails from /api/response-emails...');
+                const response = await fetch('/api/response-emails');
+                console.log('Response status:', response.status);
+                const data = await response.json();
+                console.log('Response data:', JSON.stringify(data, null, 2));
+                console.log('data.emails exists:', !!data.emails);
+                console.log('data.emails length:', data.emails ? data.emails.length : 'undefined');
+
+                if (response.status === 401 && data.needsAuth) {
+                    // Authentication required
+                    container.innerHTML = `
+                        <div class="error">
+                            <h3>🔐 Gmail Authentication Required</h3>
+                            <p>To access your Gmail emails, you need to authenticate with Google.</p>
+                            <button onclick="startAuthentication()" style="
+                                background: #4285f4; 
+                                color: white; 
+                                border: none; 
+                                padding: 12px 24px; 
+                                border-radius: 6px; 
+                                cursor: pointer; 
+                                font-size: 16px;
+                                margin-top: 10px;
+                            ">🔗 Connect to Gmail</button>
+                        </div>
+                    `;
+                    return;
+                }
+
+                if (data.emails && data.emails.length > 0) {
+                    allEmails = data.emails;
+                    populateCategories(allEmails);
+                    displayEmails(allEmails);
+                    updateDisplayStats(allEmails);
+                } else {
+                    container.innerHTML = '<div class="loading">No emails found.</div>';
+                }
+            } catch (error) {
+                console.error('Error loading emails:', error);
+                container.innerHTML = '<div class="error">Failed to load emails. Please try again.</div>';
+            }
+        }
+
+        async function startAuthentication() {
+            try {
+                const response = await fetch('/api/auth');
+                const data = await response.json();
+                
+                if (data.authUrl) {
+                    // Open Google OAuth in a new window
+                    const authWindow = window.open(data.authUrl, 'gmail-auth', 'width=500,height=600');
+                    
+                    // Show instructions
+                    const container = document.getElementById('emailContainer');
+                    container.innerHTML = `
+                        <div class="loading">
+                            <h3>🔐 Authentication in Progress</h3>
+                            <p>1. Complete the authentication in the popup window</p>
+                            <p>2. Copy the authorization code from the final page</p>
+                            <p>3. Paste it below and click "Complete Authentication"</p>
+                            <br>
+                            <input type="text" id="authCode" placeholder="Paste authorization code here" style="
+                                width: 300px; 
+                                padding: 10px; 
+                                border: 1px solid #ddd; 
+                                border-radius: 4px;
+                                margin-right: 10px;
+                            ">
+                            <button onclick="completeAuthentication()" style="
+                                background: #34a853; 
+                                color: white; 
+                                border: none; 
+                                padding: 10px 20px; 
+                                border-radius: 4px; 
+                                cursor: pointer;
+                            ">Complete Authentication</button>
+                        </div>
+                    `;
+                }
+            } catch (error) {
+                console.error('Error starting authentication:', error);
+                showErrorPopup('Failed to start authentication. Please try again.', 'Authentication Error');
+            }
+        }
+
+        async function completeAuthentication() {
+            const authCode = document.getElementById('authCode').value.trim();
+            if (!authCode) {
+                showErrorPopup('Please enter the authorization code.', 'Missing Code');
+                return;
+            }
+
+            const container = document.getElementById('emailContainer');
+            container.innerHTML = '<div class="loading">Completing authentication...</div>';
+
+            try {
+                const response = await fetch('/api/auth/callback', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ code: authCode })
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    container.innerHTML = '<div class="loading">Authentication successful! Loading emails...</div>';
+                    // Wait a moment then load emails
+                    setTimeout(loadEmails, 1000);
+                } else {
+                    container.innerHTML = `<div class="error">Authentication failed: ${data.error}</div>`;
+                }
+            } catch (error) {
+                console.error('Error completing authentication:', error);
+                container.innerHTML = '<div class="error">Authentication failed. Please try again.</div>';
+            }
+        }
+
+        function populateCategories(emails) {
+            const categoryList = document.getElementById('categoryList');
+            const categories = [...new Set(emails.map(e => e.category))];
+            
+            // Count emails per category
+            const categoryCounts = {};
+            categories.forEach(category => {
+                categoryCounts[category] = emails.filter(e => e.category === category).length;
+            });
+
+            // Update "View All" count
+            document.getElementById('allCount').textContent = emails.length;
+
+            // Clear existing categories
+            categoryList.innerHTML = '';
+
+            // Add category items
+            categories.forEach(category => {
+                const categoryDiv = document.createElement('div');
+                categoryDiv.className = 'category-item';
+                categoryDiv.onclick = () => filterByCategory(category);
+                
+                const categoryIcon = getCategoryIcon(category);
+                const categoryClass = category.toLowerCase().replace(/\s+/g, '-');
+                
+                categoryDiv.innerHTML = `
+                    <span class="category-icon">${categoryIcon}</span>
+                    <span class="category-name">${category}</span>
+                    <span class="category-count">${categoryCounts[category]}</span>
+                `;
+                
+                categoryDiv.setAttribute('data-category', category);
+                categoryList.appendChild(categoryDiv);
+            });
+
+            // Populate people section
+            populatePeople(emails);
+        }
+
+        function populatePeople(emails) {
+            const peopleList = document.getElementById('peopleList');
+            
+            // Extract people from emails and count their threads
+            const peopleThreads = {};
+            
+            emails.forEach(email => {
+                // Get original sender from email data
+                let person = 'Unknown Person';
+                if (email.originalFrom) {
+                    // Extract name from "Name <email@domain.com>" format
+                    const nameMatch = email.originalFrom.match(/^([^<]+)/);
+                    if (nameMatch) {
+                        person = nameMatch[1].trim();
+                    } else {
+                        person = email.originalFrom.split('@')[0]; // Use email username if no name
+                    }
+                } else if (email.from && email.from !== 'Karthik Sreedhar') {
+                    // Fallback to from field if originalFrom not available
+                    const nameMatch = email.from.match(/^([^<]+)/);
+                    if (nameMatch) {
+                        person = nameMatch[1].trim();
+                    } else {
+                        person = email.from.split('@')[0];
+                    }
+                }
+                
+                // Skip if person is the user themselves
+                if (person === 'Karthik Sreedhar' || person === 'Unknown Person') {
+                    return;
+                }
+                
+                // Count threads per person (using subject as thread identifier)
+                const threadId = email.subject.replace(/^Re:\s*/i, '').trim();
+                
+                if (!peopleThreads[person]) {
+                    peopleThreads[person] = {
+                        threads: new Set(),
+                        emails: []
+                    };
+                }
+                
+                peopleThreads[person].threads.add(threadId);
+                peopleThreads[person].emails.push(email);
+            });
+            
+            // Show all people (no filtering by thread count)
+            const allPeople = Object.entries(peopleThreads)
+                .sort(([a, dataA], [b, dataB]) => dataB.emails.length - dataA.emails.length); // Sort by email count
+            
+            // Clear existing people
+            peopleList.innerHTML = '';
+            
+            if (allPeople.length === 0) {
+                peopleList.innerHTML = '<div style="padding: 12px; color: #666; font-style: italic; text-align: center;">No people found</div>';
+                return;
+            }
+            
+            // Add people items
+            allPeople.forEach(([person, data]) => {
+                const personDiv = document.createElement('div');
+                personDiv.className = 'category-item';
+                personDiv.onclick = () => filterByPerson(person);
+                
+                personDiv.innerHTML = `
+                    <span class="category-icon">👤</span>
+                    <span class="category-name">${person}</span>
+                    <span class="category-count">${data.emails.length}</span>
+                `;
+                
+                personDiv.setAttribute('data-person', person);
+                peopleList.appendChild(personDiv);
+            });
+        }
+
+        function filterByPerson(person) {
+            currentFilter = `person:${person}`;
+            
+            // Update active state in sidebar
+            document.querySelectorAll('.category-item').forEach(item => {
+                item.classList.remove('active');
+            });
+            
+            // Filter emails by person
+            const filteredEmails = allEmails.filter(email => {
+                let emailPerson = 'Unknown Person';
+                if (email.originalFrom) {
+                    const nameMatch = email.originalFrom.match(/^([^<]+)/);
+                    if (nameMatch) {
+                        emailPerson = nameMatch[1].trim();
+                    } else {
+                        emailPerson = email.originalFrom.split('@')[0];
+                    }
+                } else if (email.from && email.from !== 'Karthik Sreedhar') {
+                    const nameMatch = email.from.match(/^([^<]+)/);
+                    if (nameMatch) {
+                        emailPerson = nameMatch[1].trim();
+                    } else {
+                        emailPerson = email.from.split('@')[0];
+                    }
+                }
+                
+                return emailPerson === person;
+            });
+            
+            document.querySelector(`[data-person="${person}"]`).classList.add('active');
+            document.getElementById('currentFilter').textContent = person;
+            displayEmails(filteredEmails);
+            updateDisplayStats(filteredEmails);
+        }
+
+        function getCategoryIcon(category) {
+            const icons = {
+                'Meeting Response': '📅',
+                'Academic': '🎓',
+                'Financial': '💰',
+                'General': '📄'
+            };
+            return icons[category] || '📧';
+        }
+
+        function filterByCategory(category) {
+            currentFilter = category;
+            
+            // Update active state in sidebar
+            document.querySelectorAll('.category-item').forEach(item => {
+                item.classList.remove('active');
+            });
+            
+            if (category === 'all') {
+                document.getElementById('viewAll').classList.add('active');
+                document.getElementById('currentFilter').textContent = 'All Emails';
+                displayEmails(allEmails);
+                updateDisplayStats(allEmails);
+            } else {
+                const filteredEmails = allEmails.filter(email => email.category === category);
+                document.querySelector(`[data-category="${category}"]`).classList.add('active');
+                document.getElementById('currentFilter').textContent = category;
+                displayEmails(filteredEmails);
+                updateDisplayStats(filteredEmails);
+            }
+        }
+
+        async function displayEmails(emails) {
+            const container = document.getElementById('emailContainer');
+            container.innerHTML = '';
+
+            if (emails.length === 0) {
+                container.innerHTML = '<div class="loading">No emails found in this category.</div>';
+                return;
+            }
+
+            for (const email of emails) {
+                const emailDiv = document.createElement('div');
+                emailDiv.className = 'email-item';
+                emailDiv.onclick = () => openEmailThread(email.id, email.subject);
+                
+                const categoryClass = `category-${email.category.toLowerCase().replace(/\s+/g, '-')}`;
+                
+                // Get the original sender from email data
+                let originalSender = 'Unknown Sender';
+                if (email.originalFrom) {
+                    originalSender = email.originalFrom.split('<')[0].trim();
+                } else {
+                    // Extract from subject if available
+                    const subjectMatch = email.subject.match(/Re: (.+)/);
+                    if (subjectMatch) {
+                        originalSender = 'Original Sender';
+                    }
+                }
+                
+                emailDiv.innerHTML = `
+                    <div class="email-content">
+                        <div class="email-header">
+                            <div class="email-from">Karthik Sreedhar → ${originalSender}</div>
+                            <div class="email-date">${formatDate(email.date)}</div>
+                        </div>
+                        <div class="email-subject">${email.subject}</div>
+                        <div class="email-category ${categoryClass}">${email.category}</div>
+                    </div>
+                `;
+                
+                container.appendChild(emailDiv);
+            }
+        }
+
+        function formatDate(dateString) {
+            const date = new Date(dateString);
+            const now = new Date();
+            const diffTime = Math.abs(now - date);
+            const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+            
+            if (diffDays === 1) return 'Yesterday';
+            if (diffDays < 7) return `${diffDays} days ago`;
+            return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+        }
+
+        function updateDisplayStats(emails) {
+            document.getElementById('displayedCount').textContent = emails.length;
+        }
+
+        async function openEmailThread(emailId, subject) {
+            const modal = document.getElementById('threadModal');
+            const modalTitle = document.getElementById('modalTitle');
+            const threadContainer = document.getElementById('threadContainer');
+            
+            // Show modal and loading state
+            modal.style.display = 'block';
+            modalTitle.textContent = subject;
+            threadContainer.innerHTML = '<div class="loading">Loading thread...</div>';
+            
+            try {
+                const response = await fetch(`/api/email-thread/${emailId}`);
+                const threadData = await response.json();
+                
+                if (threadData.messages) {
+                    displayThread(threadData.messages);
+                } else {
+                    threadContainer.innerHTML = '<div class="error">Failed to load email thread.</div>';
+                }
+            } catch (error) {
+                console.error('Error loading thread:', error);
+                threadContainer.innerHTML = '<div class="error">Failed to load email thread. Please try again.</div>';
+            }
+        }
+
+        function displayThread(messages) {
+            const threadContainer = document.getElementById('threadContainer');
+            threadContainer.innerHTML = '';
+            
+            messages.forEach(message => {
+                const messageDiv = document.createElement('div');
+                messageDiv.className = `thread-message ${message.isResponse ? 'response' : 'original'}`;
+                
+                const toList = Array.isArray(message.to) ? message.to.join(', ') : message.to;
+                
+                messageDiv.innerHTML = `
+                    <div class="message-header">
+                        <div class="message-from">
+                            ${message.from}
+                            ${message.isResponse ? '<span class="response-badge">Your Response</span>' : ''}
+                        </div>
+                        <div class="message-to">To: ${toList}</div>
+                        <div class="message-date">${new Date(message.date).toLocaleString()}</div>
+                    </div>
+                    <div class="message-body">${message.body}</div>
+                `;
+                
+                threadContainer.appendChild(messageDiv);
+            });
+        }
+
+        function closeModal() {
+            const modal = document.getElementById('threadModal');
+            modal.style.display = 'none';
+        }
+
+        // Close modal when clicking outside of it
+        window.onclick = function(event) {
+            const modal = document.getElementById('threadModal');
+            if (event.target === modal) {
+                closeModal();
+            }
+        }
+
+        function updateStats(emails) {
+            document.getElementById('totalEmails').textContent = emails.length;
+            
+            const categories = [...new Set(emails.map(e => e.category))];
+            document.getElementById('categories').textContent = categories.length;
+            
+            const thisWeek = emails.filter(email => {
+                const emailDate = new Date(email.date);
+                const weekAgo = new Date();
+                weekAgo.setDate(weekAgo.getDate() - 7);
+                return emailDate > weekAgo;
+            }).length;
+            document.getElementById('thisWeek').textContent = thisWeek;
+        }
+
+        // Generate Response Modal functionality
+        let unrepliedEmails = [];
+        let currentGeneratedResponse = '';
+
+        async function generateResponse() {
+            // Show the Generate Response modal
+            showGenerateResponseModal();
+        }
+
+        function showGenerateResponseModal() {
+            // Create modal HTML if it doesn't exist
+            let modal = document.getElementById('generateResponseModal');
+            if (!modal) {
+                modal = createGenerateResponseModal();
+                document.body.appendChild(modal);
+            }
+            
+            // Reset form and clear cached response
+            document.getElementById('senderInput').value = '';
+            document.getElementById('subjectInput').value = '';
+            document.getElementById('emailBodyInput').value = '';
+            document.getElementById('contextInput').value = '';
+            document.getElementById('generatedResponseArea').style.display = 'none';
+            document.getElementById('refineSection').style.display = 'none';
+            
+            // Clear the cached response
+            currentGeneratedResponse = '';
+            
+            // Remove any existing justification section
+            const existingJustification = document.getElementById('justificationSection');
+            if (existingJustification) {
+                existingJustification.remove();
+            }
+            
+            modal.style.display = 'block';
+        }
+
+        function createGenerateResponseModal() {
+            const modal = document.createElement('div');
+            modal.id = 'generateResponseModal';
+            modal.className = 'modal';
+            modal.innerHTML = `
+                <div class="modal-content generate-response-modal">
+                    <div class="modal-header">
+                        <div style="display: flex; align-items: center; gap: 15px;">
+                            <h2 class="modal-title">Generate Email Response</h2>
+                            <button class="select-email-btn" onclick="showSelectEmailModal()">Load Email From Inbox</button>
+                            <button class="select-email-btn" onclick="showSelectTestEmailModal()">Load Test Emails</button>
+                        </div>
+                        <button class="close" onclick="closeGenerateResponseModal()">&times;</button>
+                    </div>
+                    <div class="generate-form-container">
+                        <form id="generateResponseForm" onsubmit="handleGenerateResponse(event)">
+                            <div class="form-group">
+                                <label for="senderInput">Sender:</label>
+                                <input type="text" id="senderInput" placeholder="Enter sender email (optional)">
+                            </div>
+                            <div class="form-group">
+                                <label for="subjectInput">Subject:</label>
+                                <input type="text" id="subjectInput" placeholder="Enter email subject (optional)">
+                            </div>
+                            <div class="form-group">
+                                <label for="emailBodyInput">Email Body: <span class="required">*</span></label>
+                                <textarea id="emailBodyInput" rows="8" placeholder="Enter the email content you want to respond to..." required></textarea>
+                            </div>
+                            <div class="form-group">
+                                <label for="contextInput">Additional Context:</label>
+                                <textarea id="contextInput" rows="3" placeholder="Any additional context or specific instructions (optional)"></textarea>
+                            </div>
+                            <div class="form-actions">
+                                <button type="submit" class="generate-submit-btn">
+                                    <span class="btn-text">Generate Response</span>
+                                    <span class="btn-loading" style="display: none;">Generating...</span>
+                                </button>
+                            </div>
+                        </form>
+                        
+                        <div id="generatedResponseArea" style="display: none;">
+                            <div class="response-header">
+                                <h3>Generated Response:</h3>
+                                <div style="display: flex; gap: 8px;">
+                                    <button class="copy-response-btn" onclick="copyResponseToClipboard()">Copy to Clipboard</button>
+                                    <button class="edit-response-btn" onclick="enableResponseEditing()">Edit</button>
+                                </div>
+                            </div>
+                            <div class="response-content">
+                                <div id="responseDisplay" class="response-display"></div>
+                                <textarea id="responseEditor" class="response-editor" style="display: none;"></textarea>
+                            </div>
+                            <div class="response-actions">
+                                <button class="save-edit-btn" onclick="saveResponseEdit()" style="display: none;">Save Changes</button>
+                                <button class="cancel-edit-btn" onclick="cancelResponseEdit()" style="display: none;">Cancel</button>
+                            </div>
+                        </div>
+
+                        <div id="refineSection" style="display: none;">
+                            <div class="refine-header">
+                                <h3>Refine Response:</h3>
+                            </div>
+                            <div class="form-group">
+                                <textarea id="refinePrompt" rows="3" placeholder="Describe how you'd like to modify the response (e.g., 'make it more formal', 'add availability for next week', 'make it shorter')"></textarea>
+                            </div>
+                            <div class="refine-actions">
+                                <button class="refine-btn" onclick="refineResponse()">
+                                    <span class="btn-text">Refine Response</span>
+                                    <span class="btn-loading" style="display: none;">Refining...</span>
+                                </button>
+                                <button class="save-response-btn" onclick="saveCurrentResponse()">
+                                    <span class="btn-text">Save Response</span>
+                                    <span class="btn-loading" style="display: none;">Saving...</span>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+            return modal;
+        }
+
+        async function showSelectEmailModal() {
+            // Load unreplied emails if not already loaded
+            if (unrepliedEmails.length === 0) {
+                await loadUnrepliedEmails();
+            }
+            
+            // Create select email modal
+            let selectModal = document.getElementById('selectEmailModal');
+            if (!selectModal) {
+                selectModal = createSelectEmailModal();
+                document.body.appendChild(selectModal);
+            }
+            
+            populateUnrepliedEmails();
+            selectModal.style.display = 'block';
+        }
+
+        async function showSelectTestEmailModal() {
+            // Create select test email modal
+            let selectTestModal = document.getElementById('selectTestEmailModal');
+            if (!selectTestModal) {
+                selectTestModal = createSelectTestEmailModal();
+                document.body.appendChild(selectTestModal);
+            }
+            
+            await loadAndPopulateTestEmails();
+            selectTestModal.style.display = 'block';
+        }
+
+        function createSelectTestEmailModal() {
+            const modal = document.createElement('div');
+            modal.id = 'selectTestEmailModal';
+            modal.className = 'modal';
+            modal.innerHTML = `
+                <div class="modal-content select-email-modal">
+                    <div class="modal-header">
+                        <h2 class="modal-title">Load Test Emails</h2>
+                        <button class="close" onclick="closeSelectTestEmailModal()">&times;</button>
+                    </div>
+                    <div class="select-email-container">
+                        <div class="email-search">
+                            <input type="text" id="testEmailSearchInput" placeholder="Search test emails..." onkeyup="filterTestEmails()">
+                        </div>
+                        <div id="testEmailsList" class="unreplied-emails-list">
+                            <div class="loading">Loading test emails...</div>
+                        </div>
+                    </div>
+                </div>
+            `;
+            return modal;
+        }
+
+        async function loadAndPopulateTestEmails() {
+            const container = document.getElementById('testEmailsList');
+            
+            try {
+                const response = await fetch('/api/test-emails');
+                const data = await response.json();
+                
+                if (data.emails && data.emails.length > 0) {
+                    populateTestEmails(data.emails);
+                } else {
+                    container.innerHTML = '<div class="no-emails">No test emails available.</div>';
+                }
+            } catch (error) {
+                console.error('Error loading test emails:', error);
+                container.innerHTML = '<div class="error">Failed to load test emails. Please try again.</div>';
+            }
+        }
+
+        function populateTestEmails(testEmails) {
+            const container = document.getElementById('testEmailsList');
+            container.innerHTML = '';
+            
+            testEmails.forEach(email => {
+                const emailDiv = document.createElement('div');
+                emailDiv.className = 'unreplied-email-item';
+                emailDiv.onclick = () => selectTestEmail(email);
+                
+                emailDiv.innerHTML = `
+                    <div class="unreplied-email-content">
+                        <div class="unreplied-email-header">
+                            <div class="unreplied-email-from">${email.from}</div>
+                            <div class="unreplied-email-date">Test Email</div>
+                        </div>
+                        <div class="unreplied-email-subject">${email.subject}</div>
+                        <div class="unreplied-email-preview">${email.body.substring(0, 150)}...</div>
+                        <div class="email-category category-academic-affairs">Test Email</div>
+                    </div>
+                `;
+                
+                container.appendChild(emailDiv);
+            });
+        }
+
+        function filterTestEmails() {
+            const searchTerm = document.getElementById('testEmailSearchInput').value.toLowerCase();
+            const emailItems = document.querySelectorAll('#testEmailsList .unreplied-email-item');
+            
+            emailItems.forEach(item => {
+                const from = item.querySelector('.unreplied-email-from').textContent.toLowerCase();
+                const subject = item.querySelector('.unreplied-email-subject').textContent.toLowerCase();
+                const preview = item.querySelector('.unreplied-email-preview').textContent.toLowerCase();
+                
+                if (from.includes(searchTerm) || subject.includes(searchTerm) || preview.includes(searchTerm)) {
+                    item.style.display = 'block';
+                } else {
+                    item.style.display = 'none';
+                }
+            });
+        }
+
+        function selectTestEmail(email) {
+            // Populate the form with selected test email data
+            document.getElementById('senderInput').value = email.from;
+            document.getElementById('subjectInput').value = email.subject;
+            document.getElementById('emailBodyInput').value = email.body;
+            
+            // Close select test email modal
+            closeSelectTestEmailModal();
+        }
+
+        function closeSelectTestEmailModal() {
+            const modal = document.getElementById('selectTestEmailModal');
+            if (modal) {
+                modal.style.display = 'none';
+            }
+        }
+
+        function createSelectEmailModal() {
+            const modal = document.createElement('div');
+            modal.id = 'selectEmailModal';
+            modal.className = 'modal';
+            modal.innerHTML = `
+                <div class="modal-content select-email-modal">
+                    <div class="modal-header">
+                        <h2 class="modal-title">Load Email From Inbox</h2>
+                        <button class="close" onclick="closeSelectEmailModal()">&times;</button>
+                    </div>
+                    <div class="select-email-container">
+                        <div class="email-search">
+                            <input type="text" id="emailSearchInput" placeholder="Search emails..." onkeyup="filterUnrepliedEmails()">
+                        </div>
+                        <div id="unrepliedEmailsList" class="unreplied-emails-list">
+                            <div class="loading">Loading unreplied emails...</div>
+                        </div>
+                    </div>
+                </div>
+            `;
+            return modal;
+        }
+
+        async function loadUnrepliedEmails() {
+            try {
+                const response = await fetch('/api/unreplied-emails');
+                const data = await response.json();
+                unrepliedEmails = data.emails || [];
+            } catch (error) {
+                console.error('Error loading unreplied emails:', error);
+                unrepliedEmails = [];
+            }
+        }
+
+        function populateUnrepliedEmails() {
+            const container = document.getElementById('unrepliedEmailsList');
+            
+            if (unrepliedEmails.length === 0) {
+                container.innerHTML = '<div class="no-emails">No unreplied emails found.</div>';
+                return;
+            }
+            
+            container.innerHTML = '';
+            unrepliedEmails.forEach(email => {
+                const emailDiv = document.createElement('div');
+                emailDiv.className = 'unreplied-email-item';
+                emailDiv.onclick = () => selectUnrepliedEmail(email);
+                
+                const categoryClass = `category-${email.category.toLowerCase().replace(/\s+/g, '-')}`;
+                
+                emailDiv.innerHTML = `
+                    <div class="unreplied-email-content">
+                        <div class="unreplied-email-header">
+                            <div class="unreplied-email-from">${email.from}</div>
+                            <div class="unreplied-email-date">${formatDate(email.date)}</div>
+                        </div>
+                        <div class="unreplied-email-subject">${email.subject}</div>
+                        <div class="unreplied-email-preview">${email.body.substring(0, 150)}...</div>
+                        <div class="email-category ${categoryClass}">${email.category}</div>
+                    </div>
+                `;
+                
+                container.appendChild(emailDiv);
+            });
+        }
+
+        function filterUnrepliedEmails() {
+            const searchTerm = document.getElementById('emailSearchInput').value.toLowerCase();
+            const filteredEmails = unrepliedEmails.filter(email => 
+                email.from.toLowerCase().includes(searchTerm) ||
+                email.subject.toLowerCase().includes(searchTerm) ||
+                email.body.toLowerCase().includes(searchTerm)
+            );
+            
+            const container = document.getElementById('unrepliedEmailsList');
+            container.innerHTML = '';
+            
+            if (filteredEmails.length === 0) {
+                container.innerHTML = '<div class="no-emails">No matching emails found.</div>';
+                return;
+            }
+            
+            filteredEmails.forEach(email => {
+                const emailDiv = document.createElement('div');
+                emailDiv.className = 'unreplied-email-item';
+                emailDiv.onclick = () => selectUnrepliedEmail(email);
+                
+                const categoryClass = `category-${email.category.toLowerCase().replace(/\s+/g, '-')}`;
+                
+                emailDiv.innerHTML = `
+                    <div class="unreplied-email-content">
+                        <div class="unreplied-email-header">
+                            <div class="unreplied-email-from">${email.from}</div>
+                            <div class="unreplied-email-date">${formatDate(email.date)}</div>
+                        </div>
+                        <div class="unreplied-email-subject">${email.subject}</div>
+                        <div class="unreplied-email-preview">${email.body.substring(0, 150)}...</div>
+                        <div class="email-category ${categoryClass}">${email.category}</div>
+                    </div>
+                `;
+                
+                container.appendChild(emailDiv);
+            });
+        }
+
+        function selectUnrepliedEmail(email) {
+            // Populate the form with selected email data
+            document.getElementById('senderInput').value = email.from;
+            document.getElementById('subjectInput').value = email.subject;
+            document.getElementById('emailBodyInput').value = email.body;
+            
+            // Close select email modal
+            closeSelectEmailModal();
+        }
+
+        async function handleGenerateResponse(event) {
+            event.preventDefault();
+            
+            const sender = document.getElementById('senderInput').value;
+            const subject = document.getElementById('subjectInput').value;
+            const emailBody = document.getElementById('emailBodyInput').value;
+            const context = document.getElementById('contextInput').value;
+            
+            if (!emailBody.trim()) {
+                showErrorPopup('Email body is required!', 'Missing Information');
+                return;
+            }
+            
+            // Show loading state
+            const submitBtn = document.querySelector('.generate-submit-btn');
+            const btnText = submitBtn.querySelector('.btn-text');
+            const btnLoading = submitBtn.querySelector('.btn-loading');
+            
+            btnText.style.display = 'none';
+            btnLoading.style.display = 'inline';
+            submitBtn.disabled = true;
+            
+            try {
+                // First, detect missing information
+                const missingInfoResponse = await fetch('/api/detect-missing-info', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        sender,
+                        subject,
+                        emailBody
+                    })
+                });
+                
+                const missingInfoData = await missingInfoResponse.json();
+                
+                if (!missingInfoResponse.ok) {
+                    throw new Error(missingInfoData.error || 'Failed to detect missing information');
+                }
+                
+                // Reset loading state for validation popup
+                btnText.style.display = 'inline';
+                btnLoading.style.display = 'none';
+                submitBtn.disabled = false;
+                
+                // Show validation popup
+                await showMissingInfoValidationPopup(missingInfoData, sender, subject, emailBody, context);
+                
+            } catch (error) {
+                console.error('Error in email generation process:', error);
+                showErrorPopup('Failed to process email. Please try again.', 'Processing Error');
+                
+                // Reset loading state
+                btnText.style.display = 'inline';
+                btnLoading.style.display = 'none';
+                submitBtn.disabled = false;
+            }
+        }
+
+        async function showMissingInfoValidationPopup(missingInfoData, sender, subject, emailBody, context) {
+            return new Promise((resolve) => {
+                const message = missingInfoData.hasMissingInfo 
+                    ? `There appears to be missing information: ${missingInfoData.missingInfo}`
+                    : 'No missing information detected';
+                
+                const title = missingInfoData.hasMissingInfo 
+                    ? 'Missing Information Detected' 
+                    : 'Validation Complete';
+                
+                const icon = missingInfoData.hasMissingInfo ? 'warning' : 'success';
+                
+                // Create validation popup
+                const popup = document.createElement('div');
+                popup.id = 'missingInfoPopup';
+                popup.className = 'popup-modal';
+                popup.innerHTML = `
+                    <div class="popup-content" style="max-width: 500px;">
+                        <div class="popup-header">
+                            <h3 class="popup-title">${title}</h3>
+                        </div>
+                        <div class="popup-body">
+                            <span class="popup-icon popup-icon-${icon}">${icon === 'warning' ? '⚠' : '✓'}</span>
+                            <p class="popup-message">${message}</p>
+                            ${missingInfoData.hasMissingInfo ? `
+                                <div style="margin-top: 15px;">
+                                    <textarea id="userCorrectionInput" placeholder="Add any corrections or additional information (optional)" 
+                                        style="width: 100%; height: 80px; padding: 8px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px; resize: vertical;"></textarea>
+                                </div>
+                            ` : ''}
+                        </div>
+                        <div class="popup-actions">
+                            ${missingInfoData.hasMissingInfo ? `
+                                <button class="popup-btn popup-btn-secondary" id="incorrectBtn">Incorrect</button>
+                                <button class="popup-btn popup-btn-primary" id="proceedBtn">Proceed</button>
+                            ` : `
+                                <button class="popup-btn popup-btn-success" id="proceedBtn">Proceed</button>
+                            `}
+                        </div>
+                    </div>
+                `;
+                
+                document.body.appendChild(popup);
+                popup.style.display = 'block';
+                
+                const proceedBtn = popup.querySelector('#proceedBtn');
+                const incorrectBtn = popup.querySelector('#incorrectBtn');
+                const userCorrectionInput = popup.querySelector('#userCorrectionInput');
+                
+                proceedBtn.addEventListener('click', async () => {
+                    const userCorrection = userCorrectionInput ? userCorrectionInput.value.trim() : '';
+                    let finalContext = context;
+                    
+                    // Add missing information context if detected or user provided correction
+                    if (missingInfoData.hasMissingInfo || userCorrection) {
+                        const missingInfoContext = missingInfoData.hasMissingInfo 
+                            ? `Missing information detected: ${missingInfoData.missingInfo}` 
+                            : '';
+                        const userContext = userCorrection 
+                            ? `User correction: ${userCorrection}` 
+                            : '';
+                        
+                        const additionalContext = [missingInfoContext, userContext].filter(c => c).join('\n');
+                        finalContext = finalContext 
+                            ? `${finalContext}\n\n${additionalContext}` 
+                            : additionalContext;
+                    }
+                    
+                    popup.remove();
+                    await proceedWithGeneration(sender, subject, emailBody, finalContext);
+                    resolve();
+                });
+                
+                if (incorrectBtn) {
+                    incorrectBtn.addEventListener('click', async () => {
+                        // User says the missing information detection is incorrect
+                        // Proceed with normal generation (no missing information context)
+                        popup.remove();
+                        await proceedWithGeneration(sender, subject, emailBody, context);
+                        resolve();
+                    });
+                }
+                
+                // Close on background click
+                popup.addEventListener('click', function(event) {
+                    if (event.target === popup) {
+                        popup.remove();
+                        resolve();
+                    }
+                });
+            });
+        }
+
+        async function proceedWithGeneration(sender, subject, emailBody, context) {
+            // Show loading state
+            const submitBtn = document.querySelector('.generate-submit-btn');
+            const btnText = submitBtn.querySelector('.btn-text');
+            const btnLoading = submitBtn.querySelector('.btn-loading');
+            
+            btnText.style.display = 'none';
+            btnLoading.style.display = 'inline';
+            submitBtn.disabled = true;
+            
+            try {
+                const response = await fetch('/api/generate-response', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        sender,
+                        subject,
+                        emailBody,
+                        context
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (data.response) {
+                    currentGeneratedResponse = data.response;
+                    displayGeneratedResponse(data.response, data.justification);
+                } else {
+                    showErrorPopup('Failed to generate response: ' + (data.error || 'Unknown error'), 'Generation Failed');
+                }
+            } catch (error) {
+                console.error('Error generating response:', error);
+                showErrorPopup('Failed to generate response. Please try again.', 'Network Error');
+            } finally {
+                // Reset loading state
+                btnText.style.display = 'inline';
+                btnLoading.style.display = 'none';
+                submitBtn.disabled = false;
+            }
+        }
+
+        function displayGeneratedResponse(response, justification) {
+            const responseArea = document.getElementById('generatedResponseArea');
+            const responseDisplay = document.getElementById('responseDisplay');
+            const refineSection = document.getElementById('refineSection');
+            
+            // Remove "Response:" or "Response" from the beginning if present
+            let cleanedResponse = response;
+            if (cleanedResponse.toLowerCase().startsWith('response:')) {
+                cleanedResponse = cleanedResponse.substring(9).trim();
+            } else if (cleanedResponse.toLowerCase().startsWith('response')) {
+                cleanedResponse = cleanedResponse.substring(8).trim();
+            }
+            
+            // Remove "REFINED RESPONSE" header if present
+            if (cleanedResponse.toLowerCase().startsWith('refined response:')) {
+                cleanedResponse = cleanedResponse.substring(17).trim();
+            } else if (cleanedResponse.toLowerCase().startsWith('refined response')) {
+                cleanedResponse = cleanedResponse.substring(16).trim();
+            }
+            
+            responseDisplay.innerHTML = cleanedResponse.replace(/\n/g, '<br>');
+            responseArea.style.display = 'block';
+            refineSection.style.display = 'block';
+            
+            // Create and display justification section (append if refinement)
+            createJustificationSection(justification);
+        }
+
+        function createJustificationSection(justification) {
+            // Check if this is a refinement by looking for existing justification
+            const existingSection = document.getElementById('justificationSection');
+            
+            if (existingSection) {
+                // This is a refinement - append new justification below existing
+                const existingContent = document.getElementById('justificationContent');
+                const currentJustification = existingContent.innerHTML;
+                
+                // Add separator and new justification
+                const newJustificationHtml = `
+                    ${currentJustification}
+                    <hr style="margin: 20px 0; border: none; border-top: 2px solid #d2b48c; opacity: 0.5;">
+                    <div style="margin-top: 15px;">
+                        <strong style="color: #8b4513; font-size: 14px; text-transform: uppercase;">Refinement Justification:</strong>
+                        ${formatJustification(justification)}
+                    </div>
+                `;
+                
+                existingContent.innerHTML = newJustificationHtml;
+            } else {
+                // This is the first generation - create new justification section
+                const justificationSection = document.createElement('div');
+                justificationSection.id = 'justificationSection';
+                justificationSection.innerHTML = `
+                    <div class="justification-container">
+                        <div class="justification-header" onclick="toggleJustification()">
+                            <h3>Response Justification</h3>
+                            <span class="justification-toggle">◀</span>
+                        </div>
+                        <div class="justification-content" id="justificationContent">
+                            ${formatJustification(justification)}
+                        </div>
+                    </div>
+                `;
+                
+                // Insert between generated response area and refine section
+                const refineSection = document.getElementById('refineSection');
+                refineSection.parentNode.insertBefore(justificationSection, refineSection);
+            }
+        }
+
+        function formatJustification(justification) {
+            if (!justification) {
+                return '<p>No justification provided.</p>';
+            }
+            
+            // Remove "Justification:" or "Justification" from the beginning if present
+            let cleanedJustification = justification;
+            if (cleanedJustification.toLowerCase().startsWith('justification:')) {
+                cleanedJustification = cleanedJustification.substring(13).trim();
+            } else if (cleanedJustification.toLowerCase().startsWith('justification')) {
+                cleanedJustification = cleanedJustification.substring(13).trim();
+            }
+            
+            // Split justification into bullet points if it contains line breaks
+            const lines = cleanedJustification.split('\n').filter(line => line.trim());
+            
+            if (lines.length <= 1) {
+                return `<p>${cleanedJustification}</p>`;
+            }
+            
+            // Format as bullet points, but filter out empty or very short lines
+            const bulletPoints = lines
+                .map(line => {
+                    const trimmed = line.trim();
+                    // Remove existing bullet points or dashes
+                    const cleaned = trimmed.replace(/^[-•*]\s*/, '');
+                    return cleaned;
+                })
+                .filter(cleaned => cleaned.length > 2) // Filter out empty or very short lines
+                .map(cleaned => `<li>${cleaned}</li>`)
+                .join('');
+            
+            if (bulletPoints) {
+                return `<ul>${bulletPoints}</ul>`;
+            } else {
+                return `<p>${cleanedJustification}</p>`;
+            }
+        }
+
+        function toggleJustification() {
+            const content = document.getElementById('justificationContent');
+            const toggle = document.querySelector('.justification-toggle');
+            
+            if (content.style.display === 'none' || content.style.display === '') {
+                content.style.display = 'block';
+                toggle.classList.add('expanded');
+                toggle.textContent = '▼';
+            } else {
+                content.style.display = 'none';
+                toggle.classList.remove('expanded');
+                toggle.textContent = '◀';
+            }
+        }
+
+        function enableResponseEditing() {
+            const responseDisplay = document.getElementById('responseDisplay');
+            const responseEditor = document.getElementById('responseEditor');
+            const editBtn = document.querySelector('.edit-response-btn');
+            const saveBtn = document.querySelector('.save-edit-btn');
+            const cancelBtn = document.querySelector('.cancel-edit-btn');
+            
+            responseEditor.value = currentGeneratedResponse;
+            responseDisplay.style.display = 'none';
+            responseEditor.style.display = 'block';
+            editBtn.style.display = 'none';
+            saveBtn.style.display = 'inline-block';
+            cancelBtn.style.display = 'inline-block';
+        }
+
+        function saveResponseEdit() {
+            const responseDisplay = document.getElementById('responseDisplay');
+            const responseEditor = document.getElementById('responseEditor');
+            const editBtn = document.querySelector('.edit-response-btn');
+            const saveBtn = document.querySelector('.save-edit-btn');
+            const cancelBtn = document.querySelector('.cancel-edit-btn');
+            
+            currentGeneratedResponse = responseEditor.value;
+            responseDisplay.innerHTML = currentGeneratedResponse.replace(/\n/g, '<br>');
+            
+            responseDisplay.style.display = 'block';
+            responseEditor.style.display = 'none';
+            editBtn.style.display = 'inline-block';
+            saveBtn.style.display = 'none';
+            cancelBtn.style.display = 'none';
+        }
+
+        function cancelResponseEdit() {
+            const responseDisplay = document.getElementById('responseDisplay');
+            const responseEditor = document.getElementById('responseEditor');
+            const editBtn = document.querySelector('.edit-response-btn');
+            const saveBtn = document.querySelector('.save-edit-btn');
+            const cancelBtn = document.querySelector('.cancel-edit-btn');
+            
+            responseDisplay.style.display = 'block';
+            responseEditor.style.display = 'none';
+            editBtn.style.display = 'inline-block';
+            saveBtn.style.display = 'none';
+            cancelBtn.style.display = 'none';
+        }
+
+        async function refineResponse() {
+            const refinePrompt = document.getElementById('refinePrompt').value.trim();
+            
+            if (!refinePrompt) {
+                showErrorPopup('Please enter refinement instructions!', 'Missing Information');
+                return;
+            }
+            
+            // Show loading state
+            const refineBtn = document.querySelector('.refine-btn');
+            const btnText = refineBtn.querySelector('.btn-text');
+            const btnLoading = refineBtn.querySelector('.btn-loading');
+            
+            btnText.style.display = 'none';
+            btnLoading.style.display = 'inline';
+            refineBtn.disabled = true;
+            
+            try {
+                const response = await fetch('/api/refine-response', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        currentResponse: currentGeneratedResponse,
+                        refinementPrompt: refinePrompt
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (data.response) {
+                    currentGeneratedResponse = data.response;
+                    displayGeneratedResponse(data.response, data.justification);
+                    document.getElementById('refinePrompt').value = ''; // Clear refinement prompt
+                } else {
+                    showErrorPopup('Failed to refine response: ' + (data.error || 'Unknown error'), 'Refinement Failed');
+                }
+            } catch (error) {
+                console.error('Error refining response:', error);
+                showErrorPopup('Failed to refine response. Please try again.', 'Network Error');
+            } finally {
+                // Reset loading state
+                btnText.style.display = 'inline';
+                btnLoading.style.display = 'none';
+                refineBtn.disabled = false;
+            }
+        }
+
+        function closeGenerateResponseModal() {
+            const modal = document.getElementById('generateResponseModal');
+            if (modal) {
+                modal.style.display = 'none';
+            }
+        }
+
+        function closeSelectEmailModal() {
+            const modal = document.getElementById('selectEmailModal');
+            if (modal) {
+                modal.style.display = 'none';
+            }
+        }
+
+        // Close modals when clicking outside
+        window.addEventListener('click', function(event) {
+            const threadModal = document.getElementById('threadModal');
+            const generateModal = document.getElementById('generateResponseModal');
+            const selectModal = document.getElementById('selectEmailModal');
+            
+            if (event.target === threadModal) {
+                closeModal();
+            }
+            if (event.target === generateModal) {
+                closeGenerateResponseModal();
+            }
+            if (event.target === selectModal) {
+                closeSelectEmailModal();
+            }
+        });
+
+        // View Refinements Modal functionality
+        async function showViewRefinementsModal() {
+            // Create modal HTML if it doesn't exist
+            let modal = document.getElementById('viewRefinementsModal');
+            if (!modal) {
+                modal = createViewRefinementsModal();
+                document.body.appendChild(modal);
+            }
+            
+            modal.style.display = 'block';
+            await loadRefinements();
+        }
+
+        function createViewRefinementsModal() {
+            const modal = document.createElement('div');
+            modal.id = 'viewRefinementsModal';
+            modal.className = 'modal';
+            modal.innerHTML = `
+                <div class="modal-content view-refinements-modal">
+                    <div class="modal-header">
+                        <h2 class="modal-title">Saved Refinements</h2>
+                        <button class="close" onclick="closeViewRefinementsModal()">&times;</button>
+                    </div>
+                    <div class="refinements-container">
+                        <div class="refinements-header">
+                            <div class="refinements-count" id="refinementsCount">Loading...</div>
+                            <button class="clear-all-btn" id="clearAllBtn" onclick="clearAllRefinements()" disabled>Clear All</button>
+                        </div>
+                        <div id="refinementsList">
+                            <div class="loading">Loading refinements...</div>
+                        </div>
+                    </div>
+                </div>
+            `;
+            return modal;
+        }
+
+        async function loadRefinements() {
+            const refinementsList = document.getElementById('refinementsList');
+            const refinementsCount = document.getElementById('refinementsCount');
+            const clearAllBtn = document.getElementById('clearAllBtn');
+            
+            try {
+                const response = await fetch('/api/refinements');
+                const data = await response.json();
+                
+                if (data.refinements && data.refinements.length > 0) {
+                    displayRefinements(data.refinements);
+                    refinementsCount.textContent = `${data.refinements.length} refinement${data.refinements.length === 1 ? '' : 's'} saved`;
+                    clearAllBtn.disabled = false;
+                } else {
+                    displayNoRefinements();
+                    refinementsCount.textContent = 'No refinements saved';
+                    clearAllBtn.disabled = true;
+                }
+            } catch (error) {
+                console.error('Error loading refinements:', error);
+                refinementsList.innerHTML = '<div class="error">Failed to load refinements. Please try again.</div>';
+                refinementsCount.textContent = 'Error loading refinements';
+                clearAllBtn.disabled = true;
+            }
+        }
+
+        function displayRefinements(refinements) {
+            const refinementsList = document.getElementById('refinementsList');
+            refinementsList.innerHTML = '';
+            
+            refinements.forEach(refinement => {
+                const refinementDiv = document.createElement('div');
+                refinementDiv.className = 'refinement-item';
+                
+                // Check if this refinement has analysis data
+                const hasAnalysis = refinement.analysis && refinement.analysis.changes && refinement.analysis.changes.length > 0;
+                
+                let analysisHtml = '';
+                if (hasAnalysis) {
+                    analysisHtml = `
+                        <div class="refinement-analysis" style="margin-top: 15px; border-top: 1px solid #e9ecef; padding-top: 15px;">
+                            <div class="refinement-analysis-label" style="font-weight: 600; color: #6f42c1; font-size: 12px; text-transform: uppercase; margin-bottom: 10px;">
+                                Change Analysis & Categorization
+                            </div>
+                            <div class="refinement-changes">
+                                ${refinement.analysis.changes.map((change, index) => `
+                                    <div class="refinement-change" style="margin-bottom: 12px; padding: 12px; border: 1px solid #e9ecef; border-radius: 6px; background: #fefefe; box-shadow: 0 1px 3px rgba(0,0,0,0.05);">
+                                        <div class="change-header" style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 10px;">
+                                            <div class="change-description" style="font-weight: 500; color: #333; font-size: 13px; flex: 1; margin-right: 15px;">
+                                                ${change.description}
+                                            </div>
+                                            <div class="change-category-controls" style="display: flex; align-items: center; gap: 8px; flex-shrink: 0;">
+                                                <select class="change-category-select" data-refinement-id="${refinement.id}" data-change-index="${index}" 
+                                                    style="padding: 4px 8px; font-size: 12px; border: 1px solid #ddd; border-radius: 4px; background: white; min-width: 120px;">
+                                                    <option value="GENERALIZABLE" ${change.category === 'GENERALIZABLE' ? 'selected' : ''}>Generalizable</option>
+                                                    <option value="EMAIL-SPECIFIC" ${change.category === 'EMAIL-SPECIFIC' ? 'selected' : ''}>Email-Specific</option>
+                                                </select>
+                                                <button class="save-category-btn" data-refinement-id="${refinement.id}" data-change-index="${index}"
+                                                    style="padding: 4px 12px; font-size: 12px; background: #28a745; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: 500; transition: background-color 0.2s;">
+                                                    Save Category
+                                                </button>
+                                            </div>
+                                        </div>
+                                        <div class="change-reasoning" style="font-size: 12px; color: #666; margin-bottom: 8px; line-height: 1.4;">
+                                            <strong>Reasoning:</strong> ${change.reasoning}
+                                        </div>
+                                        <div class="change-category-info" style="font-size: 11px; color: #888; margin-bottom: 8px; padding: 6px 8px; background: ${change.category === 'GENERALIZABLE' ? '#e8f5e8' : '#fff3e0'}; border-radius: 3px; border-left: 3px solid ${change.category === 'GENERALIZABLE' ? '#28a745' : '#ff9800'};">
+                                            <strong>Category:</strong> ${change.category === 'GENERALIZABLE' ? 'Generalizable - Will be applied to future responses' : 'Email-Specific - Only applies to this specific context'}
+                                        </div>
+                                        ${change.extractedRule ? `
+                                            <div class="change-rule" style="font-size: 12px; color: #28a745; background: #f8fff9; padding: 8px; border-radius: 4px; border-left: 3px solid #28a745;">
+                                                <strong>Extracted Rule:</strong> ${change.extractedRule}
+                                            </div>
+                                        ` : ''}
+                                    </div>
+                                `).join('')}
+                            </div>
+                        </div>
+                    `;
+                }
+                
+                refinementDiv.innerHTML = `
+                    <div class="refinement-header">
+                        <div class="refinement-timestamp">${formatRefinementDate(refinement.timestamp)}</div>
+                        <button class="refinement-delete-btn" data-refinement-id="${refinement.id}">Delete</button>
+                    </div>
+                    <div class="refinement-content">
+                        <div class="refinement-prompt">
+                            <div class="refinement-prompt-label">Refinement Prompt</div>
+                            <div class="refinement-prompt-text">${refinement.prompt}</div>
+                        </div>
+                        <div class="refinement-responses">
+                            <div class="refinement-response refinement-original">
+                                <div class="refinement-response-label">Original Response</div>
+                                <div class="refinement-response-text">${refinement.originalResponse}</div>
+                            </div>
+                            <div class="refinement-response refinement-refined">
+                                <div class="refinement-response-label">Refined Response</div>
+                                <div class="refinement-response-text">${refinement.refinedResponse}</div>
+                            </div>
+                        </div>
+                        ${analysisHtml}
+                    </div>
+                `;
+                
+                // Add event listener for delete button
+                const deleteBtn = refinementDiv.querySelector('.refinement-delete-btn');
+                deleteBtn.addEventListener('click', () => deleteRefinement(refinement.id));
+                
+                // Add event listeners for category change buttons if analysis exists
+                if (hasAnalysis) {
+                    const saveCategoryBtns = refinementDiv.querySelectorAll('.save-category-btn');
+                    saveCategoryBtns.forEach(btn => {
+                        btn.addEventListener('click', () => {
+                            const refinementId = btn.getAttribute('data-refinement-id');
+                            const changeIndex = parseInt(btn.getAttribute('data-change-index'));
+                            const selectElement = refinementDiv.querySelector(`select[data-refinement-id="${refinementId}"][data-change-index="${changeIndex}"]`);
+                            const newCategory = selectElement.value;
+                            updateRefinementCategory(refinementId, changeIndex, newCategory);
+                        });
+                    });
+                }
+                
+                refinementsList.appendChild(refinementDiv);
+            });
+        }
+
+        function displayNoRefinements() {
+            const refinementsList = document.getElementById('refinementsList');
+            refinementsList.innerHTML = `
+                <div class="no-refinements">
+                    <div class="no-refinements-icon">📝</div>
+                    <div class="no-refinements-text">No refinements saved yet</div>
+                    <div class="no-refinements-subtext">Refinements will appear here when you use the "Refine Response" feature</div>
+                </div>
+            `;
+        }
+
+        function formatRefinementDate(timestamp) {
+            const date = new Date(timestamp);
+            const now = new Date();
+            const diffTime = Math.abs(now - date);
+            const diffMinutes = Math.floor(diffTime / (1000 * 60));
+            const diffHours = Math.floor(diffTime / (1000 * 60 * 60));
+            const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
+            
+            if (diffMinutes < 1) return 'Just now';
+            if (diffMinutes < 60) return `${diffMinutes} minute${diffMinutes === 1 ? '' : 's'} ago`;
+            if (diffHours < 24) return `${diffHours} hour${diffHours === 1 ? '' : 's'} ago`;
+            if (diffDays < 7) return `${diffDays} day${diffDays === 1 ? '' : 's'} ago`;
+            
+            return date.toLocaleDateString('en-US', { 
+                month: 'short', 
+                day: 'numeric', 
+                year: date.getFullYear() !== now.getFullYear() ? 'numeric' : undefined 
+            });
+        }
+
+        async function deleteRefinement(refinementId) {
+            showConfirmPopup(
+                'Are you sure you want to delete this refinement?',
+                async () => {
+                    try {
+                        const response = await fetch(`/api/refinements/${refinementId}`, {
+                            method: 'DELETE'
+                        });
+                        
+                        const data = await response.json();
+                        
+                        if (data.success) {
+                            showSuccessPopup('Refinement deleted successfully!', 'Refinement Deleted');
+                            // Reload refinements to update the display
+                            await loadRefinements();
+                        } else {
+                            showErrorPopup('Failed to delete refinement: ' + (data.error || 'Unknown error'), 'Delete Failed');
+                        }
+                    } catch (error) {
+                        console.error('Error deleting refinement:', error);
+                        showErrorPopup('Failed to delete refinement. Please try again.', 'Network Error');
+                    }
+                },
+                () => {},
+                'Delete Refinement'
+            );
+        }
+
+        async function clearAllRefinements() {
+            showConfirmPopup(
+                'Are you sure you want to delete ALL refinements? This action cannot be undone.',
+                async () => {
+                    const clearAllBtn = document.getElementById('clearAllBtn');
+                    const originalText = clearAllBtn.textContent;
+                    clearAllBtn.textContent = 'Clearing...';
+                    clearAllBtn.disabled = true;
+                    
+                    try {
+                        const response = await fetch('/api/refinements', {
+                            method: 'DELETE'
+                        });
+                        
+                        const data = await response.json();
+                        
+                        if (data.success) {
+                            showSuccessPopup('All refinements cleared successfully!', 'Refinements Cleared');
+                            // Reload refinements to update the display
+                            await loadRefinements();
+                        } else {
+                            showErrorPopup('Failed to clear refinements: ' + (data.error || 'Unknown error'), 'Clear Failed');
+                            clearAllBtn.textContent = originalText;
+                            clearAllBtn.disabled = false;
+                        }
+                    } catch (error) {
+                        console.error('Error clearing refinements:', error);
+                        showErrorPopup('Failed to clear refinements. Please try again.', 'Network Error');
+                        clearAllBtn.textContent = originalText;
+                        clearAllBtn.disabled = false;
+                    }
+                },
+                () => {},
+                'Clear All Refinements'
+            );
+        }
+
+        function closeViewRefinementsModal() {
+            const modal = document.getElementById('viewRefinementsModal');
+            if (modal) {
+                modal.style.display = 'none';
+            }
+        }
+
+        // Save Current Response functionality
+        async function saveCurrentResponse() {
+            if (!currentGeneratedResponse) {
+                showErrorPopup('No response to save! Please generate a response first.', 'No Response Available');
+                return;
+            }
+
+            // Get the original email data from the form
+            const sender = document.getElementById('senderInput').value;
+            const subject = document.getElementById('subjectInput').value;
+            const emailBody = document.getElementById('emailBodyInput').value;
+
+            if (!emailBody.trim()) {
+                showErrorPopup('Original email body is required to save the response!', 'Missing Information');
+                return;
+            }
+
+            // Show loading state
+            const saveBtn = document.querySelector('.save-response-btn');
+            const btnText = saveBtn.querySelector('.btn-text');
+            const btnLoading = saveBtn.querySelector('.btn-loading');
+            
+            btnText.style.display = 'none';
+            btnLoading.style.display = 'inline';
+            saveBtn.disabled = true;
+
+            try {
+                const response = await fetch('/api/save-generation', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        originalEmail: {
+                            sender: sender || 'Unknown Sender',
+                            subject: subject || 'No Subject',
+                            body: emailBody
+                        },
+                        generatedResponse: currentGeneratedResponse,
+                        justification: '' // Could add justification if needed
+                    })
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    showSuccessPopup('Response saved successfully!', 'Response Saved');
+                } else {
+                    showErrorPopup('Failed to save response: ' + (data.error || 'Unknown error'), 'Save Failed');
+                }
+            } catch (error) {
+                console.error('Error saving response:', error);
+                showErrorPopup('Failed to save response. Please try again.', 'Network Error');
+            } finally {
+                // Reset loading state
+                btnText.style.display = 'inline';
+                btnLoading.style.display = 'none';
+                saveBtn.disabled = false;
+            }
+        }
+
+        // View Saved Generations Modal functionality
+        async function showViewSavedGenerationsModal() {
+            // Create modal HTML if it doesn't exist
+            let modal = document.getElementById('viewSavedGenerationsModal');
+            if (!modal) {
+                modal = createViewSavedGenerationsModal();
+                document.body.appendChild(modal);
+            }
+            
+            modal.style.display = 'block';
+            await loadSavedGenerations();
+        }
+
+        function createViewSavedGenerationsModal() {
+            const modal = document.createElement('div');
+            modal.id = 'viewSavedGenerationsModal';
+            modal.className = 'modal';
+            modal.innerHTML = `
+                <div class="modal-content view-saved-generations-modal">
+                    <div class="modal-header">
+                        <h2 class="modal-title">Saved Generations</h2>
+                        <button class="close" onclick="closeViewSavedGenerationsModal()">&times;</button>
+                    </div>
+                    <div class="saved-generations-container">
+                        <div class="saved-generations-header">
+                            <div class="saved-generations-count" id="savedGenerationsCount">Loading...</div>
+                            <button class="clear-all-btn" id="clearAllSavedGenerationsBtn" onclick="clearAllSavedGenerations()" disabled>Clear All</button>
+                        </div>
+                        <div id="savedGenerationsList">
+                            <div class="loading">Loading saved generations...</div>
+                        </div>
+                    </div>
+                </div>
+            `;
+            return modal;
+        }
+
+        async function loadSavedGenerations() {
+            const savedGenerationsList = document.getElementById('savedGenerationsList');
+            const savedGenerationsCount = document.getElementById('savedGenerationsCount');
+            const clearAllBtn = document.getElementById('clearAllSavedGenerationsBtn');
+            
+            try {
+                const response = await fetch('/api/saved-generations');
+                const data = await response.json();
+                
+                if (data.savedGenerations && data.savedGenerations.length > 0) {
+                    displaySavedGenerations(data.savedGenerations);
+                    savedGenerationsCount.textContent = `${data.savedGenerations.length} generation${data.savedGenerations.length === 1 ? '' : 's'} saved`;
+                    clearAllBtn.disabled = false;
+                } else {
+                    displayNoSavedGenerations();
+                    savedGenerationsCount.textContent = 'No generations saved';
+                    clearAllBtn.disabled = true;
+                }
+            } catch (error) {
+                console.error('Error loading saved generations:', error);
+                savedGenerationsList.innerHTML = '<div class="error">Failed to load saved generations. Please try again.</div>';
+                savedGenerationsCount.textContent = 'Error loading saved generations';
+                clearAllBtn.disabled = true;
+            }
+        }
+
+        function displaySavedGenerations(savedGenerations) {
+            const savedGenerationsList = document.getElementById('savedGenerationsList');
+            savedGenerationsList.innerHTML = '';
+            
+            savedGenerations.forEach(generation => {
+                const generationDiv = document.createElement('div');
+                generationDiv.className = 'saved-generation-item';
+                generationDiv.innerHTML = `
+                    <div class="saved-generation-header">
+                        <div class="saved-generation-timestamp">${formatSavedGenerationDate(generation.timestamp)}</div>
+                        <button class="saved-generation-delete-btn" data-generation-id="${generation.id}">Delete</button>
+                    </div>
+                    <div class="saved-generation-content">
+                        <div class="saved-generation-original-email">
+                            <div class="saved-generation-original-label">Original Email</div>
+                            <div class="saved-generation-original-details">
+                                <div class="saved-generation-original-sender"><strong>From:</strong> ${generation.originalEmail.sender}</div>
+                                <div class="saved-generation-original-subject"><strong>Subject:</strong> ${generation.originalEmail.subject}</div>
+                                <div class="saved-generation-original-body">${generation.originalEmail.body}</div>
+                            </div>
+                        </div>
+                        <div class="saved-generation-response">
+                            <div class="saved-generation-response-label">Generated Response</div>
+                            <div class="saved-generation-response-text">${generation.generatedResponse}</div>
+                        </div>
+                    </div>
+                `;
+                
+                // Add event listener for delete button
+                const deleteBtn = generationDiv.querySelector('.saved-generation-delete-btn');
+                deleteBtn.addEventListener('click', () => deleteSavedGeneration(generation.id));
+                
+                savedGenerationsList.appendChild(generationDiv);
+            });
+        }
+
+        function displayNoSavedGenerations() {
+            const savedGenerationsList = document.getElementById('savedGenerationsList');
+            savedGenerationsList.innerHTML = `
+                <div class="no-saved-generations">
+                    <div class="no-saved-generations-icon">💾</div>
+                    <div class="no-saved-generations-text">No saved generations yet</div>
+                    <div class="no-saved-generations-subtext">Generated responses will appear here when you use the "Save Response" feature</div>
+                </div>
+            `;
+        }
+
+        function formatSavedGenerationDate(timestamp) {
+            const date = new Date(timestamp);
+            const now = new Date();
+            const diffTime = Math.abs(now - date);
+            const diffMinutes = Math.floor(diffTime / (1000 * 60));
+            const diffHours = Math.floor(diffTime / (1000 * 60 * 60));
+            const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
+            
+            if (diffMinutes < 1) return 'Just now';
+            if (diffMinutes < 60) return `${diffMinutes} minute${diffMinutes === 1 ? '' : 's'} ago`;
+            if (diffHours < 24) return `${diffHours} hour${diffHours === 1 ? '' : 's'} ago`;
+            if (diffDays < 7) return `${diffDays} day${diffDays === 1 ? '' : 's'} ago`;
+            
+            return date.toLocaleDateString('en-US', { 
+                month: 'short', 
+                day: 'numeric', 
+                year: date.getFullYear() !== now.getFullYear() ? 'numeric' : undefined 
+            });
+        }
+
+        async function deleteSavedGeneration(generationId) {
+            showConfirmPopup(
+                'Are you sure you want to delete this saved generation?',
+                async () => {
+                    try {
+                        const response = await fetch(`/api/saved-generations/${generationId}`, {
+                            method: 'DELETE'
+                        });
+                        
+                        const data = await response.json();
+                        
+                        if (data.success) {
+                            showSuccessPopup('Saved generation deleted successfully!', 'Generation Deleted');
+                            // Reload saved generations to update the display
+                            await loadSavedGenerations();
+                        } else {
+                            showErrorPopup('Failed to delete saved generation: ' + (data.error || 'Unknown error'), 'Delete Failed');
+                        }
+                    } catch (error) {
+                        console.error('Error deleting saved generation:', error);
+                        showErrorPopup('Failed to delete saved generation. Please try again.', 'Network Error');
+                    }
+                },
+                () => {},
+                'Delete Saved Generation'
+            );
+        }
+
+        async function clearAllSavedGenerations() {
+            showConfirmPopup(
+                'Are you sure you want to delete ALL saved generations? This action cannot be undone.',
+                async () => {
+                    const clearAllBtn = document.getElementById('clearAllSavedGenerationsBtn');
+                    const originalText = clearAllBtn.textContent;
+                    clearAllBtn.textContent = 'Clearing...';
+                    clearAllBtn.disabled = true;
+                    
+                    try {
+                        const response = await fetch('/api/saved-generations', {
+                            method: 'DELETE'
+                        });
+                        
+                        const data = await response.json();
+                        
+                        if (data.success) {
+                            showSuccessPopup('All saved generations cleared successfully!', 'Generations Cleared');
+                            // Reload saved generations to update the display
+                            await loadSavedGenerations();
+                        } else {
+                            showErrorPopup('Failed to clear saved generations: ' + (data.error || 'Unknown error'), 'Clear Failed');
+                            clearAllBtn.textContent = originalText;
+                            clearAllBtn.disabled = false;
+                        }
+                    } catch (error) {
+                        console.error('Error clearing saved generations:', error);
+                        showErrorPopup('Failed to clear saved generations. Please try again.', 'Network Error');
+                        clearAllBtn.textContent = originalText;
+                        clearAllBtn.disabled = false;
+                    }
+                },
+                () => {},
+                'Clear All Saved Generations'
+            );
+        }
+
+        function closeViewSavedGenerationsModal() {
+            const modal = document.getElementById('viewSavedGenerationsModal');
+            if (modal) {
+                modal.style.display = 'none';
+            }
+        }
+
+        // Update the window click event listener to include all modals
+        window.addEventListener('click', function(event) {
+            const threadModal = document.getElementById('threadModal');
+            const generateModal = document.getElementById('generateResponseModal');
+            const selectModal = document.getElementById('selectEmailModal');
+            const selectTestModal = document.getElementById('selectTestEmailModal');
+            const viewRefinementsModal = document.getElementById('viewRefinementsModal');
+            const viewSavedGenerationsModal = document.getElementById('viewSavedGenerationsModal');
+            
+            if (event.target === threadModal) {
+                closeModal();
+            }
+            if (event.target === generateModal) {
+                closeGenerateResponseModal();
+            }
+            if (event.target === selectModal) {
+                closeSelectEmailModal();
+            }
+            if (event.target === selectTestModal) {
+                closeSelectTestEmailModal();
+            }
+            if (event.target === viewRefinementsModal) {
+                closeViewRefinementsModal();
+            }
+            if (event.target === viewSavedGenerationsModal) {
+                closeViewSavedGenerationsModal();
+            }
+        });
+
+        // Custom Popup Modal Functions
+        function showCustomPopup(options) {
+            const {
+                title = 'Confirmation',
+                message = 'Are you sure?',
+                icon = 'warning',
+                primaryText = 'Confirm',
+                secondaryText = 'Cancel',
+                onPrimary = () => {},
+                onSecondary = () => {},
+                type = 'confirm' // 'confirm', 'alert', 'success'
+            } = options;
+
+            // Remove existing popup if any
+            const existingPopup = document.getElementById('customPopup');
+            if (existingPopup) {
+                existingPopup.remove();
+            }
+
+            // Create popup modal
+            const popup = document.createElement('div');
+            popup.id = 'customPopup';
+            popup.className = 'popup-modal';
+            
+            const iconClass = `popup-icon-${icon}`;
+            const iconSymbol = icon === 'success' ? '✓' : icon === 'warning' ? '⚠' : icon === 'danger' ? '⚠' : '?';
+            
+            popup.innerHTML = `
+                <div class="popup-content">
+                    <div class="popup-header">
+                        <h3 class="popup-title">${title}</h3>
+                    </div>
+                    <div class="popup-body">
+                        <span class="popup-icon ${iconClass}">${iconSymbol}</span>
+                        <p class="popup-message">${message}</p>
+                    </div>
+                    <div class="popup-actions">
+                        ${type === 'alert' ? '' : `<button class="popup-btn popup-btn-secondary" id="popupSecondaryBtn">${secondaryText}</button>`}
+                        <button class="popup-btn ${type === 'success' ? 'popup-btn-success' : 'popup-btn-primary'}" id="popupPrimaryBtn">${primaryText}</button>
+                    </div>
+                </div>
+            `;
+
+            document.body.appendChild(popup);
+            popup.style.display = 'block';
+
+            // Add event listeners for buttons
+            const primaryBtn = popup.querySelector('#popupPrimaryBtn');
+            const secondaryBtn = popup.querySelector('#popupSecondaryBtn');
+
+            primaryBtn.addEventListener('click', () => {
+                closeCustomPopup();
+                onPrimary();
+            });
+
+            if (secondaryBtn) {
+                secondaryBtn.addEventListener('click', () => {
+                    closeCustomPopup();
+                    onSecondary();
+                });
+            }
+
+            // Close on background click
+            popup.addEventListener('click', function(event) {
+                if (event.target === popup) {
+                    closeCustomPopup();
+                    if (type !== 'alert') onSecondary();
+                }
+            });
+        }
+
+        function closeCustomPopup() {
+            const popup = document.getElementById('customPopup');
+            if (popup) {
+                popup.style.display = 'none';
+                popup.remove();
+            }
+        }
+
+        // Copy to Clipboard functionality
+        async function copyResponseToClipboard() {
+            if (!currentGeneratedResponse) {
+                showErrorPopup('No response to copy! Please generate a response first.', 'No Response Available');
+                return;
+            }
+
+            try {
+                await navigator.clipboard.writeText(currentGeneratedResponse);
+                showSuccessPopup('Response copied to clipboard!', 'Copied Successfully');
+            } catch (error) {
+                console.error('Error copying to clipboard:', error);
+                
+                // Fallback method for older browsers
+                try {
+                    const textArea = document.createElement('textarea');
+                    textArea.value = currentGeneratedResponse;
+                    textArea.style.position = 'fixed';
+                    textArea.style.left = '-999999px';
+                    textArea.style.top = '-999999px';
+                    document.body.appendChild(textArea);
+                    textArea.focus();
+                    textArea.select();
+                    document.execCommand('copy');
+                    textArea.remove();
+                    showSuccessPopup('Response copied to clipboard!', 'Copied Successfully');
+                } catch (fallbackError) {
+                    console.error('Fallback copy method failed:', fallbackError);
+                    showErrorPopup('Failed to copy to clipboard. Please copy the text manually.', 'Copy Failed');
+                }
+            }
+        }
+
+        function showSuccessPopup(message, title = 'Success') {
+            showCustomPopup({
+                title: title,
+                message: message,
+                icon: 'success',
+                primaryText: 'OK',
+                type: 'alert',
+                onPrimary: () => {}
+            });
+        }
+
+        function showErrorPopup(message, title = 'Error') {
+            showCustomPopup({
+                title: title,
+                message: message,
+                icon: 'danger',
+                primaryText: 'OK',
+                type: 'alert',
+                onPrimary: () => {}
+            });
+        }
+
+        function showConfirmPopup(message, onConfirm, onCancel = () => {}, title = 'Confirm Action') {
+            showCustomPopup({
+                title: title,
+                message: message,
+                icon: 'warning',
+                primaryText: 'Confirm',
+                secondaryText: 'Cancel',
+                onPrimary: onConfirm,
+                onSecondary: onCancel,
+                type: 'confirm'
+            });
+        }
+
+        // Scenario Management Functions
+        async function saveScenario() {
+            // Get current application state
+            const currentState = {
+                emails: allEmails,
+                currentFilter: currentFilter,
+                categories: getCurrentCategories(),
+                people: getCurrentPeople(),
+                timestamp: new Date().toISOString()
+            };
+
+            // Show save scenario modal
+            showSaveScenarioModal(currentState);
+        }
+
+        function getCurrentCategories() {
+            const categoryElements = document.querySelectorAll('#categoryList .category-item');
+            const categories = [];
+            categoryElements.forEach(element => {
+                const name = element.querySelector('.category-name').textContent;
+                const count = element.querySelector('.category-count').textContent;
+                categories.push({ name, count });
+            });
+            return categories;
+        }
+
+        function getCurrentPeople() {
+            const peopleElements = document.querySelectorAll('#peopleList .category-item');
+            const people = [];
+            peopleElements.forEach(element => {
+                const name = element.querySelector('.category-name').textContent;
+                const count = element.querySelector('.category-count').textContent;
+                people.push({ name, count });
+            });
+            return people;
+        }
+
+        function showSaveScenarioModal(currentState) {
+            // Create save scenario modal if it doesn't exist
+            let modal = document.getElementById('saveScenarioModal');
+            if (!modal) {
+                modal = createSaveScenarioModal();
+                document.body.appendChild(modal);
+            }
+
+            // Reset form
+            document.getElementById('scenarioNameInput').value = '';
+            document.getElementById('scenarioDescriptionInput').value = '';
+            
+            // Update scenario preview
+            updateScenarioPreview(currentState);
+            
+            modal.style.display = 'block';
+        }
+
+        function createSaveScenarioModal() {
+            const modal = document.createElement('div');
+            modal.id = 'saveScenarioModal';
+            modal.className = 'modal';
+            modal.innerHTML = `
+                <div class="modal-content" style="max-width: 600px;">
+                    <div class="modal-header">
+                        <h2 class="modal-title">Save Current Scenario</h2>
+                        <button class="close" onclick="closeSaveScenarioModal()">&times;</button>
+                    </div>
+                    <div style="padding: 20px;">
+                        <form onsubmit="confirmSaveScenario(event)">
+                            <div class="form-group">
+                                <label for="scenarioNameInput">Scenario Name: <span class="required">*</span></label>
+                                <input type="text" id="scenarioNameInput" placeholder="Enter a name for this scenario..." required>
+                            </div>
+                            <div class="form-group">
+                                <label for="scenarioDescriptionInput">Description (optional):</label>
+                                <textarea id="scenarioDescriptionInput" rows="3" placeholder="Describe what makes this scenario unique..."></textarea>
+                            </div>
+                            <div class="form-group">
+                                <label>Current State Preview:</label>
+                                <div id="scenarioPreview" style="background: #f8f9fa; border: 1px solid #e9ecef; border-radius: 6px; padding: 15px; font-size: 14px; color: #666;">
+                                    Loading preview...
+                                </div>
+                            </div>
+                            <div class="form-actions">
+                                <button type="button" class="popup-btn popup-btn-secondary" onclick="closeSaveScenarioModal()">Cancel</button>
+                                <button type="submit" class="popup-btn popup-btn-success">Save Scenario</button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            `;
+            return modal;
+        }
+
+        async function updateScenarioPreview(currentState) {
+            const preview = document.getElementById('scenarioPreview');
+            const emailCount = currentState.emails ? currentState.emails.length : 0;
+            const categoryCount = currentState.categories ? currentState.categories.length : 0;
+            const peopleCount = currentState.people ? currentState.people.length : 0;
+            
+            // Fetch current refinements and saved generations count
+            let refinementsCount = 0;
+            let savedGenerationsCount = 0;
+            
+            try {
+                const [refinementsResponse, savedGenerationsResponse] = await Promise.all([
+                    fetch('/api/refinements'),
+                    fetch('/api/saved-generations')
+                ]);
+                
+                const refinementsData = await refinementsResponse.json();
+                const savedGenerationsData = await savedGenerationsResponse.json();
+                
+                refinementsCount = refinementsData.refinements ? refinementsData.refinements.length : 0;
+                savedGenerationsCount = savedGenerationsData.savedGenerations ? savedGenerationsData.savedGenerations.length : 0;
+            } catch (error) {
+                console.error('Error fetching refinements/saved generations count:', error);
+            }
+            
+            preview.innerHTML = `
+                <strong>📧 Emails:</strong> ${emailCount} total<br>
+                <strong>📂 Categories:</strong> ${categoryCount} categories<br>
+                <strong>👥 People:</strong> ${peopleCount} people<br>
+                <strong>🔄 Refinements:</strong> ${refinementsCount} saved<br>
+                <strong>💾 Saved Responses:</strong> ${savedGenerationsCount} saved<br>
+                <strong>🔍 Current Filter:</strong> ${currentState.currentFilter}<br>
+                <strong>⏰ Timestamp:</strong> ${new Date(currentState.timestamp).toLocaleString()}
+            `;
+        }
+
+        async function confirmSaveScenario(event) {
+            if (event) {
+                event.preventDefault();
+            }
+            
+            const scenarioName = document.getElementById('scenarioNameInput').value.trim();
+            const scenarioDescription = document.getElementById('scenarioDescriptionInput').value.trim();
+
+            if (!scenarioName) {
+                showErrorPopup('Please enter a scenario name!', 'Missing Information');
+                return;
+            }
+
+            // Get current state
+            const currentState = {
+                emails: allEmails,
+                currentFilter: currentFilter,
+                categories: getCurrentCategories(),
+                people: getCurrentPeople(),
+                timestamp: new Date().toISOString()
+            };
+
+            try {
+                const response = await fetch('/api/scenarios', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        name: scenarioName,
+                        description: scenarioDescription,
+                        state: currentState
+                    })
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    showSuccessPopup('Scenario saved successfully!', 'Scenario Saved');
+                    closeSaveScenarioModal();
+                } else {
+                    showErrorPopup('Failed to save scenario: ' + (data.error || 'Unknown error'), 'Save Failed');
+                }
+            } catch (error) {
+                console.error('Error saving scenario:', error);
+                showErrorPopup('Failed to save scenario. Please try again.', 'Network Error');
+            }
+        }
+
+        function closeSaveScenarioModal() {
+            const modal = document.getElementById('saveScenarioModal');
+            if (modal) {
+                modal.style.display = 'none';
+            }
+        }
+
+        async function showLoadScenarioModal() {
+            // Create load scenario modal if it doesn't exist
+            let modal = document.getElementById('loadScenarioModal');
+            if (!modal) {
+                modal = createLoadScenarioModal();
+                document.body.appendChild(modal);
+            }
+
+            modal.style.display = 'block';
+            await loadSavedScenarios();
+        }
+
+        function createLoadScenarioModal() {
+            const modal = document.createElement('div');
+            modal.id = 'loadScenarioModal';
+            modal.className = 'modal';
+            modal.innerHTML = `
+                <div class="modal-content" style="max-width: 800px; max-height: 80vh;">
+                    <div class="modal-header">
+                        <h2 class="modal-title">Load Saved Scenario</h2>
+                        <button class="close" onclick="closeLoadScenarioModal()">&times;</button>
+                    </div>
+                    <div style="padding: 20px; max-height: 60vh; overflow-y: auto;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; padding-bottom: 15px; border-bottom: 2px solid #28a745;">
+                            <div id="scenariosCount" style="color: #666; font-size: 14px;">Loading...</div>
+                            <button class="clear-all-btn" id="clearAllScenariosBtn" onclick="clearAllScenarios()" disabled>Clear All</button>
+                        </div>
+                        <div id="scenariosList">
+                            <div class="loading">Loading saved scenarios...</div>
+                        </div>
+                    </div>
+                </div>
+            `;
+            return modal;
+        }
+
+        async function loadSavedScenarios() {
+            const scenariosList = document.getElementById('scenariosList');
+            const scenariosCount = document.getElementById('scenariosCount');
+            const clearAllBtn = document.getElementById('clearAllScenariosBtn');
+
+            try {
+                const response = await fetch('/api/scenarios');
+                const data = await response.json();
+
+                if (data.scenarios && data.scenarios.length > 0) {
+                    displayScenarios(data.scenarios);
+                    scenariosCount.textContent = `${data.scenarios.length} scenario${data.scenarios.length === 1 ? '' : 's'} saved`;
+                    clearAllBtn.disabled = false;
+                } else {
+                    displayNoScenarios();
+                    scenariosCount.textContent = 'No scenarios saved';
+                    clearAllBtn.disabled = true;
+                }
+            } catch (error) {
+                console.error('Error loading scenarios:', error);
+                scenariosList.innerHTML = '<div class="error">Failed to load scenarios. Please try again.</div>';
+                scenariosCount.textContent = 'Error loading scenarios';
+                clearAllBtn.disabled = true;
+            }
+        }
+
+        function displayScenarios(scenarios) {
+            const scenariosList = document.getElementById('scenariosList');
+            scenariosList.innerHTML = '';
+
+            // Add "New Scenario" option at the top
+            const newScenarioDiv = document.createElement('div');
+            newScenarioDiv.className = 'refinement-item';
+            newScenarioDiv.style.border = '2px solid #28a745';
+            newScenarioDiv.style.backgroundColor = '#f8fff9';
+            newScenarioDiv.innerHTML = `
+                <div class="refinement-header">
+                    <div>
+                        <div style="font-weight: 600; color: #28a745; margin-bottom: 4px;">🆕 New Scenario</div>
+                        <div style="color: #666; font-size: 12px;">Start fresh with cleared refinements and saved generations</div>
+                    </div>
+                    <div style="display: flex; gap: 8px;">
+                        <button class="popup-btn popup-btn-success" style="padding: 4px 8px; font-size: 12px;" onclick="loadNewScenario()">Start New</button>
+                    </div>
+                </div>
+                <div class="refinement-content">
+                    <div style="font-size: 13px; color: #666;">
+                        This will clear all current refinements and saved generations, giving you a fresh start while keeping your email data intact.
+                    </div>
+                </div>
+            `;
+            scenariosList.appendChild(newScenarioDiv);
+
+            // Add existing scenarios
+            scenarios.forEach(scenario => {
+                const scenarioDiv = document.createElement('div');
+                scenarioDiv.className = 'refinement-item'; // Reuse existing styles
+                scenarioDiv.innerHTML = `
+                    <div class="refinement-header">
+                        <div>
+                            <div style="font-weight: 600; color: #333; margin-bottom: 4px;">${scenario.name}</div>
+                            <div class="refinement-timestamp">${formatScenarioDate(scenario.timestamp)}</div>
+                        </div>
+                        <div style="display: flex; gap: 8px;">
+                            <button class="popup-btn popup-btn-success" style="padding: 4px 8px; font-size: 12px;" onclick="loadScenario('${scenario.id}')">Load</button>
+                            <button class="refinement-delete-btn" onclick="deleteScenario('${scenario.id}')">Delete</button>
+                        </div>
+                    </div>
+                    <div class="refinement-content">
+                        ${scenario.description ? `<div style="margin-bottom: 10px; font-style: italic; color: #666;">${scenario.description}</div>` : ''}
+                        <div style="font-size: 13px; color: #666;">
+                            <strong>🔄 Refinements:</strong> ${scenario.refinements ? scenario.refinements.length : 0} • 
+                            <strong>💾 Saved Generations:</strong> ${scenario.savedGenerations ? scenario.savedGenerations.length : 0}
+                        </div>
+                    </div>
+                `;
+                scenariosList.appendChild(scenarioDiv);
+            });
+        }
+
+        function displayNoScenarios() {
+            const scenariosList = document.getElementById('scenariosList');
+            scenariosList.innerHTML = `
+                <div class="no-refinements">
+                    <div class="no-refinements-icon">💾</div>
+                    <div class="no-refinements-text">No scenarios saved yet</div>
+                    <div class="no-refinements-subtext">Save your current email state to quickly return to it later</div>
+                </div>
+            `;
+        }
+
+        function formatScenarioDate(timestamp) {
+            const date = new Date(timestamp);
+            const now = new Date();
+            const diffTime = Math.abs(now - date);
+            const diffMinutes = Math.floor(diffTime / (1000 * 60));
+            const diffHours = Math.floor(diffTime / (1000 * 60 * 60));
+            const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
+
+            if (diffMinutes < 1) return 'Just now';
+            if (diffMinutes < 60) return `${diffMinutes} minute${diffMinutes === 1 ? '' : 's'} ago`;
+            if (diffHours < 24) return `${diffHours} hour${diffHours === 1 ? '' : 's'} ago`;
+            if (diffDays < 7) return `${diffDays} day${diffDays === 1 ? '' : 's'} ago`;
+
+            return date.toLocaleDateString('en-US', { 
+                month: 'short', 
+                day: 'numeric', 
+                year: date.getFullYear() !== now.getFullYear() ? 'numeric' : undefined 
+            });
+        }
+
+        async function loadScenario(scenarioId) {
+            showConfirmPopup(
+                'Loading this scenario will replace your current email state. Are you sure you want to continue?',
+                async () => {
+                    try {
+                        const response = await fetch(`/api/scenarios/${scenarioId}/load`, {
+                            method: 'POST'
+                        });
+                        const data = await response.json();
+
+                        if (data.success) {
+                            showSuccessPopup(data.message, 'Scenario Loaded');
+                            closeLoadScenarioModal();
+                        } else {
+                            showErrorPopup('Failed to load scenario: ' + (data.error || 'Unknown error'), 'Load Failed');
+                        }
+                    } catch (error) {
+                        console.error('Error loading scenario:', error);
+                        showErrorPopup('Failed to load scenario. Please try again.', 'Network Error');
+                    }
+                },
+                () => {},
+                'Load Scenario'
+            );
+        }
+
+        async function loadNewScenario() {
+            showConfirmPopup(
+                'This will clear all current refinements and saved generations, giving you a fresh start. Are you sure you want to continue?',
+                async () => {
+                    try {
+                        const response = await fetch('/api/scenarios/new/load', {
+                            method: 'POST'
+                        });
+                        const data = await response.json();
+
+                        if (data.success) {
+                            showSuccessPopup('New scenario started! All refinements and saved generations have been cleared.', 'Fresh Start');
+                            closeLoadScenarioModal();
+                        } else {
+                            showErrorPopup('Failed to start new scenario: ' + (data.error || 'Unknown error'), 'Load Failed');
+                        }
+                    } catch (error) {
+                        console.error('Error starting new scenario:', error);
+                        showErrorPopup('Failed to start new scenario. Please try again.', 'Network Error');
+                    }
+                },
+                () => {},
+                'Start New Scenario'
+            );
+        }
+
+        async function deleteScenario(scenarioId) {
+            showConfirmPopup(
+                'Are you sure you want to delete this scenario?',
+                async () => {
+                    try {
+                        const response = await fetch(`/api/scenarios/${scenarioId}`, {
+                            method: 'DELETE'
+                        });
+
+                        const data = await response.json();
+
+                        if (data.success) {
+                            showSuccessPopup('Scenario deleted successfully!', 'Scenario Deleted');
+                            await loadSavedScenarios(); // Reload the list
+                        } else {
+                            showErrorPopup('Failed to delete scenario: ' + (data.error || 'Unknown error'), 'Delete Failed');
+                        }
+                    } catch (error) {
+                        console.error('Error deleting scenario:', error);
+                        showErrorPopup('Failed to delete scenario. Please try again.', 'Network Error');
+                    }
+                },
+                () => {},
+                'Delete Scenario'
+            );
+        }
+
+        async function clearAllScenarios() {
+            showConfirmPopup(
+                'Are you sure you want to delete ALL scenarios? This action cannot be undone.',
+                async () => {
+                    const clearAllBtn = document.getElementById('clearAllScenariosBtn');
+                    const originalText = clearAllBtn.textContent;
+                    clearAllBtn.textContent = 'Clearing...';
+                    clearAllBtn.disabled = true;
+
+                    try {
+                        const response = await fetch('/api/scenarios', {
+                            method: 'DELETE'
+                        });
+
+                        const data = await response.json();
+
+                        if (data.success) {
+                            showSuccessPopup('All scenarios cleared successfully!', 'Scenarios Cleared');
+                            await loadSavedScenarios(); // Reload the list
+                        } else {
+                            showErrorPopup('Failed to clear scenarios: ' + (data.error || 'Unknown error'), 'Clear Failed');
+                            clearAllBtn.textContent = originalText;
+                            clearAllBtn.disabled = false;
+                        }
+                    } catch (error) {
+                        console.error('Error clearing scenarios:', error);
+                        showErrorPopup('Failed to clear scenarios. Please try again.', 'Network Error');
+                        clearAllBtn.textContent = originalText;
+                        clearAllBtn.disabled = false;
+                    }
+                },
+                () => {},
+                'Clear All Scenarios'
+            );
+        }
+
+        function closeLoadScenarioModal() {
+            const modal = document.getElementById('loadScenarioModal');
+            if (modal) {
+                modal.style.display = 'none';
+            }
+        }
+
+        // Update the window click event listener to include scenario modals
+        window.addEventListener('click', function(event) {
+            const threadModal = document.getElementById('threadModal');
+            const generateModal = document.getElementById('generateResponseModal');
+            const selectModal = document.getElementById('selectEmailModal');
+            const selectTestModal = document.getElementById('selectTestEmailModal');
+            const viewRefinementsModal = document.getElementById('viewRefinementsModal');
+            const viewSavedGenerationsModal = document.getElementById('viewSavedGenerationsModal');
+            const saveScenarioModal = document.getElementById('saveScenarioModal');
+            const loadScenarioModal = document.getElementById('loadScenarioModal');
+            
+            if (event.target === threadModal) {
+                closeModal();
+            }
+            if (event.target === generateModal) {
+                closeGenerateResponseModal();
+            }
+            if (event.target === selectModal) {
+                closeSelectEmailModal();
+            }
+            if (event.target === selectTestModal) {
+                closeSelectTestEmailModal();
+            }
+            if (event.target === viewRefinementsModal) {
+                closeViewRefinementsModal();
+            }
+            if (event.target === viewSavedGenerationsModal) {
+                closeViewSavedGenerationsModal();
+            }
+            if (event.target === saveScenarioModal) {
+                closeSaveScenarioModal();
+            }
+            if (event.target === loadScenarioModal) {
+                closeLoadScenarioModal();
+            }
+        });
+
+        // Function to update refinement category
+        async function updateRefinementCategory(refinementId, changeIndex, newCategory) {
+            try {
+                const response = await fetch(`/api/refinements/${refinementId}/category`, {
+                    method: 'PUT',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        changeIndex: changeIndex,
+                        newCategory: newCategory
+                    })
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    showSuccessPopup('Category updated successfully!', 'Category Updated');
+                    // Reload refinements to update the display
+                    await loadRefinements();
+                } else {
+                    showErrorPopup('Failed to update category: ' + (data.error || 'Unknown error'), 'Update Failed');
+                }
+            } catch (error) {
+                console.error('Error updating refinement category:', error);
+                showErrorPopup('Failed to update category. Please try again.', 'Network Error');
+            }
+        }
+
+        // Load emails when page loads
+        document.addEventListener('DOMContentLoaded', loadEmails);
+    </script>
+</body>
+</html>
