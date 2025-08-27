@@ -190,6 +190,30 @@ rh<!DOCTYPE html>
             color: white;
         }
 
+        .people-refresh-btn {
+            background: #4285f4;
+            color: white;
+            border: none;
+            padding: 6px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: 500;
+            transition: background-color 0.2s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-width: 60px;
+        }
+
+        .people-refresh-btn:hover {
+            background: #3367d6;
+        }
+
+        .people-refresh-btn:active {
+            background: #2851a3;
+        }
+
         .content-area {
             flex: 1;
             display: flex;
@@ -1406,7 +1430,10 @@ rh<!DOCTYPE html>
                 </div>
                 
                 <div class="sidebar-section">
-                    <h3>People</h3>
+                    <div style="display: flex; align-items: center; justify-content: space-between; margin: 16px 0 8px 0;">
+                        <h3 style="margin: 0;">People</h3>
+                        <button class="people-refresh-btn" onclick="refreshPeopleList()" title="Refresh People List">Refresh</button>
+                    </div>
                     <div class="category-list">
                         <div id="peopleList">
                             <!-- People will be populated here -->
@@ -3927,6 +3954,29 @@ rh<!DOCTYPE html>
             } catch (error) {
                 console.error('Error updating refinement category:', error);
                 showErrorPopup('Failed to update category. Please try again.', 'Network Error');
+            }
+        }
+
+        // Refresh People List functionality
+        function refreshPeopleList() {
+            if (allEmails && allEmails.length > 0) {
+                // Recreate the people list and filters based on current email data
+                populatePeople(allEmails);
+                
+                // Show a brief success indication
+                const refreshBtn = document.querySelector('.people-refresh-btn');
+                const originalText = refreshBtn.textContent;
+                refreshBtn.textContent = '✓';
+                refreshBtn.style.background = '#28a745';
+                
+                // Reset button after a short delay
+                setTimeout(() => {
+                    refreshBtn.textContent = originalText;
+                    refreshBtn.style.background = '#4285f4';
+                }, 1000);
+            } else {
+                // If no emails are loaded, show an error
+                showErrorPopup('No email data available to refresh people list. Please load emails first.', 'Refresh Failed');
             }
         }
 
