@@ -3,6 +3,7 @@ const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
 const OpenAI = require('openai');
+const { google } = require('googleapis');
 
 // Initialize OpenAI client
 const openai = new OpenAI({
@@ -17,20 +18,200 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static('public'));
 
-// Data file paths - user-specific storage
-const USER_EMAIL = 'ks4190@columbia.edu';
-const USER_DATA_DIR = path.join(__dirname, 'data', USER_EMAIL);
-const DATA_FILE_PATH = path.join(USER_DATA_DIR, 'scenarios.json');
-const RESPONSE_EMAILS_PATH = path.join(USER_DATA_DIR, 'response-emails.json');
-const EMAIL_THREADS_PATH = path.join(USER_DATA_DIR, 'email-threads.json');
-const TEST_EMAILS_PATH = path.join(USER_DATA_DIR, 'test-emails.json');
-const UNREPLIED_EMAILS_PATH = path.join(USER_DATA_DIR, 'unreplied-emails.json');
+// Current user - can be changed via API
+let CURRENT_USER_EMAIL = 'ks4190@columbia.edu';
+
+// Function to get user-specific paths
+function getUserPaths(userEmail = CURRENT_USER_EMAIL) {
+  const USER_DATA_DIR = path.join(__dirname, 'data', userEmail);
+  return {
+    USER_DATA_DIR,
+    DATA_FILE_PATH: path.join(USER_DATA_DIR, 'scenarios.json'),
+    RESPONSE_EMAILS_PATH: path.join(USER_DATA_DIR, 'response-emails.json'),
+    EMAIL_THREADS_PATH: path.join(USER_DATA_DIR, 'email-threads.json'),
+    TEST_EMAILS_PATH: path.join(USER_DATA_DIR, 'test-emails.json'),
+    UNREPLIED_EMAILS_PATH: path.join(USER_DATA_DIR, 'unreplied-emails.json'),
+    OAUTH_KEYS_PATH: path.join(USER_DATA_DIR, 'gcp-oauth.keys.json'),
+    TOKENS_PATH: path.join(USER_DATA_DIR, 'gmail-tokens.json')
+  };
+}
+
+// Get current user paths
+function getCurrentUserPaths() {
+  return getUserPaths(CURRENT_USER_EMAIL);
+}
+
+// Gmail API setup
+let gmailAuth = null;
+let gmail = null;
+
+// Initialize Gmail API
+async function initializeGmailAPI() {
+  try {
+    const paths = getCurrentUserPaths();
+    
+    // Load OAuth credentials - check user-specific path first, then fallback to root
+    let credentialsPath = paths.OAUTH_KEYS_PATH;
+    if (!fs.existsSync(credentialsPath)) {
+      // Fallback to root directory for backward compatibility
+      const rootCredentialsPath = path.join(__dirname, 'gcp-oauth.keys.json');
+      if (fs.existsSync(rootCredentialsPath)) {
+        credentialsPath = rootCredentialsPath;
+        console.log(`Using OAuth keys from root directory for user ${CURRENT_USER_EMAIL}`);
+      } else {
+        console.warn(`OAuth keys file not found for user ${CURRENT_USER_EMAIL}. Gmail API will not be available.`);
+        return false;
+      }
+    } else {
+      console.log(`Using user-specific OAuth keys for ${CURRENT_USER_EMAIL}`);
+    }
+
+    const credentials = JSON.parse(fs.readFileSync(credentialsPath, 'utf8'));
+    const { client_id, client_secret, redirect_uris } = credentials.installed || credentials.web;
+
+    gmailAuth = new google.auth.OAuth2(client_id, client_secret, redirect_uris[0]);
+
+    // Load existing tokens if available
+    if (fs.existsSync(paths.TOKENS_PATH)) {
+      const tokens = JSON.parse(fs.readFileSync(paths.TOKENS_PATH, 'utf8'));
+      gmailAuth.setCredentials(tokens);
+      
+      // Check if tokens are still valid
+      try {
+        await gmailAuth.getAccessToken();
+        gmail = google.gmail({ version: 'v1', auth: gmailAuth });
+        console.log(`Gmail API initialized successfully with existing tokens for ${CURRENT_USER_EMAIL}`);
+        return true;
+      } catch (error) {
+        console.log(`Existing tokens are invalid for ${CURRENT_USER_EMAIL}, need to re-authenticate`);
+      }
+    }
+
+    gmail = google.gmail({ version: 'v1', auth: gmailAuth });
+    console.log(`Gmail API initialized for ${CURRENT_USER_EMAIL}, but authentication required`);
+    return false;
+  } catch (error) {
+    console.error(`Error initializing Gmail API for ${CURRENT_USER_EMAIL}:`, error);
+    return false;
+  }
+}
+
+// Get Gmail authentication URL
+function getGmailAuthUrl() {
+  if (!gmailAuth) return null;
+  
+  const scopes = [
+    'https://www.googleapis.com/auth/gmail.readonly',
+    'https://www.googleapis.com/auth/gmail.send'
+  ];
+
+  return gmailAuth.generateAuthUrl({
+    access_type: 'offline',
+    scope: scopes,
+  });
+}
+
+// Handle OAuth callback and save tokens
+async function handleGmailAuthCallback(code) {
+  try {
+    const { tokens } = await gmailAuth.getToken(code);
+    gmailAuth.setCredentials(tokens);
+    
+    const paths = getCurrentUserPaths();
+    
+    // Save tokens for future use
+    if (!fs.existsSync(paths.USER_DATA_DIR)) {
+      fs.mkdirSync(paths.USER_DATA_DIR, { recursive: true });
+    }
+    fs.writeFileSync(paths.TOKENS_PATH, JSON.stringify(tokens, null, 2));
+    
+    console.log('Gmail authentication successful, tokens saved');
+    return true;
+  } catch (error) {
+    console.error('Error handling Gmail auth callback:', error);
+    return false;
+  }
+}
+
+// Search Gmail for emails
+async function searchGmailEmails(query, maxResults = 10) {
+  try {
+    if (!gmail) {
+      throw new Error('Gmail API not initialized');
+    }
+
+    const response = await gmail.users.messages.list({
+      userId: 'me',
+      q: query,
+      maxResults: maxResults
+    });
+
+    return response.data.messages || [];
+  } catch (error) {
+    console.error('Error searching Gmail emails:', error);
+    throw error;
+  }
+}
+
+// Get Gmail email content
+async function getGmailEmail(messageId) {
+  try {
+    if (!gmail) {
+      throw new Error('Gmail API not initialized');
+    }
+
+    const response = await gmail.users.messages.get({
+      userId: 'me',
+      id: messageId,
+      format: 'full'
+    });
+
+    const message = response.data;
+    const headers = message.payload.headers;
+    
+    // Extract email details
+    const subject = headers.find(h => h.name === 'Subject')?.value || 'No Subject';
+    const from = headers.find(h => h.name === 'From')?.value || 'Unknown Sender';
+    const to = headers.find(h => h.name === 'To')?.value || 'Unknown Recipient';
+    const date = headers.find(h => h.name === 'Date')?.value || new Date().toISOString();
+    const threadId = message.threadId;
+
+    // Extract body
+    let body = '';
+    if (message.payload.body && message.payload.body.data) {
+      body = Buffer.from(message.payload.body.data, 'base64').toString('utf-8');
+    } else if (message.payload.parts) {
+      // Handle multipart messages
+      for (const part of message.payload.parts) {
+        if (part.mimeType === 'text/plain' && part.body && part.body.data) {
+          body = Buffer.from(part.body.data, 'base64').toString('utf-8');
+          break;
+        }
+      }
+    }
+
+    return {
+      id: messageId,
+      threadId,
+      subject,
+      from,
+      to,
+      date,
+      body: body || 'No content available',
+      snippet: message.snippet || ''
+    };
+  } catch (error) {
+    console.error('Error getting Gmail email:', error);
+    throw error;
+  }
+}
 
 // Function to load data from file
 function loadDataFromFile() {
   try {
-    if (fs.existsSync(DATA_FILE_PATH)) {
-      const data = fs.readFileSync(DATA_FILE_PATH, 'utf8');
+    const paths = getCurrentUserPaths();
+    if (fs.existsSync(paths.DATA_FILE_PATH)) {
+      const data = fs.readFileSync(paths.DATA_FILE_PATH, 'utf8');
       const parsedData = JSON.parse(data);
       return {
         scenarios: parsedData.scenarios || [],
@@ -51,13 +232,14 @@ function loadDataFromFile() {
 // Function to save data to file
 function saveDataToFile(data) {
   try {
+    const paths = getCurrentUserPaths();
     // Ensure data directory exists
-    const dataDir = path.dirname(DATA_FILE_PATH);
+    const dataDir = path.dirname(paths.DATA_FILE_PATH);
     if (!fs.existsSync(dataDir)) {
       fs.mkdirSync(dataDir, { recursive: true });
     }
     
-    fs.writeFileSync(DATA_FILE_PATH, JSON.stringify(data, null, 2));
+    fs.writeFileSync(paths.DATA_FILE_PATH, JSON.stringify(data, null, 2));
     console.log('Data saved to file successfully');
   } catch (error) {
     console.error('Error saving data to file:', error);
@@ -79,25 +261,29 @@ function loadEmailData(filePath) {
 
 // Function to load response emails from JSON file
 function loadResponseEmails() {
-  const data = loadEmailData(RESPONSE_EMAILS_PATH);
+  const paths = getCurrentUserPaths();
+  const data = loadEmailData(paths.RESPONSE_EMAILS_PATH);
   return data ? data.emails || [] : [];
 }
 
 // Function to load email threads from JSON file
 function loadEmailThreads() {
-  const data = loadEmailData(EMAIL_THREADS_PATH);
+  const paths = getCurrentUserPaths();
+  const data = loadEmailData(paths.EMAIL_THREADS_PATH);
   return data ? data.threads || [] : [];
 }
 
 // Function to load test emails from JSON file
 function loadTestEmails() {
-  const data = loadEmailData(TEST_EMAILS_PATH);
+  const paths = getCurrentUserPaths();
+  const data = loadEmailData(paths.TEST_EMAILS_PATH);
   return data ? data.emails || [] : [];
 }
 
 // Function to load unreplied emails from JSON file
 function loadUnrepliedEmails() {
-  const data = loadEmailData(UNREPLIED_EMAILS_PATH);
+  const paths = getCurrentUserPaths();
+  const data = loadEmailData(paths.UNREPLIED_EMAILS_PATH);
   return data ? data.emails || [] : [];
 }
 
@@ -175,12 +361,77 @@ function categorizeEmail(subject, body, from) {
   return 'Personal & Life Management';
 }
 
-// API endpoint to get response emails using JSON data
+// API endpoint to get response emails - prioritize Gmail API, fallback to JSON
 app.get('/api/response-emails', async (req, res) => {
   try {
-    console.log('Loading response emails from JSON file...');
+    const paths = getCurrentUserPaths();
     
-    // Load email data from JSON file
+    // Try to use Gmail API first if available and authenticated
+    if (gmail && gmailAuth && fs.existsSync(paths.TOKENS_PATH)) {
+      // Additional check: verify that we have valid credentials
+      try {
+        const credentials = gmailAuth.credentials;
+        if (credentials && credentials.access_token) {
+          // Try to use Gmail API first
+          try {
+            console.log('Loading 1 email threads using Gmail API...');
+            const sentEmails = await searchGmailEmails(`from:${CURRENT_USER_EMAIL} in:sent`, 10);
+            
+            if (sentEmails.length > 0) {
+              // Successfully got Gmail data - process and return
+              const gmailEmails = [];
+              
+              for (const sentEmail of sentEmails.slice(0, 5)) {
+                try {
+                  const emailData = await getGmailEmail(sentEmail.id);
+                  const processedEmail = {
+                    id: emailData.id,
+                    subject: emailData.subject,
+                    from: emailData.from,
+                    originalFrom: 'Gmail Sender', // Would need thread analysis to get original sender
+                    date: emailData.date,
+                    category: categorizeEmail(emailData.subject, emailData.body, emailData.from),
+                    body: emailData.body,
+                    snippet: emailData.snippet || (emailData.body ? emailData.body.substring(0, 100) + '...' : '')
+                  };
+                  gmailEmails.push(processedEmail);
+                } catch (emailError) {
+                  console.error('Error processing Gmail email:', emailError);
+                  continue;
+                }
+              }
+              
+              if (gmailEmails.length > 0) {
+                console.log(`Returning ${gmailEmails.length} emails from Gmail API`);
+                return res.json({ emails: gmailEmails });
+              }
+            }
+          } catch (gmailError) {
+            console.error('Gmail API Error:', gmailError);
+            
+            // Check if it's an authentication error
+            if (gmailError.code === 401 || gmailError.message?.includes('invalid_grant') || 
+                gmailError.message?.includes('No access, refresh token')) {
+              console.log('Gmail authentication expired, requiring re-authentication...');
+              return res.status(401).json({
+                needsAuth: true,
+                error: 'Gmail authentication expired',
+                message: 'Please re-authenticate with Gmail to access your emails'
+              });
+            }
+            
+            console.log('Gmail API failed, falling back to JSON data');
+          }
+        }
+      } catch (credError) {
+        console.log('Gmail credentials check failed, falling back to JSON data');
+      }
+    } else {
+      console.log('Gmail API not available, using JSON data');
+    }
+
+    // Fallback to JSON data if Gmail API fails for non-auth reasons
+    console.log('Loading response emails from JSON file...');
     const responseEmails = loadResponseEmails();
     
     if (responseEmails.length === 0) {
@@ -859,14 +1110,476 @@ app.delete('/api/scenarios', (req, res) => {
   }
 });
 
+// User management endpoints
+app.get('/api/current-user', (req, res) => {
+  res.json({ currentUser: CURRENT_USER_EMAIL });
+});
+
+app.get('/api/users', (req, res) => {
+  try {
+    const dataDir = path.join(__dirname, 'data');
+    if (!fs.existsSync(dataDir)) {
+      return res.json({ users: [] });
+    }
+    
+    const users = fs.readdirSync(dataDir, { withFileTypes: true })
+      .filter(dirent => dirent.isDirectory())
+      .map(dirent => dirent.name)
+      .filter(name => name.includes('@')); // Only email-like directory names
+    
+    res.json({ users });
+  } catch (error) {
+    console.error('Error listing users:', error);
+    res.status(500).json({ error: 'Failed to list users' });
+  }
+});
+
+app.post('/api/switch-user', async (req, res) => {
+  try {
+    const { userEmail } = req.body;
+    
+    if (!userEmail || !userEmail.includes('@')) {
+      return res.status(400).json({ error: 'Invalid user email' });
+    }
+    
+    // Check if user directory exists
+    const userDataDir = path.join(__dirname, 'data', userEmail);
+    if (!fs.existsSync(userDataDir)) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    
+    // Switch current user
+    CURRENT_USER_EMAIL = userEmail;
+    
+    // Reinitialize Gmail API for new user
+    gmailAuth = null;
+    gmail = null;
+    
+    // Load new user's data
+    const newPersistentData = loadDataFromFile();
+    emailMemory = {
+      categories: [],
+      responses: [],
+      refinements: newPersistentData.refinements,
+      savedGenerations: newPersistentData.savedGenerations,
+      scenarios: newPersistentData.scenarios
+    };
+    
+    // Try to initialize Gmail API for new user
+    const gmailInitialized = await initializeGmailAPI();
+    
+    console.log(`Switched to user: ${userEmail}`);
+    res.json({ 
+      success: true, 
+      currentUser: CURRENT_USER_EMAIL,
+      gmailInitialized: gmailInitialized,
+      message: `Switched to user ${userEmail}` 
+    });
+  } catch (error) {
+    console.error('Error switching user:', error);
+    res.status(500).json({ error: 'Failed to switch user' });
+  }
+});
+
+// API endpoint to upload OAuth keys for a user
+app.post('/api/upload-oauth-keys', async (req, res) => {
+  try {
+    const { userEmail, oauthKeys } = req.body;
+    
+    if (!userEmail || !userEmail.includes('@')) {
+      return res.status(400).json({ error: 'Invalid user email' });
+    }
+    
+    if (!oauthKeys) {
+      return res.status(400).json({ error: 'OAuth keys data is required' });
+    }
+    
+    // Validate OAuth keys structure
+    const hasValidStructure = (oauthKeys.installed || oauthKeys.web) && 
+                             (oauthKeys.installed?.client_id || oauthKeys.web?.client_id);
+    
+    if (!hasValidStructure) {
+      return res.status(400).json({ error: 'Invalid OAuth keys format. Expected Google Cloud credentials JSON.' });
+    }
+    
+    // Get user paths
+    const userPaths = getUserPaths(userEmail);
+    
+    // Ensure user directory exists
+    if (!fs.existsSync(userPaths.USER_DATA_DIR)) {
+      fs.mkdirSync(userPaths.USER_DATA_DIR, { recursive: true });
+    }
+    
+    // Save OAuth keys to user-specific location
+    fs.writeFileSync(userPaths.OAUTH_KEYS_PATH, JSON.stringify(oauthKeys, null, 2));
+    
+    console.log(`OAuth keys uploaded successfully for user: ${userEmail}`);
+    
+    // If this is the current user, reinitialize Gmail API
+    if (userEmail === CURRENT_USER_EMAIL) {
+      gmailAuth = null;
+      gmail = null;
+      const gmailInitialized = await initializeGmailAPI();
+      
+      res.json({ 
+        success: true, 
+        message: `OAuth keys uploaded successfully for ${userEmail}`,
+        gmailInitialized: gmailInitialized
+      });
+    } else {
+      res.json({ 
+        success: true, 
+        message: `OAuth keys uploaded successfully for ${userEmail}`
+      });
+    }
+    
+  } catch (error) {
+    console.error('Error uploading OAuth keys:', error);
+    res.status(500).json({ error: 'Failed to upload OAuth keys: ' + error.message });
+  }
+});
+
+// Gmail authentication endpoints
+app.get('/api/auth', (req, res) => {
+  try {
+    const authUrl = getGmailAuthUrl();
+    if (!authUrl) {
+      return res.status(500).json({ error: 'Gmail authentication not available' });
+    }
+    res.json({ authUrl });
+  } catch (error) {
+    console.error('Error getting auth URL:', error);
+    res.status(500).json({ error: 'Failed to get authentication URL' });
+  }
+});
+
+app.post('/api/auth/callback', async (req, res) => {
+  try {
+    const { code } = req.body;
+    const success = await handleGmailAuthCallback(code);
+    
+    if (success) {
+      res.json({ success: true, message: 'Authentication successful' });
+    } else {
+      res.status(400).json({ success: false, error: 'Authentication failed' });
+    }
+  } catch (error) {
+    console.error('Error handling auth callback:', error);
+    res.status(500).json({ success: false, error: 'Authentication failed' });
+  }
+});
+
+// API endpoint to load email threads using Gmail API
+app.post('/api/load-email-threads', async (req, res) => {
+  try {
+    const { threadCount } = req.body;
+    
+    if (!threadCount || threadCount < 1 || threadCount > 5) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Thread count must be between 1 and 5' 
+      });
+    }
+
+    console.log(`Loading ${threadCount} email threads using Gmail API...`);
+
+    // Check if Gmail API is available and authenticated
+    if (!gmail) {
+      return res.status(401).json({
+        success: false,
+        needsAuth: true,
+        error: 'Gmail authentication required'
+      });
+    }
+
+    try {
+      // Search for sent emails (your responses)
+      const sentEmails = await searchGmailEmails(`from:${CURRENT_USER_EMAIL} in:sent`, threadCount * 3);
+      
+      if (sentEmails.length === 0) {
+        return res.json({
+          success: false,
+          error: 'No sent emails found to create threads from'
+        });
+      }
+
+      console.log(`Found ${sentEmails.length} sent emails, processing threads...`);
+
+      const threads = [];
+      const processedThreadIds = new Set();
+
+      // Process each sent email to find threads
+      for (const sentEmail of sentEmails.slice(0, threadCount * 2)) {
+        try {
+          // Skip if we already processed this thread
+          if (processedThreadIds.has(sentEmail.threadId)) {
+            continue;
+          }
+
+          // Get the full sent email content
+          const sentEmailData = await getGmailEmail(sentEmail.id);
+          
+          // Check if this is a reply (has "Re:" in subject)
+          const isReply = sentEmailData.subject.toLowerCase().startsWith('re:');
+          if (!isReply) {
+            continue; // Skip emails that aren't replies
+          }
+
+          // Search for other emails in the same thread
+          const threadEmails = await searchGmailEmails(`thread:${sentEmail.threadId} -from:${CURRENT_USER_EMAIL}`, 5);
+          
+          if (threadEmails.length === 0) {
+            continue;
+          }
+
+          // Get the original email content
+          const originalEmailData = await getGmailEmail(threadEmails[0].id);
+
+          // Create thread object
+          const thread = {
+            id: `thread-${sentEmail.threadId}`,
+            subject: sentEmailData.subject,
+            messages: [
+              {
+                id: originalEmailData.id,
+                from: originalEmailData.from,
+                to: originalEmailData.to.split(',').map(email => email.trim()),
+                date: originalEmailData.date,
+                subject: originalEmailData.subject,
+                body: originalEmailData.body,
+                isResponse: false
+              },
+              {
+                id: sentEmailData.id,
+                from: sentEmailData.from,
+                to: sentEmailData.to.split(',').map(email => email.trim()),
+                date: sentEmailData.date,
+                subject: sentEmailData.subject,
+                body: sentEmailData.body,
+                isResponse: true
+              }
+            ]
+          };
+
+          threads.push(thread);
+          processedThreadIds.add(sentEmail.threadId);
+
+          // Stop when we have enough threads
+          if (threads.length >= threadCount) {
+            break;
+          }
+
+        } catch (emailError) {
+          console.error('Error processing email thread:', emailError);
+          continue; // Skip this email and continue with others
+        }
+      }
+
+      console.log(`Successfully loaded ${threads.length} email threads from Gmail`);
+      
+      res.json({
+        success: true,
+        threads: threads,
+        message: `Loaded ${threads.length} email threads from your Gmail inbox`
+      });
+
+    } catch (gmailError) {
+      console.error('Gmail API Error:', gmailError);
+      
+      // Check if it's an authentication error
+      if (gmailError.code === 401 || gmailError.message?.includes('invalid_grant')) {
+        return res.status(401).json({
+          success: false,
+          needsAuth: true,
+          error: 'Gmail authentication expired. Please re-authenticate.'
+        });
+      }
+      
+      // Fallback to simulated data if Gmail API fails
+      console.log('Falling back to simulated data due to Gmail API error');
+      const simulatedThreads = [];
+      
+      for (let i = 1; i <= threadCount; i++) {
+        const thread = {
+          id: `simulated-thread-${Date.now()}-${i}`,
+          subject: `Re: Simulated Email Thread ${i}`,
+          messages: [
+            {
+              id: `original-${Date.now()}-${i}`,
+              from: `sender${i}@example.com`,
+              to: [CURRENT_USER_EMAIL],
+              date: new Date(Date.now() - (i * 86400000)).toISOString(),
+              subject: `Simulated Email Thread ${i}`,
+              body: `This is a simulated original email ${i}. Gmail API failed, so this is sample data.`,
+              isResponse: false
+            },
+            {
+              id: `response-${Date.now()}-${i}`,
+              from: CURRENT_USER_EMAIL,
+              to: [`sender${i}@example.com`],
+              date: new Date(Date.now() - (i * 86400000) + 3600000).toISOString(),
+              subject: `Re: Simulated Email Thread ${i}`,
+              body: `This is your simulated response ${i}. Gmail API failed, so this is sample data.`,
+              isResponse: true
+            }
+          ]
+        };
+        
+        simulatedThreads.push(thread);
+      }
+
+      res.json({
+        success: true,
+        threads: simulatedThreads,
+        message: `Gmail API failed. Showing ${simulatedThreads.length} simulated threads as fallback.`,
+        fallback: true
+      });
+    }
+
+  } catch (error) {
+    console.error('Error in load email threads endpoint:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to load email threads: ' + error.message
+    });
+  }
+});
+
+// API endpoint to add email threads to the database
+app.post('/api/add-email-threads', async (req, res) => {
+  try {
+    const { threads } = req.body;
+    
+    if (!threads || !Array.isArray(threads) || threads.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'No threads provided'
+      });
+    }
+
+    console.log(`Adding ${threads.length} email threads to database...`);
+
+    // Load existing data
+    const existingResponseEmails = loadResponseEmails();
+    const existingEmailThreads = loadEmailThreads();
+
+    // Convert threads to response emails format
+    const newResponseEmails = [];
+    const newEmailThreads = [];
+
+    threads.forEach(thread => {
+      // Find the response message (user's reply)
+      const responseMessage = thread.messages.find(msg => msg.isResponse);
+      const originalMessage = thread.messages.find(msg => !msg.isResponse);
+      
+      if (responseMessage && originalMessage) {
+        // Add to response emails
+        const responseEmail = {
+          id: responseMessage.id,
+          subject: responseMessage.subject,
+          from: responseMessage.from,
+          originalFrom: originalMessage.from,
+          date: responseMessage.date,
+          category: categorizeEmail(responseMessage.subject, responseMessage.body, originalMessage.from),
+          body: responseMessage.body,
+          snippet: responseMessage.body.substring(0, 100) + (responseMessage.body.length > 100 ? '...' : ''),
+          originalBody: originalMessage.body
+        };
+        
+        newResponseEmails.push(responseEmail);
+
+        // Add to email threads
+        const emailThread = {
+          id: thread.id,
+          subject: thread.subject,
+          from: responseMessage.from,
+          originalFrom: originalMessage.from,
+          date: responseMessage.date,
+          body: responseMessage.body,
+          originalBody: originalMessage.body
+        };
+        
+        newEmailThreads.push(emailThread);
+      }
+    });
+
+    // Merge with existing data (avoid duplicates)
+    const allResponseEmails = [...existingResponseEmails];
+    const allEmailThreads = [...existingEmailThreads];
+
+    newResponseEmails.forEach(newEmail => {
+      if (!allResponseEmails.find(existing => existing.id === newEmail.id)) {
+        allResponseEmails.push(newEmail);
+      }
+    });
+
+    newEmailThreads.forEach(newThread => {
+      if (!allEmailThreads.find(existing => existing.id === newThread.id)) {
+        allEmailThreads.push(newThread);
+      }
+    });
+
+    // Save updated data back to files
+    try {
+      const paths = getCurrentUserPaths();
+      
+      // Ensure data directory exists
+      if (!fs.existsSync(paths.USER_DATA_DIR)) {
+        fs.mkdirSync(paths.USER_DATA_DIR, { recursive: true });
+      }
+
+      // Save response emails
+      fs.writeFileSync(paths.RESPONSE_EMAILS_PATH, JSON.stringify({
+        emails: allResponseEmails
+      }, null, 2));
+
+      // Save email threads
+      fs.writeFileSync(paths.EMAIL_THREADS_PATH, JSON.stringify({
+        threads: allEmailThreads
+      }, null, 2));
+
+      console.log(`Successfully added ${newResponseEmails.length} new email threads to database`);
+      
+      res.json({
+        success: true,
+        message: `Added ${newResponseEmails.length} email threads to database`,
+        addedCount: newResponseEmails.length
+      });
+
+    } catch (saveError) {
+      console.error('Error saving email threads to files:', saveError);
+      res.status(500).json({
+        success: false,
+        error: 'Failed to save email threads to database'
+      });
+    }
+
+  } catch (error) {
+    console.error('Error adding email threads:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to add email threads: ' + error.message
+    });
+  }
+});
+
 // Serve the main HTML file
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
 // Start server
-app.listen(PORT, () => {
+app.listen(PORT, async () => {
   console.log(`Server running on http://localhost:${PORT}`);
-  console.log(`Data directory: ${USER_DATA_DIR}`);
+  console.log(`Current user: ${CURRENT_USER_EMAIL}`);
+  console.log(`Data directory: ${getCurrentUserPaths().USER_DATA_DIR}`);
   console.log(`Loaded ${emailMemory.scenarios.length} scenarios, ${emailMemory.refinements.length} refinements, ${emailMemory.savedGenerations.length} saved generations`);
+  
+  // Initialize Gmail API on startup
+  const gmailInitialized = await initializeGmailAPI();
+  if (gmailInitialized) {
+    console.log('Gmail API ready for use');
+  } else {
+    console.log('Gmail API requires authentication - visit /api/auth to authenticate');
+  }
 });

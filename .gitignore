@@ -1,0 +1,59 @@
+# Sensitive OAuth and authentication files
+gcp-oauth.keys.json
+**/gcp-oauth.keys.json
+**/gmail-tokens.json
+gmail-tokens.json
+
+# MCP global directory (contains sensitive auth data)
+.gmail-mcp/
+
+# Node modules
+node_modules/
+
+# Environment variables
+.env
+.env.local
+
+# Log files
+*.log
+npm-debug.log*
+
+# Runtime data
+pids
+*.pid
+*.seed
+*.pid.lock
+
+# Coverage directory used by tools like istanbul
+coverage/
+
+# Dependency directories
+jspm_packages/
+
+# Optional npm cache directory
+.npm
+
+# Optional REPL history
+.node_repl_history
+
+# Output of 'npm pack'
+*.tgz
+
+# Yarn Integrity file
+.yarn-integrity
+
+# dotenv environment variables file
+.env
+
+# Mac system files
+.DS_Store
+
+# Windows system files
+Thumbs.db
+
+# IDE files
+.vscode/settings.json
+.idea/
+
+# Backup files
+*.backup*
