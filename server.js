@@ -161,6 +161,8 @@ function cleanResponseBody(emailBody) {
 
   // Common patterns that indicate the start of quoted content
   const quotePatterns = [
+    // Gmail style with multi-line email addresses: "On [date] at [time], [sender] <\nemail@domain.com> wrote:"
+    /\n\s*On .+? at .+?, .+?<[\s\S]*?> wrote:\s*\n/i,
     // Gmail style: "On [date] at [time], [sender] wrote:"
     /\n\s*On .+? at .+?, .+? wrote:\s*\n/i,
     // Outlook style: "From: [sender] Sent: [date]"
@@ -1392,10 +1394,10 @@ app.post('/api/load-email-threads', async (req, res) => {
   try {
     const { threadCount } = req.body;
     
-    if (!threadCount || threadCount < 1 || threadCount > 5) {
+    if (!threadCount || threadCount < 1 || threadCount > 10) {
       return res.status(400).json({ 
         success: false, 
-        error: 'Thread count must be between 1 and 5' 
+        error: 'Thread count must be between 1 and 10' 
       });
     }
 
