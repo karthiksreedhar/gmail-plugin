@@ -361,76 +361,10 @@ function categorizeEmail(subject, body, from) {
   return 'Personal & Life Management';
 }
 
-// API endpoint to get response emails - prioritize Gmail API, fallback to JSON
+// API endpoint to get response emails - prioritize JSON data, Gmail API only for specific features
 app.get('/api/response-emails', async (req, res) => {
   try {
-    const paths = getCurrentUserPaths();
-    
-    // Try to use Gmail API first if available and authenticated
-    if (gmail && gmailAuth && fs.existsSync(paths.TOKENS_PATH)) {
-      // Additional check: verify that we have valid credentials
-      try {
-        const credentials = gmailAuth.credentials;
-        if (credentials && credentials.access_token) {
-          // Try to use Gmail API first
-          try {
-            console.log('Loading 1 email threads using Gmail API...');
-            const sentEmails = await searchGmailEmails(`from:${CURRENT_USER_EMAIL} in:sent`, 10);
-            
-            if (sentEmails.length > 0) {
-              // Successfully got Gmail data - process and return
-              const gmailEmails = [];
-              
-              for (const sentEmail of sentEmails.slice(0, 5)) {
-                try {
-                  const emailData = await getGmailEmail(sentEmail.id);
-                  const processedEmail = {
-                    id: emailData.id,
-                    subject: emailData.subject,
-                    from: emailData.from,
-                    originalFrom: 'Gmail Sender', // Would need thread analysis to get original sender
-                    date: emailData.date,
-                    category: categorizeEmail(emailData.subject, emailData.body, emailData.from),
-                    body: emailData.body,
-                    snippet: emailData.snippet || (emailData.body ? emailData.body.substring(0, 100) + '...' : '')
-                  };
-                  gmailEmails.push(processedEmail);
-                } catch (emailError) {
-                  console.error('Error processing Gmail email:', emailError);
-                  continue;
-                }
-              }
-              
-              if (gmailEmails.length > 0) {
-                console.log(`Returning ${gmailEmails.length} emails from Gmail API`);
-                return res.json({ emails: gmailEmails });
-              }
-            }
-          } catch (gmailError) {
-            console.error('Gmail API Error:', gmailError);
-            
-            // Check if it's an authentication error
-            if (gmailError.code === 401 || gmailError.message?.includes('invalid_grant') || 
-                gmailError.message?.includes('No access, refresh token')) {
-              console.log('Gmail authentication expired, requiring re-authentication...');
-              return res.status(401).json({
-                needsAuth: true,
-                error: 'Gmail authentication expired',
-                message: 'Please re-authenticate with Gmail to access your emails'
-              });
-            }
-            
-            console.log('Gmail API failed, falling back to JSON data');
-          }
-        }
-      } catch (credError) {
-        console.log('Gmail credentials check failed, falling back to JSON data');
-      }
-    } else {
-      console.log('Gmail API not available, using JSON data');
-    }
-
-    // Fallback to JSON data if Gmail API fails for non-auth reasons
+    // Always load from JSON files for the main UI display
     console.log('Loading response emails from JSON file...');
     const responseEmails = loadResponseEmails();
     
@@ -1269,6 +1203,85 @@ app.post('/api/auth/callback', async (req, res) => {
   }
 });
 
+// Handle OAuth2 callback redirect from Google
+app.get('/oauth2callback', async (req, res) => {
+  try {
+    const { code, error } = req.query;
+    
+    if (error) {
+      console.error('OAuth error:', error);
+      return res.send(`
+        <html>
+          <head><title>Authentication Error</title></head>
+          <body style="font-family: Arial, sans-serif; padding: 40px; text-align: center;">
+            <h2>❌ Authentication Error</h2>
+            <p>There was an error during authentication: ${error}</p>
+            <p>Please close this window and try again.</p>
+          </body>
+        </html>
+      `);
+    }
+    
+    if (!code) {
+      return res.send(`
+        <html>
+          <head><title>Authentication Error</title></head>
+          <body style="font-family: Arial, sans-serif; padding: 40px; text-align: center;">
+            <h2>❌ No Authorization Code</h2>
+            <p>No authorization code received from Google.</p>
+            <p>Please close this window and try again.</p>
+          </body>
+        </html>
+      `);
+    }
+    
+    // Handle the OAuth callback
+    const success = await handleGmailAuthCallback(code);
+    
+    if (success) {
+      res.send(`
+        <html>
+          <head><title>Authentication Successful</title></head>
+          <body style="font-family: Arial, sans-serif; padding: 40px; text-align: center;">
+            <h2>✅ Authentication Successful!</h2>
+            <p>Your Gmail account has been successfully connected.</p>
+            <p>You can now close this window and return to the application.</p>
+            <script>
+              // Try to close the window after a short delay
+              setTimeout(() => {
+                window.close();
+              }, 2000);
+            </script>
+          </body>
+        </html>
+      `);
+    } else {
+      res.send(`
+        <html>
+          <head><title>Authentication Failed</title></head>
+          <body style="font-family: Arial, sans-serif; padding: 40px; text-align: center;">
+            <h2>❌ Authentication Failed</h2>
+            <p>There was an error processing your authentication.</p>
+            <p>Please close this window and try again.</p>
+          </body>
+        </html>
+      `);
+    }
+  } catch (error) {
+    console.error('Error in OAuth callback:', error);
+    res.send(`
+      <html>
+        <head><title>Authentication Error</title></head>
+        <body style="font-family: Arial, sans-serif; padding: 40px; text-align: center;">
+          <h2>❌ Authentication Error</h2>
+          <p>An unexpected error occurred during authentication.</p>
+          <p>Please close this window and try again.</p>
+        </body>
+      </html>
+    `);
+  }
+});
+
 // API endpoint to load email threads using Gmail API
 app.post('/api/load-email-threads', async (req, res) => {
   try {
@@ -1441,6 +1454,422 @@ app.post('/api/load-email-threads', async (req, res) => {
     res.status(500).json({
       success: false,
       error: 'Failed to load email threads: ' + error.message
+    });
+  }
+});
+
+// API endpoint to fetch more emails from inbox using Gmail API directly
+app.post('/api/fetch-more-emails', async (req, res) => {
+  try {
+    const { query, maxResults } = req.body;
+    const emailCount = maxResults || 10;
+    
+    if (emailCount < 1 || emailCount > 50) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Email count must be between 1 and 50' 
+      });
+    }
+
+    console.log(`Fetching ${emailCount} emails from Gmail inbox${query ? ` with query: ${query}` : ''}...`);
+
+    // Check if Gmail API is available and authenticated
+    if (!gmail || !gmailAuth) {
+      return res.status(401).json({
+        success: false,
+        needsAuth: true,
+        error: 'Gmail authentication required',
+        message: 'Please authenticate with Gmail to access your emails'
+      });
+    }
+
+    // Check if we have valid credentials
+    const paths = getCurrentUserPaths();
+    if (!fs.existsSync(paths.TOKENS_PATH)) {
+      return res.status(401).json({
+        success: false,
+        needsAuth: true,
+        error: 'Gmail authentication required',
+        message: 'Please authenticate with Gmail to access your emails'
+      });
+    }
+
+    // Verify credentials are valid by checking if we have access token
+    try {
+      const credentials = gmailAuth.credentials;
+      if (!credentials || !credentials.access_token) {
+        return res.status(401).json({
+          success: false,
+          needsAuth: true,
+          error: 'Gmail authentication required',
+          message: 'Please authenticate with Gmail to access your emails'
+        });
+      }
+    } catch (credError) {
+      return res.status(401).json({
+        success: false,
+        needsAuth: true,
+        error: 'Gmail authentication required',
+        message: 'Please authenticate with Gmail to access your emails'
+      });
+    }
+
+    try {
+      // Build Gmail search query
+      let searchQuery = 'in:inbox';
+      if (query && query.trim()) {
+        searchQuery += ` ${query.trim()}`;
+      }
+
+      console.log(`Searching Gmail with query: ${searchQuery}`);
+
+      // Search for emails using Gmail API
+      const emailMessages = await searchGmailEmails(searchQuery, emailCount);
+      
+      if (emailMessages.length === 0) {
+        return res.json({
+          success: true,
+          message: 'No emails found matching the criteria',
+          emails: []
+        });
+      }
+
+      console.log(`Found ${emailMessages.length} emails, processing content...`);
+
+      // Get full email content for each message
+      const processedEmails = [];
+      
+      for (const message of emailMessages) {
+        try {
+          const emailData = await getGmailEmail(message.id);
+          
+          const processedEmail = {
+            id: emailData.id,
+            subject: emailData.subject,
+            from: emailData.from,
+            date: emailData.date,
+            body: emailData.body,
+            snippet: emailData.snippet || (emailData.body ? emailData.body.substring(0, 100) + (emailData.body.length > 100 ? '...' : '') : 'No content available'),
+            category: categorizeEmail(emailData.subject, emailData.body, emailData.from),
+            source: 'gmail-api'
+          };
+          
+          processedEmails.push(processedEmail);
+        } catch (emailError) {
+          console.error('Error processing email:', emailError);
+          continue; // Skip this email and continue with others
+        }
+      }
+
+      console.log(`Successfully processed ${processedEmails.length} emails from Gmail`);
+
+      res.json({
+        success: true,
+        message: `Fetched ${processedEmails.length} emails from Gmail inbox`,
+        emails: processedEmails,
+        fallback: false
+      });
+
+    } catch (gmailError) {
+      console.error('Gmail API Error:', gmailError);
+      
+      // Check if it's an authentication error
+      if (gmailError.code === 401 || gmailError.message?.includes('invalid_grant') || 
+          gmailError.message?.includes('No access, refresh token')) {
+        return res.status(401).json({
+          success: false,
+          needsAuth: true,
+          error: 'Gmail authentication expired',
+          message: 'Please re-authenticate with Gmail to access your emails'
+        });
+      }
+      
+      // For other Gmail API errors, fall back to simulated data
+      console.log('Gmail API failed, generating simulated emails for testing');
+      const simulatedEmails = [];
+      
+      const sampleSenders = [
+        'professor@columbia.edu',
+        'student@columbia.edu', 
+        'admin@columbia.edu',
+        'conference@acm.org',
+        'journal@ieee.org',
+        'colleague@cs.columbia.edu'
+      ];
+      
+      const sampleSubjects = [
+        'Research Paper Review Request',
+        'Meeting Scheduling Request', 
+        'Conference Submission Deadline',
+        'Course Registration Question',
+        'Lab Meeting Tomorrow',
+        'Collaboration Opportunity'
+      ];
+      
+      for (let i = 1; i <= emailCount; i++) {
+        const sender = sampleSenders[Math.floor(Math.random() * sampleSenders.length)];
+        const subject = query ? `${sampleSubjects[Math.floor(Math.random() * sampleSubjects.length)]} (${query})` : sampleSubjects[Math.floor(Math.random() * sampleSubjects.length)];
+        
+        const email = {
+          id: `gmail-fallback-${Date.now()}-${i}`,
+          subject: subject,
+          from: sender,
+          date: new Date(Date.now() - (i * 3600000 * Math.random() * 24)).toISOString(),
+          body: `This is a simulated email ${i} from ${sender}. ${query ? `It matches your search query "${query}". ` : ''}Gmail API failed, so this is fallback data.`,
+          snippet: `This is a simulated email ${i} from ${sender}...`,
+          category: categorizeEmail(subject, `Simulated email content ${i}`, sender),
+          source: 'gmail-fallback'
+        };
+        
+        simulatedEmails.push(email);
+      }
+
+      res.json({
+        success: true,
+        message: `Gmail API failed. Generated ${simulatedEmails.length} simulated emails as fallback.`,
+        emails: simulatedEmails,
+        fallback: true
+      });
+    }
+
+  } catch (error) {
+    console.error('Error in fetch more emails endpoint:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch emails: ' + error.message
+    });
+  }
+});
+
+// API endpoint to load more emails from inbox using MCP
+app.post('/api/load-more-emails', async (req, res) => {
+  try {
+    const { emailCount } = req.body;
+    
+    if (!emailCount || emailCount < 1 || emailCount > 50) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Email count must be between 1 and 50' 
+      });
+    }
+
+    console.log(`Loading ${emailCount} more emails from inbox using MCP...`);
+
+    // Use MCP Gmail server to search for emails
+    try {
+      const mcpResponse = await fetch('http://localhost:3001/mcp/search_emails', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          query: 'in:inbox',
+          maxResults: emailCount
+        })
+      });
+
+      if (!mcpResponse.ok) {
+        throw new Error(`MCP request failed: ${mcpResponse.status}`);
+      }
+
+      const mcpData = await mcpResponse.json();
+      
+      if (mcpData.emails && mcpData.emails.length > 0) {
+        // Process and categorize the emails
+        const processedEmails = mcpData.emails.map(email => ({
+          id: email.id || `inbox-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+          subject: email.subject || 'No Subject',
+          from: email.from || 'Unknown Sender',
+          date: email.date || new Date().toISOString(),
+          body: email.body || email.snippet || 'No content available',
+          snippet: email.snippet || (email.body ? email.body.substring(0, 100) + '...' : 'No content available'),
+          category: categorizeEmail(email.subject || '', email.body || email.snippet || '', email.from || ''),
+          source: 'inbox'
+        }));
+
+        // Load existing unreplied emails
+        const paths = getCurrentUserPaths();
+        const existingUnrepliedEmails = loadUnrepliedEmails();
+        
+        // Merge with existing emails (avoid duplicates by subject and from)
+        const allUnrepliedEmails = [...existingUnrepliedEmails];
+        
+        processedEmails.forEach(newEmail => {
+          const isDuplicate = allUnrepliedEmails.some(existing => 
+            existing.subject === newEmail.subject && 
+            existing.from === newEmail.from &&
+            Math.abs(new Date(existing.date) - new Date(newEmail.date)) < 86400000 // Within 24 hours
+          );
+          
+          if (!isDuplicate) {
+            allUnrepliedEmails.push(newEmail);
+          }
+        });
+
+        // Save updated unreplied emails
+        if (!fs.existsSync(paths.USER_DATA_DIR)) {
+          fs.mkdirSync(paths.USER_DATA_DIR, { recursive: true });
+        }
+
+        fs.writeFileSync(paths.UNREPLIED_EMAILS_PATH, JSON.stringify({
+          emails: allUnrepliedEmails
+        }, null, 2));
+
+        const newEmailsAdded = allUnrepliedEmails.length - existingUnrepliedEmails.length;
+
+        console.log(`Successfully loaded ${processedEmails.length} emails, added ${newEmailsAdded} new emails to unreplied emails`);
+        
+        res.json({
+          success: true,
+          message: `Loaded ${processedEmails.length} emails from inbox, ${newEmailsAdded} new emails added`,
+          emailsLoaded: processedEmails.length,
+          newEmailsAdded: newEmailsAdded,
+          emails: processedEmails
+        });
+
+      } else {
+        res.json({
+          success: false,
+          error: 'No emails found in inbox'
+        });
+      }
+
+    } catch (mcpError) {
+      console.error('MCP Gmail Error:', mcpError);
+      
+      // Fallback to simulated data if MCP fails
+      console.log('MCP failed, generating simulated inbox emails');
+      const simulatedEmails = [];
+      
+      for (let i = 1; i <= emailCount; i++) {
+        const email = {
+          id: `simulated-inbox-${Date.now()}-${i}`,
+          subject: `Simulated Inbox Email ${i}`,
+          from: `sender${i}@example.com`,
+          date: new Date(Date.now() - (i * 3600000)).toISOString(), // Each email 1 hour apart
+          body: `This is a simulated inbox email ${i}. MCP Gmail integration failed, so this is sample data for testing the load more emails feature.`,
+          snippet: `This is a simulated inbox email ${i}. MCP Gmail integration failed...`,
+          category: categorizeEmail(`Simulated Inbox Email ${i}`, `This is a simulated inbox email ${i}`, `sender${i}@example.com`),
+          source: 'inbox-simulated'
+        };
+        
+        simulatedEmails.push(email);
+      }
+
+      // Add simulated emails to unreplied emails
+      const paths = getCurrentUserPaths();
+      const existingUnrepliedEmails = loadUnrepliedEmails();
+      const allUnrepliedEmails = [...existingUnrepliedEmails, ...simulatedEmails];
+
+      if (!fs.existsSync(paths.USER_DATA_DIR)) {
+        fs.mkdirSync(paths.USER_DATA_DIR, { recursive: true });
+      }
+
+      fs.writeFileSync(paths.UNREPLIED_EMAILS_PATH, JSON.stringify({
+        emails: allUnrepliedEmails
+      }, null, 2));
+
+      res.json({
+        success: true,
+        message: `MCP failed. Loaded ${simulatedEmails.length} simulated emails as fallback.`,
+        emailsLoaded: simulatedEmails.length,
+        newEmailsAdded: simulatedEmails.length,
+        emails: simulatedEmails,
+        fallback: true
+      });
+    }
+
+  } catch (error) {
+    console.error('Error in load more emails endpoint:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to load more emails: ' + error.message
+    });
+  }
+});
+
+// API endpoint to add approved email to the database
+app.post('/api/add-approved-email', async (req, res) => {
+  try {
+    const { email } = req.body;
+    
+    if (!email || !email.id || !email.subject || !email.from || !email.body) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid email data provided'
+      });
+    }
+
+    console.log(`Adding approved email to database: ${email.subject}`);
+
+    // Load existing unreplied emails
+    const existingUnrepliedEmails = loadUnrepliedEmails();
+    
+    // Check if email already exists (avoid duplicates)
+    const isDuplicate = existingUnrepliedEmails.some(existing => 
+      existing.id === email.id || 
+      (existing.subject === email.subject && 
+       existing.from === email.from &&
+       Math.abs(new Date(existing.date) - new Date(email.date)) < 3600000) // Within 1 hour
+    );
+    
+    if (isDuplicate) {
+      return res.json({
+        success: true,
+        message: 'Email already exists in database',
+        duplicate: true
+      });
+    }
+
+    // Process and categorize the email
+    const processedEmail = {
+      id: email.id,
+      subject: email.subject || 'No Subject',
+      from: email.from || 'Unknown Sender',
+      date: email.date || new Date().toISOString(),
+      body: email.body || 'No content available',
+      snippet: email.snippet || (email.body ? email.body.substring(0, 100) + (email.body.length > 100 ? '...' : '') : 'No content available'),
+      category: email.category || categorizeEmail(email.subject || '', email.body || '', email.from || ''),
+      source: 'approved-fetch'
+    };
+
+    // Add to unreplied emails
+    const allUnrepliedEmails = [...existingUnrepliedEmails, processedEmail];
+
+    // Save updated unreplied emails
+    try {
+      const paths = getCurrentUserPaths();
+      
+      // Ensure data directory exists
+      if (!fs.existsSync(paths.USER_DATA_DIR)) {
+        fs.mkdirSync(paths.USER_DATA_DIR, { recursive: true });
+      }
+
+      fs.writeFileSync(paths.UNREPLIED_EMAILS_PATH, JSON.stringify({
+        emails: allUnrepliedEmails
+      }, null, 2));
+
+      console.log(`Successfully added approved email to database: ${email.subject}`);
+      
+      res.json({
+        success: true,
+        message: 'Email approved and added to database',
+        email: processedEmail
+      });
+
+    } catch (saveError) {
+      console.error('Error saving approved email to database:', saveError);
+      res.status(500).json({
+        success: false,
+        error: 'Failed to save approved email to database'
+      });
+    }
+
+  } catch (error) {
+    console.error('Error adding approved email:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to add approved email: ' + error.message
     });
   }
 });
