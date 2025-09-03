@@ -153,6 +153,53 @@ async function searchGmailEmails(query, maxResults = 10) {
   }
 }
 
+// Helper function to clean email response body by removing quoted original content
+function cleanResponseBody(emailBody) {
+  if (!emailBody || typeof emailBody !== 'string') {
+    return emailBody;
+  }
+
+  // Common patterns that indicate the start of quoted content
+  const quotePatterns = [
+    // Gmail style: "On [date] at [time], [sender] wrote:"
+    /\n\s*On .+? at .+?, .+? wrote:\s*\n/i,
+    // Outlook style: "From: [sender] Sent: [date]"
+    /\n\s*From:\s*.+?\s*Sent:\s*.+?\n/i,
+    // Generic "On [date], [sender] wrote:"
+    /\n\s*On .+?, .+? wrote:\s*\n/i,
+    // Simple "---- Original Message ----" or similar
+    /\n\s*-+\s*Original Message\s*-+\s*\n/i,
+    // Email client forwarding patterns
+    /\n\s*-+\s*Forwarded message\s*-+\s*\n/i,
+    // Generic quote markers with ">" at start of lines
+    /\n\s*>\s*.+/,
+    // Date/time patterns that often precede quoted content
+    /\n\s*\d{1,2}\/\d{1,2}\/\d{4}.+?wrote:\s*\n/i
+  ];
+
+  let cleanedBody = emailBody;
+
+  // Try each pattern to find where the quoted content starts
+  for (const pattern of quotePatterns) {
+    const match = cleanedBody.match(pattern);
+    if (match) {
+      // Split at the quote marker and keep only the part before it
+      const quoteStart = match.index;
+      cleanedBody = cleanedBody.substring(0, quoteStart).trim();
+      break;
+    }
+  }
+
+  // Additional cleanup: remove excessive whitespace and normalize line breaks
+  cleanedBody = cleanedBody
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n')
+    .replace(/\n\s*\n\s*\n/g, '\n\n')
+    .trim();
+
+  return cleanedBody;
+}
+
 // Helper function to recursively extract email body from nested parts
 function extractEmailBody(payload) {
   let body = '';
@@ -504,7 +551,7 @@ app.get('/api/email-thread/:emailId', async (req, res) => {
             to: [thread.originalFrom || 'Unknown Sender'],
             date: thread.date,
             subject: thread.subject,
-            body: thread.body,
+            body: cleanResponseBody(thread.body),
             isResponse: true
           }
         ]
@@ -2058,6 +2105,87 @@ app.post('/api/add-email-threads', async (req, res) => {
     res.status(500).json({
       success: false,
       error: 'Failed to add email threads: ' + error.message
+    });
+  }
+});
+
+// API endpoint to delete an email thread
+app.delete('/api/email-thread/:emailId', async (req, res) => {
+  try {
+    const emailId = req.params.emailId;
+    
+    if (!emailId) {
+      return res.status(400).json({
+        success: false,
+        error: 'Email ID is required'
+      });
+    }
+
+    console.log(`Deleting email thread with ID: ${emailId}`);
+
+    // Load existing data
+    const existingResponseEmails = loadResponseEmails();
+    const existingEmailThreads = loadEmailThreads();
+
+    // Find the email to delete
+    const emailToDelete = existingResponseEmails.find(email => email.id === emailId);
+    
+    if (!emailToDelete) {
+      return res.status(404).json({
+        success: false,
+        error: 'Email thread not found'
+      });
+    }
+
+    // Remove from response emails
+    const updatedResponseEmails = existingResponseEmails.filter(email => email.id !== emailId);
+    
+    // Remove from email threads
+    const updatedEmailThreads = existingEmailThreads.filter(thread => thread.id !== emailId);
+
+    // Save updated data back to files
+    try {
+      const paths = getCurrentUserPaths();
+      
+      // Ensure data directory exists
+      if (!fs.existsSync(paths.USER_DATA_DIR)) {
+        fs.mkdirSync(paths.USER_DATA_DIR, { recursive: true });
+      }
+
+      // Save updated response emails
+      fs.writeFileSync(paths.RESPONSE_EMAILS_PATH, JSON.stringify({
+        emails: updatedResponseEmails
+      }, null, 2));
+
+      // Save updated email threads
+      fs.writeFileSync(paths.EMAIL_THREADS_PATH, JSON.stringify({
+        threads: updatedEmailThreads
+      }, null, 2));
+
+      console.log(`Successfully deleted email thread: ${emailToDelete.subject}`);
+      
+      res.json({
+        success: true,
+        message: `Email thread "${emailToDelete.subject}" deleted successfully`,
+        deletedEmail: {
+          id: emailToDelete.id,
+          subject: emailToDelete.subject
+        }
+      });
+
+    } catch (saveError) {
+      console.error('Error saving updated data after deletion:', saveError);
+      res.status(500).json({
+        success: false,
+        error: 'Failed to save changes after deletion'
+      });
+    }
+
+  } catch (error) {
+    console.error('Error deleting email thread:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to delete email thread: ' + error.message
     });
   }
 });

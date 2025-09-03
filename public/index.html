@@ -518,6 +518,35 @@
             box-shadow: 0 4px 12px rgba(0,0,0,0.1);
         }
 
+        .email-actions {
+            display: flex;
+            align-items: center;
+            margin-left: 16px;
+        }
+
+        .delete-thread-btn {
+            background: #dc3545;
+            color: white;
+            border: none;
+            padding: 8px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+            transition: all 0.2s ease;
+            opacity: 0;
+            transform: scale(0.8);
+        }
+
+        .delete-thread-btn:hover {
+            background: #c82333;
+            transform: scale(1.1);
+        }
+
+        .email-item:hover .delete-thread-btn {
+            opacity: 1;
+            transform: scale(1);
+        }
+
         /* Modal styles */
         .modal {
             display: none;
@@ -2712,6 +2741,11 @@
                         </div>
                         <div class="email-subject">${email.subject}</div>
                         <div class="email-category ${categoryClass}">${email.category}</div>
+                    </div>
+                    <div class="email-actions">
+                        <button class="delete-thread-btn" onclick="deleteEmailThread('${email.id}', '${email.subject.replace(/'/g, "\\'")}', event)" title="Delete this thread">
+                            🗑️
+                        </button>
                     </div>
                 `;
                 
@@ -6058,6 +6092,41 @@
                 closeLoadMoreEmailsCarouselModal();
             }
         });
+
+        // Delete Email Thread functionality
+        async function deleteEmailThread(emailId, emailSubject, event) {
+            // Prevent the email item click event from firing
+            event.stopPropagation();
+            
+            showConfirmPopup(
+                `Are you sure you want to delete the email thread "${emailSubject}"? This action cannot be undone.`,
+                async () => {
+                    try {
+                        const response = await fetch(`/api/email-thread/${emailId}`, {
+                            method: 'DELETE'
+                        });
+                        
+                        const data = await response.json();
+                        
+                        if (data.success) {
+                            showSuccessPopup(`Email thread "${emailSubject}" deleted successfully!`, 'Thread Deleted');
+                            
+                            // Refresh the email list to remove the deleted thread
+                            loadEmails();
+                        } else {
+                            showErrorPopup('Failed to delete email thread: ' + (data.error || 'Unknown error'), 'Delete Failed');
+                        }
+                    } catch (error) {
+                        console.error('Error deleting email thread:', error);
+                        showErrorPopup('Failed to delete email thread. Please try again.', 'Network Error');
+                    }
+                },
+                () => {
+                    // User cancelled - do nothing
+                },
+                'Delete Email Thread'
+            );
+        }
 
         // Load emails when page loads
         document.addEventListener('DOMContentLoaded', function() {
