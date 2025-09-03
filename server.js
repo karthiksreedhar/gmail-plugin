@@ -1396,15 +1396,27 @@ app.post('/api/load-email-threads', async (req, res) => {
             continue; // Skip emails that aren't replies
           }
 
-          // Search for other emails in the same thread
-          const threadEmails = await searchGmailEmails(`thread:${sentEmail.threadId} -from:${CURRENT_USER_EMAIL}`, 5);
+          // Use Gmail threads API to get all messages in the thread
+          const threadResponse = await gmail.users.threads.get({
+            userId: 'me',
+            id: sentEmail.threadId
+          });
+
+          const threadMessages = threadResponse.data.messages || [];
           
-          if (threadEmails.length === 0) {
+          // Find the original email (not from current user)
+          const originalMessage = threadMessages.find(msg => {
+            const msgHeaders = msg.payload.headers;
+            const msgFrom = msgHeaders.find(h => h.name === 'From')?.value || '';
+            return !msgFrom.includes(CURRENT_USER_EMAIL);
+          });
+
+          if (!originalMessage) {
             continue;
           }
 
-          // Get the original email content
-          const originalEmailData = await getGmailEmail(threadEmails[0].id);
+          // Get the original email content using the message data we already have
+          const originalEmailData = await getGmailEmail(originalMessage.id);
 
           // Create thread object
           const thread = {
