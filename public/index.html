@@ -5963,10 +5963,16 @@
                 'Approval Complete'
             );
             
-            // Close the select email modal as well
-            closeSelectEmailModal();
+            // Refresh the unreplied emails list to show newly added emails
+            loadUnrepliedEmails().then(() => {
+                // If the select email modal is still open, refresh its content
+                const selectModal = document.getElementById('selectEmailModal');
+                if (selectModal && selectModal.style.display === 'block') {
+                    populateUnrepliedEmails();
+                }
+            });
             
-            // Refresh the email list to show any new emails
+            // Also refresh the main email list to show any new emails
             loadEmails();
         }
 

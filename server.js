@@ -153,6 +153,67 @@ async function searchGmailEmails(query, maxResults = 10) {
   }
 }
 
+// Helper function to recursively extract email body from nested parts
+function extractEmailBody(payload) {
+  let body = '';
+  
+  // If this payload has body data directly
+  if (payload.body && payload.body.data) {
+    try {
+      body = Buffer.from(payload.body.data, 'base64').toString('utf-8');
+      if (body.trim()) {
+        return body;
+      }
+    } catch (error) {
+      console.error('Error decoding body data:', error);
+    }
+  }
+  
+  // If this payload has parts, recursively search them
+  if (payload.parts && payload.parts.length > 0) {
+    // First, try to find text/plain parts
+    for (const part of payload.parts) {
+      if (part.mimeType === 'text/plain') {
+        const plainTextBody = extractEmailBody(part);
+        if (plainTextBody && plainTextBody.trim()) {
+          return plainTextBody;
+        }
+      }
+    }
+    
+    // If no text/plain found, try text/html parts
+    for (const part of payload.parts) {
+      if (part.mimeType === 'text/html') {
+        const htmlBody = extractEmailBody(part);
+        if (htmlBody && htmlBody.trim()) {
+          // Basic HTML to text conversion (remove tags)
+          return htmlBody.replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' ').trim();
+        }
+      }
+    }
+    
+    // If still no body found, recursively search multipart/* parts
+    for (const part of payload.parts) {
+      if (part.mimeType && part.mimeType.startsWith('multipart/')) {
+        const nestedBody = extractEmailBody(part);
+        if (nestedBody && nestedBody.trim()) {
+          return nestedBody;
+        }
+      }
+    }
+    
+    // Last resort: try any part that might have body content
+    for (const part of payload.parts) {
+      const anyBody = extractEmailBody(part);
+      if (anyBody && anyBody.trim()) {
+        return anyBody;
+      }
+    }
+  }
+  
+  return body;
+}
+
 // Get Gmail email content
 async function getGmailEmail(messageId) {
   try {
@@ -176,18 +237,15 @@ async function getGmailEmail(messageId) {
     const date = headers.find(h => h.name === 'Date')?.value || new Date().toISOString();
     const threadId = message.threadId;
 
-    // Extract body
-    let body = '';
-    if (message.payload.body && message.payload.body.data) {
-      body = Buffer.from(message.payload.body.data, 'base64').toString('utf-8');
-    } else if (message.payload.parts) {
-      // Handle multipart messages
-      for (const part of message.payload.parts) {
-        if (part.mimeType === 'text/plain' && part.body && part.body.data) {
-          body = Buffer.from(part.body.data, 'base64').toString('utf-8');
-          break;
-        }
-      }
+    // Extract body using recursive function
+    let body = extractEmailBody(message.payload);
+    
+    // Clean up the body text
+    if (body) {
+      // Remove excessive whitespace and normalize line breaks
+      body = body.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+      body = body.replace(/\n\s*\n\s*\n/g, '\n\n'); // Remove excessive line breaks
+      body = body.trim();
     }
 
     return {
@@ -197,7 +255,7 @@ async function getGmailEmail(messageId) {
       from,
       to,
       date,
-      body: body || 'No content available',
+      body: body || message.snippet || 'No content available',
       snippet: message.snippet || ''
     };
   } catch (error) {
