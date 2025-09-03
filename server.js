@@ -20,6 +20,8 @@ app.use(express.static('public'));
 
 // Current user - can be changed via API
 let CURRENT_USER_EMAIL = 'ks4190@columbia.edu';
+// Sending email for Gmail API queries (can be different from CURRENT_USER_EMAIL for aliases)
+let SENDING_EMAIL = 'ks4190@columbia.edu';
 
 // Function to get user-specific paths
 function getUserPaths(userEmail = CURRENT_USER_EMAIL) {
@@ -153,6 +155,38 @@ async function searchGmailEmails(query, maxResults = 10) {
   }
 }
 
+// Helper function to add intelligent formatting to improve email readability
+function addIntelligentFormatting(text) {
+  // If the text is already well-formatted (has multiple line breaks), don't mess with it much
+  const lineBreakCount = (text.match(/\n/g) || []).length;
+  if (lineBreakCount >= 2) {
+    return text; // Already has decent formatting
+  }
+  
+  // For run-on text or poorly formatted text, add intelligent line breaks
+  let formatted = text;
+  
+  // Add line break after greeting patterns
+  formatted = formatted.replace(/^(Hi,|Hello,|Hey,|Dear [^,]+,)/i, '$1\n\n');
+  
+  // Add line breaks before common closing patterns
+  formatted = formatted.replace(/(Thanks,|Best,|Regards,|Sincerely,|Best regards,|Kind regards,)\s*([A-Z][a-z]+)$/i, '\n\n$1\n$2');
+  
+  // Add line breaks after sentence endings followed by capital letters (new sentences)
+  formatted = formatted.replace(/([.!?])\s+([A-Z])/g, '$1\n\n$2');
+  
+  // Add line break after question marks followed by space and capital letter
+  formatted = formatted.replace(/(\?)\s+([A-Z])/g, '$1\n\n$2');
+  
+  // Handle common patterns like "I hope" starting new paragraphs
+  formatted = formatted.replace(/\.\s+(I hope|I wanted|I would|I think|I believe|Please|Could you|Would you)/g, '.\n\n$1');
+  
+  // Handle "Let me know" patterns
+  formatted = formatted.replace(/\.\s+(Let me know|Please let me know)/g, '.\n\n$1');
+  
+  return formatted;
+}
+
 // Helper function to clean email response body by removing quoted original content
 function cleanResponseBody(emailBody) {
   if (!emailBody || typeof emailBody !== 'string') {
@@ -208,6 +242,9 @@ function cleanResponseBody(emailBody) {
     cleanedBody = filteredLines.join('\n').trim();
     console.log(`Cleaned email - removed ${lines.length - filteredLines.length} quoted lines starting with ">"`);
   }
+
+  // Add intelligent formatting to improve readability
+  cleanedBody = addIntelligentFormatting(cleanedBody);
 
   return cleanedBody.trim();
 }
@@ -1163,7 +1200,36 @@ app.delete('/api/scenarios', (req, res) => {
 
 // User management endpoints
 app.get('/api/current-user', (req, res) => {
-  res.json({ currentUser: CURRENT_USER_EMAIL });
+  res.json({ 
+    currentUser: CURRENT_USER_EMAIL,
+    sendingEmail: SENDING_EMAIL 
+  });
+});
+
+// API endpoint to set sending email for current user
+app.post('/api/set-sending-email', (req, res) => {
+  try {
+    const { sendingEmail } = req.body;
+    
+    if (!sendingEmail || !sendingEmail.includes('@')) {
+      return res.status(400).json({ error: 'Invalid sending email address' });
+    }
+    
+    // Update the sending email
+    SENDING_EMAIL = sendingEmail;
+    
+    console.log(`Updated sending email to: ${sendingEmail} for user: ${CURRENT_USER_EMAIL}`);
+    
+    res.json({ 
+      success: true, 
+      currentUser: CURRENT_USER_EMAIL,
+      sendingEmail: SENDING_EMAIL,
+      message: `Sending email updated to ${sendingEmail}` 
+    });
+  } catch (error) {
+    console.error('Error setting sending email:', error);
+    res.status(500).json({ error: 'Failed to set sending email' });
+  }
 });
 
 app.get('/api/users', (req, res) => {
@@ -1201,6 +1267,8 @@ app.post('/api/switch-user', async (req, res) => {
     
     // Switch current user
     CURRENT_USER_EMAIL = userEmail;
+    // Reset sending email to match current user (can be changed later if needed)
+    SENDING_EMAIL = userEmail;
     
     // Reinitialize Gmail API for new user
     gmailAuth = null;
@@ -1435,7 +1503,7 @@ app.post('/api/load-email-threads', async (req, res) => {
       );
 
       // Search for sent emails (your responses) - get more to account for filtering
-      const sentEmails = await searchGmailEmails(`from:${CURRENT_USER_EMAIL} in:sent`, threadCount * 5);
+      const sentEmails = await searchGmailEmails(`from:${SENDING_EMAIL} in:sent`, threadCount * 5);
       
       if (sentEmails.length === 0) {
         return res.json({
