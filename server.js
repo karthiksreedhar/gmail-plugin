@@ -159,47 +159,57 @@ function cleanResponseBody(emailBody) {
     return emailBody;
   }
 
-  // Common patterns that indicate the start of quoted content
-  const quotePatterns = [
-    // Gmail style with multi-line email addresses: "On [date] at [time], [sender] <\nemail@domain.com> wrote:"
-    /\n\s*On .+? at .+?, .+?<[\s\S]*?> wrote:\s*\n/i,
-    // Gmail style: "On [date] at [time], [sender] wrote:"
-    /\n\s*On .+? at .+?, .+? wrote:\s*\n/i,
-    // Outlook style: "From: [sender] Sent: [date]"
-    /\n\s*From:\s*.+?\s*Sent:\s*.+?\n/i,
-    // Generic "On [date], [sender] wrote:"
-    /\n\s*On .+?, .+? wrote:\s*\n/i,
-    // Simple "---- Original Message ----" or similar
-    /\n\s*-+\s*Original Message\s*-+\s*\n/i,
-    // Email client forwarding patterns
-    /\n\s*-+\s*Forwarded message\s*-+\s*\n/i,
-    // Generic quote markers with ">" at start of lines
-    /\n\s*>\s*.+/,
-    // Date/time patterns that often precede quoted content
-    /\n\s*\d{1,2}\/\d{1,2}\/\d{4}.+?wrote:\s*\n/i
-  ];
-
   let cleanedBody = emailBody;
 
-  // Try each pattern to find where the quoted content starts
-  for (const pattern of quotePatterns) {
-    const match = cleanedBody.match(pattern);
-    if (match) {
-      // Split at the quote marker and keep only the part before it
-      const quoteStart = match.index;
-      cleanedBody = cleanedBody.substring(0, quoteStart).trim();
+  // Method 1: Remove everything after "On ... wrote:" pattern - find "wrote:" first, then look for "On" before it
+  const wroteMatches = [...cleanedBody.matchAll(/wrote:\s*[\s\S]*$/gi)];
+  
+  for (const wroteMatch of wroteMatches) {
+    const wroteIndex = wroteMatch.index;
+    const beforeWrote = cleanedBody.substring(0, wroteIndex);
+    
+    // Find the last occurrence of "On" before "wrote:" (simple approach)
+    const onIndex = beforeWrote.lastIndexOf('On ');
+    
+    if (onIndex !== -1) {
+      // Cut everything from "On" onwards
+      cleanedBody = cleanedBody.substring(0, onIndex).trim();
+      console.log(`Cleaned email - removed quoted content using "On...wrote:" pattern`);
       break;
     }
   }
 
-  // Additional cleanup: remove excessive whitespace and normalize line breaks
-  cleanedBody = cleanedBody
-    .replace(/\r\n/g, '\n')
-    .replace(/\r/g, '\n')
-    .replace(/\n\s*\n\s*\n/g, '\n\n')
-    .trim();
+  // Method 2: Remove lines that start with ">" (quoted text)
+  const lines = cleanedBody.split('\n');
+  const filteredLines = [];
+  let inQuotedSection = false;
 
-  return cleanedBody;
+  for (const line of lines) {
+    const trimmedLine = line.trim();
+    
+    // If line starts with ">", it's quoted content - skip it
+    if (trimmedLine.startsWith('>')) {
+      inQuotedSection = true;
+      continue;
+    }
+    
+    // If we were in a quoted section and hit a non-quoted line, we're out
+    if (inQuotedSection && trimmedLine.length > 0 && !trimmedLine.startsWith('>')) {
+      inQuotedSection = false;
+    }
+    
+    // Only keep non-quoted lines
+    if (!inQuotedSection) {
+      filteredLines.push(line);
+    }
+  }
+
+  if (filteredLines.length < lines.length) {
+    cleanedBody = filteredLines.join('\n').trim();
+    console.log(`Cleaned email - removed ${lines.length - filteredLines.length} quoted lines starting with ">"`);
+  }
+
+  return cleanedBody.trim();
 }
 
 // Helper function to recursively extract email body from nested parts
@@ -589,7 +599,7 @@ app.get('/api/email-thread/:emailId', async (req, res) => {
           to: [email.originalFrom || 'Unknown Sender'],
           date: email.date,
           subject: email.subject,
-          body: email.body,
+          body: cleanResponseBody(email.body),
           isResponse: true
         }
       ]
