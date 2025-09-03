@@ -5013,6 +5013,11 @@
                     // Close dropdown
                     closeUserDropdown();
                     
+                    // Clear cached data for the new user
+                    unrepliedEmails = [];
+                    allEmails = [];
+                    currentFilter = 'all';
+                    
                     // Show success message
                     showSuccessPopup(`Switched to user: ${userEmail}`, 'User Switched');
                     
