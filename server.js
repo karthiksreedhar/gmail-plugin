@@ -1619,11 +1619,27 @@ app.post('/api/load-email-threads', async (req, res) => {
   }
 });
 
+// Store for tracking previously shown results during refresh operations
+let refreshExclusionCache = {
+  emails: new Set(),
+  threads: new Set(),
+  lastClearTime: Date.now()
+};
+
+// Clear exclusion cache every 30 minutes to prevent it from growing indefinitely
+setInterval(() => {
+  refreshExclusionCache.emails.clear();
+  refreshExclusionCache.threads.clear();
+  refreshExclusionCache.lastClearTime = Date.now();
+  console.log('Cleared refresh exclusion cache');
+}, 30 * 60 * 1000);
+
 // API endpoint to fetch more emails from inbox using Gmail API directly
 app.post('/api/fetch-more-emails', async (req, res) => {
   try {
-    const { query, maxResults } = req.body;
+    const { query, maxResults, refresh } = req.body;
     const emailCount = maxResults || 10;
+    const isRefresh = refresh === true;
     
     if (emailCount < 1 || emailCount > 50) {
       return res.status(400).json({ 
@@ -1691,6 +1707,11 @@ app.post('/api/fetch-more-emails', async (req, res) => {
         ...existingResponseEmails.map(email => `${email.subject.toLowerCase()}|${email.originalFrom?.toLowerCase() || email.from.toLowerCase()}`)
       ]);
 
+      // If this is a refresh request, also exclude previously shown emails in this session
+      if (isRefresh) {
+        console.log(`Refresh request - excluding ${refreshExclusionCache.emails.size} previously shown emails`);
+      }
+
       // Build Gmail search query - get more emails to account for filtering
       let searchQuery = 'in:inbox';
       if (query && query.trim()) {
@@ -1699,8 +1720,9 @@ app.post('/api/fetch-more-emails', async (req, res) => {
 
       console.log(`Searching Gmail with query: ${searchQuery}`);
 
-      // Search for emails using Gmail API - get more to account for duplicates
-      const emailMessages = await searchGmailEmails(searchQuery, emailCount * 3);
+      // Search for emails using Gmail API - get more to account for duplicates and exclusions
+      const searchMultiplier = isRefresh ? 5 : 3; // Get more emails for refresh to account for exclusions
+      const emailMessages = await searchGmailEmails(searchQuery, emailCount * searchMultiplier);
       
       if (emailMessages.length === 0) {
         return res.json({
@@ -1725,10 +1747,22 @@ app.post('/api/fetch-more-emails', async (req, res) => {
             continue;
           }
           
+          // Skip if this email was shown in a previous request during this session (for refresh)
+          if (isRefresh && refreshExclusionCache.emails.has(emailData.id)) {
+            console.log(`Skipping email ${emailData.id} - shown in previous request`);
+            continue;
+          }
+          
           // Skip if subject+sender combination already exists
           const subjectFromKey = `${emailData.subject.toLowerCase()}|${emailData.from.toLowerCase()}`;
           if (existingSubjectFromPairs.has(subjectFromKey)) {
             console.log(`Skipping email - similar already exists: ${emailData.subject} from ${emailData.from}`);
+            continue;
+          }
+          
+          // Skip if this subject+sender was shown in a previous request (for refresh)
+          if (isRefresh && refreshExclusionCache.emails.has(subjectFromKey)) {
+            console.log(`Skipping email - similar shown in previous request: ${emailData.subject} from ${emailData.from}`);
             continue;
           }
           
@@ -1749,6 +1783,10 @@ app.post('/api/fetch-more-emails', async (req, res) => {
           existingEmailIds.add(emailData.id);
           existingSubjectFromPairs.add(subjectFromKey);
           
+          // Add to refresh exclusion cache for future refresh requests
+          refreshExclusionCache.emails.add(emailData.id);
+          refreshExclusionCache.emails.add(subjectFromKey);
+          
           // Stop when we have enough unique emails
           if (processedEmails.length >= emailCount) {
             break;
@@ -1762,9 +1800,60 @@ app.post('/api/fetch-more-emails', async (req, res) => {
 
       console.log(`Successfully processed ${processedEmails.length} new emails from Gmail`);
 
+      // If no new emails found during refresh, clear the cache and try again once
+      if (isRefresh && processedEmails.length === 0 && refreshExclusionCache.emails.size > 0) {
+        console.log('No new emails found during refresh, clearing exclusion cache and retrying...');
+        refreshExclusionCache.emails.clear();
+        
+        // Retry the search with cleared cache
+        const retryMessages = await searchGmailEmails(searchQuery, emailCount * 2);
+        const retryEmails = [];
+        
+        for (const message of retryMessages.slice(0, emailCount)) {
+          try {
+            const emailData = await getGmailEmail(message.id);
+            
+            if (existingEmailIds.has(emailData.id)) continue;
+            
+            const subjectFromKey = `${emailData.subject.toLowerCase()}|${emailData.from.toLowerCase()}`;
+            if (existingSubjectFromPairs.has(subjectFromKey)) continue;
+            
+            const processedEmail = {
+              id: emailData.id,
+              subject: emailData.subject,
+              from: emailData.from,
+              date: emailData.date,
+              body: emailData.body,
+              snippet: emailData.snippet || (emailData.body ? emailData.body.substring(0, 100) + (emailData.body.length > 100 ? '...' : '') : 'No content available'),
+              category: categorizeEmail(emailData.subject, emailData.body, emailData.from),
+              source: 'gmail-api'
+            };
+            
+            retryEmails.push(processedEmail);
+            refreshExclusionCache.emails.add(emailData.id);
+            refreshExclusionCache.emails.add(subjectFromKey);
+            
+          } catch (emailError) {
+            continue;
+          }
+        }
+        
+        if (retryEmails.length > 0) {
+          console.log(`Retry successful: found ${retryEmails.length} emails after clearing cache`);
+          return res.json({
+            success: true,
+            message: `Refreshed with ${retryEmails.length} new emails from Gmail inbox`,
+            emails: retryEmails,
+            fallback: false
+          });
+        }
+      }
+
       res.json({
         success: true,
-        message: `Fetched ${processedEmails.length} new emails from Gmail inbox`,
+        message: isRefresh ? 
+          `Refreshed with ${processedEmails.length} new emails from Gmail inbox` :
+          `Fetched ${processedEmails.length} new emails from Gmail inbox`,
         emails: processedEmails,
         fallback: false
       });

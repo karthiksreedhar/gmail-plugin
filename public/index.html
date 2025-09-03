@@ -5392,6 +5392,7 @@
                         <div class="carousel-header">
                             <div class="carousel-info" id="carouselInfo">Loading threads...</div>
                             <div class="carousel-controls">
+                                <button class="carousel-nav-btn" onclick="refreshEmailThreads()" style="background: #667eea; margin-right: 10px;">🔄 Refresh Threads</button>
                                 <button class="carousel-nav-btn" id="prevBtn" onclick="previousSlide()" disabled>← Previous</button>
                                 <span class="carousel-counter" id="carouselCounter">1 / 1</span>
                                 <button class="carousel-nav-btn" id="nextBtn" onclick="nextSlide()" disabled>Next →</button>
@@ -5742,6 +5743,7 @@
                         <div class="carousel-header">
                             <div class="carousel-info" id="loadMoreCarouselInfo">Loading emails...</div>
                             <div class="carousel-controls">
+                                <button class="carousel-nav-btn" onclick="refreshLoadMoreEmails()" style="background: #667eea; margin-right: 10px;">🔄 Refresh Emails</button>
                                 <button class="carousel-nav-btn" id="loadMorePrevBtn" onclick="previousLoadMoreSlide()" disabled>← Previous</button>
                                 <span class="carousel-counter" id="loadMoreCarouselCounter">1 / 1</span>
                                 <button class="carousel-nav-btn" id="loadMoreNextBtn" onclick="nextLoadMoreSlide()" disabled>Next →</button>
@@ -6107,6 +6109,120 @@
                 closeLoadMoreEmailsCarouselModal();
             }
         });
+
+        // Refresh functionality for Load More Emails
+        async function refreshLoadMoreEmails() {
+            // Get the current query and count from the original fetch
+            const query = document.getElementById('emailQueryInput') ? document.getElementById('emailQueryInput').value.trim() : '';
+            const maxResults = loadMoreEmailsData.length || 10; // Use current count or default to 10
+            
+            // Show loading overlay
+            showLoadingOverlay('Refreshing Emails', 'Fetching new emails from your Gmail inbox...', true);
+            
+            try {
+                // Create abort controller for cancellation
+                loadingOperation = new AbortController();
+                
+                const response = await fetch('/api/fetch-more-emails', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        query: query || undefined,
+                        maxResults: maxResults,
+                        refresh: true // Flag to indicate this is a refresh request for different emails
+                    }),
+                    signal: loadingOperation.signal
+                });
+                
+                const data = await response.json();
+                
+                if (data.success && data.emails && data.emails.length > 0) {
+                    // Replace current emails with new ones
+                    loadMoreEmailsData = data.emails;
+                    selectedLoadMoreEmails.clear();
+                    currentLoadMoreSlideIndex = 0;
+                    
+                    // Hide loading overlay
+                    hideLoadingOverlay();
+                    
+                    // Refresh the carousel display
+                    populateLoadMoreEmailsCarousel();
+                    
+                    showSuccessPopup(`Refreshed with ${data.emails.length} new email${data.emails.length === 1 ? '' : 's'}!`, 'Emails Refreshed');
+                } else {
+                    hideLoadingOverlay();
+                    showErrorPopup(data.error || 'No new emails found matching the criteria.', 'No New Emails');
+                }
+            } catch (error) {
+                hideLoadingOverlay();
+                if (error.name === 'AbortError') {
+                    console.log('Email refresh was cancelled');
+                } else {
+                    console.error('Error refreshing emails:', error);
+                    showErrorPopup('Failed to refresh emails. Please try again.', 'Refresh Failed');
+                }
+            } finally {
+                loadingOperation = null;
+            }
+        }
+
+        // Refresh functionality for Email Threads
+        async function refreshEmailThreads() {
+            // Get the current thread count from the original load
+            const threadCount = currentThreads.length || 3; // Use current count or default to 3
+            
+            // Show loading overlay
+            showLoadingOverlay('Refreshing Threads', 'Fetching new email threads from your inbox...', true);
+            
+            try {
+                // Create abort controller for cancellation
+                loadingOperation = new AbortController();
+                
+                const response = await fetch('/api/load-email-threads', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        threadCount: threadCount,
+                        refresh: true // Flag to indicate this is a refresh request for different threads
+                    }),
+                    signal: loadingOperation.signal
+                });
+                
+                const data = await response.json();
+                
+                if (data.success && data.threads && data.threads.length > 0) {
+                    // Replace current threads with new ones
+                    currentThreads = data.threads;
+                    selectedThreads.clear();
+                    currentSlideIndex = 0;
+                    
+                    // Hide loading overlay
+                    hideLoadingOverlay();
+                    
+                    // Refresh the carousel display
+                    populateThreadCarousel();
+                    
+                    showSuccessPopup(`Refreshed with ${data.threads.length} new thread${data.threads.length === 1 ? '' : 's'}!`, 'Threads Refreshed');
+                } else {
+                    hideLoadingOverlay();
+                    showErrorPopup(data.error || 'No new email threads found matching the criteria.', 'No New Threads');
+                }
+            } catch (error) {
+                hideLoadingOverlay();
+                if (error.name === 'AbortError') {
+                    console.log('Thread refresh was cancelled');
+                } else {
+                    console.error('Error refreshing threads:', error);
+                    showErrorPopup('Failed to refresh threads. Please try again.', 'Refresh Failed');
+                }
+            } finally {
+                loadingOperation = null;
+            }
+        }
 
         // Delete Email Thread functionality
         async function deleteEmailThread(emailId, emailSubject, event) {
