@@ -1413,8 +1413,19 @@ app.post('/api/load-email-threads', async (req, res) => {
     }
 
     try {
-      // Search for sent emails (your responses)
-      const sentEmails = await searchGmailEmails(`from:${CURRENT_USER_EMAIL} in:sent`, threadCount * 3);
+      // Load existing response emails and threads to avoid duplicates
+      const existingResponseEmails = loadResponseEmails();
+      const existingEmailThreads = loadEmailThreads();
+      
+      // Create sets of existing email IDs and thread IDs for fast lookup
+      const existingEmailIds = new Set(existingResponseEmails.map(email => email.id));
+      const existingThreadIds = new Set(existingEmailThreads.map(thread => thread.id));
+      const existingSubjectFromPairs = new Set(
+        existingResponseEmails.map(email => `${email.subject.toLowerCase()}|${email.originalFrom?.toLowerCase() || 'unknown'}`)
+      );
+
+      // Search for sent emails (your responses) - get more to account for filtering
+      const sentEmails = await searchGmailEmails(`from:${CURRENT_USER_EMAIL} in:sent`, threadCount * 5);
       
       if (sentEmails.length === 0) {
         return res.json({
@@ -1429,15 +1440,21 @@ app.post('/api/load-email-threads', async (req, res) => {
       const processedThreadIds = new Set();
 
       // Process each sent email to find threads
-      for (const sentEmail of sentEmails.slice(0, threadCount * 2)) {
+      for (const sentEmail of sentEmails) {
         try {
-          // Skip if we already processed this thread
+          // Skip if we already processed this thread in this request
           if (processedThreadIds.has(sentEmail.threadId)) {
             continue;
           }
 
           // Get the full sent email content
           const sentEmailData = await getGmailEmail(sentEmail.id);
+          
+          // Skip if this email is already in our database
+          if (existingEmailIds.has(sentEmailData.id)) {
+            console.log(`Skipping email ${sentEmailData.id} - already in database`);
+            continue;
+          }
           
           // Check if this is a reply (has "Re:" in subject)
           const isReply = sentEmailData.subject.toLowerCase().startsWith('re:');
@@ -1467,27 +1484,47 @@ app.post('/api/load-email-threads', async (req, res) => {
           // Get the original email content using the message data we already have
           const originalEmailData = await getGmailEmail(originalMessage.id);
 
-          // Create thread object
+          // Check for duplicates based on subject and original sender
+          const subjectFromKey = `${sentEmailData.subject.toLowerCase()}|${originalEmailData.from.toLowerCase()}`;
+          if (existingSubjectFromPairs.has(subjectFromKey)) {
+            console.log(`Skipping thread - similar email already exists: ${sentEmailData.subject} from ${originalEmailData.from}`);
+            continue;
+          }
+
+          // Check if thread ID already exists
+          const threadId = `thread-${sentEmail.threadId}`;
+          if (existingThreadIds.has(threadId)) {
+            console.log(`Skipping thread ${threadId} - already in database`);
+            continue;
+          }
+
+          // Create thread object with unique ID based on timestamp and thread ID
+          const uniqueThreadId = `thread-${sentEmail.threadId}-${Date.now()}`;
+          
+          // Safely handle the 'to' field which might be a string or undefined
+          const originalTo = originalEmailData.to ? originalEmailData.to.split(',').map(email => email.trim()) : [CURRENT_USER_EMAIL];
+          const sentTo = sentEmailData.to ? sentEmailData.to.split(',').map(email => email.trim()) : [originalEmailData.from];
+          
           const thread = {
-            id: `thread-${sentEmail.threadId}`,
+            id: uniqueThreadId,
             subject: sentEmailData.subject,
             messages: [
               {
                 id: originalEmailData.id,
                 from: originalEmailData.from,
-                to: originalEmailData.to.split(',').map(email => email.trim()),
+                to: originalTo,
                 date: originalEmailData.date,
                 subject: originalEmailData.subject,
-                body: originalEmailData.body,
+                body: originalEmailData.body || 'No content available',
                 isResponse: false
               },
               {
                 id: sentEmailData.id,
                 from: sentEmailData.from,
-                to: sentEmailData.to.split(',').map(email => email.trim()),
+                to: sentTo,
                 date: sentEmailData.date,
                 subject: sentEmailData.subject,
-                body: sentEmailData.body,
+                body: sentEmailData.body || 'No content available',
                 isResponse: true
               }
             ]
@@ -1495,6 +1532,11 @@ app.post('/api/load-email-threads', async (req, res) => {
 
           threads.push(thread);
           processedThreadIds.add(sentEmail.threadId);
+          
+          // Add to our tracking sets to avoid duplicates within this request
+          existingEmailIds.add(sentEmailData.id);
+          existingThreadIds.add(threadId);
+          existingSubjectFromPairs.add(subjectFromKey);
 
           // Stop when we have enough threads
           if (threads.length >= threadCount) {
@@ -1507,12 +1549,12 @@ app.post('/api/load-email-threads', async (req, res) => {
         }
       }
 
-      console.log(`Successfully loaded ${threads.length} email threads from Gmail`);
+      console.log(`Successfully loaded ${threads.length} new email threads from Gmail`);
       
       res.json({
         success: true,
         threads: threads,
-        message: `Loaded ${threads.length} email threads from your Gmail inbox`
+        message: `Loaded ${threads.length} new email threads from your Gmail inbox`
       });
 
     } catch (gmailError) {
@@ -1634,7 +1676,22 @@ app.post('/api/fetch-more-emails', async (req, res) => {
     }
 
     try {
-      // Build Gmail search query
+      // Load existing emails to avoid duplicates
+      const existingUnrepliedEmails = loadUnrepliedEmails();
+      const existingResponseEmails = loadResponseEmails();
+      
+      // Create sets for fast duplicate checking
+      const existingEmailIds = new Set([
+        ...existingUnrepliedEmails.map(email => email.id),
+        ...existingResponseEmails.map(email => email.id)
+      ]);
+      
+      const existingSubjectFromPairs = new Set([
+        ...existingUnrepliedEmails.map(email => `${email.subject.toLowerCase()}|${email.from.toLowerCase()}`),
+        ...existingResponseEmails.map(email => `${email.subject.toLowerCase()}|${email.originalFrom?.toLowerCase() || email.from.toLowerCase()}`)
+      ]);
+
+      // Build Gmail search query - get more emails to account for filtering
       let searchQuery = 'in:inbox';
       if (query && query.trim()) {
         searchQuery += ` ${query.trim()}`;
@@ -1642,8 +1699,8 @@ app.post('/api/fetch-more-emails', async (req, res) => {
 
       console.log(`Searching Gmail with query: ${searchQuery}`);
 
-      // Search for emails using Gmail API
-      const emailMessages = await searchGmailEmails(searchQuery, emailCount);
+      // Search for emails using Gmail API - get more to account for duplicates
+      const emailMessages = await searchGmailEmails(searchQuery, emailCount * 3);
       
       if (emailMessages.length === 0) {
         return res.json({
@@ -1653,14 +1710,27 @@ app.post('/api/fetch-more-emails', async (req, res) => {
         });
       }
 
-      console.log(`Found ${emailMessages.length} emails, processing content...`);
+      console.log(`Found ${emailMessages.length} emails, processing content and filtering duplicates...`);
 
-      // Get full email content for each message
+      // Get full email content for each message and filter duplicates
       const processedEmails = [];
       
       for (const message of emailMessages) {
         try {
           const emailData = await getGmailEmail(message.id);
+          
+          // Skip if email ID already exists
+          if (existingEmailIds.has(emailData.id)) {
+            console.log(`Skipping email ${emailData.id} - already in database`);
+            continue;
+          }
+          
+          // Skip if subject+sender combination already exists
+          const subjectFromKey = `${emailData.subject.toLowerCase()}|${emailData.from.toLowerCase()}`;
+          if (existingSubjectFromPairs.has(subjectFromKey)) {
+            console.log(`Skipping email - similar already exists: ${emailData.subject} from ${emailData.from}`);
+            continue;
+          }
           
           const processedEmail = {
             id: emailData.id,
@@ -1674,17 +1744,27 @@ app.post('/api/fetch-more-emails', async (req, res) => {
           };
           
           processedEmails.push(processedEmail);
+          
+          // Add to tracking sets to avoid duplicates within this request
+          existingEmailIds.add(emailData.id);
+          existingSubjectFromPairs.add(subjectFromKey);
+          
+          // Stop when we have enough unique emails
+          if (processedEmails.length >= emailCount) {
+            break;
+          }
+          
         } catch (emailError) {
           console.error('Error processing email:', emailError);
           continue; // Skip this email and continue with others
         }
       }
 
-      console.log(`Successfully processed ${processedEmails.length} emails from Gmail`);
+      console.log(`Successfully processed ${processedEmails.length} new emails from Gmail`);
 
       res.json({
         success: true,
-        message: `Fetched ${processedEmails.length} emails from Gmail inbox`,
+        message: `Fetched ${processedEmails.length} new emails from Gmail inbox`,
         emails: processedEmails,
         fallback: false
       });
