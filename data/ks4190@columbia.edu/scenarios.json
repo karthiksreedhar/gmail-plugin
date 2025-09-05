@@ -302,8 +302,44 @@
         }
       ],
       "timestamp": "2025-08-26T11:45:47.810Z"
+    },
+    {
+      "id": "1757088339534",
+      "name": "sept-5-tests",
+      "description": "",
+      "createdAt": "2025-09-05T16:05:39.534Z"
     }
   ],
-  "refinements": [],
-  "savedGenerations": []
+  "refinements": [
+    {
+      "id": "1757088252720",
+      "timestamp": "2025-09-05T16:04:12.721Z",
+      "prompt": "I want to set the deadline as Tuesday EOD instead.",
+      "originalResponse": "Hi Ari,\n\nI’m sorry you’ve been under the weather. No worries—please submit HW #3 by Wednesday EOD, and let me know if you need any additional time.\n\nFeel better soon!\n\nThanks,  \nKarthik",
+      "refinedResponse": "Hi Ari,\n\nI’m sorry you’ve been under the weather. Please submit HW #3 by Tuesday EOD, and let me know if you need any additional time.\n\nFeel better soon!\n\nThanks,  \nKarthik",
+      "analysis": {
+        "changes": [
+          {
+            "description": "Move the homework deadline from Wednesday EOD to Tuesday EOD",
+            "category": "EMAIL-SPECIFIC",
+            "reasoning": "The change involves a concrete, time-bound detail (the exact due date) that is unique to this particular situation and not a reusable writing principle.",
+            "extractedRule": null
+          }
+        ]
+      }
+    }
+  ],
+  "savedGenerations": [
+    {
+      "id": "1757088257759",
+      "timestamp": "2025-09-05T16:04:17.759Z",
+      "originalEmail": {
+        "sender": "Joe Smith <arigold@columbia.edu>",
+        "subject": "Homework #3 Extension",
+        "body": "Hi Karthik,\n\nI wanted to reach out to ask if I could have an extension on Homework #3 - I have been feeling sick this weekend and would sincerely appreciate the extra time.\n\nThanks,\nAri"
+      },
+      "generatedResponse": "Hi Ari,\n\nI’m sorry you’ve been under the weather. Please submit HW #3 by Tuesday EOD, and let me know if you need any additional time.\n\nFeel better soon!\n\nThanks,  \nKarthik",
+      "justification": ""
+    }
+  ]
 }
