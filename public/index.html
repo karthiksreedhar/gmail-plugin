@@ -6381,19 +6381,21 @@
             modal.id = 'categoriesReviewModal';
             modal.className = 'modal';
             modal.innerHTML = `
-                <div class="modal-content" style="max-width: 85vw; width: 85vw; max-height: 85vh;">
-                    <div class="modal-header">
+                <div class="modal-content" style="max-width: 85vw; width: 85vw; max-height: 85vh; display: flex; flex-direction: column; overflow: hidden;">
+                    <div class="modal-header" style="flex: 0 0 auto;">
                         <h2 class="modal-title">Review Generated Categories</h2>
                         <button class="close" onclick="closeCategoriesReviewModal()">&times;</button>
                     </div>
-                    <div style="padding: 16px;">
-                        <div style="display: flex; gap: 12px; align-items: center; margin-bottom: 12px;">
+                    <div style="padding: 16px; display: flex; flex-direction: column; gap: 12px; flex: 1 1 auto; min-height: 0;">
+                        <div style="display: flex; gap: 12px; align-items: center;">
                             <button class="select-email-btn" onclick="addNewCategory()">+ Add Category</button>
                             <button class="select-email-btn" onclick="refreshCategoriesInModal()">🔄 Refresh Categories</button>
                             <span style="color:#666; font-size:12px;">Drag emails between categories. Click “Approve & Save” to apply changes.</span>
                         </div>
-                        <div id="categoriesEditor" style="display:flex; gap:12px; overflow-x:auto; padding-bottom:8px;"></div>
-                        <div style="display:flex; justify-content:center; gap:12px; margin-top:16px;">
+                        <div id="categoriesEditorContainer" style="flex: 1 1 auto; min-height: 0; overflow: hidden;">
+                            <div id="categoriesEditor" style="height: 100%; display:flex; gap:12px; overflow-x:auto; overflow-y:hidden; align-items: stretch; padding-bottom:8px;"></div>
+                        </div>
+                        <div style="display:flex; justify-content:center; gap:12px; margin-top: 8px; flex: 0 0 auto;">
                             <button class="carousel-btn carousel-btn-cancel" onclick="closeCategoriesReviewModal()">Cancel</button>
                             <button class="carousel-btn carousel-btn-add" onclick="approveAndSaveCategories()">Approve & Save</button>
                         </div>
@@ -6433,6 +6435,9 @@
                 col.style.border = '1px solid #e9ecef';
                 col.style.borderRadius = '8px';
                 col.style.padding = '12px';
+                col.style.display = 'flex';
+                col.style.flexDirection = 'column';
+                col.style.height = '100%';
 
                 const header = document.createElement('div');
                 header.style.display = 'flex';
@@ -6472,6 +6477,9 @@
                 list.style.display = 'flex';
                 list.style.flexDirection = 'column';
                 list.style.gap = '8px';
+                list.style.flex = '1 1 auto';
+                list.style.minHeight = '0';
+                list.style.overflowY = 'auto';
 
                 (cat.emails || []).forEach(e => {
                     const item = document.createElement('div');
