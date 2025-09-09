@@ -6291,19 +6291,21 @@
 
         async function showCategoriesReviewModal() {
             try {
-                // Fetch proposed categories from server
-                const resp = await fetch('/api/generate-categories', { method: 'POST' });
-                const data = await resp.json();
-                if (!resp.ok || !data.success) {
-                    throw new Error(data.error || 'Failed to generate categories');
+                // Build categories from current emails to keep existing assignments as-is
+                let sourceEmails = Array.isArray(allEmails) && allEmails.length ? allEmails : [];
+
+                if (!sourceEmails.length) {
+                    // Fallback: fetch current response emails (existing saved categories)
+                    const resp = await fetch('/api/response-emails');
+                    const data = await resp.json();
+                    if (data && Array.isArray(data.emails)) {
+                        sourceEmails = data.emails;
+                    }
                 }
 
-                categoriesState = (data.categories || []).map(c => ({
-                    name: c.name,
-                    emails: Array.isArray(c.emails) ? c.emails.slice() : []
-                }));
+                categoriesState = groupEmailsIntoCategories(sourceEmails);
 
-                // Seed assignments map
+                // Seed assignments map from current categories
                 categoryAssignments = {};
                 categoriesState.forEach(cat => {
                     (cat.emails || []).forEach(e => {
@@ -6321,7 +6323,55 @@
                 renderCategoriesEditor();
                 modal.style.display = 'block';
             } catch (err) {
-                console.error('Error refreshing categories:', err);
+                console.error('Error opening categories editor:', err);
+                showErrorPopup('Failed to open categories editor. Please try again.', 'Open Failed');
+            }
+        }
+
+        function groupEmailsIntoCategories(emails) {
+            const groups = {};
+            (emails || []).forEach(email => {
+                const name = (email.category && String(email.category)) || 'Uncategorized';
+                if (!groups[name]) groups[name] = [];
+                groups[name].push({
+                    id: email.id,
+                    subject: email.subject || 'No Subject',
+                    from: email.originalFrom || email.from || 'Unknown Sender',
+                    date: email.date || new Date().toISOString(),
+                    snippet: email.snippet || (email.body ? email.body.substring(0, 120) + (email.body.length > 120 ? '...' : '') : 'No content available')
+                });
+            });
+            return Object.keys(groups)
+                .sort()
+                .map(name => ({ name, emails: groups[name] }));
+        }
+
+        async function refreshCategoriesInModal() {
+            try {
+                // Explicit refresh: generate suggested categories from server
+                const resp = await fetch('/api/generate-categories', { method: 'POST' });
+                const data = await resp.json();
+                if (!resp.ok || !data.success) {
+                    throw new Error(data.error || 'Failed to generate categories');
+                }
+
+                categoriesState = (data.categories || []).map(c => ({
+                    name: c.name,
+                    emails: Array.isArray(c.emails) ? c.emails.slice() : []
+                }));
+
+                // Reset assignments map based on refreshed groups
+                categoryAssignments = {};
+                categoriesState.forEach(cat => {
+                    (cat.emails || []).forEach(e => {
+                        if (e && e.id) categoryAssignments[e.id] = cat.name;
+                    });
+                });
+
+                renderCategoriesEditor();
+                showSuccessPopup('Categories refreshed from current data.', 'Refreshed');
+            } catch (err) {
+                console.error('Error refreshing categories in modal:', err);
                 showErrorPopup('Failed to refresh categories. Please try again.', 'Refresh Failed');
             }
         }
@@ -6339,6 +6389,7 @@
                     <div style="padding: 16px;">
                         <div style="display: flex; gap: 12px; align-items: center; margin-bottom: 12px;">
                             <button class="select-email-btn" onclick="addNewCategory()">+ Add Category</button>
+                            <button class="select-email-btn" onclick="refreshCategoriesInModal()">🔄 Refresh Categories</button>
                             <span style="color:#666; font-size:12px;">Drag emails between categories. Click “Approve & Save” to apply changes.</span>
                         </div>
                         <div id="categoriesEditor" style="display:flex; gap:12px; overflow-x:auto; padding-bottom:8px;"></div>
