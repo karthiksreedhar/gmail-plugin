@@ -6392,7 +6392,7 @@
                             <button class="select-email-btn" onclick="refreshCategoriesInModal()">🔄 Refresh Categories</button>
                             <span style="color:#666; font-size:12px;">Drag emails between categories. Click “Approve & Save” to apply changes.</span>
                         </div>
-                        <div id="categoriesEditorContainer" style="flex: 1 1 auto; min-height: 0; overflow: hidden;">
+                        <div id="categoriesEditorContainer" style="flex: 0 0 60vh; height: 60vh; min-height: 0; overflow: hidden;">
                             <div id="categoriesEditor" style="height: 100%; display:flex; gap:12px; overflow-x:auto; overflow-y:hidden; align-items: stretch; padding-bottom:8px;"></div>
                         </div>
                         <div style="display:flex; justify-content:center; gap:12px; margin-top: 8px; flex: 0 0 auto;">
@@ -6480,6 +6480,8 @@
                 list.style.flex = '1 1 auto';
                 list.style.minHeight = '0';
                 list.style.overflowY = 'auto';
+                list.style.paddingRight = '8px';
+                list.style.webkitOverflowScrolling = 'touch';
 
                 (cat.emails || []).forEach(e => {
                     const item = document.createElement('div');
