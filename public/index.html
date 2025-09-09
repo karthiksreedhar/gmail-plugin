@@ -214,6 +214,25 @@
             background: #2851a3;
         }
 
+        .categories-edit-btn {
+            background: #ff9800;
+            color: white;
+            border: none;
+            padding: 10px 12px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 600;
+            transition: background-color 0.2s ease;
+            display: block;
+            width: 100%;
+            margin: 6px 0 8px 0;
+        }
+
+        .categories-edit-btn:hover {
+            background: #f57c00;
+        }
+
         /* User Selector Styles */
         .user-selector-container {
             position: relative;
@@ -2247,6 +2266,7 @@
             <div class="sidebar">
                 <div class="sidebar-section">
                     <h3>System Generated Categories</h3>
+                    <button class="categories-edit-btn" onclick="showCategoriesReviewModal()" title="Edit Categories and Notes">Edit Categories & Notes</button>
                     <div class="category-list">
                         <div class="category-item active" onclick="filterByCategory('all')" id="viewAll">
                             <span class="category-icon">📧</span>
@@ -3143,7 +3163,13 @@
             }
             
             container.innerHTML = '';
-            unrepliedEmails.forEach(email => {
+            const sortedUnreplied = (unrepliedEmails || []).slice().sort((a, b) => {
+                const ac = (a.category || '').toLowerCase();
+                const bc = (b.category || '').toLowerCase();
+                if (ac !== bc) return ac.localeCompare(bc);
+                return new Date(b.date) - new Date(a.date); // newest first within category
+            });
+            sortedUnreplied.forEach(email => {
                 const emailDiv = document.createElement('div');
                 emailDiv.className = 'unreplied-email-item';
                 emailDiv.onclick = () => selectUnrepliedEmail(email);
@@ -6257,6 +6283,315 @@
                 },
                 'Delete Email Thread'
             );
+        }
+
+        // Categories Review Modal (Refresh Categories)
+        let categoriesState = [];
+        let categoryAssignments = {};
+
+        async function showCategoriesReviewModal() {
+            try {
+                // Fetch proposed categories from server
+                const resp = await fetch('/api/generate-categories', { method: 'POST' });
+                const data = await resp.json();
+                if (!resp.ok || !data.success) {
+                    throw new Error(data.error || 'Failed to generate categories');
+                }
+
+                categoriesState = (data.categories || []).map(c => ({
+                    name: c.name,
+                    emails: Array.isArray(c.emails) ? c.emails.slice() : []
+                }));
+
+                // Seed assignments map
+                categoryAssignments = {};
+                categoriesState.forEach(cat => {
+                    (cat.emails || []).forEach(e => {
+                        if (e && e.id) categoryAssignments[e.id] = cat.name;
+                    });
+                });
+
+                // Create modal once
+                let modal = document.getElementById('categoriesReviewModal');
+                if (!modal) {
+                    modal = createCategoriesReviewModal();
+                    document.body.appendChild(modal);
+                }
+
+                renderCategoriesEditor();
+                modal.style.display = 'block';
+            } catch (err) {
+                console.error('Error refreshing categories:', err);
+                showErrorPopup('Failed to refresh categories. Please try again.', 'Refresh Failed');
+            }
+        }
+
+        function createCategoriesReviewModal() {
+            const modal = document.createElement('div');
+            modal.id = 'categoriesReviewModal';
+            modal.className = 'modal';
+            modal.innerHTML = `
+                <div class="modal-content" style="max-width: 85vw; width: 85vw; max-height: 85vh;">
+                    <div class="modal-header">
+                        <h2 class="modal-title">Review Generated Categories</h2>
+                        <button class="close" onclick="closeCategoriesReviewModal()">&times;</button>
+                    </div>
+                    <div style="padding: 16px;">
+                        <div style="display: flex; gap: 12px; align-items: center; margin-bottom: 12px;">
+                            <button class="select-email-btn" onclick="addNewCategory()">+ Add Category</button>
+                            <span style="color:#666; font-size:12px;">Drag emails between categories. Click “Approve & Save” to apply changes.</span>
+                        </div>
+                        <div id="categoriesEditor" style="display:flex; gap:12px; overflow-x:auto; padding-bottom:8px;"></div>
+                        <div style="display:flex; justify-content:center; gap:12px; margin-top:16px;">
+                            <button class="carousel-btn carousel-btn-cancel" onclick="closeCategoriesReviewModal()">Cancel</button>
+                            <button class="carousel-btn carousel-btn-add" onclick="approveAndSaveCategories()">Approve & Save</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+            // Close on click backdrop
+            modal.addEventListener('click', (ev) => {
+                if (ev.target === modal) closeCategoriesReviewModal();
+            });
+            return modal;
+        }
+
+        function closeCategoriesReviewModal() {
+            const modal = document.getElementById('categoriesReviewModal');
+            if (modal) modal.style.display = 'none';
+        }
+
+        function renderCategoriesEditor() {
+            const editor = document.getElementById('categoriesEditor');
+            if (!editor) return;
+            editor.innerHTML = '';
+
+            if (!Array.isArray(categoriesState) || categoriesState.length === 0) {
+                editor.innerHTML = '<div class="loading" style="width:100%;">No categories generated.</div>';
+                return;
+            }
+
+            categoriesState.forEach((cat, index) => {
+                const col = document.createElement('div');
+                col.className = 'category-column';
+                col.setAttribute('data-category', cat.name);
+                col.setAttribute('ondragover', 'categoriesAllowDrop(event)');
+                col.setAttribute('ondrop', `categoriesHandleDrop(event, ${index})`);
+                col.style.minWidth = '300px';
+                col.style.background = '#f8f9fa';
+                col.style.border = '1px solid #e9ecef';
+                col.style.borderRadius = '8px';
+                col.style.padding = '12px';
+
+                const header = document.createElement('div');
+                header.style.display = 'flex';
+                header.style.alignItems = 'center';
+                header.style.justifyContent = 'space-between';
+                header.style.marginBottom = '8px';
+
+                const title = document.createElement('div');
+                title.style.display = 'flex';
+                title.style.alignItems = 'center';
+                title.style.gap = '8px';
+
+                const nameSpan = document.createElement('span');
+                nameSpan.textContent = cat.name;
+                nameSpan.style.fontWeight = '600';
+                nameSpan.style.fontSize = '14px';
+
+                const renameBtn = document.createElement('button');
+                renameBtn.textContent = 'Rename';
+                renameBtn.className = 'select-email-btn';
+                renameBtn.style.padding = '4px 8px';
+                renameBtn.style.fontSize = '12px';
+                renameBtn.addEventListener('click', () => renameCategory(index));
+
+                title.appendChild(nameSpan);
+                title.appendChild(renameBtn);
+
+                const count = document.createElement('span');
+                count.className = 'category-count';
+                count.textContent = (cat.emails || []).length;
+
+                header.appendChild(title);
+                header.appendChild(count);
+
+                const list = document.createElement('div');
+                list.className = 'category-email-list';
+                list.style.display = 'flex';
+                list.style.flexDirection = 'column';
+                list.style.gap = '8px';
+
+                (cat.emails || []).forEach(e => {
+                    const item = document.createElement('div');
+                    item.className = 'category-email';
+                    item.setAttribute('draggable', 'true');
+                    item.setAttribute('ondragstart', `categoriesDragStart(event, '${e.id}')`);
+                    item.style.border = '1px solid #e9ecef';
+                    item.style.background = 'white';
+                    item.style.borderLeft = '4px solid #c19a6b';
+                    item.style.borderRadius = '6px';
+                    item.style.padding = '8px';
+
+                    const subj = document.createElement('div');
+                    subj.style.fontWeight = '600';
+                    subj.style.fontSize = '13px';
+                    subj.style.color = '#333';
+                    subj.textContent = e.subject || 'No Subject';
+
+                    const meta = document.createElement('div');
+                    meta.style.fontSize = '12px';
+                    meta.style.color = '#666';
+                    meta.textContent = `${(e.from || 'Unknown').toString()} • ${formatDate(e.date || new Date().toISOString())}`;
+
+                    const prev = document.createElement('div');
+                    prev.style.fontSize = '12px';
+                    prev.style.color = '#777';
+                    prev.style.marginTop = '4px';
+                    prev.textContent = (e.snippet || '').toString();
+
+                    item.appendChild(subj);
+                    item.appendChild(meta);
+                    item.appendChild(prev);
+
+                    list.appendChild(item);
+                });
+
+                col.appendChild(header);
+                col.appendChild(list);
+                editor.appendChild(col);
+            });
+        }
+
+        function addNewCategory() {
+            let base = 'New Category';
+            let name = base;
+            const existing = new Set(categoriesState.map(c => c.name));
+            let i = 1;
+            while (existing.has(name)) {
+                i += 1;
+                name = `${base} ${i}`;
+            }
+            categoriesState.push({ name, emails: [] });
+            renderCategoriesEditor();
+        }
+
+        function renameCategory(index) {
+            const current = categoriesState[index]?.name || 'Category';
+            const proposed = prompt('Enter new category name:', current);
+            if (!proposed) return;
+            const trimmed = proposed.trim();
+            if (!trimmed) return;
+
+            // Ensure uniqueness
+            const exists = categoriesState.some((c, i) => i !== index && c.name.toLowerCase() === trimmed.toLowerCase());
+            if (exists) {
+                showErrorPopup('A category with that name already exists.', 'Rename Failed');
+                return;
+            }
+
+            categoriesState[index].name = trimmed;
+            // Update current assignments pointing to the old name
+            const newAssignments = {};
+            categoriesState.forEach(cat => {
+                (cat.emails || []).forEach(e => { newAssignments[e.id] = cat.name; });
+            });
+            categoryAssignments = newAssignments;
+
+            renderCategoriesEditor();
+        }
+
+        function categoriesDragStart(ev, emailId) {
+            try { ev.dataTransfer.setData('text/plain', emailId); } catch (e) {}
+        }
+
+        function categoriesAllowDrop(ev) {
+            ev.preventDefault();
+        }
+
+        function categoriesHandleDrop(ev, targetIndex) {
+            ev.preventDefault();
+            let emailId = '';
+            try { emailId = ev.dataTransfer.getData('text/plain'); } catch (e) {}
+            if (!emailId) return;
+
+            moveEmailToCategory(emailId, targetIndex);
+        }
+
+        function moveEmailToCategory(emailId, targetIndex) {
+            if (targetIndex < 0 || targetIndex >= categoriesState.length) return;
+
+            // Find current location
+            let foundIndex = -1;
+            let emailObj = null;
+            categoriesState.forEach((cat, ci) => {
+                const idx = (cat.emails || []).findIndex(e => e.id === emailId);
+                if (idx !== -1) {
+                    foundIndex = ci;
+                    emailObj = cat.emails[idx];
+                }
+            });
+
+            if (!emailObj) return;
+            if (foundIndex === targetIndex) return;
+
+            // Remove from old
+            categoriesState[foundIndex].emails = categoriesState[foundIndex].emails.filter(e => e.id !== emailId);
+            // Add to new
+            categoriesState[targetIndex].emails.push(emailObj);
+            // Update assignment
+            categoryAssignments[emailId] = categoriesState[targetIndex].name;
+
+            renderCategoriesEditor();
+        }
+
+        async function approveAndSaveCategories() {
+            try {
+                // Either send explicit assignments or categories array (backend supports both)
+                const body = { categories: categoriesState };
+
+                const resp = await fetch('/api/save-categories', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body)
+                });
+                const data = await resp.json();
+                if (!resp.ok || !data.success) {
+                    throw new Error(data.error || 'Failed to save categories');
+                }
+
+                // Reflect changes in-memory
+                // Build map from categoriesState
+                const map = {};
+                categoriesState.forEach(cat => {
+                    (cat.emails || []).forEach(e => { if (e && e.id) map[e.id] = cat.name; });
+                });
+
+                // Update allEmails categories
+                allEmails = (allEmails || []).map(email => {
+                    const newCat = map[email.id];
+                    return newCat ? { ...email, category: newCat } : email;
+                });
+
+                // Refresh UI: categories and list
+                populateCategories(allEmails);
+                currentFilter = 'all';
+                filterByCategory('all');
+                updateDisplayStats(allEmails);
+
+                // Also refresh the inbox/unreplied emails view so "Load Email From Inbox" reflects updated categories
+                await loadUnrepliedEmails();
+                const selectEmailModalEl = document.getElementById('selectEmailModal');
+                if (selectEmailModalEl && selectEmailModalEl.style.display === 'block') {
+                    populateUnrepliedEmails();
+                }
+
+                closeCategoriesReviewModal();
+                showSuccessPopup(`Categories updated successfully! ${data.updatedCount || 0} email(s) re-categorized.`, 'Categories Saved');
+            } catch (err) {
+                console.error('Error saving categories:', err);
+                showErrorPopup('Failed to save categories. Please try again.', 'Save Failed');
+            }
         }
 
         // Load emails when page loads

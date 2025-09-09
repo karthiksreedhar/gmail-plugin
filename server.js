@@ -2368,6 +2368,118 @@ app.delete('/api/email-thread/:emailId', async (req, res) => {
   }
 });
 
+/**
+ * Categories generation and saving endpoints
+ * - POST /api/generate-categories: Propose categories based on current response emails
+ * - POST /api/save-categories: Persist updated category assignments for emails
+ */
+app.post('/api/generate-categories', (req, res) => {
+  try {
+    const responseEmails = loadResponseEmails();
+    const groups = {};
+
+    responseEmails.forEach(email => {
+      const suggested = categorizeEmail(email.subject || '', email.body || '', email.from || '');
+      const name = suggested || 'General';
+      if (!groups[name]) groups[name] = [];
+      groups[name].push({
+        id: email.id,
+        subject: email.subject || 'No Subject',
+        from: email.originalFrom || email.from || 'Unknown Sender',
+        date: email.date || new Date().toISOString(),
+        snippet:
+          email.snippet ||
+          (email.body ? email.body.substring(0, 120) + (email.body.length > 120 ? '...' : '') : 'No content available')
+      });
+    });
+
+    const categories = Object.keys(groups)
+      .sort()
+      .map(name => ({ name, emails: groups[name] }));
+
+    res.json({ success: true, categories });
+  } catch (error) {
+    console.error('Error generating categories:', error);
+    res.status(500).json({ success: false, error: 'Failed to generate categories' });
+  }
+});
+
+app.post('/api/save-categories', (req, res) => {
+  try {
+    const { assignments, categories } = req.body || {};
+
+    // Build a mapping { emailId: categoryName }
+    const map = assignments && typeof assignments === 'object' ? { ...assignments } : {};
+    if (!Object.keys(map).length && Array.isArray(categories)) {
+      categories.forEach(cat => {
+        const cname = cat.name;
+        (cat.emails || []).forEach(e => {
+          if (e && e.id) map[e.id] = cname;
+        });
+      });
+    }
+
+    if (!Object.keys(map).length) {
+      return res.status(400).json({ success: false, error: 'No category assignments provided' });
+    }
+
+    const paths = getCurrentUserPaths();
+
+    // 1) Update response emails (main list on the right)
+    const existingResponses = loadResponseEmails();
+    let updatedResponseCount = 0;
+
+    const updatedResponses = existingResponses.map(e => {
+      const newCat = map[e.id];
+      if (newCat && newCat !== e.category) {
+        updatedResponseCount++;
+        return { ...e, category: newCat };
+      }
+      return e;
+    });
+
+    // 2) Update unreplied (inbox) emails so "Load Email From Inbox" reflects new categories
+    const existingUnreplied = loadUnrepliedEmails();
+    let updatedUnrepliedCount = 0;
+
+    const updatedUnreplied = existingUnreplied.map(e => {
+      const newCat = map[e.id];
+      if (newCat && newCat !== e.category) {
+        updatedUnrepliedCount++;
+        return { ...e, category: newCat };
+      }
+      return e;
+    });
+
+    // Ensure user data dir exists
+    if (!fs.existsSync(paths.USER_DATA_DIR)) {
+      fs.mkdirSync(paths.USER_DATA_DIR, { recursive: true });
+    }
+
+    // Persist both files
+    fs.writeFileSync(
+      paths.RESPONSE_EMAILS_PATH,
+      JSON.stringify({ emails: updatedResponses }, null, 2)
+    );
+
+    fs.writeFileSync(
+      paths.UNREPLIED_EMAILS_PATH,
+      JSON.stringify({ emails: updatedUnreplied }, null, 2)
+    );
+
+    res.json({
+      success: true,
+      updatedCount: updatedResponseCount,
+      unrepliedUpdatedCount: updatedUnrepliedCount,
+      totalResponses: updatedResponses.length,
+      totalUnreplied: updatedUnreplied.length
+    });
+  } catch (error) {
+    console.error('Error saving categories:', error);
+    res.status(500).json({ success: false, error: 'Failed to save categories' });
+  }
+});
+
 // Serve the main HTML file
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
