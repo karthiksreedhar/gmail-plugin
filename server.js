@@ -38,7 +38,8 @@ function getUserPaths(userEmail = CURRENT_USER_EMAIL) {
     TEST_EMAILS_PATH: path.join(USER_DATA_DIR, 'test-emails.json'),
     UNREPLIED_EMAILS_PATH: path.join(USER_DATA_DIR, 'unreplied-emails.json'),
     OAUTH_KEYS_PATH: path.join(USER_DATA_DIR, 'gcp-oauth.keys.json'),
-    TOKENS_PATH: path.join(USER_DATA_DIR, 'gmail-tokens.json')
+    TOKENS_PATH: path.join(USER_DATA_DIR, 'gmail-tokens.json'),
+    NOTES_PATH: path.join(USER_DATA_DIR, 'notes.json')
   };
 }
 
@@ -446,6 +447,21 @@ function loadUnrepliedEmails() {
   const paths = getCurrentUserPaths();
   const data = loadEmailData(paths.UNREPLIED_EMAILS_PATH);
   return data ? data.emails || [] : [];
+}
+
+// Notes persistence helpers
+function loadNotes() {
+  const paths = getCurrentUserPaths();
+  const data = loadEmailData(paths.NOTES_PATH);
+  return data ? (data.notes || []) : [];
+}
+
+function saveNotes(notes) {
+  const paths = getCurrentUserPaths();
+  if (!fs.existsSync(paths.USER_DATA_DIR)) {
+    fs.mkdirSync(paths.USER_DATA_DIR, { recursive: true });
+  }
+  fs.writeFileSync(paths.NOTES_PATH, JSON.stringify({ notes }, null, 2));
 }
 
 // Load initial data from file
@@ -2477,6 +2493,85 @@ app.post('/api/save-categories', (req, res) => {
   } catch (error) {
     console.error('Error saving categories:', error);
     res.status(500).json({ success: false, error: 'Failed to save categories' });
+  }
+});
+
+/**
+ * Notes CRUD endpoints
+ */
+app.get('/api/notes', (req, res) => {
+  try {
+    const category = req.query.category;
+    let notes = loadNotes();
+    if (category) {
+      notes = notes.filter(n => n.category === category);
+    }
+    notes.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+    res.json({ notes });
+  } catch (error) {
+    console.error('Error loading notes:', error);
+    res.status(500).json({ error: 'Failed to load notes' });
+  }
+});
+
+app.post('/api/notes', (req, res) => {
+  try {
+    const { category, text, scope } = req.body || {};
+    if (!category || !text) {
+      return res.status(400).json({ error: 'category and text are required' });
+    }
+    const notes = loadNotes();
+    const note = {
+      id: `note-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      category,
+      text,
+      scope: (scope === 'LOCAL' || scope === 'GLOBAL') ? scope : 'GLOBAL',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+    notes.push(note);
+    saveNotes(notes);
+    res.json({ success: true, note });
+  } catch (error) {
+    console.error('Error creating note:', error);
+    res.status(500).json({ error: 'Failed to create note' });
+  }
+});
+
+app.put('/api/notes/:id', (req, res) => {
+  try {
+    const id = req.params.id;
+    const { category, text, scope } = req.body || {};
+    const notes = loadNotes();
+    const idx = notes.findIndex(n => n.id === id);
+    if (idx === -1) {
+      return res.status(404).json({ error: 'Note not found' });
+    }
+    if (typeof text === 'string') notes[idx].text = text;
+    if (category) notes[idx].category = category;
+    if (scope === 'GLOBAL' || scope === 'LOCAL') notes[idx].scope = scope;
+    notes[idx].updatedAt = new Date().toISOString();
+    saveNotes(notes);
+    res.json({ success: true, note: notes[idx] });
+  } catch (error) {
+    console.error('Error updating note:', error);
+    res.status(500).json({ error: 'Failed to update note' });
+  }
+});
+
+app.delete('/api/notes/:id', (req, res) => {
+  try {
+    const id = req.params.id;
+    const notes = loadNotes();
+    const next = notes.filter(n => n.id !== id);
+    if (next.length === notes.length) {
+      return res.status(404).json({ error: 'Note not found' });
+    }
+    saveNotes(next);
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error deleting note:', error);
+    res.status(500).json({ error: 'Failed to delete note' });
   }
 });
 
