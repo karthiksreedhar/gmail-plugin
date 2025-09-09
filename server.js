@@ -4,22 +4,28 @@ const path = require('path');
 const fs = require('fs');
 const OpenAI = require('openai');
 const { google } = require('googleapis');
+require('dotenv').config();
 
-// Initialize OpenAI client
+/**
+ * Initialize OpenAI client using environment variable
+ * Ensure OPENAI_API_KEY is set in your .env file
+ */
 const openai = new OpenAI({
-  apiKey: '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'
+  apiKey: process.env.OPENAI_API_KEY
 });
 
 const app = express();
-const PORT = 3000;
+const PORT = parseInt(process.env.PORT, 10) || 3000;
 
 // Middleware
 app.use(cors());
 app.use(express.json());
 app.use(express.static('public'));
 
-// Current user - can be changed via API
-let CURRENT_USER_EMAIL = 'ks4190@columbia.edu';
+// Current user - can be changed via API (loaded from .env if present)
+let CURRENT_USER_EMAIL = process.env.CURRENT_USER_EMAIL || 'ks4190@columbia.edu';
+// Sending email for Gmail API queries (alias support) - defaults to CURRENT_USER_EMAIL
+let SENDING_EMAIL = process.env.SENDING_EMAIL || process.env.CURRENT_USER_EMAIL || CURRENT_USER_EMAIL;
 
 // Function to get user-specific paths
 function getUserPaths(userEmail = CURRENT_USER_EMAIL) {
@@ -153,53 +159,101 @@ async function searchGmailEmails(query, maxResults = 10) {
   }
 }
 
+// Helper function to add intelligent formatting to improve email readability
+function addIntelligentFormatting(text) {
+  const lineBreakCount = (text.match(/\n/g) || []).length;
+  if (lineBreakCount >= 2) {
+    return text;
+  }
+  let formatted = text;
+
+  // Add line break after greeting patterns
+  formatted = formatted.replace(/^(Hi,|Hello,|Hey,|Dear [^,]+,)/i, '$1\n\n');
+
+  // Add line breaks before common closing patterns
+  formatted = formatted.replace(/(Thanks,|Best,|Regards,|Sincerely,|Best regards,|Kind regards,)\s*([A-Z][a-z]+)$/i, '\n\n$1\n$2');
+
+  // Add line breaks after sentence endings followed by capital letters
+  formatted = formatted.replace(/([.!?])\s+([A-Z])/g, '$1\n\n$2');
+
+  // Add line break after question marks followed by capital letter
+  formatted = formatted.replace(/(\?)\s+([A-Z])/g, '$1\n\n$2');
+
+  // Start new paragraphs for common phrases
+  formatted = formatted.replace(/\.\s+(I hope|I wanted|I would|I think|I believe|Please|Could you|Would you)/g, '.\n\n$1');
+
+  // Handle "Let me know" patterns
+  formatted = formatted.replace(/\.\s+(Let me know|Please let me know)/g, '.\n\n$1');
+
+  return formatted;
+}
+
 // Helper function to clean email response body by removing quoted original content
 function cleanResponseBody(emailBody) {
-  if (!emailBody || typeof emailBody !== 'string') {
-    return emailBody;
-  }
+  if (typeof emailBody !== 'string' || !emailBody) return emailBody;
 
-  // Common patterns that indicate the start of quoted content
-  const quotePatterns = [
-    // Gmail style with multi-line email addresses: "On [date] at [time], [sender] <\nemail@domain.com> wrote:"
-    /\n\s*On .+? at .+?, .+?<[\s\S]*?> wrote:\s*\n/i,
-    // Gmail style: "On [date] at [time], [sender] wrote:"
-    /\n\s*On .+? at .+?, .+? wrote:\s*\n/i,
-    // Outlook style: "From: [sender] Sent: [date]"
-    /\n\s*From:\s*.+?\s*Sent:\s*.+?\n/i,
-    // Generic "On [date], [sender] wrote:"
-    /\n\s*On .+?, .+? wrote:\s*\n/i,
-    // Simple "---- Original Message ----" or similar
-    /\n\s*-+\s*Original Message\s*-+\s*\n/i,
-    // Email client forwarding patterns
-    /\n\s*-+\s*Forwarded message\s*-+\s*\n/i,
-    // Generic quote markers with ">" at start of lines
-    /\n\s*>\s*.+/,
-    // Date/time patterns that often precede quoted content
-    /\n\s*\d{1,2}\/\d{1,2}\/\d{4}.+?wrote:\s*\n/i
-  ];
+  // 1) Normalize line endings & weird spaces often introduced by email clients
+  let s = emailBody
+    .replace(/\r\n?/g, '\n')                      // CRLF/CR -> LF
+    .replace(/[\u00A0\u202F\u2007]/g, ' ')        // NBSP / narrow spaces -> space
+    .replace(/[ \t]+\n/g, '\n');                  // trim trailing spaces on lines
 
-  let cleanedBody = emailBody;
-
-  // Try each pattern to find where the quoted content starts
-  for (const pattern of quotePatterns) {
-    const match = cleanedBody.match(pattern);
-    if (match) {
-      // Split at the quote marker and keep only the part before it
-      const quoteStart = match.index;
-      cleanedBody = cleanedBody.substring(0, quoteStart).trim();
-      break;
+  // 2) Aggressive detection of reply header regardless of line breaks:
+  // Find "On ... wrote:" anywhere (no line anchors), limited window length.
+  let cutIdx = s.length;
+  const onWroteRe = /\bOn\s+(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun|Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec|\d{1,2})[\s\S]{0,400}?\bwrote:\s*/;
+  const onWroteMatch = onWroteRe.exec(s);
+  if (onWroteMatch) {
+    cutIdx = Math.min(cutIdx, onWroteMatch.index);
+  } else {
+    // Secondary heuristic: locate "wrote:" then back-scan up to 600 chars for "On"
+    const lower = s.toLowerCase();
+    const wroteIdx = lower.indexOf('wrote:');
+    if (wroteIdx !== -1) {
+      const windowStart = Math.max(0, wroteIdx - 400);
+      const window = s.slice(windowStart, wroteIdx);
+      let lastOnInWindow = -1;
+      // Case-insensitive search for the last "On" token in the window
+      const onGlobal = /\bOn\b/g;
+      let m;
+      while ((m = onGlobal.exec(window)) !== null) {
+        lastOnInWindow = m.index;
+      }
+      if (lastOnInWindow !== -1) {
+        cutIdx = Math.min(cutIdx, windowStart + lastOnInWindow);
+      }
     }
   }
 
-  // Additional cleanup: remove excessive whitespace and normalize line breaks
-  cleanedBody = cleanedBody
-    .replace(/\r\n/g, '\n')
-    .replace(/\r/g, '\n')
-    .replace(/\n\s*\n\s*\n/g, '\n\n')
-    .trim();
+  // 3) Other reply/forward headers anywhere (no line anchors)
+  const patterns = [
+    /From:\s[\s\S]{0,600}?\bSent:\s/i,
+    /[\-–—_]{2,}\s*Original Message\s*[\-–—_]{2,}\s*/i,
+    /[\-–—_]{2,}\s*Forwarded message\s*[\-–—_]{2,}\s*/i,
+    /Begin forwarded message:\s*/i,
+    /-{2,}\s*Forwarded Message\s*-{2,}\s*/i,
+    // Fallback: presence of two or more quote markers ">" anywhere (single-line safe)
+    /(>.+){2,}/
+  ];
 
-  return cleanedBody;
+  for (const re of patterns) {
+    const m = re.exec(s);
+    if (m && m.index < cutIdx) {
+      cutIdx = m.index;
+    }
+  }
+
+  // Cut at earliest detected header/quote
+  s = s.slice(0, cutIdx).trim();
+
+  // 4) Optional: strip signature and mobile footers at the end
+  s = s.replace(/(^|\n)-- \n[\s\S]*$/m, '').trim(); // RFC 3676 signature delimiter
+  s = s.replace(/\n(?:Sent from my .+|Get Outlook for .+)\s*$/i, '').trim();
+
+  // 5) Collapse excessive blank lines
+  s = s.replace(/\n{3,}/g, '\n\n');
+
+  return s;
 }
 
 // Helper function to recursively extract email body from nested parts
@@ -589,7 +643,7 @@ app.get('/api/email-thread/:emailId', async (req, res) => {
           to: [email.originalFrom || 'Unknown Sender'],
           date: email.date,
           subject: email.subject,
-          body: email.body,
+          body: cleanResponseBody(email.body),
           isResponse: true
         }
       ]
@@ -1153,7 +1207,35 @@ app.delete('/api/scenarios', (req, res) => {
 
 // User management endpoints
 app.get('/api/current-user', (req, res) => {
-  res.json({ currentUser: CURRENT_USER_EMAIL });
+  res.json({
+    currentUser: CURRENT_USER_EMAIL,
+    sendingEmail: SENDING_EMAIL
+  });
+});
+
+// API endpoint to set sending email for current user
+app.post('/api/set-sending-email', (req, res) => {
+  try {
+    const { sendingEmail } = req.body;
+
+    if (!sendingEmail || !sendingEmail.includes('@')) {
+      return res.status(400).json({ error: 'Invalid sending email address' });
+    }
+
+    SENDING_EMAIL = sendingEmail;
+
+    console.log(`Updated sending email to: ${sendingEmail} for user: ${CURRENT_USER_EMAIL}`);
+
+    res.json({
+      success: true,
+      currentUser: CURRENT_USER_EMAIL,
+      sendingEmail: SENDING_EMAIL,
+      message: `Sending email updated to ${sendingEmail}`
+    });
+  } catch (error) {
+    console.error('Error setting sending email:', error);
+    res.status(500).json({ error: 'Failed to set sending email' });
+  }
 });
 
 app.get('/api/users', (req, res) => {
@@ -1191,6 +1273,8 @@ app.post('/api/switch-user', async (req, res) => {
     
     // Switch current user
     CURRENT_USER_EMAIL = userEmail;
+    // Reset sending email to match current user (can be changed later if needed)
+    SENDING_EMAIL = userEmail;
     
     // Reinitialize Gmail API for new user
     gmailAuth = null;
@@ -1401,7 +1485,7 @@ app.post('/api/load-email-threads', async (req, res) => {
       });
     }
 
-    console.log(`Loading ${threadCount} email threads using Gmail API...`);
+    console.log(`Loading ${threadCount} unique email threads using Gmail API...`);
 
     // Check if Gmail API is available and authenticated
     if (!gmail) {
@@ -1413,106 +1497,156 @@ app.post('/api/load-email-threads', async (req, res) => {
     }
 
     try {
-      // Search for sent emails (your responses)
-      const sentEmails = await searchGmailEmails(`from:${CURRENT_USER_EMAIL} in:sent`, threadCount * 3);
+      // Load existing email threads and response emails to check for duplicates
+      const existingEmailThreads = loadEmailThreads();
+      const existingResponseEmails = loadResponseEmails();
       
-      if (sentEmails.length === 0) {
-        return res.json({
-          success: false,
-          error: 'No sent emails found to create threads from'
-        });
-      }
+      // Keep fetching until we have enough unique threads
+      const uniqueThreads = [];
+      let fetchAttempts = 0;
+      const maxFetchAttempts = 5;
+      let currentSearchLimit = threadCount * 3; // Start with 3x to account for duplicates and non-replies
 
-      console.log(`Found ${sentEmails.length} sent emails, processing threads...`);
+      while (uniqueThreads.length < threadCount && fetchAttempts < maxFetchAttempts) {
+        fetchAttempts++;
+        console.log(`Thread fetch attempt ${fetchAttempts}: searching for ${currentSearchLimit} sent emails`);
 
-      const threads = [];
-      const processedThreadIds = new Set();
+        // Search for sent emails (your responses)
+        const sentEmails = await searchGmailEmails(`from:${SENDING_EMAIL} in:sent`, currentSearchLimit);
+        
+        if (sentEmails.length === 0) {
+          console.log('No more sent emails found in Gmail');
+          break;
+        }
 
-      // Process each sent email to find threads
-      for (const sentEmail of sentEmails.slice(0, threadCount * 2)) {
-        try {
-          // Skip if we already processed this thread
-          if (processedThreadIds.has(sentEmail.threadId)) {
-            continue;
+        console.log(`Found ${sentEmails.length} sent emails, processing threads and filtering duplicates...`);
+
+        const processedThreadIds = new Set();
+
+        // Process each sent email to find threads
+        for (const sentEmail of sentEmails) {
+          try {
+            // Skip if we already processed this thread in current batch
+            if (processedThreadIds.has(sentEmail.threadId)) {
+              continue;
+            }
+
+            // Get the full sent email content
+            const sentEmailData = await getGmailEmail(sentEmail.id);
+            
+            // Check if this is a reply (has "Re:" in subject)
+            const isReply = sentEmailData.subject.toLowerCase().startsWith('re:');
+            if (!isReply) {
+              continue; // Skip emails that aren't replies
+            }
+
+            // Check if this thread already exists in database
+            const isDuplicateThread = existingEmailThreads.some(existing => 
+              existing.id === `thread-${sentEmail.threadId}` ||
+              existing.id === sentEmailData.id ||
+              (existing.subject === sentEmailData.subject && 
+               existing.from === sentEmailData.from &&
+               Math.abs(new Date(existing.date) - new Date(sentEmailData.date)) < 86400000) // Within 24 hours
+            );
+
+            // Also check response emails for duplicates
+            const isDuplicateResponse = existingResponseEmails.some(existing => 
+              existing.id === sentEmailData.id ||
+              (existing.subject === sentEmailData.subject && 
+               existing.from === sentEmailData.from &&
+               Math.abs(new Date(existing.date) - new Date(sentEmailData.date)) < 86400000)
+            );
+
+            // Check if we already added this thread in current batch
+            const isAlreadyAdded = uniqueThreads.some(added => 
+              added.id === `thread-${sentEmail.threadId}` ||
+              added.messages.some(msg => msg.id === sentEmailData.id)
+            );
+
+            if (isDuplicateThread || isDuplicateResponse || isAlreadyAdded) {
+              console.log(`Skipping duplicate thread: ${sentEmailData.subject}`);
+              processedThreadIds.add(sentEmail.threadId);
+              continue;
+            }
+
+            // Use Gmail threads API to get all messages in the thread
+            const threadResponse = await gmail.users.threads.get({
+              userId: 'me',
+              id: sentEmail.threadId
+            });
+
+            const threadMessages = threadResponse.data.messages || [];
+            
+            // Find the original email (not from current user)
+            const originalMessage = threadMessages.find(msg => {
+              const msgHeaders = msg.payload.headers;
+              const msgFrom = msgHeaders.find(h => h.name === 'From')?.value || '';
+              return !msgFrom.includes(CURRENT_USER_EMAIL);
+            });
+
+            if (!originalMessage) {
+              processedThreadIds.add(sentEmail.threadId);
+              continue;
+            }
+
+            // Get the original email content using the message data we already have
+            const originalEmailData = await getGmailEmail(originalMessage.id);
+
+            // Create thread object
+            const thread = {
+              id: `thread-${sentEmail.threadId}`,
+              subject: sentEmailData.subject,
+              messages: [
+                {
+                  id: originalEmailData.id,
+                  from: originalEmailData.from,
+                  to: originalEmailData.to.split(',').map(email => email.trim()),
+                  date: originalEmailData.date,
+                  subject: originalEmailData.subject,
+                  body: originalEmailData.body,
+                  isResponse: false
+                },
+                {
+                  id: sentEmailData.id,
+                  from: sentEmailData.from,
+                  to: sentEmailData.to.split(',').map(email => email.trim()),
+                  date: sentEmailData.date,
+                  subject: sentEmailData.subject,
+                  body: cleanResponseBody(sentEmailData.body),
+                  isResponse: true
+                }
+              ]
+            };
+
+            uniqueThreads.push(thread);
+            processedThreadIds.add(sentEmail.threadId);
+            console.log(`Added unique thread: ${sentEmailData.subject}`);
+
+            // Stop when we have enough unique threads
+            if (uniqueThreads.length >= threadCount) {
+              break;
+            }
+
+          } catch (emailError) {
+            console.error('Error processing email thread:', emailError);
+            continue; // Skip this email and continue with others
           }
+        }
 
-          // Get the full sent email content
-          const sentEmailData = await getGmailEmail(sentEmail.id);
-          
-          // Check if this is a reply (has "Re:" in subject)
-          const isReply = sentEmailData.subject.toLowerCase().startsWith('re:');
-          if (!isReply) {
-            continue; // Skip emails that aren't replies
-          }
-
-          // Use Gmail threads API to get all messages in the thread
-          const threadResponse = await gmail.users.threads.get({
-            userId: 'me',
-            id: sentEmail.threadId
-          });
-
-          const threadMessages = threadResponse.data.messages || [];
-          
-          // Find the original email (not from current user)
-          const originalMessage = threadMessages.find(msg => {
-            const msgHeaders = msg.payload.headers;
-            const msgFrom = msgHeaders.find(h => h.name === 'From')?.value || '';
-            return !msgFrom.includes(CURRENT_USER_EMAIL);
-          });
-
-          if (!originalMessage) {
-            continue;
-          }
-
-          // Get the original email content using the message data we already have
-          const originalEmailData = await getGmailEmail(originalMessage.id);
-
-          // Create thread object
-          const thread = {
-            id: `thread-${sentEmail.threadId}`,
-            subject: sentEmailData.subject,
-            messages: [
-              {
-                id: originalEmailData.id,
-                from: originalEmailData.from,
-                to: originalEmailData.to.split(',').map(email => email.trim()),
-                date: originalEmailData.date,
-                subject: originalEmailData.subject,
-                body: originalEmailData.body,
-                isResponse: false
-              },
-              {
-                id: sentEmailData.id,
-                from: sentEmailData.from,
-                to: sentEmailData.to.split(',').map(email => email.trim()),
-                date: sentEmailData.date,
-                subject: sentEmailData.subject,
-                body: sentEmailData.body,
-                isResponse: true
-              }
-            ]
-          };
-
-          threads.push(thread);
-          processedThreadIds.add(sentEmail.threadId);
-
-          // Stop when we have enough threads
-          if (threads.length >= threadCount) {
-            break;
-          }
-
-        } catch (emailError) {
-          console.error('Error processing email thread:', emailError);
-          continue; // Skip this email and continue with others
+        // If we still need more threads, increase the search limit for next attempt
+        if (uniqueThreads.length < threadCount) {
+          currentSearchLimit = Math.min(currentSearchLimit * 2, 100); // Cap at 100
+          console.log(`Need ${threadCount - uniqueThreads.length} more unique threads, increasing search to ${currentSearchLimit}`);
         }
       }
 
-      console.log(`Successfully loaded ${threads.length} email threads from Gmail`);
+      console.log(`Successfully loaded ${uniqueThreads.length} unique email threads from Gmail`);
       
       res.json({
         success: true,
-        threads: threads,
-        message: `Loaded ${threads.length} email threads from your Gmail inbox`
+        threads: uniqueThreads,
+        message: `Loaded ${uniqueThreads.length} unique email threads from your Gmail inbox`,
+        fetchAttempts: fetchAttempts
       });
 
     } catch (gmailError) {
@@ -1590,7 +1724,7 @@ app.post('/api/fetch-more-emails', async (req, res) => {
       });
     }
 
-    console.log(`Fetching ${emailCount} emails from Gmail inbox${query ? ` with query: ${query}` : ''}...`);
+    console.log(`Fetching ${emailCount} unique emails from Gmail inbox${query ? ` with query: ${query}` : ''}...`);
 
     // Check if Gmail API is available and authenticated
     if (!gmail || !gmailAuth) {
@@ -1634,6 +1768,9 @@ app.post('/api/fetch-more-emails', async (req, res) => {
     }
 
     try {
+      // Load existing unreplied emails to check for duplicates
+      const existingUnrepliedEmails = loadUnrepliedEmails();
+      
       // Build Gmail search query
       let searchQuery = 'in:inbox';
       if (query && query.trim()) {
@@ -1642,51 +1779,90 @@ app.post('/api/fetch-more-emails', async (req, res) => {
 
       console.log(`Searching Gmail with query: ${searchQuery}`);
 
-      // Search for emails using Gmail API
-      const emailMessages = await searchGmailEmails(searchQuery, emailCount);
-      
-      if (emailMessages.length === 0) {
-        return res.json({
-          success: true,
-          message: 'No emails found matching the criteria',
-          emails: []
-        });
-      }
+      // Keep fetching until we have enough unique emails
+      const uniqueEmails = [];
+      let fetchAttempts = 0;
+      const maxFetchAttempts = 5;
+      let currentMaxResults = emailCount * 2; // Start with 2x to account for duplicates
 
-      console.log(`Found ${emailMessages.length} emails, processing content...`);
+      while (uniqueEmails.length < emailCount && fetchAttempts < maxFetchAttempts) {
+        fetchAttempts++;
+        console.log(`Fetch attempt ${fetchAttempts}: requesting ${currentMaxResults} emails`);
 
-      // Get full email content for each message
-      const processedEmails = [];
-      
-      for (const message of emailMessages) {
-        try {
-          const emailData = await getGmailEmail(message.id);
-          
-          const processedEmail = {
-            id: emailData.id,
-            subject: emailData.subject,
-            from: emailData.from,
-            date: emailData.date,
-            body: emailData.body,
-            snippet: emailData.snippet || (emailData.body ? emailData.body.substring(0, 100) + (emailData.body.length > 100 ? '...' : '') : 'No content available'),
-            category: categorizeEmail(emailData.subject, emailData.body, emailData.from),
-            source: 'gmail-api'
-          };
-          
-          processedEmails.push(processedEmail);
-        } catch (emailError) {
-          console.error('Error processing email:', emailError);
-          continue; // Skip this email and continue with others
+        // Search for emails using Gmail API
+        const emailMessages = await searchGmailEmails(searchQuery, currentMaxResults);
+        
+        if (emailMessages.length === 0) {
+          console.log('No more emails found in Gmail');
+          break;
+        }
+
+        console.log(`Found ${emailMessages.length} emails, processing content and filtering duplicates...`);
+
+        // Process each email and check for duplicates
+        for (const message of emailMessages) {
+          try {
+            const emailData = await getGmailEmail(message.id);
+            
+            // Check if this email already exists in database
+            const isDuplicate = existingUnrepliedEmails.some(existing => 
+              existing.id === emailData.id || 
+              (existing.subject === emailData.subject && 
+               existing.from === emailData.from &&
+               Math.abs(new Date(existing.date) - new Date(emailData.date)) < 86400000) // Within 24 hours
+            );
+
+            // Also check if we already added this email in current batch
+            const isAlreadyAdded = uniqueEmails.some(added => 
+              added.id === emailData.id ||
+              (added.subject === emailData.subject && 
+               added.from === emailData.from &&
+               Math.abs(new Date(added.date) - new Date(emailData.date)) < 86400000)
+            );
+
+            if (!isDuplicate && !isAlreadyAdded) {
+              const processedEmail = {
+                id: emailData.id,
+                subject: emailData.subject,
+                from: emailData.from,
+                date: emailData.date,
+                body: emailData.body,
+                snippet: emailData.snippet || (emailData.body ? emailData.body.substring(0, 100) + (emailData.body.length > 100 ? '...' : '') : 'No content available'),
+                category: categorizeEmail(emailData.subject, emailData.body, emailData.from),
+                source: 'gmail-api'
+              };
+              
+              uniqueEmails.push(processedEmail);
+              console.log(`Added unique email: ${emailData.subject}`);
+
+              // Stop if we have enough unique emails
+              if (uniqueEmails.length >= emailCount) {
+                break;
+              }
+            } else {
+              console.log(`Skipping duplicate email: ${emailData.subject}`);
+            }
+          } catch (emailError) {
+            console.error('Error processing email:', emailError);
+            continue; // Skip this email and continue with others
+          }
+        }
+
+        // If we still need more emails, increase the search limit for next attempt
+        if (uniqueEmails.length < emailCount) {
+          currentMaxResults = Math.min(currentMaxResults * 2, 100); // Cap at 100
+          console.log(`Need ${emailCount - uniqueEmails.length} more unique emails, increasing search to ${currentMaxResults}`);
         }
       }
 
-      console.log(`Successfully processed ${processedEmails.length} emails from Gmail`);
+      console.log(`Successfully processed ${uniqueEmails.length} unique emails from Gmail`);
 
       res.json({
         success: true,
-        message: `Fetched ${processedEmails.length} emails from Gmail inbox`,
-        emails: processedEmails,
-        fallback: false
+        message: `Fetched ${uniqueEmails.length} unique emails from Gmail inbox`,
+        emails: uniqueEmails,
+        fallback: false,
+        fetchAttempts: fetchAttempts
       });
 
     } catch (gmailError) {
