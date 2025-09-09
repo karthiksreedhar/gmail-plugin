@@ -5342,6 +5342,7 @@
         let currentThreads = [];
         let currentSlideIndex = 0;
         let selectedThreads = new Set();
+        let lastThreadDateFilter = null;
 
         async function showLoadEmailThreadsModal() {
             // Create modal HTML if it doesn't exist
@@ -5383,6 +5384,7 @@
                                 <option value="8">8 Threads</option>
                                 <option value="9">9 Threads</option>
                                 <option value="10">10 Threads</option>
+                                <option value="today">All from Today</option>
                             </select>
                         </div>
                         
@@ -5397,7 +5399,10 @@
         }
 
         async function loadEmailThreads() {
-            const threadCount = parseInt(document.getElementById('threadCountDropdown').value);
+            const countVal = document.getElementById('threadCountDropdown').value;
+            const isToday = countVal === 'today';
+            const threadCount = isToday ? null : parseInt(countVal);
+            lastThreadDateFilter = isToday ? 'today' : null;
             
             // Close the initial modal
             closeLoadEmailThreadsModal();
@@ -5414,9 +5419,7 @@
                     headers: {
                         'Content-Type': 'application/json',
                     },
-                    body: JSON.stringify({
-                        threadCount: threadCount
-                    }),
+                    body: JSON.stringify(isToday ? { dateFilter: 'today' } : { threadCount: threadCount }),
                     signal: loadingOperation.signal
                 });
                 
@@ -5700,6 +5703,7 @@
         let loadMoreEmailsData = [];
         let currentLoadMoreSlideIndex = 0;
         let selectedLoadMoreEmails = new Set();
+        let lastLoadMoreDateFilter = null;
 
         async function showLoadMoreEmailsModal() {
             // Create modal HTML if it doesn't exist
@@ -5750,6 +5754,7 @@
                                 <option value="8">8 Emails</option>
                                 <option value="9">9 Emails</option>
                                 <option value="10" selected>10 Emails</option>
+                                <option value="today">All from Today</option>
                             </select>
                         </div>
                         
@@ -5765,7 +5770,10 @@
 
         async function fetchMoreEmails() {
             const query = document.getElementById('emailQueryInput').value.trim();
-            const maxResults = parseInt(document.getElementById('emailCountDropdown').value);
+            const countVal = document.getElementById('emailCountDropdown').value;
+            const isToday = countVal === 'today';
+            const maxResults = isToday ? null : parseInt(countVal);
+            lastLoadMoreDateFilter = isToday ? 'today' : null;
             
             // Close the initial modal
             closeLoadMoreEmailsModal();
@@ -5782,10 +5790,7 @@
                     headers: {
                         'Content-Type': 'application/json',
                     },
-                    body: JSON.stringify({
-                        query: query || undefined,
-                        maxResults: maxResults
-                    }),
+                    body: JSON.stringify(isToday ? { dateFilter: 'today' } : { query: query || undefined, maxResults: maxResults }),
                     signal: loadingOperation.signal
                 });
                 
@@ -6248,11 +6253,7 @@
                     headers: {
                         'Content-Type': 'application/json',
                     },
-                    body: JSON.stringify({
-                        query: query || undefined,
-                        maxResults: maxResults,
-                        refresh: true // Flag to indicate this is a refresh request for different emails
-                    }),
+                    body: JSON.stringify(lastLoadMoreDateFilter === 'today' ? { dateFilter: 'today', refresh: true } : { query: query || undefined, maxResults: maxResults, refresh: true }),
                     signal: loadingOperation.signal
                 });
                 
@@ -6305,10 +6306,7 @@
                     headers: {
                         'Content-Type': 'application/json',
                     },
-                    body: JSON.stringify({
-                        threadCount: threadCount,
-                        refresh: true // Flag to indicate this is a refresh request for different threads
-                    }),
+                    body: JSON.stringify(lastThreadDateFilter === 'today' ? { dateFilter: 'today', refresh: true } : { threadCount: threadCount, refresh: true }),
                     signal: loadingOperation.signal
                 });
                 

@@ -1492,9 +1492,9 @@ app.get('/oauth2callback', async (req, res) => {
 // API endpoint to load email threads using Gmail API
 app.post('/api/load-email-threads', async (req, res) => {
   try {
-    const { threadCount } = req.body;
+    const { threadCount, dateFilter } = req.body;
     
-    if (!threadCount || threadCount < 1 || threadCount > 10) {
+    if ((!threadCount || threadCount < 1 || threadCount > 10) && dateFilter !== 'today') {
       return res.status(400).json({ 
         success: false, 
         error: 'Thread count must be between 1 and 10' 
@@ -1510,6 +1510,127 @@ app.post('/api/load-email-threads', async (req, res) => {
         needsAuth: true,
         error: 'Gmail authentication required'
       });
+    }
+
+    if (dateFilter === 'today') {
+      try {
+        // Load existing email threads and response emails to check for duplicates
+        const existingEmailThreads = loadEmailThreads();
+        const existingResponseEmails = loadResponseEmails();
+        const uniqueThreads = [];
+        const processedThreadIds = new Set();
+
+        // Build Gmail query for today (local timezone)
+        const now = new Date();
+        const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        const tomorrow = new Date(start.getTime() + 24 * 60 * 60 * 1000);
+        const formatDateForGmail = (d) => {
+          const y = d.getFullYear();
+          const m = String(d.getMonth() + 1).padStart(2, '0');
+          const day = String(d.getDate()).padStart(2, '0');
+          return `${y}/${m}/${day}`;
+        };
+        const after = formatDateForGmail(start);
+        const before = formatDateForGmail(tomorrow);
+        const searchQuery = `from:${SENDING_EMAIL} in:sent after:${after} before:${before}`;
+
+        console.log(`Loading all email threads from today using query: ${searchQuery}`);
+
+        const sentEmails = await searchGmailEmails(searchQuery, 200);
+
+        for (const sentEmail of sentEmails) {
+          try {
+            if (processedThreadIds.has(sentEmail.threadId)) continue;
+
+            const sentEmailData = await getGmailEmail(sentEmail.id);
+
+            // Keep replies only, consistent with previous behavior
+            const isReply = sentEmailData.subject.toLowerCase().startsWith('re:');
+            if (!isReply) {
+              processedThreadIds.add(sentEmail.threadId);
+              continue;
+            }
+
+            // Check duplicates
+            const isDuplicateThread = existingEmailThreads.some(existing => 
+              existing.id === `thread-${sentEmail.threadId}` ||
+              existing.id === sentEmailData.id
+            );
+            const isDuplicateResponse = existingResponseEmails.some(existing =>
+              existing.id === sentEmailData.id
+            );
+            const isAlreadyAdded = uniqueThreads.some(added =>
+              added.id === `thread-${sentEmail.threadId}` ||
+              added.messages.some(msg => msg.id === sentEmailData.id)
+            );
+            if (isDuplicateThread || isDuplicateResponse || isAlreadyAdded) {
+              processedThreadIds.add(sentEmail.threadId);
+              continue;
+            }
+
+            // Get thread to find original message
+            const threadResponse = await gmail.users.threads.get({
+              userId: 'me',
+              id: sentEmail.threadId
+            });
+            const threadMessages = threadResponse.data.messages || [];
+            const originalMessage = threadMessages.find(msg => {
+              const msgHeaders = msg.payload.headers;
+              const msgFrom = msgHeaders.find(h => h.name === 'From')?.value || '';
+              return !msgFrom.includes(CURRENT_USER_EMAIL);
+            });
+            if (!originalMessage) {
+              processedThreadIds.add(sentEmail.threadId);
+              continue;
+            }
+
+            const originalEmailData = await getGmailEmail(originalMessage.id);
+
+            const thread = {
+              id: `thread-${sentEmail.threadId}`,
+              subject: sentEmailData.subject,
+              messages: [
+                {
+                  id: originalEmailData.id,
+                  from: originalEmailData.from,
+                  to: originalEmailData.to.split(',').map(email => email.trim()),
+                  date: originalEmailData.date,
+                  subject: originalEmailData.subject,
+                  body: originalEmailData.body,
+                  isResponse: false
+                },
+                {
+                  id: sentEmailData.id,
+                  from: sentEmailData.from,
+                  to: sentEmailData.to.split(',').map(email => email.trim()),
+                  date: sentEmailData.date,
+                  subject: sentEmailData.subject,
+                  body: cleanResponseBody(sentEmailData.body),
+                  isResponse: true
+                }
+              ]
+            };
+
+            uniqueThreads.push(thread);
+            processedThreadIds.add(sentEmail.threadId);
+          } catch (emailErr) {
+            console.error('Error processing today thread:', emailErr);
+          }
+        }
+
+        console.log(`Loaded ${uniqueThreads.length} threads from today`);
+        return res.json({
+          success: true,
+          threads: uniqueThreads,
+          message: `Loaded ${uniqueThreads.length} email threads from today`
+        });
+      } catch (err) {
+        console.error('Error loading today threads:', err);
+        return res.status(500).json({
+          success: false,
+          error: 'Failed to load today threads: ' + err.message
+        });
+      }
     }
 
     try {
@@ -1730,10 +1851,10 @@ app.post('/api/load-email-threads', async (req, res) => {
 // API endpoint to fetch more emails from inbox using Gmail API directly
 app.post('/api/fetch-more-emails', async (req, res) => {
   try {
-    const { query, maxResults } = req.body;
+    const { query, maxResults, dateFilter } = req.body;
     const emailCount = maxResults || 10;
     
-    if (emailCount < 1 || emailCount > 50) {
+    if ((emailCount < 1 || emailCount > 50) && dateFilter !== 'today') {
       return res.status(400).json({ 
         success: false, 
         error: 'Email count must be between 1 and 50' 
@@ -1781,6 +1902,78 @@ app.post('/api/fetch-more-emails', async (req, res) => {
         error: 'Gmail authentication required',
         message: 'Please authenticate with Gmail to access your emails'
       });
+    }
+
+    if (dateFilter === 'today') {
+      try {
+        const existingUnrepliedEmails = loadUnrepliedEmails();
+
+        // Build Gmail query for today (local timezone)
+        const now = new Date();
+        const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        const tomorrow = new Date(start.getTime() + 24 * 60 * 60 * 1000);
+        const formatDateForGmail = (d) => {
+          const y = d.getFullYear();
+          const m = String(d.getMonth() + 1).padStart(2, '0');
+          const day = String(d.getDate()).padStart(2, '0');
+          return `${y}/${m}/${day}`;
+        };
+        const after = formatDateForGmail(start);
+        const before = formatDateForGmail(tomorrow);
+        const searchQuery = `in:inbox after:${after} before:${before}`;
+
+        console.log(`Fetching all emails from today with query: ${searchQuery}`);
+
+        const emailMessages = await searchGmailEmails(searchQuery, 200);
+        const uniqueEmails = [];
+
+        for (const message of emailMessages) {
+          try {
+            const emailData = await getGmailEmail(message.id);
+
+            const isDuplicate = existingUnrepliedEmails.some(existing =>
+              existing.id === emailData.id
+            );
+            const isAlreadyAdded = uniqueEmails.some(added =>
+              added.id === emailData.id
+            );
+
+            if (!isDuplicate && !isAlreadyAdded) {
+              const processedEmail = {
+                id: emailData.id,
+                subject: emailData.subject,
+                from: emailData.from,
+                date: emailData.date,
+                body: emailData.body,
+                snippet: emailData.snippet || (emailData.body ? emailData.body.substring(0, 100) + (emailData.body.length > 100 ? '...' : '') : 'No content available'),
+                category: categorizeEmail(emailData.subject || '', emailData.body || '', emailData.from || ''),
+                source: 'gmail-api'
+              };
+
+              uniqueEmails.push(processedEmail);
+            }
+          } catch (emailError) {
+            console.error('Error processing email:', emailError);
+            continue;
+          }
+        }
+
+        console.log(`Successfully processed ${uniqueEmails.length} emails from today`);
+
+        return res.json({
+          success: true,
+          message: `Fetched ${uniqueEmails.length} emails from today`,
+          emails: uniqueEmails,
+          fallback: false,
+          fetchAttempts: 1
+        });
+      } catch (err) {
+        console.error('Error fetching today emails:', err);
+        return res.status(500).json({
+          success: false,
+          error: 'Failed to fetch today emails: ' + err.message
+        });
+      }
     }
 
     try {
