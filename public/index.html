@@ -1946,14 +1946,14 @@
 
         /* Thread Carousel Styles */
         .thread-carousel-modal {
-            max-width: 1000px;
+            max-width: 1200px;
             max-height: 85vh;
         }
 
         .thread-carousel-container {
             padding: 20px;
-            max-height: 70vh;
-            overflow: hidden;
+            max-height: 80vh;
+            overflow: auto;
             display: flex;
             flex-direction: column;
         }
@@ -2006,7 +2006,8 @@
 
         .thread-carousel {
             flex: 1;
-            overflow: hidden;
+            overflow-y: auto;
+            overflow-x: hidden;
             position: relative;
             min-height: 400px;
         }
@@ -2022,7 +2023,8 @@
         }
 
         .thread-slide.active {
-            display: block;
+            display: flex;
+            flex-direction: column;
         }
 
         .thread-preview {
@@ -2042,7 +2044,9 @@
         }
 
         .thread-messages {
-            max-height: 300px;
+            flex: 1 1 auto;
+            min-height: 0;
+            max-height: 60vh;
             overflow-y: auto;
         }
 
@@ -2083,21 +2087,16 @@
         .message-preview-body {
             padding: 12px;
             font-size: 14px;
-            line-height: 1.4;
-            color: #555;
-            max-height: 100px;
-            overflow: hidden;
-            position: relative;
+            line-height: 1.6;
+            color: #333;
+            max-height: none;
+            overflow: visible;
+            position: static;
+            white-space: pre-wrap;
         }
 
         .message-preview-body::after {
-            content: '';
-            position: absolute;
-            bottom: 0;
-            left: 0;
-            right: 0;
-            height: 20px;
-            background: linear-gradient(transparent, white);
+            display: none;
         }
 
         .thread-selection {
@@ -5342,6 +5341,7 @@
         let currentThreads = [];
         let currentSlideIndex = 0;
         let selectedThreads = new Set();
+        let hiddenThreads = new Set();
         let lastThreadDateFilter = null;
 
         async function showLoadEmailThreadsModal() {
@@ -5558,19 +5558,34 @@
                     <div class="thread-preview">
                         <div class="thread-subject">${thread.subject}</div>
                         <div class="thread-messages">
-                            ${thread.messages.map(message => `
+                            ${thread.messages.map((message, mi) => `
                                 <div class="thread-message-preview ${message.isResponse ? 'response' : 'original'}">
                                     <div class="message-preview-header">
                                         <div class="message-preview-from">${message.from}${message.isResponse ? ' (Your Response)' : ''}</div>
                                         <div class="message-preview-date">${formatDate(message.date)}</div>
                                     </div>
-                                    <div class="message-preview-body">${message.body.substring(0, 200)}${message.body.length > 200 ? '...' : ''}</div>
+                                    <div class="message-preview-subject" style="padding: 8px 12px; font-size: 13px; color: #333;">
+                                        <strong>Subject:</strong>
+                                        <span id="msg-subject-display-${index}-${mi}">${message.subject}</span>
+                                        <input id="msg-subject-input-${index}-${mi}" type="text" style="display:none; width:100%; margin-top:6px; padding:6px; border:1px solid #ddd; border-radius:4px;">
+                                    </div>
+                                    <div id="msg-body-display-${index}-${mi}" class="message-preview-body">${message.body}</div>
+                                    <textarea id="msg-body-input-${index}-${mi}" class="message-preview-body" style="display:none; width:100%; height:150px; padding:10px; border:1px solid #ddd; border-radius:6px;"></textarea>
+                                    <div class="message-edit-actions" style="padding: 8px 12px;">
+                                        <button id="msg-edit-btn-${index}-${mi}" class="carousel-nav-btn" style="background: #6c757d;" onclick="editThreadMessage(${index}, ${mi})">Edit</button>
+                                        <button id="msg-save-btn-${index}-${mi}" class="carousel-nav-btn" style="display:none; background: #28a745;" onclick="saveThreadMessage(${index}, ${mi})">Save</button>
+                                        <button id="msg-cancel-btn-${index}-${mi}" class="carousel-nav-btn" style="display:none; background: #dc3545;" onclick="cancelEditThreadMessage(${index}, ${mi})">Cancel</button>
+                                    </div>
                                 </div>
                             `).join('')}
                         </div>
                         <div class="thread-selection">
                             <input type="checkbox" id="thread-${index}" class="thread-select-checkbox" onchange="toggleThreadSelection(${index})">
                             <label for="thread-${index}" class="thread-select-label">Add this thread to database</label>
+                            <div style="margin-top:8px;">
+                                <input type="checkbox" id="hide-thread-${index}" class="thread-select-checkbox" onchange="toggleHideThreadSelection(${index})">
+                                <label for="hide-thread-${index}" class="thread-select-label" style="color:#c00;">Hide Permanently</label>
+                            </div>
                         </div>
                     </div>
                 `;
@@ -5580,7 +5595,94 @@
             updateCarouselNavigation();
         }
 
-        function previousSlide() {
+        function editThreadMessage(ti, mi) {
+    try {
+        const subjDisp = document.getElementById(`msg-subject-display-${ti}-${mi}`);
+        const subjInput = document.getElementById(`msg-subject-input-${ti}-${mi}`);
+        const bodyDisp = document.getElementById(`msg-body-display-${ti}-${mi}`);
+        const bodyInput = document.getElementById(`msg-body-input-${ti}-${mi}`);
+        const editBtn = document.getElementById(`msg-edit-btn-${ti}-${mi}`);
+        const saveBtn = document.getElementById(`msg-save-btn-${ti}-${mi}`);
+        const cancelBtn = document.getElementById(`msg-cancel-btn-${ti}-${mi}`);
+
+        // Initialize input values from current in-memory thread or display
+        if (subjInput) subjInput.value = subjDisp ? subjDisp.textContent : (currentThreads?.[ti]?.messages?.[mi]?.subject || '');
+        if (bodyInput) bodyInput.value = currentThreads?.[ti]?.messages?.[mi]?.body || (bodyDisp ? bodyDisp.textContent : '');
+
+        if (subjDisp) subjDisp.style.display = 'none';
+        if (subjInput) subjInput.style.display = 'block';
+        if (bodyDisp) bodyDisp.style.display = 'none';
+        if (bodyInput) bodyInput.style.display = 'block';
+
+        if (editBtn) editBtn.style.display = 'none';
+        if (saveBtn) saveBtn.style.display = 'inline-block';
+        if (cancelBtn) cancelBtn.style.display = 'inline-block';
+    } catch (e) {
+        console.error('Failed to enable edit mode:', e);
+    }
+}
+
+function saveThreadMessage(ti, mi) {
+    try {
+        const subjDisp = document.getElementById(`msg-subject-display-${ti}-${mi}`);
+        const subjInput = document.getElementById(`msg-subject-input-${ti}-${mi}`);
+        const bodyDisp = document.getElementById(`msg-body-display-${ti}-${mi}`);
+        const bodyInput = document.getElementById(`msg-body-input-${ti}-${mi}`);
+        const editBtn = document.getElementById(`msg-edit-btn-${ti}-${mi}`);
+        const saveBtn = document.getElementById(`msg-save-btn-${ti}-${mi}`);
+        const cancelBtn = document.getElementById(`msg-cancel-btn-${ti}-${mi}`);
+
+        const newSubject = subjInput ? subjInput.value : (subjDisp ? subjDisp.textContent : '');
+        const newBody = bodyInput ? bodyInput.value : (bodyDisp ? bodyDisp.textContent : '');
+
+        // Update in-memory thread object so server receives edits on approval
+        if (currentThreads?.[ti]?.messages?.[mi]) {
+            currentThreads[ti].messages[mi].subject = newSubject;
+            currentThreads[ti].messages[mi].body = newBody;
+        }
+
+        // Reflect changes in UI
+        if (subjDisp) subjDisp.textContent = newSubject;
+        if (bodyDisp) bodyDisp.textContent = newBody;
+
+        if (subjInput) subjInput.style.display = 'none';
+        if (bodyInput) bodyInput.style.display = 'none';
+        if (subjDisp) subjDisp.style.display = 'inline';
+        if (bodyDisp) bodyDisp.style.display = 'block';
+
+        if (editBtn) editBtn.style.display = 'inline-block';
+        if (saveBtn) saveBtn.style.display = 'none';
+        if (cancelBtn) cancelBtn.style.display = 'none';
+    } catch (e) {
+        console.error('Failed to save edits:', e);
+        showErrorPopup('Failed to save your edits. Please try again.', 'Save Failed');
+    }
+}
+
+function cancelEditThreadMessage(ti, mi) {
+    try {
+        const subjDisp = document.getElementById(`msg-subject-display-${ti}-${mi}`);
+        const subjInput = document.getElementById(`msg-subject-input-${ti}-${mi}`);
+        const bodyDisp = document.getElementById(`msg-body-display-${ti}-${mi}`);
+        const bodyInput = document.getElementById(`msg-body-input-${ti}-${mi}`);
+        const editBtn = document.getElementById(`msg-edit-btn-${ti}-${mi}`);
+        const saveBtn = document.getElementById(`msg-save-btn-${ti}-${mi}`);
+        const cancelBtn = document.getElementById(`msg-cancel-btn-${ti}-${mi}`);
+
+        if (subjInput) subjInput.style.display = 'none';
+        if (bodyInput) bodyInput.style.display = 'none';
+        if (subjDisp) subjDisp.style.display = 'inline';
+        if (bodyDisp) bodyDisp.style.display = 'block';
+
+        if (editBtn) editBtn.style.display = 'inline-block';
+        if (saveBtn) saveBtn.style.display = 'none';
+        if (cancelBtn) cancelBtn.style.display = 'none';
+    } catch (e) {
+        console.error('Failed to cancel edit mode:', e);
+    }
+}
+
+function previousSlide() {
             if (currentSlideIndex > 0) {
                 currentSlideIndex--;
                 updateCarouselDisplay();
@@ -5617,6 +5719,12 @@
             
             if (checkbox.checked) {
                 selectedThreads.add(threadIndex);
+                // If marking for add, ensure it's not hidden
+                const hideCb = document.getElementById(`hide-thread-${threadIndex}`);
+                if (hideCb && hideCb.checked) {
+                    hideCb.checked = false;
+                    hiddenThreads.delete(threadIndex);
+                }
             } else {
                 selectedThreads.delete(threadIndex);
             }
@@ -5624,59 +5732,107 @@
             updateAddButton();
         }
 
+        function toggleHideThreadSelection(threadIndex) {
+            const checkbox = document.getElementById(`hide-thread-${threadIndex}`);
+            if (checkbox.checked) {
+                hiddenThreads.add(threadIndex);
+                // If marking hidden, unselect add for safety
+                const addCb = document.getElementById(`thread-${threadIndex}`);
+                if (addCb && addCb.checked) {
+                    addCb.checked = false;
+                    selectedThreads.delete(threadIndex);
+                }
+            } else {
+                hiddenThreads.delete(threadIndex);
+            }
+            updateAddButton();
+        }
+
         function updateAddButton() {
             const addBtn = document.getElementById('addSelectedBtn');
             const selectedCount = selectedThreads.size;
-            
-            addBtn.disabled = selectedCount === 0;
-            addBtn.textContent = selectedCount === 0 
-                ? 'Add Selected Threads' 
-                : `Add ${selectedCount} Selected Thread${selectedCount === 1 ? '' : 's'}`;
+            const hideCount = hiddenThreads.size;
+
+            const total = selectedCount + hideCount;
+            addBtn.disabled = total === 0;
+
+            if (selectedCount > 0 && hideCount === 0) {
+                addBtn.textContent = `Add ${selectedCount} Selected Thread${selectedCount === 1 ? '' : 's'}`;
+            } else if (selectedCount === 0 && hideCount > 0) {
+                addBtn.textContent = `Hide ${hideCount} Selected Thread${hideCount === 1 ? '' : 's'}`;
+            } else if (selectedCount > 0 && hideCount > 0) {
+                addBtn.textContent = `Add ${selectedCount} & Hide ${hideCount}`;
+            } else {
+                addBtn.textContent = 'Add Selected Threads';
+            }
         }
 
         async function addSelectedThreads() {
-            if (selectedThreads.size === 0) {
-                showErrorPopup('Please select at least one thread to add.', 'No Threads Selected');
+            if (selectedThreads.size === 0 && hiddenThreads.size === 0) {
+                showErrorPopup('Please select at least one thread to add or hide.', 'No Threads Selected');
                 return;
             }
             
             const threadsToAdd = Array.from(selectedThreads).map(index => currentThreads[index]);
+            const threadsToHide = Array.from(hiddenThreads).map(index => currentThreads[index]);
             
             // Show loading overlay
-            showLoadingOverlay('Adding Threads', `Adding ${threadsToAdd.length} thread${threadsToAdd.length === 1 ? '' : 's'} to your database...`);
+            const addCount = threadsToAdd.length;
+            const hideCount = threadsToHide.length;
+            const parts = [];
+            if (addCount > 0) parts.push(`adding ${addCount}`);
+            if (hideCount > 0) parts.push(`hiding ${hideCount}`);
+            const actionText = parts.join(' and ');
+            showLoadingOverlay('Processing Threads', `Processing selections (${actionText})...`);
             
             try {
-                const response = await fetch('/api/add-email-threads', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({
-                        threads: threadsToAdd
-                    })
-                });
-                
-                const data = await response.json();
-                
-                if (data.success) {
-                    hideLoadingOverlay();
-                    closeThreadCarouselModal();
-                    
-                    showSuccessPopup(
-                        `Successfully added ${threadsToAdd.length} email thread${threadsToAdd.length === 1 ? '' : 's'} to your database!`,
-                        'Threads Added'
-                    );
-                    
-                    // Refresh the email list to show new threads
-                    loadEmails();
-                } else {
-                    hideLoadingOverlay();
-                    showErrorPopup('Failed to add threads: ' + (data.error || 'Unknown error'), 'Add Failed');
+                // First, hide permanently if requested
+                if (threadsToHide.length > 0) {
+                    const hideResp = await fetch('/api/hide-email-threads', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({ threads: threadsToHide })
+                    });
+                    const hideData = await hideResp.json();
+                    if (!hideResp.ok || !hideData.success) {
+                        throw new Error(hideData.error || 'Failed to hide selected threads');
+                    }
                 }
+
+                // Then add selected threads to database
+                if (threadsToAdd.length > 0) {
+                    const addResp = await fetch('/api/add-email-threads', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({ threads: threadsToAdd })
+                    });
+                    const addData = await addResp.json();
+                    if (!addResp.ok || !addData.success) {
+                        throw new Error(addData.error || 'Failed to add selected threads');
+                    }
+                }
+                
+                hideLoadingOverlay();
+                closeThreadCarouselModal();
+                
+                const msgs = [];
+                if (addCount > 0) msgs.push(`${addCount} added`);
+                if (hideCount > 0) msgs.push(`${hideCount} hidden`);
+                showSuccessPopup(
+                    `Completed: ${msgs.join(', ')}.`,
+                    'Threads Processed'
+                );
+                
+                // Refresh the email list to show updates
+                loadEmails();
             } catch (error) {
                 hideLoadingOverlay();
-                console.error('Error adding threads:', error);
-                showErrorPopup('Failed to add threads. Please try again.', 'Network Error');
+                console.error('Error processing threads:', error);
+                showErrorPopup('Failed to process threads. ' + (error?.message || 'Please try again.'), 'Operation Failed');
             }
         }
 

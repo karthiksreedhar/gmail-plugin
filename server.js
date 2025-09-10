@@ -39,7 +39,8 @@ function getUserPaths(userEmail = CURRENT_USER_EMAIL) {
     UNREPLIED_EMAILS_PATH: path.join(USER_DATA_DIR, 'unreplied-emails.json'),
     OAUTH_KEYS_PATH: path.join(USER_DATA_DIR, 'gcp-oauth.keys.json'),
     TOKENS_PATH: path.join(USER_DATA_DIR, 'gmail-tokens.json'),
-    NOTES_PATH: path.join(USER_DATA_DIR, 'notes.json')
+    NOTES_PATH: path.join(USER_DATA_DIR, 'notes.json'),
+    HIDDEN_THREADS_PATH: path.join(USER_DATA_DIR, 'hidden-threads.json')
   };
 }
 
@@ -510,6 +511,21 @@ function saveNotes(notes) {
   fs.writeFileSync(paths.NOTES_PATH, JSON.stringify({ notes }, null, 2));
 }
 
+// Hidden threads persistence helpers
+function loadHiddenThreads() {
+  const paths = getCurrentUserPaths();
+  const data = loadEmailData(paths.HIDDEN_THREADS_PATH);
+  return data ? (data.hidden || []) : [];
+}
+
+function saveHiddenThreads(hidden) {
+  const paths = getCurrentUserPaths();
+  if (!fs.existsSync(paths.USER_DATA_DIR)) {
+    fs.mkdirSync(paths.USER_DATA_DIR, { recursive: true });
+  }
+  fs.writeFileSync(paths.HIDDEN_THREADS_PATH, JSON.stringify({ hidden }, null, 2));
+}
+
 // Load initial data from file
 const persistentData = loadDataFromFile();
 
@@ -630,8 +646,14 @@ app.get('/api/response-emails', async (req, res) => {
       console.warn(`Filtered out ${responseEmails.length - validatedEmails.length} invalid emails`);
     }
 
-    console.log(`Returning ${validatedEmails.length} validated emails from JSON file`);
-    res.json({ emails: validatedEmails });
+    const hiddenList = loadHiddenThreads();
+    const hiddenResponseIds = new Set((hiddenList || []).flatMap(h => (h.responseIds || [])));
+    const filteredEmails = validatedEmails.filter(e => !hiddenResponseIds.has(e.id));
+    if (filteredEmails.length !== validatedEmails.length) {
+      console.log(`Filtered out ${validatedEmails.length - filteredEmails.length} hidden emails`);
+    }
+    console.log(`Returning ${filteredEmails.length} validated emails from JSON file`);
+    res.json({ emails: filteredEmails });
   } catch (error) {
     console.error('Error fetching response emails:', error);
     res.status(500).json({ error: 'Failed to fetch response emails', details: error.message });
@@ -647,11 +669,17 @@ app.get('/api/email-thread/:emailId', async (req, res) => {
     // Load email threads from JSON file
     const emailThreads = loadEmailThreads();
     
-    // Find the specific email thread by matching the id field
-    const thread = emailThreads.find(t => t.id === emailId);
+    // Prefer lookup by responseId (new) with legacy fallback by id
+    const thread = emailThreads.find(t => t && (t.responseId === emailId || t.id === emailId));
     
     if (thread) {
-      // Create proper thread data structure from the JSON data
+      // If stored with full messages, return as-is
+      if (Array.isArray(thread.messages) && thread.messages.length > 0) {
+        console.log(`Returning stored multi-message thread for responseId/id: ${emailId}`);
+        return res.json({ messages: thread.messages });
+      }
+
+      // Legacy fallback: synthesize two-message thread from stored fields
       const threadData = {
         messages: [
           {
@@ -659,7 +687,7 @@ app.get('/api/email-thread/:emailId', async (req, res) => {
             from: thread.originalFrom || 'Unknown Sender',
             to: [thread.from],
             date: new Date(new Date(thread.date).getTime() - 86400000).toISOString(),
-            subject: thread.subject.replace('Re: ', ''),
+            subject: (thread.subject || '').replace('Re: ', ''),
             body: thread.originalBody || 'Original email content not available',
             isResponse: false
           },
@@ -675,7 +703,7 @@ app.get('/api/email-thread/:emailId', async (req, res) => {
         ]
       };
       
-      console.log(`Returning thread data from JSON file for email: ${thread.subject}`);
+      console.log(`Returning synthesized legacy thread for email: ${thread.subject}`);
       return res.json(threadData);
     }
     
@@ -802,6 +830,24 @@ PREVIOUS EMAIL RESPONSES:
         prompt += `Generated Response: ${generation.generatedResponse}\n`;
         prompt += `Justification: ${generation.justification}\n\n`;
       });
+    }
+
+    // Include full thread examples when available (appended without changing prior prompt content)
+    try {
+      const fullThreads = loadEmailThreads().filter(t => Array.isArray(t.messages) && t.messages.length > 2);
+      if (fullThreads.length > 0) {
+        prompt += `\nFULL THREAD EXAMPLES (for context; do not quote directly):\n`;
+        fullThreads.slice(0, 3).forEach((t, idx) => {
+          prompt += `\n--- THREAD ${idx + 1} ---\n`;
+          prompt += `Subject: ${t.subject}\n`;
+          (t.messages || []).slice(0, 6).forEach((m, mi) => {
+            const toLine = Array.isArray(m.to) ? m.to.join(', ') : (m.to || '');
+            prompt += `${mi + 1}) From: ${m.from} | To: ${toLine} | Date: ${m.date}\nSubject: ${m.subject}\nBody: ${m.body}\n\n`;
+          });
+        });
+      }
+    } catch (e) {
+      console.warn('Unable to append full thread examples:', e?.message || e);
     }
 
     // Add additional context if provided
@@ -1558,6 +1604,11 @@ app.post('/api/load-email-threads', async (req, res) => {
       });
     }
 
+    // Load hidden threads to skip in results
+    const hiddenList = loadHiddenThreads();
+    const HIDDEN_THREAD_IDS = new Set((hiddenList || []).map(h => h.id));
+    const HIDDEN_RESPONSE_IDS = new Set((hiddenList || []).flatMap(h => (h.responseIds || [])));
+
     if (dateFilter === 'today') {
       try {
         // Load existing email threads and response emails to check for duplicates
@@ -1592,6 +1643,12 @@ app.post('/api/load-email-threads', async (req, res) => {
 
             // Keep replies only, consistent with previous behavior
             const isReply = sentEmailData.subject.toLowerCase().startsWith('re:');
+            // Skip hidden threads/responses
+            const isHidden = HIDDEN_THREAD_IDS.has(`thread-${sentEmail.threadId}`) || HIDDEN_RESPONSE_IDS.has(sentEmailData.id);
+            if (isHidden) {
+              processedThreadIds.add(sentEmail.threadId);
+              continue;
+            }
             if (!isReply) {
               processedThreadIds.add(sentEmail.threadId);
               continue;
@@ -1632,29 +1689,35 @@ app.post('/api/load-email-threads', async (req, res) => {
 
             const originalEmailData = await getGmailEmail(originalMessage.id);
 
+            // Build full thread with all messages (multi-email thread support)
+            const allMsgs = [];
+            for (const msg of threadMessages) {
+              try {
+                const data = await getGmailEmail(msg.id);
+                const toArr = (data.to || '').split(',').map(email => email.trim()).filter(Boolean);
+                const lowerFrom = (data.from || '').toLowerCase();
+                const me1 = (SENDING_EMAIL || CURRENT_USER_EMAIL || '').toLowerCase();
+                const me2 = (CURRENT_USER_EMAIL || '').toLowerCase();
+                const isResp = lowerFrom.includes(me1) || lowerFrom.includes(me2);
+                const cleanedBody = isResp ? await cleanResponseBody(data.body) : data.body;
+                allMsgs.push({
+                  id: data.id,
+                  from: data.from,
+                  to: toArr.length ? toArr : [data.to || 'Unknown Recipient'],
+                  date: data.date,
+                  subject: data.subject,
+                  body: cleanedBody,
+                  isResponse: !!isResp
+                });
+              } catch (e) {
+                console.error('Error building full thread message:', e);
+              }
+            }
+            allMsgs.sort((a, b) => new Date(a.date) - new Date(b.date));
             const thread = {
               id: `thread-${sentEmail.threadId}`,
               subject: sentEmailData.subject,
-              messages: [
-                {
-                  id: originalEmailData.id,
-                  from: originalEmailData.from,
-                  to: originalEmailData.to.split(',').map(email => email.trim()),
-                  date: originalEmailData.date,
-                  subject: originalEmailData.subject,
-                  body: originalEmailData.body,
-                  isResponse: false
-                },
-                {
-                  id: sentEmailData.id,
-                  from: sentEmailData.from,
-                  to: sentEmailData.to.split(',').map(email => email.trim()),
-                  date: sentEmailData.date,
-                  subject: sentEmailData.subject,
-                  body: await cleanResponseBody(sentEmailData.body),
-                  isResponse: true
-                }
-              ]
+              messages: allMsgs
             };
 
             uniqueThreads.push(thread);
@@ -1746,7 +1809,10 @@ app.post('/api/load-email-threads', async (req, res) => {
               added.messages.some(msg => msg.id === sentEmailData.id)
             );
 
-            if (isDuplicateThread || isDuplicateResponse || isAlreadyAdded) {
+            // Check if hidden
+            const isHidden = HIDDEN_THREAD_IDS.has(`thread-${sentEmail.threadId}`) || HIDDEN_RESPONSE_IDS.has(sentEmailData.id);
+
+            if (isDuplicateThread || isDuplicateResponse || isAlreadyAdded || isHidden) {
               console.log(`Skipping duplicate thread: ${sentEmailData.subject}`);
               processedThreadIds.add(sentEmail.threadId);
               continue;
@@ -1775,30 +1841,35 @@ app.post('/api/load-email-threads', async (req, res) => {
             // Get the original email content using the message data we already have
             const originalEmailData = await getGmailEmail(originalMessage.id);
 
-            // Create thread object
+            // Create full thread object with all messages (multi-email thread support)
+            const allMsgs = [];
+            for (const msg of threadMessages) {
+              try {
+                const data = await getGmailEmail(msg.id);
+                const toArr = (data.to || '').split(',').map(email => email.trim()).filter(Boolean);
+                const lowerFrom = (data.from || '').toLowerCase();
+                const me1 = (SENDING_EMAIL || CURRENT_USER_EMAIL || '').toLowerCase();
+                const me2 = (CURRENT_USER_EMAIL || '').toLowerCase();
+                const isResp = lowerFrom.includes(me1) || lowerFrom.includes(me2);
+                const cleanedBody = isResp ? await cleanResponseBody(data.body) : data.body;
+                allMsgs.push({
+                  id: data.id,
+                  from: data.from,
+                  to: toArr.length ? toArr : [data.to || 'Unknown Recipient'],
+                  date: data.date,
+                  subject: data.subject,
+                  body: cleanedBody,
+                  isResponse: !!isResp
+                });
+              } catch (e) {
+                console.error('Error building full thread message:', e);
+              }
+            }
+            allMsgs.sort((a, b) => new Date(a.date) - new Date(b.date));
             const thread = {
               id: `thread-${sentEmail.threadId}`,
               subject: sentEmailData.subject,
-              messages: [
-                {
-                  id: originalEmailData.id,
-                  from: originalEmailData.from,
-                  to: originalEmailData.to.split(',').map(email => email.trim()),
-                  date: originalEmailData.date,
-                  subject: originalEmailData.subject,
-                  body: originalEmailData.body,
-                  isResponse: false
-                },
-                {
-                  id: sentEmailData.id,
-                  from: sentEmailData.from,
-                  to: sentEmailData.to.split(',').map(email => email.trim()),
-                  date: sentEmailData.date,
-                  subject: sentEmailData.subject,
-                  body: await cleanResponseBody(sentEmailData.body),
-                  isResponse: true
-                }
-              ]
+              messages: allMsgs
             };
 
             uniqueThreads.push(thread);
@@ -2424,6 +2495,71 @@ app.post('/api/add-approved-email', async (req, res) => {
   }
 });
 
+app.post('/api/hide-email-threads', (req, res) => {
+  try {
+    const { threads } = req.body || {};
+    if (!threads || !Array.isArray(threads) || threads.length === 0) {
+      return res.status(400).json({ success: false, error: 'No threads provided' });
+    }
+
+    const paths = getCurrentUserPaths();
+    const hidden = loadHiddenThreads();
+    const existingIds = new Set((hidden || []).map(h => h.id));
+    const updatedHidden = Array.isArray(hidden) ? [...hidden] : [];
+    let added = 0;
+
+    const toHideResponseIds = new Set();
+
+    threads.forEach(thread => {
+      if (!thread || !thread.id) return;
+      const responseIds = (thread.messages || []).filter(m => m.isResponse).map(m => m.id);
+      responseIds.forEach(id => toHideResponseIds.add(id));
+      if (!existingIds.has(thread.id)) {
+        const originalIds = (thread.messages || []).filter(m => !m.isResponse).map(m => m.id);
+        updatedHidden.push({
+          id: thread.id,
+          subject: thread.subject || '',
+          responseIds,
+          originalIds,
+          date: (thread.messages || []).find(m => m.isResponse)?.date || new Date().toISOString()
+        });
+        existingIds.add(thread.id);
+        added++;
+      }
+    });
+
+    // Persist hidden list
+    saveHiddenThreads(updatedHidden);
+
+    // Prune existing database files so hidden threads don't appear anywhere
+    // 1) Response emails
+    const existingResponses = loadResponseEmails();
+    const prunedResponses = existingResponses.filter(e => !toHideResponseIds.has(e.id));
+    if (prunedResponses.length !== existingResponses.length) {
+      fs.writeFileSync(paths.RESPONSE_EMAILS_PATH, JSON.stringify({ emails: prunedResponses }, null, 2));
+    }
+
+    // 2) Email threads
+    const existingThreads = loadEmailThreads();
+    const hiddenThreadIds = new Set(updatedHidden.map(h => h.id));
+    const prunedThreads = existingThreads.filter(t => !hiddenThreadIds.has(t.id));
+    if (prunedThreads.length !== existingThreads.length) {
+      fs.writeFileSync(paths.EMAIL_THREADS_PATH, JSON.stringify({ threads: prunedThreads }, null, 2));
+    }
+
+    res.json({
+      success: true,
+      addedCount: added,
+      totalHidden: updatedHidden.length,
+      prunedResponses: existingResponses.length - prunedResponses.length,
+      prunedThreads: existingThreads.length - prunedThreads.length
+    });
+  } catch (error) {
+    console.error('Error hiding email threads:', error);
+    res.status(500).json({ success: false, error: 'Failed to hide email threads' });
+  }
+});
+
 // API endpoint to add email threads to the database
 app.post('/api/add-email-threads', async (req, res) => {
   try {
@@ -2438,6 +2574,11 @@ app.post('/api/add-email-threads', async (req, res) => {
 
     console.log(`Adding ${threads.length} email threads to database...`);
 
+    // Load hidden sets to prevent adding hidden threads
+    const hiddenListForAdd = loadHiddenThreads();
+    const hiddenThreadIds = new Set((hiddenListForAdd || []).map(h => h.id));
+    const hiddenResponseIds = new Set((hiddenListForAdd || []).flatMap(h => (h.responseIds || [])));
+
     // Load existing data
     const existingResponseEmails = loadResponseEmails();
     const existingEmailThreads = loadEmailThreads();
@@ -2447,11 +2588,17 @@ app.post('/api/add-email-threads', async (req, res) => {
     const newEmailThreads = [];
 
     threads.forEach(thread => {
-      // Find the response message (user's reply)
-      const responseMessage = thread.messages.find(msg => msg.isResponse);
-      const originalMessage = thread.messages.find(msg => !msg.isResponse);
+      // Choose latest response and earliest original for linkage
+      const responses = (thread.messages || []).filter(m => m.isResponse).sort((a, b) => new Date(b.date) - new Date(a.date));
+      const originals = (thread.messages || []).filter(m => !m.isResponse).sort((a, b) => new Date(a.date) - new Date(b.date));
+      const responseMessage = responses[0];
+      const originalMessage = originals[0];
       
       if (responseMessage && originalMessage) {
+        // Skip hidden threads/responses
+        if (hiddenThreadIds.has(thread.id) || hiddenResponseIds.has(responseMessage.id)) {
+          return;
+        }
         // Add to response emails
         const responseEmail = {
           id: responseMessage.id,
@@ -2475,7 +2622,9 @@ app.post('/api/add-email-threads', async (req, res) => {
           originalFrom: originalMessage.from,
           date: responseMessage.date,
           body: responseMessage.body,
-          originalBody: originalMessage.body
+          originalBody: originalMessage.body,
+          responseId: responseMessage.id,
+          messages: thread.messages
         };
         
         newEmailThreads.push(emailThread);
@@ -2573,8 +2722,25 @@ app.delete('/api/email-thread/:emailId', async (req, res) => {
     // Remove from response emails
     const updatedResponseEmails = existingResponseEmails.filter(email => email.id !== emailId);
     
-    // Remove from email threads
-    const updatedEmailThreads = existingEmailThreads.filter(thread => thread.id !== emailId);
+    // Remove from email threads (by responseId when available; fallback heuristic for legacy entries)
+    const updatedEmailThreads = existingEmailThreads.filter(thread => {
+      if (thread.responseId === emailId) {
+        return false;
+      }
+      // Legacy fallback: match by subject (ignoring "Re:") + originalFrom + date proximity
+      const norm = s => (s || '').toLowerCase().replace(/^re:\s*/i, '').trim();
+      const subjMatch = norm(thread.subject) === norm(emailToDelete.subject);
+      const fromMatch = (thread.originalFrom || '').toLowerCase() === (emailToDelete.originalFrom || '').toLowerCase();
+      const tDate = new Date(thread.date);
+      const eDate = new Date(emailToDelete.date);
+      const dateDiffMs = Math.abs(tDate - eDate);
+      const dateClose = isFinite(dateDiffMs) && dateDiffMs <= 1000 * 60 * 60 * 24 * 14; // within 14 days
+
+      if (subjMatch && fromMatch && dateClose) {
+        return false;
+      }
+      return true;
+    });
 
     // Save updated data back to files
     try {
@@ -2628,6 +2794,79 @@ app.delete('/api/email-thread/:emailId', async (req, res) => {
  * - POST /api/generate-categories: Propose categories based on current response emails
  * - POST /api/save-categories: Persist updated category assignments for emails
  */
+/**
+ * Cleanup: prune email-threads.json to entries represented in response-emails.json.
+ * - Backfills missing responseId by matching on subject (ignoring "Re:"), originalFrom, and date proximity.
+ * - Drops threads that cannot be matched to a response email.
+ */
+app.post('/api/cleanup-email-threads', (req, res) => {
+  try {
+    const paths = getCurrentUserPaths();
+    const responses = loadResponseEmails();
+    const threads = loadEmailThreads();
+
+    const responseById = new Map(responses.map(r => [r.id, r]));
+    const responseIds = new Set(responseById.keys());
+
+    const norm = s => (s || '').toLowerCase().replace(/^re:\s*/i, '').trim();
+    const withinDays = (d1, d2, days = 30) => {
+      const t1 = new Date(d1);
+      const t2 = new Date(d2);
+      const diff = Math.abs(t1 - t2);
+      return Number.isFinite(diff) && diff <= days * 24 * 60 * 60 * 1000;
+    };
+
+    const updated = [];
+    let backfilled = 0;
+    let dropped = 0;
+
+    for (const t of threads) {
+      // Keep if thread already links to an existing responseId
+      if (t.responseId && responseIds.has(t.responseId)) {
+        updated.push(t);
+        continue;
+      }
+
+      // Try to infer responseId for legacy entries
+      let matched = null;
+      for (const r of responses) {
+        if (
+          norm(r.subject) === norm(t.subject) &&
+          (r.originalFrom || '').toLowerCase() === (t.originalFrom || '').toLowerCase() &&
+          withinDays(r.date, t.date, 30)
+        ) {
+          matched = r;
+          break;
+        }
+      }
+
+      if (matched) {
+        updated.push({ ...t, responseId: matched.id });
+        backfilled++;
+      } else {
+        dropped++;
+      }
+    }
+
+    // Persist the cleaned list
+    if (!fs.existsSync(paths.USER_DATA_DIR)) {
+      fs.mkdirSync(paths.USER_DATA_DIR, { recursive: true });
+    }
+    fs.writeFileSync(paths.EMAIL_THREADS_PATH, JSON.stringify({ threads: updated }, null, 2));
+
+    return res.json({
+      success: true,
+      totalThreads: threads.length,
+      kept: updated.length,
+      dropped,
+      backfilled
+    });
+  } catch (error) {
+    console.error('Error cleaning up email threads:', error);
+    return res.status(500).json({ success: false, error: 'Failed to clean up email threads' });
+  }
+});
+
 app.post('/api/generate-categories', (req, res) => {
   try {
     const responseEmails = loadResponseEmails();
