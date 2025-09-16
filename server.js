@@ -1948,10 +1948,10 @@ app.post('/api/load-email-threads', async (req, res) => {
   try {
     const { threadCount, dateFilter } = req.body;
     
-    if ((!threadCount || threadCount < 1 || threadCount > 10) && dateFilter !== 'today') {
+    if ((!threadCount || threadCount < 1 || threadCount > 100) && dateFilter !== 'today') {
       return res.status(400).json({ 
         success: false, 
-        error: 'Thread count must be between 1 and 10' 
+        error: 'Thread count must be between 1 and 100' 
       });
     }
 
@@ -2113,7 +2113,7 @@ app.post('/api/load-email-threads', async (req, res) => {
       const uniqueThreads = [];
       let fetchAttempts = 0;
       const maxFetchAttempts = 5;
-      let currentSearchLimit = threadCount * 3; // Start with 3x to account for duplicates and non-replies
+      let currentSearchLimit = Math.min(threadCount * 5, 500); // Start with 5x to account for duplicates/non-replies (cap 500)
 
       while (uniqueThreads.length < threadCount && fetchAttempts < maxFetchAttempts) {
         fetchAttempts++;
@@ -2251,7 +2251,7 @@ app.post('/api/load-email-threads', async (req, res) => {
 
         // If we still need more threads, increase the search limit for next attempt
         if (uniqueThreads.length < threadCount) {
-          currentSearchLimit = Math.min(currentSearchLimit * 2, 100); // Cap at 100
+          currentSearchLimit = Math.min(currentSearchLimit * 2, 500); // Cap at 500
           console.log(`Need ${threadCount - uniqueThreads.length} more unique threads, increasing search to ${currentSearchLimit}`);
         }
       }
@@ -3301,6 +3301,8 @@ Guidelines:
   • Lab/Project Logistics
   • Networking/Opportunities
   • Personal & Life Management
+  • Student With Research Proposal
+  • Meeting Request
 - 5–12 categories is typical; avoid overly broad single buckets like "General"
 - Category names should be short, descriptive, and stable across sessions
 - Every email must appear in exactly one category (choose the best fit)

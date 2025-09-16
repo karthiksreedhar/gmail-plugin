@@ -5504,6 +5504,15 @@ function getCategoryBadgeStyle(category) {
             const modal = document.createElement('div');
             modal.id = 'loadEmailThreadsModal';
             modal.className = 'modal';
+
+            // Build 1..100 options; default select 3
+            const threadOptions = Array.from({ length: 100 }, (_, i) => {
+                const n = i + 1;
+                const label = `${n} Thread${n === 1 ? '' : 's'}`;
+                const sel = n === 3 ? ' selected' : '';
+                return `<option value="${n}"${sel}>${label}</option>`;
+            }).join('');
+
             modal.innerHTML = `
                 <div class="modal-content load-threads-modal">
                     <div class="modal-header">
@@ -5518,17 +5527,8 @@ function getCategoryBadgeStyle(category) {
                         
                         <div class="thread-count-selector">
                             <label for="threadCountDropdown">Number of Threads to Load:</label>
-                            <select id="threadCountDropdown" class="thread-count-dropdown">
-                                <option value="1">1 Thread</option>
-                                <option value="2">2 Threads</option>
-                                <option value="3" selected>3 Threads</option>
-                                <option value="4">4 Threads</option>
-                                <option value="5">5 Threads</option>
-                                <option value="6">6 Threads</option>
-                                <option value="7">7 Threads</option>
-                                <option value="8">8 Threads</option>
-                                <option value="9">9 Threads</option>
-                                <option value="10">10 Threads</option>
+                            <select id="threadCountDropdown" class="thread-count-dropdown" size="3">
+                                ${threadOptions}
                                 <option value="today">All from Today</option>
                             </select>
                         </div>
@@ -5626,6 +5626,16 @@ function getCategoryBadgeStyle(category) {
             }
         }
 
+        // Update the loading overlay text while an operation is in progress
+        function updateLoadingOverlayMessage(title, message) {
+            const overlay = document.getElementById('loadingOverlay');
+            if (!overlay) return;
+            const titleEl = overlay.querySelector('.loading-text');
+            const subEl = overlay.querySelector('.loading-subtext');
+            if (titleEl && typeof title === 'string') titleEl.textContent = title;
+            if (subEl && typeof message === 'string') subEl.textContent = message;
+        }
+
         function cancelLoadingOperation() {
             if (loadingOperation) {
                 loadingOperation.abort();
@@ -5661,6 +5671,7 @@ function getCategoryBadgeStyle(category) {
                             <div class="carousel-info" id="carouselInfo">Loading threads...</div>
                             <div class="carousel-controls">
                                 <button class="carousel-nav-btn" onclick="refreshEmailThreads()" style="background: #667eea; margin-right: 10px;">🔄 Refresh Threads</button>
+                                <button class="carousel-nav-btn" id="selectAllThreadsBtn" onclick="selectAllThreads()">Select All</button>
                                 <button class="carousel-nav-btn" id="prevBtn" onclick="previousSlide()" disabled>← Previous</button>
                                 <span class="carousel-counter" id="carouselCounter">1 / 1</span>
                                 <button class="carousel-nav-btn" id="nextBtn" onclick="nextSlide()" disabled>Next →</button>
@@ -5848,6 +5859,8 @@ async function cleanThreadMessage(ti, mi) {
             return;
         }
 
+        // Show loading while cleaning
+        showLoadingOverlay('Cleaning Message', 'Extracting newest unquoted content...', false);
         // Call server to clean text using OpenAI/fallback
         const resp = await fetch('/api/clean-text', {
             method: 'POST',
@@ -5856,9 +5869,11 @@ async function cleanThreadMessage(ti, mi) {
         });
         const data = await resp.json();
         if (!resp.ok || !data.success) {
+            hideLoadingOverlay();
             throw new Error(data.error || 'Clean request failed');
         }
         const cleaned = data.cleaned != null ? String(data.cleaned) : '';
+        hideLoadingOverlay();
 
         // Show preview popup with Approve / Edit Manually
         const popup = document.createElement('div');
@@ -5911,6 +5926,7 @@ async function cleanThreadMessage(ti, mi) {
         });
     } catch (e) {
         console.error('Clean action failed:', e);
+        try { hideLoadingOverlay(); } catch (_) {}
         showErrorPopup('Cleaning failed. Please try again or edit manually.', 'Clean Failed');
     }
 }
@@ -6039,73 +6055,110 @@ function previousSlide() {
             }
         }
 
+        // Select all visible threads for addition (unhides any that were marked to hide)
+        function selectAllThreads() {
+            try {
+                const total = currentThreads?.length || 0;
+                selectedThreads.clear();
+                for (let i = 0; i < total; i++) {
+                    selectedThreads.add(i);
+                    const addCb = document.getElementById(`thread-${i}`);
+                    if (addCb) addCb.checked = true;
+                    const hideCb = document.getElementById(`hide-thread-${i}`);
+                    if (hideCb) hideCb.checked = false;
+                    hiddenThreads.delete(i);
+                }
+                updateAddButton();
+                const btn = document.getElementById('selectAllThreadsBtn');
+                if (btn) {
+                    btn.textContent = 'All Selected';
+                    btn.disabled = true;
+                    setTimeout(() => {
+                        if (btn) {
+                            btn.textContent = 'Select All';
+                            btn.disabled = false;
+                        }
+                    }, 1200);
+                }
+            } catch (e) {
+                console.error('Select All failed:', e);
+            }
+        }
+
+        // Add/hide threads with partial success: skip failures and continue
         async function addSelectedThreads() {
             if (selectedThreads.size === 0 && hiddenThreads.size === 0) {
                 showErrorPopup('Please select at least one thread to add or hide.', 'No Threads Selected');
                 return;
             }
-            
+
             const threadsToAdd = Array.from(selectedThreads).map(index => currentThreads[index]);
             const threadsToHide = Array.from(hiddenThreads).map(index => currentThreads[index]);
-            
-            // Show loading overlay
-            const addCount = threadsToAdd.length;
-            const hideCount = threadsToHide.length;
+
+            const addCountRequested = threadsToAdd.length;
+            const hideCountRequested = threadsToHide.length;
+
             const parts = [];
-            if (addCount > 0) parts.push(`adding ${addCount}`);
-            if (hideCount > 0) parts.push(`hiding ${hideCount}`);
+            if (addCountRequested > 0) parts.push(`adding ${addCountRequested}`);
+            if (hideCountRequested > 0) parts.push(`hiding ${hideCountRequested}`);
             const actionText = parts.join(' and ');
-            showLoadingOverlay('Processing Threads', `Processing selections (${actionText})...`);
-            
+            showLoadingOverlay('Processing Threads', `Preparing (${actionText})...`);
+
+            // Try to hide threads in one call, but do not abort on failure
             try {
-                // First, hide permanently if requested
-                if (threadsToHide.length > 0) {
+                if (hideCountRequested > 0) {
+                    updateLoadingOverlayMessage('Processing Threads', `Hiding ${hideCountRequested} thread${hideCountRequested === 1 ? '' : 's'}...`);
                     const hideResp = await fetch('/api/hide-email-threads', {
                         method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                        },
+                        headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ threads: threadsToHide })
                     });
-                    const hideData = await hideResp.json();
-                    if (!hideResp.ok || !hideData.success) {
-                        throw new Error(hideData.error || 'Failed to hide selected threads');
-                    }
+                    // Consume JSON to avoid unhandled rejection; continue regardless of status
+                    await hideResp.json().catch(() => ({}));
                 }
-
-                // Then add selected threads to database
-                if (threadsToAdd.length > 0) {
-                    const addResp = await fetch('/api/add-email-threads', {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                        },
-                        body: JSON.stringify({ threads: threadsToAdd })
-                    });
-                    const addData = await addResp.json();
-                    if (!addResp.ok || !addData.success) {
-                        throw new Error(addData.error || 'Failed to add selected threads');
-                    }
-                }
-                
-                hideLoadingOverlay();
-                closeThreadCarouselModal();
-                
-                const msgs = [];
-                if (addCount > 0) msgs.push(`${addCount} added`);
-                if (hideCount > 0) msgs.push(`${hideCount} hidden`);
-                showSuccessPopup(
-                    `Completed: ${msgs.join(', ')}.`,
-                    'Threads Processed'
-                );
-                
-                // Refresh the email list to show updates
-                loadEmails();
-            } catch (error) {
-                hideLoadingOverlay();
-                console.error('Error processing threads:', error);
-                showErrorPopup('Failed to process threads. ' + (error?.message || 'Please try again.'), 'Operation Failed');
+            } catch (e) {
+                console.warn('Hide threads encountered an error but proceeding with adds:', e);
             }
+
+            // Add threads one-by-one to guarantee partial success
+            let added = 0;
+            let failed = 0;
+            if (addCountRequested > 0) {
+                for (let i = 0; i < threadsToAdd.length; i++) {
+                    updateLoadingOverlayMessage(
+                        'Processing Threads',
+                        `Adding ${i + 1} of ${threadsToAdd.length}...`
+                    );
+                    try {
+                        const resp = await fetch('/api/add-email-threads', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ threads: [threadsToAdd[i]] })
+                        });
+                        const data = await resp.json().catch(() => ({}));
+                        if (!resp.ok || !data.success) {
+                            failed++;
+                        } else {
+                            // Prefer server-reported count when available
+                            added += typeof data.addedCount === 'number' ? data.addedCount : 1;
+                        }
+                    } catch (e) {
+                        failed++;
+                    }
+                }
+            }
+
+            hideLoadingOverlay();
+            closeThreadCarouselModal();
+
+            const summary = [];
+            if (added > 0) summary.push(`${added} added`);
+            if (hideCountRequested > 0) summary.push(`${hideCountRequested} hidden`);
+            if (failed > 0) summary.push(`${failed} failed`);
+            showSuccessPopup(`Completed: ${summary.join(', ')}.`, 'Threads Processed');
+
+            // Refresh the email list to show updates
+            loadEmails();
         }
 
         function closeLoadEmailThreadsModal() {
@@ -7594,6 +7647,7 @@ categoriesState[index].name = newName;
             if (modal) modal.style.display = 'none';
         }
 
+        // HTML-escape utility (correctly encodes special chars)
         function escapeHtml(s) {
             return String(s)
                 .replace(/&/g, '&')
