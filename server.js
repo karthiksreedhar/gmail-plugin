@@ -2932,20 +2932,54 @@ app.post('/api/save-categories', (req, res) => {
       return e;
     });
 
-    // 2) Update unreplied (inbox) emails so "Load Email From Inbox" reflects new categories
-    const existingUnreplied = loadUnrepliedEmails();
-    let updatedUnrepliedCount = 0;
+  // 2) Update unreplied (inbox) emails so "Load Email From Inbox" reflects new categories
+  const existingUnreplied = loadUnrepliedEmails();
+  let updatedUnrepliedCount = 0;
 
-    const updatedUnreplied = existingUnreplied.map(e => {
-      const newCat = map[e.id];
-      if (newCat && newCat !== e.category) {
-        updatedUnrepliedCount++;
-        return { ...e, category: newCat };
+  const updatedUnreplied = existingUnreplied.map(e => {
+    const newCat = map[e.id];
+    if (newCat && newCat !== e.category) {
+      updatedUnrepliedCount++;
+      return { ...e, category: newCat };
+    }
+    return e;
+  });
+
+  // 2b) Apply category rename mapping across all emails (handles renames where IDs don't overlap)
+  let renameAppliedResponses = 0;
+  let renameAppliedUnreplied = 0;
+  const renameMap = {};
+  if (Array.isArray(categories)) {
+    categories.forEach(cat => {
+      const oldName = (cat.renamedFrom || cat.originalName || '').trim();
+      const newName = (cat.name || '').trim();
+      if (oldName && newName && oldName !== newName) {
+        renameMap[oldName] = newName;
       }
-      return e;
     });
+  }
 
-    // Ensure user data dir exists
+  const renamedResponses = updatedResponses.map(e => {
+    const before = e.category;
+    const after = renameMap[before] ? renameMap[before] : before;
+    if (after !== before) {
+      renameAppliedResponses++;
+      return { ...e, category: after };
+    }
+    return e;
+  });
+
+  const renamedUnreplied = updatedUnreplied.map(e => {
+    const before = e.category;
+    const after = renameMap[before] ? renameMap[before] : before;
+    if (after !== before) {
+      renameAppliedUnreplied++;
+      return { ...e, category: after };
+    }
+    return e;
+  });
+
+  // Ensure user data dir exists
     if (!fs.existsSync(paths.USER_DATA_DIR)) {
       fs.mkdirSync(paths.USER_DATA_DIR, { recursive: true });
     }
@@ -2953,20 +2987,22 @@ app.post('/api/save-categories', (req, res) => {
     // Persist both files
     fs.writeFileSync(
       paths.RESPONSE_EMAILS_PATH,
-      JSON.stringify({ emails: updatedResponses }, null, 2)
+      JSON.stringify({ emails: renamedResponses }, null, 2)
     );
 
     fs.writeFileSync(
       paths.UNREPLIED_EMAILS_PATH,
-      JSON.stringify({ emails: updatedUnreplied }, null, 2)
+      JSON.stringify({ emails: renamedUnreplied }, null, 2)
     );
 
     res.json({
       success: true,
       updatedCount: updatedResponseCount,
       unrepliedUpdatedCount: updatedUnrepliedCount,
-      totalResponses: updatedResponses.length,
-      totalUnreplied: updatedUnreplied.length
+      renameUpdatedResponses: renameAppliedResponses,
+      renameUpdatedUnreplied: renameAppliedUnreplied,
+      totalResponses: renamedResponses.length,
+      totalUnreplied: renamedUnreplied.length
     });
   } catch (error) {
     console.error('Error saving categories:', error);
@@ -3050,6 +3086,31 @@ app.delete('/api/notes/:id', (req, res) => {
   } catch (error) {
     console.error('Error deleting note:', error);
     res.status(500).json({ error: 'Failed to delete note' });
+  }
+});
+
+/**
+ * Clean arbitrary email/message text using the same extractor as responses.
+ * Input: { text: string }
+ * Output: { success: true, cleaned: string }
+ */
+app.post('/api/clean-text', async (req, res) => {
+  try {
+    const { text } = req.body || {};
+    if (typeof text !== 'string' || !text.trim()) {
+      return res.status(400).json({ success: false, error: 'text is required' });
+    }
+    const cleaned = await cleanResponseBody(text);
+    return res.json({ success: true, cleaned });
+  } catch (e) {
+    console.error('Error cleaning text:', e);
+    try {
+      const cleaned = fallbackHeuristicClean(req.body?.text || '');
+      return res.json({ success: true, cleaned });
+    } catch (fallbackErr) {
+      console.error('Heuristic clean failed:', fallbackErr);
+      return res.status(500).json({ success: false, error: 'Failed to clean text' });
+    }
   }
 });
 

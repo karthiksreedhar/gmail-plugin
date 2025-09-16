@@ -2898,6 +2898,10 @@ function getCategoryBadgeStyle(category) {
         // Generate Response Modal functionality
         let unrepliedEmails = [];
         let currentGeneratedResponse = '';
+        // Category notes support for Generate Response workflow
+        let currentContextCategory = '';
+        let cachedCategoryNotes = [];
+        let cachedGlobalNotes = [];
 
         async function generateResponse() {
             // Show the Generate Response modal
@@ -2961,7 +2965,10 @@ function getCategoryBadgeStyle(category) {
                                 <textarea id="emailBodyInput" rows="8" placeholder="Enter the email content you want to respond to..." required></textarea>
                             </div>
                             <div class="form-group">
-                                <label for="contextInput">Additional Context:</label>
+                                <label for="contextInput" style="display:flex; align-items:center; justify-content:space-between;">
+                                    <span>Additional Context:</span>
+                                    <button type="button" id="seeCategoryNotesBtn" class="select-email-btn" style="display:none;">See Category Notes</button>
+                                </label>
                                 <textarea id="contextInput" rows="3" placeholder="Any additional context or specific instructions (optional)"></textarea>
                             </div>
                             <div class="form-actions">
@@ -3015,10 +3022,8 @@ function getCategoryBadgeStyle(category) {
         }
 
         async function showSelectEmailModal() {
-            // Load unreplied emails if not already loaded
-            if (unrepliedEmails.length === 0) {
-                await loadUnrepliedEmails();
-            }
+            // Always refresh unreplied emails to reflect latest category changes
+            await loadUnrepliedEmails();
             
             // Create select email modal
             let selectModal = document.getElementById('selectEmailModal');
@@ -3131,6 +3136,20 @@ function getCategoryBadgeStyle(category) {
             document.getElementById('senderInput').value = email.from;
             document.getElementById('subjectInput').value = email.subject;
             document.getElementById('emailBodyInput').value = email.body;
+
+            // If a category is present on the test email, set current context category
+            // and reveal the "See Category Notes" button to keep UX consistent with inbox emails.
+            currentContextCategory = email.category || '';
+            const seeNotesBtn = document.getElementById('seeCategoryNotesBtn');
+            if (seeNotesBtn) {
+                if (currentContextCategory) {
+                    seeNotesBtn.style.display = 'inline-block';
+                    seeNotesBtn.onclick = showSeeCategoryNotesModal;
+                } else {
+                    seeNotesBtn.style.display = 'none';
+                    seeNotesBtn.onclick = null;
+                }
+            }
             
             // Close select test email modal
             closeSelectTestEmailModal();
@@ -3267,6 +3286,19 @@ function getCategoryBadgeStyle(category) {
             document.getElementById('subjectInput').value = email.subject;
             document.getElementById('emailBodyInput').value = email.body;
             
+            // Set current category and reveal "See Category Notes" button
+            currentContextCategory = email.category || '';
+            const seeNotesBtn = document.getElementById('seeCategoryNotesBtn');
+            if (seeNotesBtn) {
+                if (currentContextCategory) {
+                    seeNotesBtn.style.display = 'inline-block';
+                    seeNotesBtn.onclick = showSeeCategoryNotesModal;
+                } else {
+                    seeNotesBtn.style.display = 'none';
+                    seeNotesBtn.onclick = null;
+                }
+            }
+
             // Close select email modal
             closeSelectEmailModal();
         }
@@ -5750,6 +5782,7 @@ async function cleanThreadMessage(ti, mi) {
         const popup = document.createElement('div');
         popup.id = 'cleanPreviewPopup';
         popup.className = 'popup-modal';
+        const safeCleaned = escapeHtml(cleaned);
         popup.innerHTML = `
             <div class="popup-content" style="max-width: 700px;">
                 <div class="popup-header">
@@ -5757,7 +5790,7 @@ async function cleanThreadMessage(ti, mi) {
                 </div>
                 <div class="popup-body" style="text-align: left; max-height: 50vh; overflow: auto;">
                     <div style="font-size: 12px; color: #666; margin-bottom: 8px;">Preview the cleaned content. Approve to apply, or edit manually instead.</div>
-                    <div id="cleanedPreviewArea" style="white-space: pre-wrap; font-size: 14px; line-height: 1.6; color: #333; border: 1px solid #e9ecef; padding: 12px; border-radius: 6px; background: #fff;">${cleaned.replace(/&/g,'&').replace(/</g,'<').replace(/>/g,'>')}</div>
+                    <div id="cleanedPreviewArea" style="white-space: pre-wrap; font-size: 14px; line-height: 1.6; color: #333; border: 1px solid #e9ecef; padding: 12px; border-radius: 6px; background: #fff;">${safeCleaned}</div>
                 </div>
                 <div class="popup-actions">
                     <button class="popup-btn popup-btn-secondary" id="cleanEditManuallyBtn">Edit Manually</button>
@@ -7337,6 +7370,159 @@ categoriesState[index].name = newName;
                 console.error('Failed to update scope:', e);
                 showErrorPopup('Failed to update scope. Please try again.', 'Update Failed');
             }
+        }
+
+        // See Category Notes popup for Generate Response workflow
+        function ensureSeeCategoryNotesModal() {
+            let modal = document.getElementById('seeCategoryNotesModal');
+            if (modal) return modal;
+
+            modal = document.createElement('div');
+            modal.id = 'seeCategoryNotesModal';
+            modal.className = 'modal';
+            modal.innerHTML = `
+                <div class="modal-content" style="max-width: 900px; max-height: 80vh;">
+                    <div class="modal-header">
+                        <h2 class="modal-title">Category Notes</h2>
+                        <button class="close" onclick="closeSeeCategoryNotesModal()">&times;</button>
+                    </div>
+                    <div style="padding: 16px; display: flex; flex-direction: column; gap: 12px; max-height: 60vh; overflow: hidden;">
+                        <div style="font-size: 13px; color: #666;">Select notes to insert into the Additional Context field.</div>
+                        <div style="display: flex; gap: 16px; flex: 1 1 auto; min-height: 0;">
+                            <div style="flex: 1 1 0; display: flex; flex-direction: column; min-width: 0;">
+                                <div id="seeNotesCategoryTitle" style="font-weight: 600; margin-bottom: 8px;">Category Notes</div>
+                                <div id="seeNotesCategoryList" style="flex: 1 1 auto; overflow: auto; border: 1px solid #e9ecef; border-radius: 8px; padding: 10px; background: #fff;">
+                                    <div class="loading">Loading...</div>
+                                </div>
+                            </div>
+                            <div style="flex: 1 1 0; display: flex; flex-direction: column; min-width: 0;">
+                                <div style="font-weight: 600; margin-bottom: 8px;">Global Notes (Other Categories)</div>
+                                <div id="seeNotesGlobalList" style="flex: 1 1 auto; overflow: auto; border: 1px solid #e9ecef; border-radius: 8px; padding: 10px; background: #fff;">
+                                    <div class="loading">Loading...</div>
+                                </div>
+                            </div>
+                        </div>
+                        <div style="display: flex; justify-content: center; gap: 12px; padding-top: 8px;">
+                            <button class="popup-btn popup-btn-secondary" type="button" onclick="closeSeeCategoryNotesModal()">Cancel</button>
+                            <button class="popup-btn popup-btn-success" id="applyCategoryNotesBtn" type="button">Add</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+            modal.addEventListener('click', (ev) => {
+                if (ev.target === modal) closeSeeCategoryNotesModal();
+            });
+            document.body.appendChild(modal);
+            return modal;
+        }
+
+        function closeSeeCategoryNotesModal() {
+            const modal = document.getElementById('seeCategoryNotesModal');
+            if (modal) modal.style.display = 'none';
+        }
+
+        function escapeHtml(s) {
+            return String(s)
+                .replace(/&/g, '&')
+                .replace(/</g, '<')
+                .replace(/>/g, '>')
+                .replace(/"/g, '"')
+                .replace(/'/g, '&#039;');
+        }
+
+        function renderSeeCategoryNotesLists() {
+            const catList = document.getElementById('seeNotesCategoryList');
+            const globList = document.getElementById('seeNotesGlobalList');
+            if (!catList || !globList) return;
+
+            const makeItem = (note, includeCategory = false) => {
+                const catLabel = includeCategory ? `<span style="color:#999; font-size:12px;"> [${escapeHtml(note.category)}]</span>` : '';
+                return `<label style="display:block; margin-bottom:8px; cursor:pointer;">
+                    <input type="checkbox" data-id="${note.id}" style="margin-right:8px;">
+                    <span style="white-space:pre-wrap;">${escapeHtml(note.text || '')}</span>${catLabel}
+                </label>`;
+            };
+
+            catList.innerHTML = cachedCategoryNotes.length
+                ? cachedCategoryNotes.map(n => makeItem(n, false)).join('')
+                : `<div style="color:#666; font-style:italic; text-align:center; padding:8px;">No notes for this category.</div>`;
+
+            globList.innerHTML = cachedGlobalNotes.length
+                ? cachedGlobalNotes.map(n => makeItem(n, true)).join('')
+                : `<div style="color:#666; font-style:italic; text-align:center; padding:8px;">No global notes from other categories.</div>`;
+        }
+
+        async function showSeeCategoryNotesModal() {
+            const modal = ensureSeeCategoryNotesModal();
+
+            // Set heading
+            const titleEl = document.getElementById('seeNotesCategoryTitle');
+            if (titleEl) {
+                titleEl.textContent = currentContextCategory
+                    ? `Notes for: ${currentContextCategory}`
+                    : 'Category Notes';
+            }
+
+            // Loading states
+            const catList = document.getElementById('seeNotesCategoryList');
+            const globList = document.getElementById('seeNotesGlobalList');
+            if (catList) catList.innerHTML = '<div class="loading">Loading...</div>';
+            if (globList) globList.innerHTML = '<div class="loading">Loading...</div>';
+
+            modal.style.display = 'block';
+
+            try {
+                // Fetch all notes once and split on the client
+                const resp = await fetch('/api/notes');
+                const data = await resp.json();
+                const allNotes = Array.isArray(data.notes) ? data.notes : [];
+
+                cachedCategoryNotes = allNotes.filter(n => (n.category === currentContextCategory));
+                cachedGlobalNotes = allNotes.filter(n => (n.scope === 'GLOBAL' && n.category !== currentContextCategory));
+
+                renderSeeCategoryNotesLists();
+
+                const applyBtn = document.getElementById('applyCategoryNotesBtn');
+                if (applyBtn) {
+                    applyBtn.onclick = applySelectedNotesToContext;
+                }
+            } catch (e) {
+                console.error('Failed to load notes:', e);
+                if (catList) catList.innerHTML = '<div class="error">Failed to load notes.</div>';
+                if (globList) globList.innerHTML = '<div class="error">Failed to load notes.</div>';
+            }
+        }
+
+        function applySelectedNotesToContext() {
+            const catList = document.getElementById('seeNotesCategoryList');
+            const globList = document.getElementById('seeNotesGlobalList');
+            if (!catList || !globList) return;
+
+            const selectedIds = [];
+            catList.querySelectorAll('input[type="checkbox"]:checked').forEach(cb => selectedIds.push(cb.getAttribute('data-id')));
+            globList.querySelectorAll('input[type="checkbox"]:checked').forEach(cb => selectedIds.push(cb.getAttribute('data-id')));
+
+            const byId = new Map([...cachedCategoryNotes, ...cachedGlobalNotes].map(n => [n.id, n]));
+            const selectedTexts = selectedIds
+                .map(id => byId.get(id))
+                .filter(Boolean)
+                .map(n => n.text || '')
+                .filter(t => t && t.trim());
+
+            if (!selectedTexts.length) {
+                closeSeeCategoryNotesModal();
+                return;
+            }
+
+            const insertText = selectedTexts.join('\n\n');
+            const ctx = document.getElementById('contextInput');
+            if (ctx) {
+                ctx.value = ctx.value && ctx.value.trim()
+                    ? (ctx.value.trimEnd() + '\n\n' + insertText)
+                    : insertText;
+            }
+
+            closeSeeCategoryNotesModal();
         }
 
         // Load emails when page loads
