@@ -1364,47 +1364,10 @@ app.get('/api/unreplied-emails', async (req, res) => {
       return res.json({ emails: [] });
     }
 
-    // Derive the current category set: use categories.json if present; otherwise fall back to RHS-derived set
-    const listFromFile = loadCategoriesList();
-    const currentCategories = (listFromFile && listFromFile.length) ? listFromFile : getCurrentCategoriesFromResponses();
-
-    // Reconcile each unreplied email's category to the current set:
-    //  - Try normalizeCategoryName() first
-    //  - If not present in current set, heuristically categorize and then match to existing set
-    let changed = false;
-    const reconciled = (unrepliedEmails || []).map(e => {
-      const orig = e.category;
-      let next = normalizeCategoryName(orig);
-
-      const inCurrent = currentCategories.some(c => c.toLowerCase() === String(next || '').toLowerCase());
-      if (!inCurrent) {
-        const heuristic = categorizeEmail(e.subject || '', e.body || '', e.from || '');
-        next = matchToCurrentCategory(heuristic || next, currentCategories);
-      }
-
-      if (next !== orig) {
-        changed = true;
-        return { ...e, category: next };
-      }
-      return e;
-    });
-
-    // Persist reconciliation if anything changed
-    if (changed) {
-      try {
-        const paths = getCurrentUserPaths();
-        fs.writeFileSync(paths.UNREPLIED_EMAILS_PATH, JSON.stringify({ emails: reconciled }, null, 2));
-        console.log(`Reconciled categories for ${reconciled.length} unreplied emails to current RHS set (changes persisted)`);
-      } catch (persistErr) {
-        console.warn('Failed to persist reconciled unreplied emails:', persistErr?.message || persistErr);
-      }
-    }
-    
-    // Sort emails chronologically (newest first)
-    reconciled.sort((a, b) => new Date(b.date) - new Date(a.date));
-    
-    console.log(`Returning ${reconciled.length} unreplied emails from JSON file`);
-    res.json({ emails: reconciled });
+    // Do not alter categories here; just return what's stored. Reclassification is explicit via POST endpoint.
+    const sorted = (unrepliedEmails || []).slice().sort((a, b) => new Date(b.date) - new Date(a.date));
+    console.log(`Returning ${sorted.length} unreplied emails from JSON file`);
+    res.json({ emails: sorted });
     
   } catch (error) {
     console.error('Error fetching unreplied emails:', error);
@@ -1413,6 +1376,172 @@ app.get('/api/unreplied-emails', async (req, res) => {
       details: error.message,
       emails: [] // Return empty array as fallback
     });
+  }
+});
+
+/**
+ * Reclassify unreplied emails (Inbox modal) using the authoritative categories X and OpenAI.
+ * This DOES NOT run automatically. It only executes when explicitly called by the client
+ * (e.g., via the "Update Categories" button in the Inbox modal).
+ * 
+ * Input: none
+ * Output: { success: true, updatedCount, total, categoriesUsed: [names], mode: 'ai' | 'rule-based-fallback' }
+ */
+app.post('/api/unreplied-emails/reclassify', async (req, res) => {
+  try {
+    // Load current unreplied emails (Inbox data) and category list X
+    const unreplied = loadUnrepliedEmails();
+    let categoriesX = loadCategoriesList();
+    if (!Array.isArray(categoriesX) || categoriesX.length === 0) {
+      // Fallbacks: derive from RHS responses, else canonical
+      categoriesX = getCurrentCategoriesFromResponses();
+      if (!Array.isArray(categoriesX) || categoriesX.length === 0) {
+        categoriesX = CANONICAL_CATEGORIES.slice();
+      }
+    }
+
+    if (!Array.isArray(unreplied) || unreplied.length === 0) {
+      return res.json({ success: true, updatedCount: 0, total: 0, categoriesUsed: categoriesX, mode: 'noop' });
+    }
+
+    // Prepare compact email list for model
+    const minimal = unreplied.map(e => ({
+      id: e.id,
+      subject: e.subject || 'No Subject',
+      from: e.from || 'Unknown Sender',
+      date: e.date || new Date().toISOString(),
+      snippet: e.snippet || (e.body ? String(e.body).slice(0, 160) + (e.body.length > 160 ? '...' : '') : 'No content available')
+    }));
+
+    // Helper to normalize to one of X exactly
+    const exactFromX = (name) => {
+      if (!name) return null;
+      const lower = String(name).toLowerCase();
+      const exact = categoriesX.find(c => String(c).toLowerCase() === lower);
+      if (exact) return exact;
+      // Try fuzzy to nearest in X
+      return matchToCurrentCategory(name, categoriesX);
+    };
+
+    const SYSTEM = `You are an expert triage assistant. You will classify a list of emails into one of the GIVEN categories EXACTLY as named.
+Rules:
+- For each email ID, choose exactly ONE category from the provided list.
+- Use the category names exactly as provided (case and spelling must match).
+- Do not invent new categories.
+- If unsure, choose the closest fit that helps triage.
+
+Output strictly valid JSON:
+{
+  "assignments": {
+    "<emailId>": "<CategoryFromList>",
+    ...
+  }
+}`;
+
+    const USER = `Categories (X): ${JSON.stringify(categoriesX, null, 2)}
+Emails (JSON): ${JSON.stringify({ emails: minimal }, null, 2)}
+Return ONLY the JSON object described above.`;
+
+    // Call OpenAI with structured JSON response
+    let raw = null;
+    let parsed = null;
+    let mode = 'ai';
+
+    try {
+      const completion = await openai.chat.completions.create({
+        model: "o3",
+        messages: [
+          { role: "system", content: SYSTEM },
+          { role: "user", content: USER }
+        ],
+        max_completion_tokens: 1200,
+        response_format: { type: "json_object" }
+      });
+      raw = completion.choices?.[0]?.message?.content || '';
+    } catch (e) {
+      console.warn('AI reclassify (o3) failed:', e?.message || e);
+      raw = '';
+    }
+
+    const extractJson = (text) => {
+      if (typeof text !== 'string') return null;
+      const t = text.trim();
+      try { return JSON.parse(t); } catch {}
+      const fence = t.match(/```(?:json)?\s*([\s\S]*?)```/i);
+      if (fence && fence[1]) { try { return JSON.parse(fence[1].trim()); } catch {} }
+      const first = t.indexOf('{'); const last = t.lastIndexOf('}');
+      if (first !== -1 && last !== -1 && last > first) {
+        try { return JSON.parse(t.slice(first, last + 1)); } catch {}
+      }
+      return null;
+    };
+
+    if (typeof raw === 'object' && raw) {
+      parsed = raw;
+    } else {
+      parsed = extractJson(raw);
+      if (!parsed || !parsed.assignments || typeof parsed.assignments !== 'object') {
+        try {
+          const retry = await openai.chat.completions.create({
+            model: "gpt-4o-mini",
+            messages: [
+              { role: "system", content: SYSTEM },
+              { role: "user", content: USER }
+            ],
+            max_completion_tokens: 1200,
+            response_format: { type: "json_object" }
+          });
+          const raw2 = retry.choices?.[0]?.message?.content || '';
+          parsed = extractJson(raw2);
+        } catch (retryErr) {
+          console.warn('AI reclassify retry failed:', retryErr?.message || retryErr);
+        }
+      }
+    }
+
+    // Build new list using AI assignments or fallback
+    const byId = new Map(unreplied.map(e => [e.id, e]));
+    let assignments = {};
+    if (parsed && parsed.assignments && typeof parsed.assignments === 'object') {
+      assignments = parsed.assignments;
+    } else {
+      mode = 'rule-based-fallback';
+      assignments = {};
+      for (const e of unreplied) {
+        const heuristic = categorizeEmail(e.subject || '', e.body || '', e.from || '');
+        const mapped = exactFromX(heuristic) || categoriesX[0];
+        assignments[e.id] = mapped;
+      }
+    }
+
+    // Apply assignments (validated to X) and persist
+    let updatedCount = 0;
+    const updated = unreplied.map(e => {
+      const rawCat = assignments[e.id];
+      const mapped = exactFromX(rawCat) || e.category || categoriesX[0];
+      if (mapped !== e.category) {
+        updatedCount++;
+        return { ...e, category: mapped };
+      }
+      return e;
+    });
+
+    const paths = getCurrentUserPaths();
+    if (!fs.existsSync(paths.USER_DATA_DIR)) {
+      fs.mkdirSync(paths.USER_DATA_DIR, { recursive: true });
+    }
+    fs.writeFileSync(paths.UNREPLIED_EMAILS_PATH, JSON.stringify({ emails: updated }, null, 2));
+
+    return res.json({
+      success: true,
+      updatedCount,
+      total: updated.length,
+      categoriesUsed: categoriesX,
+      mode
+    });
+  } catch (error) {
+    console.error('Error reclassifying unreplied emails:', error);
+    return res.status(500).json({ success: false, error: 'Failed to reclassify unreplied emails' });
   }
 });
 
@@ -3392,18 +3521,10 @@ app.post('/api/save-categories', (req, res) => {
       return e;
     });
 
-  // 2) Update unreplied (inbox) emails so "Load Email From Inbox" reflects new categories
+  // 2) Do NOT update unreplied (Inbox) emails here. Inbox reclassification is explicit via POST /api/unreplied-emails/reclassify
   const existingUnreplied = loadUnrepliedEmails();
   let updatedUnrepliedCount = 0;
-
-  const updatedUnreplied = existingUnreplied.map(e => {
-    const newCat = map[e.id];
-    if (newCat && newCat !== e.category) {
-      updatedUnrepliedCount++;
-      return { ...e, category: newCat };
-    }
-    return e;
-  });
+  const updatedUnreplied = existingUnreplied;
 
   // 2b) Apply category rename mapping across all emails (handles renames where IDs don't overlap)
   let renameAppliedResponses = 0;
@@ -3429,15 +3550,7 @@ app.post('/api/save-categories', (req, res) => {
     return e;
   });
 
-  const renamedUnreplied = updatedUnreplied.map(e => {
-    const before = e.category;
-    const after = renameMap[before] ? renameMap[before] : before;
-    if (after !== before) {
-      renameAppliedUnreplied++;
-      return { ...e, category: after };
-    }
-    return e;
-  });
+  const renamedUnreplied = existingUnreplied;
 
   // Ensure user data dir exists
     if (!fs.existsSync(paths.USER_DATA_DIR)) {

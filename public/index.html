@@ -3246,11 +3246,19 @@ function getCategoryBadgeStyle(category) {
                     btn.disabled = true;
                     btn.textContent = 'Updating...';
                 }
+                // Explicit reclassification: use authoritative categories X and OpenAI
+                const resp = await fetch('/api/unreplied-emails/reclassify', { method: 'POST' });
+                const data = await resp.json();
+                if (!resp.ok || !data.success) {
+                    throw new Error(data.error || 'Reclassify failed');
+                }
+                // Reload lists after reclassification
                 await loadUnrepliedEmails();
                 await loadCurrentCategories();
                 populateUnrepliedEmails();
                 if (btn) {
-                    btn.textContent = '✓ Categories Updated';
+                    const updated = typeof data.updatedCount === 'number' ? ` (${data.updatedCount} updated)` : '';
+                    btn.textContent = `✓ Categories Updated${updated}`;
                     btn.style.background = '#28a745';
                     setTimeout(() => {
                         btn.textContent = '🔄 Update Categories';

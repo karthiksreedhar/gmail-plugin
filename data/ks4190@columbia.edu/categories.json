@@ -1,13 +1,13 @@
 {
   "categories": [
-    "Grading/TA Administration",
     "Lab/Project Logistics",
-    "Networking/Opportunities",
-    "Personal & Life Management",
-    "Reimbursement Request",
-    "Research/Advisor Communication",
     "Student Extension Request",
-    "Student Policy Clarification",
-    "University Administration"
+    "Networking/Opportunities",
+    "Grading/TA Administration",
+    "Reimbursement Request",
+    "University Administration",
+    "Research/Advisor Communication",
+    "Conference Submission/Review",
+    "Personal & Life Management"
   ]
 }
