@@ -2547,8 +2547,10 @@
                     categoryDiv.onclick = () => filterByCategory(category);
                     
                     const categoryIcon = getCategoryIcon(category);
+                    const catColors = getCategoryColors(category);
                     
                     categoryDiv.innerHTML = `
+                        <span class="category-color-dot" style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${catColors.bg};border:1px solid rgba(0,0,0,0.1);margin-right:8px;"></span>
                         <span class="category-icon">${categoryIcon}</span>
                         <span class="category-name">${category}</span>
                         <span class="category-count">0</span>
@@ -2565,8 +2567,10 @@
                     categoryDiv.onclick = () => filterByCategory(category);
                     
                     const categoryIcon = getCategoryIcon(category);
+                    const catColors = getCategoryColors(category);
                     
                     categoryDiv.innerHTML = `
+                        <span class="category-color-dot" style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${catColors.bg};border:1px solid rgba(0,0,0,0.1);margin-right:8px;"></span>
                         <span class="category-icon">${categoryIcon}</span>
                         <span class="category-name">${category}</span>
                         <span class="category-count">${categoryCounts[category]}</span>
@@ -2702,6 +2706,30 @@
             return icons[category] || '📧';
         }
 
+// Deterministic category color utilities for dynamic/renamed/added categories
+function hashString(str) {
+    let h = 0;
+    for (let i = 0; i < str.length; i++) {
+        h = ((h << 5) - h) + str.charCodeAt(i);
+        h |= 0;
+    }
+    return Math.abs(h);
+}
+function getCategoryColors(category) {
+    const name = String(category || 'Uncategorized');
+    const h = hashString(name) % 360;
+    const s = 70;   // saturation
+    const l = 88;   // lightness for pastel background
+    const bg = `hsl(${h}, ${s}%, ${l}%)`;
+    // Darker text color using the same hue for readability
+    const fg = `hsl(${h}, 45%, 25%)`;
+    return { bg, fg };
+}
+function getCategoryBadgeStyle(category) {
+    const { bg, fg } = getCategoryColors(category);
+    return `background: ${bg}; color: ${fg};`;
+}
+
         function filterByCategory(category) {
             currentFilter = category;
             
@@ -2739,6 +2767,7 @@
                 emailDiv.onclick = () => openEmailThread(email.id, email.subject);
                 
                 const categoryClass = `category-${email.category.toLowerCase().replace(/\s+/g, '-')}`;
+                const catStyle = getCategoryBadgeStyle(email.category);
                 
                 // Get the original sender from email data
                 let originalSender = 'Unknown Sender';
@@ -2759,7 +2788,7 @@
                             <div class="email-date">${formatDate(email.date)}</div>
                         </div>
                         <div class="email-subject">${email.subject}</div>
-                        <div class="email-category ${categoryClass}">${email.category}</div>
+                        <div class="email-category ${categoryClass}" style="${catStyle}">${email.category}</div>
                     </div>
                     <div class="email-actions">
                         <button class="delete-thread-btn" onclick="deleteEmailThread('${email.id}', '${email.subject.replace(/'/g, "\\'")}', event)" title="Delete this thread">
@@ -3174,6 +3203,7 @@
                 emailDiv.onclick = () => selectUnrepliedEmail(email);
                 
                 const categoryClass = `category-${email.category.toLowerCase().replace(/\s+/g, '-')}`;
+                const catStyle = getCategoryBadgeStyle(email.category);
                 
                 emailDiv.innerHTML = `
                     <div class="unreplied-email-content">
@@ -3183,7 +3213,7 @@
                         </div>
                         <div class="unreplied-email-subject">${email.subject}</div>
                         <div class="unreplied-email-preview">${email.body.substring(0, 150)}...</div>
-                        <div class="email-category ${categoryClass}">${email.category}</div>
+                        <div class="email-category ${categoryClass}" style="${catStyle}">${email.category}</div>
                     </div>
                 `;
                 
@@ -3213,6 +3243,7 @@
                 emailDiv.onclick = () => selectUnrepliedEmail(email);
                 
                 const categoryClass = `category-${email.category.toLowerCase().replace(/\s+/g, '-')}`;
+                const catStyle = getCategoryBadgeStyle(email.category);
                 
                 emailDiv.innerHTML = `
                     <div class="unreplied-email-content">
@@ -3222,7 +3253,7 @@
                         </div>
                         <div class="unreplied-email-subject">${email.subject}</div>
                         <div class="unreplied-email-preview">${email.body.substring(0, 150)}...</div>
-                        <div class="email-category ${categoryClass}">${email.category}</div>
+                        <div class="email-category ${categoryClass}" style="${catStyle}">${email.category}</div>
                     </div>
                 `;
                 
@@ -5553,13 +5584,14 @@
             
             currentThreads.forEach((thread, index) => {
                 const slide = document.createElement('div');
+                slide.id = `thread-slide-${index}`;
                 slide.className = `thread-slide ${index === 0 ? 'active' : ''}`;
                 slide.innerHTML = `
                     <div class="thread-preview">
                         <div class="thread-subject">${thread.subject}</div>
                         <div class="thread-messages">
                             ${thread.messages.map((message, mi) => `
-                                <div class="thread-message-preview ${message.isResponse ? 'response' : 'original'}">
+                                <div id="msg-card-${index}-${mi}" class="thread-message-preview ${message.isResponse ? 'response' : 'original'}">
                                     <div class="message-preview-header">
                                         <div class="message-preview-from">${message.from}${message.isResponse ? ' (Your Response)' : ''}</div>
                                         <div class="message-preview-date">${formatDate(message.date)}</div>
@@ -5571,10 +5603,12 @@
                                     </div>
                                     <div id="msg-body-display-${index}-${mi}" class="message-preview-body">${message.body}</div>
                                     <textarea id="msg-body-input-${index}-${mi}" class="message-preview-body" style="display:none; width:100%; height:150px; padding:10px; border:1px solid #ddd; border-radius:6px;"></textarea>
-                                    <div class="message-edit-actions" style="padding: 8px 12px;">
+                                    <div class="message-edit-actions" style="padding: 8px 12px; display: flex; gap: 8px; align-items: center;">
+                                        <button id="msg-clean-btn-${index}-${mi}" class="carousel-nav-btn" style="background: #17a2b8;" onclick="cleanThreadMessage(${index}, ${mi})">Clean</button>
                                         <button id="msg-edit-btn-${index}-${mi}" class="carousel-nav-btn" style="background: #6c757d;" onclick="editThreadMessage(${index}, ${mi})">Edit</button>
+                                        <button id="msg-delete-btn-${index}-${mi}" class="carousel-nav-btn" style="background: #dc3545;" onclick="deleteThreadMessage(${index}, ${mi})">Delete</button>
                                         <button id="msg-save-btn-${index}-${mi}" class="carousel-nav-btn" style="display:none; background: #28a745;" onclick="saveThreadMessage(${index}, ${mi})">Save</button>
-                                        <button id="msg-cancel-btn-${index}-${mi}" class="carousel-nav-btn" style="display:none; background: #dc3545;" onclick="cancelEditThreadMessage(${index}, ${mi})">Cancel</button>
+                                        <button id="msg-cancel-btn-${index}-${mi}" class="carousel-nav-btn" style="display:none; background: #6c757d;" onclick="cancelEditThreadMessage(${index}, ${mi})">Cancel</button>
                                     </div>
                                 </div>
                             `).join('')}
@@ -5679,6 +5713,129 @@ function cancelEditThreadMessage(ti, mi) {
         if (cancelBtn) cancelBtn.style.display = 'none';
     } catch (e) {
         console.error('Failed to cancel edit mode:', e);
+    }
+}
+
+async function cleanThreadMessage(ti, mi) {
+    try {
+        const bodyDisp = document.getElementById(`msg-body-display-${ti}-${mi}`);
+        const bodyInput = document.getElementById(`msg-body-input-${ti}-${mi}`);
+        let currentText = '';
+        if (bodyInput && bodyInput.style.display !== 'none') {
+            currentText = bodyInput.value || '';
+        } else if (currentThreads?.[ti]?.messages?.[mi]?.body) {
+            currentText = currentThreads[ti].messages[mi].body;
+        } else if (bodyDisp) {
+            currentText = bodyDisp.textContent || '';
+        }
+
+        if (!currentText || !currentText.trim()) {
+            showErrorPopup('No content to clean for this message.', 'Nothing to Clean');
+            return;
+        }
+
+        // Call server to clean text using OpenAI/fallback
+        const resp = await fetch('/api/clean-text', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text: currentText })
+        });
+        const data = await resp.json();
+        if (!resp.ok || !data.success) {
+            throw new Error(data.error || 'Clean request failed');
+        }
+        const cleaned = data.cleaned != null ? String(data.cleaned) : '';
+
+        // Show preview popup with Approve / Edit Manually
+        const popup = document.createElement('div');
+        popup.id = 'cleanPreviewPopup';
+        popup.className = 'popup-modal';
+        popup.innerHTML = `
+            <div class="popup-content" style="max-width: 700px;">
+                <div class="popup-header">
+                    <h3 class="popup-title">Cleaned Text Preview</h3>
+                </div>
+                <div class="popup-body" style="text-align: left; max-height: 50vh; overflow: auto;">
+                    <div style="font-size: 12px; color: #666; margin-bottom: 8px;">Preview the cleaned content. Approve to apply, or edit manually instead.</div>
+                    <div id="cleanedPreviewArea" style="white-space: pre-wrap; font-size: 14px; line-height: 1.6; color: #333; border: 1px solid #e9ecef; padding: 12px; border-radius: 6px; background: #fff;">${cleaned.replace(/&/g,'&').replace(/</g,'<').replace(/>/g,'>')}</div>
+                </div>
+                <div class="popup-actions">
+                    <button class="popup-btn popup-btn-secondary" id="cleanEditManuallyBtn">Edit Manually</button>
+                    <button class="popup-btn popup-btn-success" id="cleanApproveBtn">Approve</button>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(popup);
+        popup.style.display = 'block';
+
+        const close = () => { try { popup.remove(); } catch(e) {} };
+
+        document.getElementById('cleanEditManuallyBtn')?.addEventListener('click', () => {
+            close(); // user will click Edit themselves if desired
+        });
+
+        document.getElementById('cleanApproveBtn')?.addEventListener('click', () => {
+            try {
+                // Apply cleaned text to memory and UI
+                if (currentThreads?.[ti]?.messages?.[mi]) {
+                    currentThreads[ti].messages[mi].body = cleaned;
+                }
+                if (bodyDisp) bodyDisp.textContent = cleaned;
+                if (bodyInput) bodyInput.value = cleaned;
+            } catch (e) {
+                console.error('Failed to apply cleaned text:', e);
+                showErrorPopup('Failed to apply cleaned text. Please try again.', 'Apply Failed');
+            } finally {
+                close();
+            }
+        });
+
+        // Close on background click
+        popup.addEventListener('click', (ev) => {
+            if (ev.target === popup) close();
+        });
+    } catch (e) {
+        console.error('Clean action failed:', e);
+        showErrorPopup('Cleaning failed. Please try again or edit manually.', 'Clean Failed');
+    }
+}
+
+function deleteThreadMessage(ti, mi) {
+    try {
+        if (!currentThreads?.[ti]?.messages) return;
+        // Remove the message from the in-memory thread
+        currentThreads[ti].messages.splice(mi, 1);
+        // Rerender this slide to refresh indexing and buttons
+        rerenderThreadSlide(ti);
+    } catch (e) {
+        console.error('Delete message failed:', e);
+        showErrorPopup('Failed to delete message. Please try again.', 'Delete Failed');
+    }
+}
+
+function rerenderThreadSlide(ti) {
+    try {
+        // Preserve selection states for this thread
+        const addCb = document.getElementById(`thread-${ti}`);
+        const hideCb = document.getElementById(`hide-thread-${ti}`);
+        const addChecked = addCb ? addCb.checked : false;
+        const hideChecked = hideCb ? hideCb.checked : false;
+
+        // Rebuild all slides to ensure proper reindexing
+        populateThreadCarousel();
+
+        // Restore selection state
+        const newAdd = document.getElementById(`thread-${ti}`);
+        const newHide = document.getElementById(`hide-thread-${ti}`);
+        if (newAdd) newAdd.checked = addChecked;
+        if (newHide) newHide.checked = hideChecked;
+
+        // Update add button label/state
+        updateAddButton();
+        // Ensure the same slide remains active
+        updateCarouselDisplay();
+    } catch (e) {
+        console.error('Failed to rerender thread slide:', e);
     }
 }
 
@@ -6591,7 +6748,7 @@ function previousSlide() {
             });
             return Object.keys(groups)
                 .sort()
-                .map(name => ({ name, emails: groups[name] }));
+                .map(name => ({ name, originalName: name, emails: groups[name] }));
         }
 
         async function refreshCategoriesInModal() {
@@ -6605,6 +6762,7 @@ function previousSlide() {
 
                 categoriesState = (data.categories || []).map(c => ({
                     name: c.name,
+                    originalName: c.originalName || c.name,
                     emails: Array.isArray(c.emails) ? c.emails.slice() : []
                 }));
 
@@ -6711,7 +6869,7 @@ function previousSlide() {
                 renameBtn.addEventListener('click', () => renameCategory(index));
 
                 const notesBtn = document.createElement('button');
-                notesBtn.textContent = 'Notes';
+                notesBtn.textContent = 'See Notes';
                 notesBtn.className = 'select-email-btn';
                 notesBtn.style.padding = '4px 8px';
                 notesBtn.style.fontSize = '12px';
@@ -6791,7 +6949,7 @@ function previousSlide() {
                 i += 1;
                 name = `${base} ${i}`;
             }
-            categoriesState.push({ name, emails: [] });
+            categoriesState.push({ name, originalName: name, emails: [] });
             renderCategoriesEditor();
         }
 
@@ -6818,7 +6976,9 @@ function previousSlide() {
                         return;
                     }
 
-                    categoriesState[index].name = newName;
+                    if (!categoriesState[index].originalName) { categoriesState[index].originalName = current; }
+categoriesState[index].renamedFrom = current;
+categoriesState[index].name = newName;
 
                     // Update current assignments pointing to the old name
                     const newAssignments = {};
