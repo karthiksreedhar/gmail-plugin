@@ -7262,6 +7262,7 @@ categoriesState[index].name = newName;
                 });
 
                 // Refresh UI: categories and list
+                await loadCurrentCategories();
                 populateCategories(allEmails);
                 currentFilter = 'all';
                 filterByCategory('all');
