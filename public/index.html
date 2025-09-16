@@ -2395,6 +2395,7 @@
     <script>
         let allEmails = [];
         let currentFilter = 'all';
+        let currentCategoriesOrder = [];
 
         async function loadEmails() {
             const container = document.getElementById('emailContainer');
@@ -2424,6 +2425,7 @@
 
                 if (data.emails) {
                     allEmails = data.emails;
+                    await loadCurrentCategories();
                     populateCategories(allEmails);
                     displayEmails(allEmails);
                     updateDisplayStats(allEmails);
@@ -2514,12 +2516,18 @@
 
         function populateCategories(emails) {
             const categoryList = document.getElementById('categoryList');
-            const categories = [...new Set(emails.map(e => e.category))];
-            
-            // Count emails per category
+
+            // Determine authoritative category order: use /api/current-categories if available; fallback to categories present in emails
+            const ordered = Array.isArray(currentCategoriesOrder) && currentCategoriesOrder.length
+                ? currentCategoriesOrder.slice()
+                : Array.from(new Set((emails || []).map(e => e.category))).filter(Boolean);
+
+            // Build counts from emails
             const categoryCounts = {};
-            categories.forEach(category => {
-                categoryCounts[category] = emails.filter(e => e.category === category).length;
+            (emails || []).forEach(e => {
+                const c = String(e.category || '').trim();
+                if (!c) return;
+                categoryCounts[c] = (categoryCounts[c] || 0) + 1;
             });
 
             // Update "View All" count - show 0 if no emails
@@ -2528,54 +2536,65 @@
             // Clear existing categories
             categoryList.innerHTML = '';
 
-            // If no emails, show empty state for categories
-            if (emails.length === 0) {
-                // Still show standard categories but with 0 counts
-                const standardCategories = [
-                    'Teaching & Student Support',
-                    'Research & Lab Work', 
-                    'University Administration',
-                    'Financial & Reimbursements',
-                    'Conferences',
-                    'Networking',
-                    'Personal & Life Management'
-                ];
-                
-                standardCategories.forEach(category => {
+            // If we have an authoritative list, render that (including zero-count categories).
+            // Otherwise, fallback to canonical defaults when there are no emails and no known order.
+            const listToRender = ordered.length
+                ? ordered
+                : (emails.length === 0
+                    ? [
+                        'Teaching & Student Support',
+                        'Research & Lab Work',
+                        'University Administration',
+                        'Financial & Reimbursements',
+                        'Conferences',
+                        'Networking',
+                        'Personal & Life Management'
+                      ]
+                    : []);
+
+            listToRender.forEach(category => {
+                const count = categoryCounts[category] || 0;
+
+                const categoryDiv = document.createElement('div');
+                categoryDiv.className = 'category-item';
+                categoryDiv.onclick = () => filterByCategory(category);
+
+                const categoryIcon = getCategoryIcon(category);
+                const catColors = getCategoryColors(category);
+
+                categoryDiv.innerHTML = `
+                    <span class="category-color-dot" style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${catColors.bg};border:1px solid rgba(0,0,0,0.1);margin-right:8px;"></span>
+                    <span class="category-icon">${categoryIcon}</span>
+                    <span class="category-name">${category}</span>
+                    <span class="category-count">${count}</span>
+                `;
+
+                categoryDiv.setAttribute('data-category', category);
+                categoryList.appendChild(categoryDiv);
+            });
+
+            // If there was no authoritative list and emails exist, ensure we still render unique categories from emails
+            if (!ordered.length && emails.length > 0) {
+                const uniqueFromEmails = Array.from(new Set(emails.map(e => e.category))).filter(Boolean);
+                uniqueFromEmails.forEach(category => {
+                    // These may already be rendered; skip duplicates
+                    const exists = categoryList.querySelector(`[data-category="${category.replace(/"/g, '"')}"]`);
+                    if (exists) return;
+
                     const categoryDiv = document.createElement('div');
                     categoryDiv.className = 'category-item';
                     categoryDiv.onclick = () => filterByCategory(category);
-                    
+
                     const categoryIcon = getCategoryIcon(category);
                     const catColors = getCategoryColors(category);
-                    
+
                     categoryDiv.innerHTML = `
                         <span class="category-color-dot" style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${catColors.bg};border:1px solid rgba(0,0,0,0.1);margin-right:8px;"></span>
                         <span class="category-icon">${categoryIcon}</span>
                         <span class="category-name">${category}</span>
-                        <span class="category-count">0</span>
+                        <span class="category-count">${categoryCounts[category] || 0}</span>
                     `;
-                    
-                    categoryDiv.setAttribute('data-category', category);
-                    categoryList.appendChild(categoryDiv);
-                });
-            } else {
-                // Add category items with actual counts
-                categories.forEach(category => {
-                    const categoryDiv = document.createElement('div');
-                    categoryDiv.className = 'category-item';
-                    categoryDiv.onclick = () => filterByCategory(category);
-                    
-                    const categoryIcon = getCategoryIcon(category);
-                    const catColors = getCategoryColors(category);
-                    
-                    categoryDiv.innerHTML = `
-                        <span class="category-color-dot" style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${catColors.bg};border:1px solid rgba(0,0,0,0.1);margin-right:8px;"></span>
-                        <span class="category-icon">${categoryIcon}</span>
-                        <span class="category-name">${category}</span>
-                        <span class="category-count">${categoryCounts[category]}</span>
-                    `;
-                    
+
                     categoryDiv.setAttribute('data-category', category);
                     categoryList.appendChild(categoryDiv);
                 });
@@ -3024,6 +3043,8 @@ function getCategoryBadgeStyle(category) {
         async function showSelectEmailModal() {
             // Always refresh unreplied emails to reflect latest category changes
             await loadUnrepliedEmails();
+            // Load current authoritative categories ordering
+            await loadCurrentCategories();
             
             // Create select email modal
             let selectModal = document.getElementById('selectEmailModal');
@@ -3172,19 +3193,24 @@ function getCategoryBadgeStyle(category) {
                         <h2 class="modal-title">Load Email From Inbox</h2>
                         <button class="close" onclick="closeSelectEmailModal()">&times;</button>
                     </div>
-                    <div class="select-email-container">
-                        <div class="email-search">
-                            <input type="text" id="emailSearchInput" placeholder="Search emails..." onkeyup="filterUnrepliedEmails()">
-                        </div>
-                        <div style="margin-bottom: 15px; text-align: center;">
-                            <button class="select-email-btn" onclick="showLoadMoreEmailsModal()" style="background: #28a745; width: 100%; padding: 12px;">
-                                📥 Load More Emails from Inbox
-                            </button>
-                        </div>
-                        <div id="unrepliedEmailsList" class="unreplied-emails-list">
-                            <div class="loading">Loading unreplied emails...</div>
-                        </div>
+                <div class="select-email-container">
+                    <div class="email-search">
+                        <input type="text" id="emailSearchInput" placeholder="Search emails..." onkeyup="filterUnrepliedEmails()">
                     </div>
+                    <div style="margin-bottom: 8px; text-align: center;">
+                        <button class="select-email-btn" id="updateInboxCategoriesBtn" onclick="updateInboxCategories()" style="background: #667eea; width: 100%; padding: 10px;">
+                            🔄 Update Categories
+                        </button>
+                    </div>
+                    <div style="margin-bottom: 15px; text-align: center;">
+                        <button class="select-email-btn" onclick="showLoadMoreEmailsModal()" style="background: #28a745; width: 100%; padding: 12px;">
+                            📥 Load More Emails from Inbox
+                        </button>
+                    </div>
+                    <div id="unrepliedEmailsList" class="unreplied-emails-list">
+                        <div class="loading">Loading unreplied emails...</div>
+                    </div>
+                </div>
                 </div>
             `;
             return modal;
@@ -3201,6 +3227,47 @@ function getCategoryBadgeStyle(category) {
             }
         }
 
+        async function loadCurrentCategories() {
+            try {
+                const resp = await fetch('/api/current-categories');
+                const data = await resp.json();
+                currentCategoriesOrder = Array.isArray(data.categories) ? data.categories : [];
+            } catch (e) {
+                console.error('Error loading current categories:', e);
+                currentCategoriesOrder = [];
+            }
+        }
+
+        async function updateInboxCategories() {
+            const btn = document.getElementById('updateInboxCategoriesBtn');
+            const originalText = btn ? btn.textContent : null;
+            try {
+                if (btn) {
+                    btn.disabled = true;
+                    btn.textContent = 'Updating...';
+                }
+                await loadUnrepliedEmails();
+                await loadCurrentCategories();
+                populateUnrepliedEmails();
+                if (btn) {
+                    btn.textContent = '✓ Categories Updated';
+                    btn.style.background = '#28a745';
+                    setTimeout(() => {
+                        btn.textContent = '🔄 Update Categories';
+                        btn.style.background = '#667eea';
+                        btn.disabled = false;
+                    }, 1000);
+                }
+            } catch (e) {
+                console.error('Update categories failed:', e);
+                showErrorPopup('Failed to update categories. Please try again.', 'Update Failed');
+                if (btn) {
+                    btn.textContent = originalText || '🔄 Update Categories';
+                    btn.disabled = false;
+                }
+            }
+        }
+
         function populateUnrepliedEmails() {
             const container = document.getElementById('unrepliedEmailsList');
             
@@ -3210,11 +3277,18 @@ function getCategoryBadgeStyle(category) {
             }
             
             container.innerHTML = '';
+            const orderList = Array.isArray(currentCategoriesOrder) ? currentCategoriesOrder : [];
+            const catIndex = (name) => {
+                const n = String(name || '').toLowerCase();
+                const idx = orderList.findIndex(c => String(c || '').toLowerCase() === n);
+                return idx === -1 ? Number.MAX_SAFE_INTEGER : idx;
+            };
             const sortedUnreplied = (unrepliedEmails || []).slice().sort((a, b) => {
-                const ac = (a.category || '').toLowerCase();
-                const bc = (b.category || '').toLowerCase();
-                if (ac !== bc) return ac.localeCompare(bc);
-                return new Date(b.date) - new Date(a.date); // newest first within category
+                const ai = catIndex(a.category);
+                const bi = catIndex(b.category);
+                if (ai !== bi) return ai - bi;
+                // Within the same category index, newest first
+                return new Date(b.date) - new Date(a.date);
             });
             sortedUnreplied.forEach(email => {
                 const emailDiv = document.createElement('div');
@@ -6331,7 +6405,7 @@ function previousSlide() {
                 : `Use ${selectedCount} Selected Email${selectedCount === 1 ? '' : 's'}`;
         }
 
-        function useSelectedEmails() {
+        async function useSelectedEmails() {
             if (selectedLoadMoreEmails.size === 0) {
                 showErrorPopup('Please select at least one email to use.', 'No Emails Selected');
                 return;
@@ -6344,20 +6418,23 @@ function previousSlide() {
             closeLoadMoreEmailsCarouselModal();
             
             // Show approval popup for each selected email
-            showEmailApprovalPopup(selectedEmails);
+            await showEmailApprovalPopup(selectedEmails);
         }
 
         // Email Approval Popup functionality
         let emailsToApprove = [];
         let currentApprovalIndex = 0;
 
-        function showEmailApprovalPopup(emails) {
+        async function showEmailApprovalPopup(emails) {
             emailsToApprove = emails;
             currentApprovalIndex = 0;
             
             if (emailsToApprove.length === 0) {
                 return;
             }
+
+            // Ensure current categories are loaded for category selection
+            try { await loadCurrentCategories(); } catch (e) { console.warn('Failed to refresh category list for approval modal:', e); }
             
             showNextEmailApproval();
         }
@@ -6403,6 +6480,11 @@ function previousSlide() {
                         <div id="approvalEmailPreview" style="border: 1px solid #e9ecef; border-radius: 8px; background: white; overflow: hidden;">
                             <!-- Email preview will be populated here -->
                         </div>
+
+                        <div style="margin-top: 12px;">
+                            <label for="approvalCategorySelect" style="font-weight: 600; font-size: 13px; color: #333; margin-bottom: 6px; display: block;">Category</label>
+                            <select id="approvalCategorySelect" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 6px; font-size: 13px;"></select>
+                        </div>
                         
                         <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 20px; padding-top: 16px; border-top: 1px solid #e9ecef;">
                             <div id="approvalProgress" style="color: #666; font-size: 14px;">
@@ -6430,18 +6512,44 @@ function previousSlide() {
                         <div style="color: #666; font-size: 12px;">${formatDate(email.date)}</div>
                     </div>
                     <div style="font-weight: 500; color: #1a73e8; margin-bottom: 8px; font-size: 14px;">${email.subject}</div>
-                    ${email.category ? `<div class="email-category category-${email.category.toLowerCase().replace(/\s+/g, '-')}" style="display: inline-block; padding: 4px 8px; border-radius: 12px; font-size: 12px; font-weight: 500;">${email.category}</div>` : ''}
+                    ${email.category ? `<div class="email-category category-${(email.category || '').toLowerCase().replace(/\s+/g, '-')}" style="display: inline-block; padding: 4px 8px; border-radius: 12px; font-size: 12px; font-weight: 500;">${email.category}</div>` : ''}
                 </div>
                 <div style="padding: 15px; max-height: 300px; overflow-y: auto;">
                     <div style="font-size: 14px; line-height: 1.6; color: #333; white-space: pre-wrap;">${email.body}</div>
                 </div>
             `;
+
+            // Populate category select using authoritative ordering
+            try {
+                const sel = document.getElementById('approvalCategorySelect');
+                if (sel) {
+                    const list = Array.isArray(currentCategoriesOrder) ? currentCategoriesOrder.slice() : [];
+                    const cur = String(email.category || '').trim();
+                    const exists = list.some(c => String(c || '').toLowerCase() === cur.toLowerCase());
+                    const categories = exists || !cur ? list : [...list, cur];
+                    sel.innerHTML = categories.map(c => `<option value="${String(c).replace(/"/g, '"')}">${c}</option>`).join('');
+                    // Select the current email category if available; otherwise select first
+                    const match = categories.find(c => String(c || '').toLowerCase() === cur.toLowerCase());
+                    sel.value = match || (categories[0] || '');
+                }
+            } catch (e) {
+                console.error('Failed to populate category select in approval modal:', e);
+            }
             
             progress.textContent = `Email ${currentApprovalIndex + 1} of ${emailsToApprove.length}`;
         }
 
         async function approveCurrentEmail() {
             const email = emailsToApprove[currentApprovalIndex];
+            // Apply explicit category override if user selected one
+            try {
+                const sel = document.getElementById('approvalCategorySelect');
+                if (sel && sel.value) {
+                    email.category = sel.value;
+                }
+            } catch (e) {
+                console.warn('Could not read approval category selection:', e);
+            }
             
             try {
                 // Add the approved email to the database
@@ -6815,6 +6923,62 @@ function previousSlide() {
             }
         }
 
+        // Prompt for refresh mode selection: Rule Based vs AI Generated
+        function promptRefreshCategoriesMode() {
+            showCustomPopup({
+                title: 'Refresh Categories',
+                message: 'Choose a method to refresh categories.',
+                icon: 'warning',
+                primaryText: 'AI Generated',
+                secondaryText: 'Rule Based',
+                onPrimary: () => { refreshCategoriesInModalAI(); },
+                onSecondary: () => { refreshCategoriesInModal(); },
+                type: 'confirm'
+            });
+        }
+
+        // AI-generated categories using backend OpenAI endpoint with robust prompt & fallbacks
+        async function refreshCategoriesInModalAI() {
+            try {
+                showLoadingOverlay('Generating Categories', 'Asking AI to group your emails...', true);
+                const resp = await fetch('/api/generate-categories-ai', { method: 'POST' });
+                const data = await resp.json();
+                if (!resp.ok || !data.success) {
+                    throw new Error(data.error || 'Failed to generate AI categories');
+                }
+
+                // Normalize to internal structure
+                categoriesState = (data.categories || []).map(c => ({
+                    name: c.name,
+                    originalName: c.originalName || c.name,
+                    emails: Array.isArray(c.emails) ? c.emails.slice() : []
+                }));
+
+                // Reset assignments map based on refreshed groups
+                categoryAssignments = {};
+                categoriesState.forEach(cat => {
+                    (cat.emails || []).forEach(e => {
+                        if (e && e.id) categoryAssignments[e.id] = cat.name;
+                    });
+                });
+
+                hideLoadingOverlay();
+                renderCategoriesEditor();
+                const modeMsg = data.mode === 'rule-based-fallback' ? 'AI unavailable, applied rule-based fallback.' : 'AI-generated categories applied.';
+                showSuccessPopup(modeMsg, data.mode === 'rule-based-fallback' ? 'Fallback Applied' : 'AI Refreshed');
+            } catch (err) {
+                console.error('Error refreshing AI categories in modal:', err);
+                hideLoadingOverlay();
+                // Soft fallback to rule-based
+                try {
+                    await refreshCategoriesInModal();
+                    showErrorPopup('AI generation failed. Applied rule-based categories instead.', 'AI Failed');
+                } catch (fallbackErr) {
+                    showErrorPopup('Failed to refresh categories. Please try again.', 'Refresh Failed');
+                }
+            }
+        }
+
         function createCategoriesReviewModal() {
             const modal = document.createElement('div');
             modal.id = 'categoriesReviewModal';
@@ -6828,7 +6992,7 @@ function previousSlide() {
                     <div style="padding: 16px; display: flex; flex-direction: column; gap: 12px; flex: 1 1 auto; min-height: 0;">
                         <div style="display: flex; gap: 12px; align-items: center;">
                             <button class="select-email-btn" onclick="addNewCategory()">+ Add Category</button>
-                            <button class="select-email-btn" onclick="refreshCategoriesInModal()">🔄 Refresh Categories</button>
+                            <button class="select-email-btn" onclick="promptRefreshCategoriesMode()">🔄 Refresh Categories</button>
                             <span style="color:#666; font-size:12px;">Drag emails between categories. Click “Approve & Save” to apply changes.</span>
                         </div>
                         <div id="categoriesEditorContainer" style="flex: 0 0 60vh; height: 60vh; min-height: 0; overflow: hidden;">
