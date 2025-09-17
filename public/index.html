@@ -4401,7 +4401,9 @@ function getCategoryBadgeStyle(category) {
                 secondaryText = 'Cancel',
                 onPrimary = () => {},
                 onSecondary = () => {},
-                type = 'confirm' // 'confirm', 'alert', 'success'
+                type = 'confirm', // 'confirm', 'alert', 'success'
+                tertiaryText = null,
+                onTertiary = () => {}
             } = options;
 
             // Remove existing popup if any
@@ -4431,6 +4433,7 @@ function getCategoryBadgeStyle(category) {
                         ${type === 'alert' ? '' : `<button class="popup-btn popup-btn-secondary" id="popupSecondaryBtn">${secondaryText}</button>`}
                         <button class="popup-btn ${type === 'success' ? 'popup-btn-success' : 'popup-btn-primary'}" id="popupPrimaryBtn">${primaryText}</button>
                     </div>
+                    ${tertiaryText ? `<div class="popup-actions" style="padding-top:0;"><button class="popup-btn popup-btn-primary" id="popupTertiaryBtn" style="width:100%;">${tertiaryText}</button></div>` : ''}
                 </div>
             `;
 
@@ -4450,6 +4453,14 @@ function getCategoryBadgeStyle(category) {
                 secondaryBtn.addEventListener('click', () => {
                     closeCustomPopup();
                     onSecondary();
+                });
+            }
+
+            const tertiaryBtn = popup.querySelector('#popupTertiaryBtn');
+            if (tertiaryBtn) {
+                tertiaryBtn.addEventListener('click', () => {
+                    closeCustomPopup();
+                    onTertiary();
                 });
             }
 
@@ -6994,6 +7005,8 @@ function previousSlide() {
                 secondaryText: 'Rule Based',
                 onPrimary: () => { refreshCategoriesInModalAI(); },
                 onSecondary: () => { refreshCategoriesInModal(); },
+                tertiaryText: 'AI Generated V2',
+                onTertiary: () => { refreshCategoriesInModalAIV2(); },
                 type: 'confirm'
             });
         }
@@ -7034,6 +7047,48 @@ function previousSlide() {
                 try {
                     await refreshCategoriesInModal();
                     showErrorPopup('AI generation failed. Applied rule-based categories instead.', 'AI Failed');
+                } catch (fallbackErr) {
+                    showErrorPopup('Failed to refresh categories. Please try again.', 'Refresh Failed');
+                }
+            }
+        }
+
+        // AI-generated categories V2 using a more detailed academic-task prompt
+        async function refreshCategoriesInModalAIV2() {
+            try {
+                showLoadingOverlay('Generating Categories', 'Asking AI (V2) to group your emails...', true);
+                const resp = await fetch('/api/generate-categories-ai-v2', { method: 'POST' });
+                const data = await resp.json();
+                if (!resp.ok || !data.success) {
+                    throw new Error(data.error || 'Failed to generate AI categories (V2)');
+                }
+
+                // Normalize to internal structure
+                categoriesState = (data.categories || []).map(c => ({
+                    name: c.name,
+                    originalName: c.originalName || c.name,
+                    emails: Array.isArray(c.emails) ? c.emails.slice() : []
+                }));
+
+                // Reset assignments map based on refreshed groups
+                categoryAssignments = {};
+                categoriesState.forEach(cat => {
+                    (cat.emails || []).forEach(e => {
+                        if (e && e.id) categoryAssignments[e.id] = cat.name;
+                    });
+                });
+
+                hideLoadingOverlay();
+                renderCategoriesEditor();
+                const modeMsg = data.mode === 'rule-based-fallback' ? 'AI unavailable, applied rule-based fallback.' : 'AI-generated categories (V2) applied.';
+                showSuccessPopup(modeMsg, data.mode === 'rule-based-fallback' ? 'Fallback Applied' : 'AI Refreshed (V2)');
+            } catch (err) {
+                console.error('Error refreshing AI V2 categories in modal:', err);
+                hideLoadingOverlay();
+                // Soft fallback to rule-based
+                try {
+                    await refreshCategoriesInModal();
+                    showErrorPopup('AI V2 generation failed. Applied rule-based categories instead.', 'AI V2 Failed');
                 } catch (fallbackErr) {
                     showErrorPopup('Failed to refresh categories. Please try again.', 'Refresh Failed');
                 }

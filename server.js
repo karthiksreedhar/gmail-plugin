@@ -3489,6 +3489,221 @@ Return ONLY the JSON object as specified above.`;
   }
 });
 
+/**
+ * AI-generated categories endpoint (V2)
+ * - POST /api/generate-categories-ai-v2
+ * Uses a more detailed, professor-inbox–focused prompt to categorize emails by task type.
+ * Returns the same shape as /api/generate-categories-ai:
+ *   { success: true, categories: [{ name, emails: [{ id, subject, from, date, snippet }] }], mode: 'ai' | 'rule-based-fallback' }
+ */
+app.post('/api/generate-categories-ai-v2', async (req, res) => {
+  try {
+    const responseEmails = loadResponseEmails() || [];
+    if (responseEmails.length === 0) {
+      return res.json({ success: true, categories: [] });
+    }
+
+    // Build compact list to pass to the model
+    const minimal = responseEmails.map(e => ({
+      id: e.id,
+      subject: e.subject || 'No Subject',
+      from: e.originalFrom || e.from || 'Unknown Sender',
+      date: e.date || new Date().toISOString(),
+      snippet: e.snippet || (e.body ? String(e.body).slice(0, 160) + (e.body.length > 160 ? '...' : '') : 'No content available')
+    }));
+
+    // Fast lookup by id for reconstruction
+    const byId = new Map(minimal.map(e => [e.id, e]));
+
+    const SYSTEM = `You are an expert assistant for organizing a professor's inbox. Given a list of emails with subject lines, senders, dates, and short snippets, group them into clear, task-specific categories that reflect what the professor needs to do.
+
+Important: Treat this as "emails a professor has received." Your job is to sort these into actionable task types. Prefer specific, stable category names. Keep them short and descriptive.
+
+Examples of task-centric category patterns:
+- Responding to University Administrators (dept/program notices, policy, clearance, deadlines)
+- Students Interested in Collaborating (new connections or inquiries from students you don't work with yet)
+- Students You Already Work With (advisees, RAs, current mentees)
+- Meeting Scheduling & Coordination (finding times, calendar holds, Zoom/room logistics)
+- Conference Submissions / Reviews / Deadlines (ACM/IEEE reviews, CFPs, camera-ready/TAPS, PC service)
+- Reimbursements / Finance / Purchasing (receipts, reimbursements, invoices, payments, travel expenses)
+- Teaching / TA / Grading Administration (assignment policy, extensions, grading issues, TA coordination)
+- Research / Lab / Project Logistics (study coordination, IRB, data collection, lab ops)
+- Networking / Opportunities (colleagues, recruiters, external collaboration opportunities)
+- Personal & Life Management (non-work or personal scheduling)
+
+Guidelines:
+- 6–14 categories is typical; avoid overly broad single buckets like "General"
+- Use exactly one category per email ID (no duplicates)
+- Do NOT invent email IDs—only use those provided
+- Choose stable names across sessions (avoid renaming categories unless necessary)
+- If uncertain, choose the closest task-focused category that aids triage
+
+Output strictly valid JSON with this exact shape:
+{
+  "categories": [
+    {
+      "name": "Category Name",
+      "emails": ["<id1>", "<id2>", "..."]
+    }
+  ]
+}
+Return ONLY the JSON (no markdown, no commentary).`;
+
+    const USER = `Here is the list of emails a professor has received (JSON):
+${JSON.stringify({ emails: minimal }, null, 2)}
+
+Please return ONLY the JSON object as specified above. Ensure every provided ID appears exactly once.`;
+
+    // JSON extraction helper
+    function extractJson(text) {
+      if (typeof text !== 'string') return null;
+      const trimmed = text.trim();
+      try { return JSON.parse(trimmed); } catch {}
+      const fence = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
+      if (fence && fence[1]) { try { return JSON.parse(fence[1].trim()); } catch {} }
+      const first = trimmed.indexOf('{'); const last = trimmed.lastIndexOf('}');
+      if (first !== -1 && last !== -1 && last > first) {
+        const slice = trimmed.slice(first, last + 1);
+        try { return JSON.parse(slice); } catch {}
+      }
+      return null;
+    }
+
+    // Primary attempt with o3; fallback to gpt-4o-mini JSON mode
+    let raw = '';
+    let parsed = null;
+    let mode = 'ai';
+    try {
+      const completion = await openai.chat.completions.create({
+        model: "o3",
+        messages: [
+          { role: "system", content: SYSTEM },
+          { role: "user", content: USER }
+        ],
+        max_completion_tokens: 1500,
+        response_format: { type: "json_object" }
+      });
+      raw = completion.choices?.[0]?.message?.content || '';
+    } catch (e) {
+      console.warn('AI V2 categories (o3) failed:', e?.message || e);
+      raw = '';
+    }
+
+    if (raw) parsed = typeof raw === 'object' ? raw : extractJson(raw);
+    if (!parsed || !Array.isArray(parsed.categories)) {
+      try {
+        const retry = await openai.chat.completions.create({
+          model: "gpt-4o-mini",
+          messages: [
+            { role: "system", content: SYSTEM },
+            { role: "user", content: USER }
+          ],
+          max_completion_tokens: 1500,
+          response_format: { type: "json_object" }
+        });
+        const raw2 = retry.choices?.[0]?.message?.content || '';
+        parsed = extractJson(raw2);
+      } catch (retryErr) {
+        console.error('AI V2 categories retry failed:', retryErr?.message || retryErr);
+      }
+    }
+
+    // Fallback to heuristic rule-based grouping if model output unusable
+    const fallbackRuleBased = () => {
+      const groups = {};
+      responseEmails.forEach(email => {
+        const suggested = categorizeEmail(email.subject || '', email.body || '', email.from || '');
+        const name = suggested || 'Personal & Life Management';
+        if (!groups[name]) groups[name] = [];
+        groups[name].push({
+          id: email.id,
+          subject: email.subject || 'No Subject',
+          from: email.originalFrom || email.from || 'Unknown Sender',
+          date: email.date || new Date().toISOString(),
+          snippet:
+            email.snippet ||
+            (email.body ? String(email.body).slice(0, 160) + (email.body.length > 160 ? '...' : '') : 'No content available')
+        });
+      });
+      const categories = Object.keys(groups).sort().map(name => ({ name, emails: groups[name] }));
+      return res.json({ success: true, categories, mode: 'rule-based-fallback' });
+    };
+
+    if (!parsed || !Array.isArray(parsed.categories)) {
+      return fallbackRuleBased();
+    }
+
+    // Sanitize and rebuild categories to match expected shape
+    const MAX_CATS = 24;
+    const categories = [];
+    const used = new Set();
+
+    for (const cat of parsed.categories.slice(0, MAX_CATS)) {
+      const nameRaw = (cat && cat.name != null) ? String(cat.name) : '';
+      const name = nameRaw.trim().slice(0, 120) || 'Uncategorized';
+      const emailIds = Array.isArray(cat?.emails) ? cat.emails : [];
+
+      const items = [];
+      for (const item of emailIds) {
+        const id = typeof item === 'string' ? item : (item && typeof item === 'object' ? String(item.id || '') : '');
+        if (!id || used.has(id)) continue;
+        if (!byId.has(id)) continue; // ignore ids not in provided list
+        used.add(id);
+        items.push(byId.get(id));
+      }
+
+      if (items.length > 0) {
+        categories.push({ name, emails: items });
+      }
+    }
+
+    // Ensure all emails are assigned (catch-all for remaining)
+    if (used.size < minimal.length) {
+      const remaining = [];
+      for (const e of minimal) {
+        if (!used.has(e.id)) remaining.push(e);
+      }
+      if (remaining.length) {
+        categories.push({
+          name: 'Personal & Life Management',
+          emails: remaining
+        });
+      }
+    }
+
+    if (!categories.length) {
+      return fallbackRuleBased();
+    }
+
+    return res.json({ success: true, categories, mode });
+  } catch (error) {
+    console.error('Error generating AI categories (V2):', error);
+    // Final fallback
+    try {
+      const groups = {};
+      const responseEmails = loadResponseEmails() || [];
+      responseEmails.forEach(email => {
+        const suggested = categorizeEmail(email.subject || '', email.body || '', email.from || '');
+        const name = suggested || 'Personal & Life Management';
+        if (!groups[name]) groups[name] = [];
+        groups[name].push({
+          id: email.id,
+          subject: email.subject || 'No Subject',
+          from: email.originalFrom || email.from || 'Unknown Sender',
+          date: email.date || new Date().toISOString(),
+          snippet:
+            email.snippet ||
+            (email.body ? String(email.body).slice(0, 160) + (email.body.length > 160 ? '...' : '') : 'No content available')
+        });
+      });
+      const categories = Object.keys(groups).sort().map(name => ({ name, emails: groups[name] }));
+      return res.json({ success: true, categories, mode: 'rule-based-fallback' });
+    } catch (fallbackErr) {
+      return res.status(500).json({ success: false, error: 'Failed to generate categories (V2)' });
+    }
+  }
+});
+
 app.post('/api/save-categories', (req, res) => {
   try {
     const { assignments, categories } = req.body || {};
