@@ -41,6 +41,7 @@ function getUserPaths(userEmail = CURRENT_USER_EMAIL) {
     TOKENS_PATH: path.join(USER_DATA_DIR, 'gmail-tokens.json'),
     NOTES_PATH: path.join(USER_DATA_DIR, 'notes.json'),
     CATEGORIES_PATH: path.join(USER_DATA_DIR, 'categories.json'),
+    CATEGORY_GUIDELINES_PATH: path.join(USER_DATA_DIR, 'category-guidelines.json'),
     HIDDEN_THREADS_PATH: path.join(USER_DATA_DIR, 'hidden-threads.json')
   };
 }
@@ -524,6 +525,37 @@ function saveHiddenThreads(hidden) {
     fs.mkdirSync(paths.USER_DATA_DIR, { recursive: true });
   }
   fs.writeFileSync(paths.HIDDEN_THREADS_PATH, JSON.stringify({ hidden }, null, 2));
+}
+
+/**
+ * Category Guidelines persistence helpers
+ * Stored per-user at: data/{email}/category-guidelines.json
+ * Shape:
+ * {
+ *   "categories": [{ "name": "Category A", "notes": "what belongs here..." }, ...],
+ *   "updatedAt": "ISO"
+ * }
+ */
+function loadCategoryGuidelines() {
+  const paths = getCurrentUserPaths();
+  const data = loadEmailData(paths.CATEGORY_GUIDELINES_PATH);
+  if (data && Array.isArray(data.categories)) return data.categories;
+  return [];
+}
+
+function saveCategoryGuidelines(categories) {
+  const paths = getCurrentUserPaths();
+  if (!fs.existsSync(paths.USER_DATA_DIR)) {
+    fs.mkdirSync(paths.USER_DATA_DIR, { recursive: true });
+  }
+  const payload = {
+    categories: (categories || []).map(c => ({
+      name: String(c?.name || '').trim(),
+      notes: String(c?.notes || '')
+    })).filter(c => c.name),
+    updatedAt: new Date().toISOString()
+  };
+  fs.writeFileSync(paths.CATEGORY_GUIDELINES_PATH, JSON.stringify(payload, null, 2));
 }
 
 // Categories list persistence (authoritative category names/order across the app)
@@ -3823,6 +3855,240 @@ app.post('/api/save-categories', (req, res) => {
   } catch (error) {
     console.error('Error saving categories:', error);
     res.status(500).json({ success: false, error: 'Failed to save categories' });
+  }
+});
+
+/**
+ * Category Guidelines endpoints
+ * - GET /api/category-guidelines  -> returns saved guidelines for current user
+ * - POST /api/category-guidelines -> saves guidelines (array of {name, notes})
+ * - POST /api/generate-categories-guided -> AI generation that incorporates user guidelines
+ */
+app.get('/api/category-guidelines', (req, res) => {
+  try {
+    const categories = loadCategoryGuidelines();
+    return res.json({ categories });
+  } catch (e) {
+    console.error('Error loading category guidelines:', e);
+    return res.status(500).json({ categories: [] });
+  }
+});
+
+app.post('/api/category-guidelines', (req, res) => {
+  try {
+    const { categories } = req.body || {};
+    if (!Array.isArray(categories)) {
+      return res.status(400).json({ success: false, error: 'categories array is required' });
+    }
+    const cleaned = categories
+      .map(c => ({ name: String(c?.name || '').trim(), notes: String(c?.notes || '') }))
+      .filter(c => c.name);
+    saveCategoryGuidelines(cleaned);
+    return res.json({ success: true, count: cleaned.length });
+  } catch (e) {
+    console.error('Error saving category guidelines:', e);
+    return res.status(500).json({ success: false, error: 'Failed to save guidelines' });
+  }
+});
+
+app.post('/api/generate-categories-guided', async (req, res) => {
+  try {
+    const responseEmails = loadResponseEmails() || [];
+    if (responseEmails.length === 0) {
+      return res.json({ success: true, categories: [], mode: 'ai-guided' });
+    }
+
+    // Build compact list to pass to the model
+    const minimal = responseEmails.map(e => ({
+      id: e.id,
+      subject: e.subject || 'No Subject',
+      from: e.originalFrom || e.from || 'Unknown Sender',
+      date: e.date || new Date().toISOString(),
+      snippet: e.snippet || (e.body ? String(e.body).slice(0, 160) + (e.body.length > 160 ? '...' : '') : 'No content available')
+    }));
+    const byId = new Map(minimal.map(e => [e.id, e]));
+
+    // Load guidelines from request body (if provided) or from disk
+    let guidelines = [];
+    if (Array.isArray(req.body?.categories)) {
+      guidelines = req.body.categories
+        .map(c => ({ name: String(c?.name || '').trim(), notes: String(c?.notes || '') }))
+        .filter(c => c.name);
+    } else {
+      guidelines = loadCategoryGuidelines();
+    }
+
+    const SYSTEM = `You are an expert assistant for organizing a professor's inbox.
+Your job: group given emails into clear, task-specific categories that the user will triage.
+
+You are provided with USER CATEGORY GUIDELINES. Prefer these category names and follow their intent when assigning emails.
+- Aim to produce between 5 and 12 TOTAL categories.
+- If the user provides fewer than 5 guideline categories, ADD as many additional categories as needed (derived from the email set) to reach at least 5 total, but no more than 12 overall.
+- If applying the guidelines would result in more than 12 categories, MERGE or simplify closely related buckets to stay within the 12-category cap.
+- Do NOT rename the guideline categories; use the names exactly as provided if applicable. Add complementary categories to reach the target range instead of renaming.
+- Every provided email ID must appear in exactly one category (no duplicates, no omissions).
+- Keep category names short, descriptive, and stable across sessions.`;
+
+    const USER = `USER CATEGORY GUIDELINES (JSON):
+${JSON.stringify({ categories: guidelines }, null, 2)}
+
+EMAILS TO CATEGORIZE (JSON):
+${JSON.stringify({ emails: minimal }, null, 2)}
+
+Output strictly valid JSON with this exact shape:
+{
+  "categories": [
+    {
+      "name": "Category Name",
+      "emails": ["<id1>", "<id2>", "..."]
+    }
+  ]
+}
+Return ONLY the JSON (no markdown).`;
+
+    // JSON extraction helper
+    function extractJson(text) {
+      if (typeof text !== 'string') return null;
+      const trimmed = text.trim();
+      try { return JSON.parse(trimmed); } catch {}
+      const fence = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
+      if (fence && fence[1]) { try { return JSON.parse(fence[1].trim()); } catch {} }
+      const first = trimmed.indexOf('{'); const last = trimmed.lastIndexOf('}');
+      if (first !== -1 && last !== -1 && last > first) {
+        const slice = trimmed.slice(first, last + 1);
+        try { return JSON.parse(slice); } catch {}
+      }
+      return null;
+    }
+
+    let raw = '';
+    let parsed = null;
+    let mode = 'ai-guided';
+
+    try {
+      const completion = await openai.chat.completions.create({
+        model: "o3",
+        messages: [
+          { role: "system", content: SYSTEM },
+          { role: "user", content: USER }
+        ],
+        max_completion_tokens: 1500,
+        response_format: { type: "json_object" }
+      });
+      raw = completion.choices?.[0]?.message?.content || '';
+    } catch (e) {
+      console.warn('AI guided categories (o3) failed:', e?.message || e);
+      raw = '';
+    }
+
+    if (raw) parsed = typeof raw === 'object' ? raw : extractJson(raw);
+    if (!parsed || !Array.isArray(parsed.categories)) {
+      try {
+        const retry = await openai.chat.completions.create({
+          model: "gpt-4o-mini",
+          messages: [
+            { role: "system", content: SYSTEM },
+            { role: "user", content: USER }
+          ],
+          max_completion_tokens: 1500,
+          response_format: { type: "json_object" }
+        });
+        const raw2 = retry.choices?.[0]?.message?.content || '';
+        parsed = extractJson(raw2);
+      } catch (retryErr) {
+        console.error('AI guided categories retry failed:', retryErr?.message || retryErr);
+      }
+    }
+
+    // Fallback to rule-based (but try to map names to guideline list if possible)
+    const fallbackRuleBased = () => {
+      const groups = {};
+      responseEmails.forEach(email => {
+        const suggested = categorizeEmail(email.subject || '', email.body || '', email.from || '');
+        const fallbackName = suggested || 'Personal & Life Management';
+        const name = fallbackName;
+        if (!groups[name]) groups[name] = [];
+        groups[name].push({
+          id: email.id,
+          subject: email.subject || 'No Subject',
+          from: email.originalFrom || email.from || 'Unknown Sender',
+          date: email.date || new Date().toISOString(),
+          snippet:
+            email.snippet ||
+            (email.body ? String(email.body).slice(0, 160) + (email.body.length > 160 ? '...' : '') : 'No content available')
+        });
+      });
+      const categories = Object.keys(groups).sort().map(name => ({ name, emails: groups[name] }));
+      return res.json({ success: true, categories, mode: 'rule-based-fallback' });
+    };
+
+    if (!parsed || !Array.isArray(parsed.categories)) {
+      return fallbackRuleBased();
+    }
+
+    // Rebuild categories to expected shape with objects for each id
+    const MAX_CATS = 24;
+    const categories = [];
+    const used = new Set();
+
+    for (const cat of parsed.categories.slice(0, MAX_CATS)) {
+      const nameRaw = (cat && cat.name != null) ? String(cat.name) : '';
+      const name = nameRaw.trim().slice(0, 120) || 'Uncategorized';
+      const emailIds = Array.isArray(cat?.emails) ? cat.emails : [];
+      const items = [];
+      for (const item of emailIds) {
+        const id = typeof item === 'string' ? item : (item && typeof item === 'object' ? String(item.id || '') : '');
+        if (!id || used.has(id)) continue;
+        if (!byId.has(id)) continue;
+        used.add(id);
+        items.push(byId.get(id));
+      }
+      if (items.length > 0) {
+        categories.push({ name, emails: items });
+      }
+    }
+
+    // Ensure all emails are assigned (catch-all)
+    if (used.size < minimal.length) {
+      const remaining = [];
+      for (const e of minimal) {
+        if (!used.has(e.id)) remaining.push(e);
+      }
+      if (remaining.length) {
+        categories.push({ name: 'Personal & Life Management', emails: remaining });
+      }
+    }
+
+    if (!categories.length) {
+      return fallbackRuleBased();
+    }
+
+    return res.json({ success: true, categories, mode });
+  } catch (error) {
+    console.error('Error generating guided categories:', error);
+    // Final fallback
+    try {
+      const groups = {};
+      const responseEmails = loadResponseEmails() || [];
+      responseEmails.forEach(email => {
+        const suggested = categorizeEmail(email.subject || '', email.body || '', email.from || '');
+        const name = suggested || 'Personal & Life Management';
+        if (!groups[name]) groups[name] = [];
+        groups[name].push({
+          id: email.id,
+          subject: email.subject || 'No Subject',
+          from: email.originalFrom || email.from || 'Unknown Sender',
+          date: email.date || new Date().toISOString(),
+          snippet:
+            email.snippet ||
+            (email.body ? String(email.body).slice(0, 160) + (email.body.length > 160 ? '...' : '') : 'No content available')
+        });
+      });
+      const categories = Object.keys(groups).sort().map(name => ({ name, emails: groups[name] }));
+      return res.json({ success: true, categories, mode: 'rule-based-fallback' });
+    } catch (fallbackErr) {
+      return res.status(500).json({ success: false, error: 'Failed to generate guided categories' });
+    }
   }
 });
 
