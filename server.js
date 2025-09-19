@@ -811,6 +811,106 @@ function matchToCurrentCategory(name, currentCategories) {
 }
 
 /**
+ * Ensure there are at least minCount categories by heuristically splitting the largest buckets.
+ * Uses categorizeEmail() to derive meaningful sub-groups. Does not create empty categories.
+ */
+function enforceMinCategories(categories, minCount = 5) {
+  try {
+    if (!Array.isArray(categories)) return;
+
+    const toHeuristic = (item) => {
+      const subj = item?.subject || '';
+      const snip = item?.snippet || '';
+      const from = item?.from || '';
+      return categorizeEmail(subj, snip, from) || 'Personal & Life Management';
+    };
+
+    const existing = new Set(categories.map(c => String(c?.name || '').toLowerCase()));
+
+    let guard = 32; // prevent infinite loops
+    while (categories.length < minCount && guard-- > 0) {
+      // Find largest non-empty category that can be split
+      let largestIdx = -1;
+      let largestLen = 0;
+      categories.forEach((c, i) => {
+        const len = Array.isArray(c.emails) ? c.emails.length : 0;
+        if (len > largestLen) {
+          largestLen = len;
+          largestIdx = i;
+        }
+      });
+
+      if (largestIdx === -1 || largestLen <= 1) break;
+
+      const src = categories[largestIdx];
+      const originalNameLower = String(src.name || '').toLowerCase();
+
+      // Group emails by heuristic category
+      const groups = {};
+      (src.emails || []).forEach(e => {
+        const g = toHeuristic(e);
+        if (!groups[g]) groups[g] = [];
+        groups[g].push(e);
+      });
+
+      // Pick the biggest heuristic subgroup that:
+      // - isn't identical to the source name
+      // - isn't already an existing category name
+      // - doesn't consume all emails (i.e., real split)
+      let bestName = null;
+      let bestArr = null;
+      Object.entries(groups)
+        .sort((a, b) => b[1].length - a[1].length)
+        .some(([name, arr]) => {
+          const k = String(name || '').toLowerCase();
+          if (k === originalNameLower) return false;
+          if (existing.has(k)) return false;
+          if (arr.length >= 1 && arr.length < src.emails.length) {
+            bestName = name;
+            bestArr = arr;
+            return true;
+          }
+          return false;
+        });
+
+      if (!bestName || !bestArr) break;
+
+      // Move selected emails into a new category
+      src.emails = src.emails.filter(e => !bestArr.includes(e));
+      categories.splice(largestIdx + 1, 0, { name: bestName, emails: bestArr });
+      existing.add(String(bestName).toLowerCase());
+    }
+  } catch (e) {
+    console.warn('Failed to enforce minimum categories:', e?.message || e);
+  }
+}
+
+/**
+ * Ensure at least minCount categories by first splitting large buckets (non-empty),
+ * then, if still below minCount, append empty canonical categories (not already present).
+ */
+function ensureMinCategoriesAtLeast(categories, minCount = 5) {
+  try {
+    enforceMinCategories(categories, minCount);
+    if (!Array.isArray(categories)) return;
+
+    if (categories.length < minCount) {
+      const present = new Set(categories.map(c => String(c?.name || '').toLowerCase()));
+      for (const cname of CANONICAL_CATEGORIES) {
+        const k = String(cname).toLowerCase();
+        if (!present.has(k)) {
+          categories.push({ name: cname, emails: [] });
+          present.add(k);
+        }
+        if (categories.length >= minCount) break;
+      }
+    }
+  } catch (e) {
+    console.warn('ensureMinCategoriesAtLeast failed:', e?.message || e);
+  }
+}
+
+/**
  * Current categories: derived from categories.json if present, otherwise from existing responses (fallback to canonical)
  */
 app.get('/api/current-categories', (req, res) => {
@@ -3285,6 +3385,13 @@ app.post('/api/generate-categories', (req, res) => {
       .sort()
       .map(name => ({ name, emails: groups[name] }));
 
+    // Ensure at least 5 categories (split large buckets, then fill with canonical empties if still below 5)
+    try {
+      ensureMinCategoriesAtLeast(categories, 5);
+    } catch (e) {
+      console.warn('Min category enforcement (rule-based) failed:', e?.message || e);
+    }
+
     res.json({ success: true, categories });
   } catch (error) {
     console.error('Error generating categories:', error);
@@ -3422,6 +3529,11 @@ Return ONLY the JSON object as specified above.`;
         });
       });
       const categories = Object.keys(groups).sort().map(name => ({ name, emails: groups[name] }));
+      try {
+        ensureMinCategoriesAtLeast(categories, 5);
+      } catch (e) {
+        console.warn('Min category enforcement (AI fallback) failed:', e?.message || e);
+      }
       return res.json({ success: true, categories, mode: 'rule-based-fallback' });
     };
 
@@ -3490,6 +3602,13 @@ Return ONLY the JSON object as specified above.`;
     // Final sanity: cap total categories and avoid empty
     if (!categories.length) {
       return fallbackRuleBased();
+    }
+
+    // Enforce a minimum of 5 categories (split + fill with canonical empties if needed)
+    try {
+      ensureMinCategoriesAtLeast(categories, 5);
+    } catch (e) {
+      console.warn('Min category enforcement failed:', e?.message || e);
     }
 
     return res.json({ success: true, categories, mode: 'ai' });
@@ -3658,6 +3777,11 @@ Please return ONLY the JSON object as specified above. Ensure every provided ID 
         });
       });
       const categories = Object.keys(groups).sort().map(name => ({ name, emails: groups[name] }));
+      try {
+        ensureMinCategoriesAtLeast(categories, 5);
+      } catch (e) {
+        console.warn('Min category enforcement (AI V2 fallback) failed:', e?.message || e);
+      }
       return res.json({ success: true, categories, mode: 'rule-based-fallback' });
     };
 
@@ -3705,6 +3829,13 @@ Please return ONLY the JSON object as specified above. Ensure every provided ID 
 
     if (!categories.length) {
       return fallbackRuleBased();
+    }
+
+    // Enforce a minimum of 5 categories (split + fill with canonical empties if needed)
+    try {
+      ensureMinCategoriesAtLeast(categories, 5);
+    } catch (e) {
+      console.warn('Min category enforcement (V2) failed:', e?.message || e);
     }
 
     return res.json({ success: true, categories, mode });
@@ -4019,6 +4150,11 @@ Return ONLY the JSON (no markdown).`;
         });
       });
       const categories = Object.keys(groups).sort().map(name => ({ name, emails: groups[name] }));
+      try {
+        ensureMinCategoriesAtLeast(categories, 5);
+      } catch (e) {
+        console.warn('Min category enforcement (guided fallback) failed:', e?.message || e);
+      }
       return res.json({ success: true, categories, mode: 'rule-based-fallback' });
     };
 
@@ -4061,6 +4197,13 @@ Return ONLY the JSON (no markdown).`;
 
     if (!categories.length) {
       return fallbackRuleBased();
+    }
+
+    // Enforce a minimum of 5 categories (split + fill with canonical empties if needed)
+    try {
+      ensureMinCategoriesAtLeast(categories, 5);
+    } catch (e) {
+      console.warn('Min category enforcement (guided) failed:', e?.message || e);
     }
 
     return res.json({ success: true, categories, mode });
