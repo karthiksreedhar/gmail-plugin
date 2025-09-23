@@ -7490,6 +7490,7 @@ function previousSlide() {
                         </div>
                         <div class="carousel-actions">
                             <button class="carousel-btn carousel-btn-cancel" onclick="closeKeywordSearchResultsModal()">Close</button>
+                            <button class="carousel-btn carousel-btn-add" id="saveKeywordGroupingBtn" onclick="saveKeywordGrouping()" style="min-width: 220px;">Save Grouping</button>
                         </div>
                     </div>
                 </div>
@@ -7585,6 +7586,18 @@ function previousSlide() {
                     : `<div class="no-emails" style="padding: 16px;">No threads matched this keyword.</div>`;
 
                 slide.innerHTML = `
+                    <div class="facet-box" id="facet-box-${index}" style="border:1px solid #e9ecef;border-left:4px solid #6f42c1;border-radius:8px;background:#fff;padding:12px;margin-bottom:12px;">
+                        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+                            <div style="font-weight:600;color:#6f42c1;">Suggested Facets</div>
+                            <button class="carousel-nav-btn" style="background:#6f42c1;" onclick="regenerateFacetsForGroup(${index})">Regenerate</button>
+                        </div>
+                        <div id="facet-groups-${index}">
+                            <div class="loading">Analyzing group facets...</div>
+                        </div>
+                        <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:8px;">
+                            <button class="carousel-nav-btn" style="background:#28a745;" onclick="applySelectedFacets(${index})">Add Threads</button>
+                        </div>
+                    </div>
                     <div class="thread-preview">
                         <div class="thread-subject">
                             ${group.isOther 
@@ -7597,6 +7610,7 @@ function previousSlide() {
                     </div>
                 `;
                 carousel.appendChild(slide);
+                try { renderFacetBoxForGroup(index); } catch (e) { console.error('Facet box render failed:', e); }
             });
 
             updateKeywordCarouselNavigation();
@@ -7733,6 +7747,11 @@ function previousSlide() {
                 }
 
                 keywordResults = results;
+                // Working copy for interactive grouping (latest wins, unique assignment)
+                window.keywordWorkingGroups = JSON.parse(JSON.stringify(results));
+                // Build thread index for fast lookups
+                window.threadById = new Map();
+                (keywordAllThreads || []).forEach(t => { try { if (t && t.id) window.threadById.set(t.id, t); } catch(_){} });
                 currentKeywordSlideIndex = 0;
 
                 // Show results carousel
@@ -8458,6 +8477,458 @@ function escapeHtml(s) {
             }
 
             closeSeeCategoryNotesModal();
+        }
+
+        // ===== Facet Box logic for Keyword Results =====
+
+        // Working grouping state (array of { name, threads, isOther? }) maintained separate from keywordResults
+        let keywordWorkingGroups = Array.isArray(window.keywordWorkingGroups) ? window.keywordWorkingGroups : [];
+        let threadById = window.threadById instanceof Map ? window.threadById : new Map();
+
+        function deepCopy(obj) { try { return JSON.parse(JSON.stringify(obj)); } catch { return obj; } }
+
+        // Always read the latest refs from window to avoid stale copies after modal opens
+        function getWorkingGroupsRef() {
+            if (Array.isArray(window.keywordWorkingGroups)) {
+                keywordWorkingGroups = window.keywordWorkingGroups;
+            }
+            if (!Array.isArray(keywordWorkingGroups)) keywordWorkingGroups = [];
+            return keywordWorkingGroups;
+        }
+        function getThreadByIdRef() {
+            if (window.threadById instanceof Map) {
+                threadById = window.threadById;
+            }
+            return threadById instanceof Map ? threadById : new Map();
+        }
+
+        function getWorkingGroup(idx) {
+            const groups = getWorkingGroupsRef();
+            return groups[idx] || { name: '', threads: [] };
+        }
+
+        async function renderFacetBoxForGroup(idx) {
+            try {
+                const box = document.getElementById(`facet-groups-${idx}`);
+                if (!box) return;
+                box.innerHTML = '<div class="loading">Analyzing group facets...</div>';
+
+                const group = getWorkingGroup(idx) || { threads: [] };
+
+                // Cap analysis size to avoid oversized payloads and speed up facet generation
+                const CAP_THREADS = group.isOther ? 60 : 40;
+                const CAP_MESSAGES_PER_THREAD = 6;
+                const CAP_BODY_CHARS = 800;
+
+                // Sort threads by latest message date (desc) and cap count
+                const threadsSorted = (group.threads || []).slice().sort((a, b) => {
+                    const ad = Array.isArray(a.messages) && a.messages.length
+                        ? Math.max(...a.messages.map(m => new Date(m.date || 0).getTime() || 0))
+                        : 0;
+                    const bd = Array.isArray(b.messages) && b.messages.length
+                        ? Math.max(...b.messages.map(m => new Date(m.date || 0).getTime() || 0))
+                        : 0;
+                    return bd - ad;
+                });
+                const limitedThreads = threadsSorted.slice(0, CAP_THREADS);
+
+                // Build compact payload
+                const payload = {
+                    threads: limitedThreads.map(t => ({
+                        id: t.id,
+                        subject: t.subject || '',
+                        messages: (Array.isArray(t.messages) ? t.messages.slice(-CAP_MESSAGES_PER_THREAD) : []).map(m => ({
+                            from: m.from || '',
+                            to: Array.isArray(m.to) ? m.to.slice(0, 10) : (m.to ? [m.to] : []),
+                            subject: m.subject || '',
+                            body: String(m.body || '').slice(0, CAP_BODY_CHARS),
+                            isResponse: !!m.isResponse
+                        }))
+                    }))
+                };
+
+                let facets = { people: [], domains: [], phrases: [] };
+                let truncatedNote = '';
+                if (limitedThreads.length > 0) {
+                    try {
+                        const resp = await fetch('/api/keyword-group-facets', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(payload)
+                        });
+                        if (!resp.ok) {
+                            const text = await resp.text().catch(() => '');
+                            console.warn('Facet API non-OK status:', resp.status, text);
+                        }
+                        const data = await resp.json().catch(() => ({}));
+                        if (data && data.success && data.facets) facets = data.facets;
+                    } catch (e) {
+                        console.warn('Facet API failed, using empty suggestions:', e);
+                    }
+                } else {
+                    // Avoid 400 from backend when group has no threads; skip API call
+                    console.info('Facet API skipped: group has 0 threads for idx', idx);
+                }
+
+                // Client-side fallback: if API returned empty facets, compute simple heuristics here so "Regenerate" is always functional
+                try {
+                    const isEmpty = (!Array.isArray(facets.people) || facets.people.length === 0)
+                                 && (!Array.isArray(facets.domains) || facets.domains.length === 0)
+                                 && (!Array.isArray(facets.phrases) || facets.phrases.length === 0);
+
+                    if (isEmpty) {
+                        const MAX_RET = 12;
+                        const emailRe = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/ig;
+                        const stop = new Set(['the','a','an','and','or','of','in','on','at','to','for','from','by','with','about','as','is','it','this','that','be','are','was','were','will','shall','would','should','could','can','do','does','did','has','have','had','i','you','he','she','we','they','them','me','my','your','our','their','his','her','re','fw','fwd','dear','hi','hello','thanks','thank','regards','best','please']);
+                        const counts = {
+                            people: new Map(),
+                            domains: new Map(),
+                            phrases: new Map()
+                        };
+                        const bumpOncePerThread = (map, key, seenSet) => {
+                            const k = String(key || '').trim().toLowerCase();
+                            if (!k) return;
+                            if (seenSet.has(k)) return;
+                            seenSet.add(k);
+                            map.set(k, (map.get(k) || 0) + 1);
+                        };
+                        const normalize = s => String(s || '');
+                        const userEmail = (document.getElementById('currentUser')?.textContent || '').toLowerCase();
+
+                        for (const t of limitedThreads) {
+                            const seenPpl = new Set();
+                            const seenDom = new Set();
+                            const seenPhr = new Set();
+
+                            const texts = [];
+                            try {
+                                texts.push(normalize(t.subject));
+                                (Array.isArray(t.messages) ? t.messages : []).forEach(m => {
+                                    texts.push(normalize(m.subject));
+                                    texts.push(normalize(m.body));
+                                    // from
+                                    (normalize(m.from).match(emailRe) || []).forEach(em => {
+                                        const emL = em.toLowerCase();
+                                        if (!userEmail || !emL.includes(userEmail)) bumpOncePerThread(counts.people, emL, seenPpl);
+                                        const at = emL.lastIndexOf('@');
+                                        if (at > -1) bumpOncePerThread(counts.domains, emL.slice(at + 1), seenDom);
+                                    });
+                                    // to
+                                    const toArr = Array.isArray(m.to) ? m.to : (m.to ? [m.to] : []);
+                                    toArr.forEach(addr => {
+                                        (normalize(addr).match(emailRe) || []).forEach(em => {
+                                            const emL = em.toLowerCase();
+                                            if (!userEmail || !emL.includes(userEmail)) bumpOncePerThread(counts.people, emL, seenPpl);
+                                            const at = emL.lastIndexOf('@');
+                                            if (at > -1) bumpOncePerThread(counts.domains, emL.slice(at + 1), seenDom);
+                                        });
+                                    });
+                                });
+                            } catch {}
+
+                            // simple 2-3 gram extraction
+                            const textAll = texts.join(' ').toLowerCase().replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
+                            if (textAll) {
+                                const words = textAll.split(' ').filter(w => w && w.length >= 2 && !stop.has(w));
+                                for (let n = 2; n <= 3; n++) {
+                                    for (let i = 0; i + n <= words.length; i++) {
+                                        const ph = words.slice(i, i + n).join(' ');
+                                        if (ph.length >= 5) bumpOncePerThread(counts.phrases, ph, seenPhr);
+                                    }
+                                }
+                            }
+                        }
+
+                        const rank = (map) => Array.from(map.entries()).sort((a,b) => b[1]-a[1] || a[0].localeCompare(b[0])).map(([k]) => k);
+                        const topPeople = rank(counts.people).slice(0, MAX_RET);
+                        const topDomains = rank(counts.domains).slice(0, MAX_RET);
+                        const topPhrases = rank(counts.phrases).slice(0, MAX_RET);
+
+                        // Only adopt fallback if it actually yields something meaningful
+                        if (topPeople.length || topDomains.length || topPhrases.length) {
+                            facets = {
+                                people: topPeople,
+                                domains: topDomains,
+                                phrases: topPhrases
+                            };
+                        }
+                    }
+                } catch (fe) {
+                    console.warn('Facet client fallback failed:', fe);
+                }
+
+                if ((group.threads || []).length > CAP_THREADS) {
+                    truncatedNote = `<div style="color:#6c757d;font-size:12px;margin:4px 0 8px 0;">
+                        Suggestions based on top ${CAP_THREADS} of ${(group.threads || []).length} threads (newest first)
+                    </div>`;
+                }
+
+                box.innerHTML = truncatedNote + buildFacetGroupsHTML(idx, facets);
+            } catch (e) {
+                console.error('renderFacetBoxForGroup failed:', e);
+            }
+        }
+
+        function regenerateFacetsForGroup(idx) {
+            renderFacetBoxForGroup(idx);
+        }
+
+        function buildFacetGroupsHTML(idx, facets) {
+            const section = (title, items, key) => {
+                const content = (items || []).length
+                    ? items.map((v, i) => `
+                        <label style="display:inline-flex;align-items:center;gap:6px;margin:4px 10px 4px 0;">
+                            <input type="checkbox" data-facet-type="${key}" data-facet-value="${escapeHtml(v)}" />
+                            <span>${escapeHtml(v)}</span>
+                        </label>`).join('')
+                    : `<div style="color:#666;font-style:italic;">No ${title.toLowerCase()} found</div>`;
+                return `
+                    <div style="margin-bottom:8px;">
+                        <div style="font-weight:600;color:#333;margin-bottom:4px;">${title}</div>
+                        <div>${content}</div>
+                    </div>
+                `;
+            };
+            return `
+                ${section('People', facets.people || [], 'people')}
+                ${section('Domains', facets.domains || [], 'domains')}
+                ${section('Phrases', facets.phrases || [], 'phrases')}
+            `;
+        }
+
+        function applySelectedFacets(idx) {
+            try {
+                // Collect selected facets (OR matching)
+                const container = document.getElementById(`facet-groups-${idx}`);
+                if (!container) return;
+                const checks = Array.from(container.querySelectorAll('input[type="checkbox"]:checked'));
+                if (!checks.length) {
+                    showErrorPopup('Please select at least one facet before adding threads.', 'No Facets Selected');
+                    return;
+                }
+                const selected = checks.map(cb => ({
+                    type: cb.getAttribute('data-facet-type'),
+                    value: cb.getAttribute('data-facet-value') || ''
+                })).filter(f => f.value);
+
+                // Compute matching thread IDs from the full pool (keywordAllThreads)
+                const pool = Array.isArray(keywordAllThreads) ? keywordAllThreads : [];
+                const matchIds = [];
+                for (const t of pool) {
+                    if (!t || !t.id) continue;
+                    if (threadMatchesAnyFacet(t, selected)) {
+                        matchIds.push(t.id);
+                    }
+                }
+
+                if (!matchIds.length) {
+                    showErrorPopup('No additional threads matched the selected facets.', 'No Matches');
+                    return;
+                }
+
+                // Unique assignment: latest wins
+                moveThreadsToGroup(matchIds, idx);
+
+                // Refresh UI and facets for this group
+                const keepIndex = currentKeywordSlideIndex;
+                populateKeywordSearchResultsCarousel();
+                currentKeywordSlideIndex = Math.min(keepIndex, keywordWorkingGroups.length - 1);
+                updateKeywordCarouselDisplay();
+
+                // Re-render facets for the updated group (async)
+                setTimeout(() => { try { renderFacetBoxForGroup(idx); } catch(_){} }, 0);
+            } catch (e) {
+                console.error('applySelectedFacets failed:', e);
+                showErrorPopup('Failed to add threads. Please try again.', 'Operation Failed');
+            }
+        }
+
+        function fieldContains(hay, needle) {
+            try {
+                const H = String(hay || '').toLowerCase();
+                const N = String(needle || '').toLowerCase();
+                return H.includes(N);
+            } catch { return false; }
+        }
+
+        function threadMatchesAnyFacet(thread, facets) {
+            try {
+                if (!Array.isArray(facets) || facets.length === 0) return false;
+                // Prepare data
+                const subj = String(thread.subject || '');
+                const msgs = Array.isArray(thread.messages) ? thread.messages : [];
+                for (const facet of facets) {
+                    const val = facet.value || '';
+                    if (!val) continue;
+                    const type = facet.type;
+
+                    // Domains: look for '@domain' in from/to headers
+                    if (type === 'domains') {
+                        const dom = val.toLowerCase();
+                        let ok = false;
+                        if (thread.originalFrom && thread.originalFrom.toLowerCase().includes(dom)) ok = true;
+                        if (!ok && thread.from && String(thread.from).toLowerCase().includes(dom)) ok = true;
+                        if (!ok) {
+                            for (const m of msgs) {
+                                if (String(m.from || '').toLowerCase().includes(dom)) { ok = true; break; }
+                                const toArr = Array.isArray(m.to) ? m.to : (m.to ? [m.to] : []);
+                                if (toArr.some(x => String(x || '').toLowerCase().includes(dom))) { ok = true; break; }
+                            }
+                        }
+                        if (ok) return true;
+                        continue;
+                    }
+
+                    // People: match either name fragments or email addresses in from/to
+                    if (type === 'people') {
+                        const needle = val.toLowerCase();
+                        let ok = false;
+                        const headers = [];
+                        if (thread.originalFrom) headers.push(thread.originalFrom);
+                        if (thread.from) headers.push(thread.from);
+                        for (const m of msgs) {
+                            headers.push(m.from || '');
+                            const toArr = Array.isArray(m.to) ? m.to : (m.to ? [m.to] : []);
+                            headers.push(...toArr);
+                        }
+                        if (headers.some(h => String(h || '').toLowerCase().includes(needle))) return true;
+                        // Also allow phrase match fallback below (name in subject/body)
+                        // fall-through as phrase
+                    }
+
+                    // Phrases or fallback: match in subject/body
+                    if (fieldContains(subj, val)) return true;
+                    for (const m of msgs) {
+                        if (fieldContains(m.subject || '', val)) return true;
+                        if (fieldContains(m.body || '', val)) return true;
+                    }
+                }
+                return false;
+            } catch { return false; }
+        }
+
+        function removeThreadFromAllGroups(threadId) {
+            const groups = getWorkingGroupsRef();
+            for (const g of groups) {
+                if (!Array.isArray(g.threads)) continue;
+                g.threads = g.threads.filter(t => t && t.id !== threadId);
+            }
+        }
+
+        function addThreadToGroup(threadId, idx) {
+            const tgt = getWorkingGroup(idx);
+            if (!tgt) return;
+            if (!Array.isArray(tgt.threads)) tgt.threads = [];
+            // Get full thread object from the latest index
+            const map = getThreadByIdRef();
+            const full = map.get(threadId);
+            if (!full) return;
+            // Avoid duplicates
+            if (!tgt.threads.some(t => t && t.id === threadId)) {
+                tgt.threads.push(full);
+            }
+        }
+
+        function moveThreadsToGroup(threadIds, idx) {
+            const ids = Array.from(new Set((threadIds || []).filter(Boolean)));
+            if (!ids.length) return;
+            ids.forEach(id => {
+                removeThreadFromAllGroups(id);
+                addThreadToGroup(id, idx);
+            });
+            // Ensure "Other Threads" remains the last group and contains the remainder (optional: we recompute Other)
+            rebuildOtherGroup();
+        }
+
+        function rebuildOtherGroup() {
+            try {
+                const groups = getWorkingGroupsRef();
+                // Ensure an "Other Threads" bucket exists
+                let otherIdx = groups.findIndex(g => g && g.isOther);
+                if (otherIdx === -1) {
+                    groups.push({ name: 'Other Threads', threads: [], isOther: true });
+                    otherIdx = groups.length - 1;
+                }
+                const assigned = new Set();
+                groups.forEach((g) => {
+                    if (!g || !Array.isArray(g.threads)) return;
+                    if (g.isOther) return;
+                    g.threads.forEach(t => { if (t && t.id) assigned.add(t.id); });
+                });
+                const all = Array.isArray(keywordAllThreads) ? keywordAllThreads : [];
+                const others = all.filter(t => t && t.id && !assigned.has(t.id));
+                groups[otherIdx].threads = others;
+                // Persist back to window for other consumers
+                window.keywordWorkingGroups = groups;
+            } catch (e) {
+                console.warn('rebuildOtherGroup failed:', e);
+            }
+        }
+
+        function saveKeywordGrouping() {
+            try {
+                // Build category buckets from working groups (exclude Other)
+                const buckets = [];
+                const groupList = getWorkingGroupsRef();
+                for (const g of groupList) {
+                    if (!g || g.isOther) continue;
+                    const emails = [];
+                    const seen = new Set();
+                    for (const t of (g.threads || [])) {
+                        // Map thread -> response email by latest response message id
+                        const msg = Array.isArray(t.messages)
+                            ? t.messages.filter(m => m && m.isResponse).sort((a,b)=> new Date(b.date)-new Date(a.date))[0]
+                            : null;
+                        const respId = msg && msg.id;
+                        if (!respId || seen.has(respId)) continue;
+                        const e = (allEmails || []).find(x => x && x.id === respId);
+                        if (!e) continue; // only include existing response emails
+                        seen.add(respId);
+                        emails.push({
+                            id: e.id,
+                            subject: e.subject || 'No Subject',
+                            from: e.originalFrom || e.from || 'Unknown Sender',
+                            date: e.date || new Date().toISOString(),
+                            snippet: e.snippet || (e.body ? String(e.body).slice(0, 120) + (e.body.length > 120 ? '...' : '') : 'No content available')
+                        });
+                    }
+                    // Only include non-empty buckets
+                    if (emails.length) {
+                        buckets.push({ name: g.name || 'Unnamed', originalName: g.name || 'Unnamed', emails });
+                    }
+                }
+                if (!buckets.length) {
+                    showErrorPopup('No matching response emails found to save. Try adding threads that correspond to existing responses.', 'Nothing to Save');
+                    return;
+                }
+                // Open Categories editor with pre-populated buckets
+                startCategoriesEditorWithBuckets(buckets);
+            } catch (e) {
+                console.error('saveKeywordGrouping failed:', e);
+                showErrorPopup('Failed to prepare grouping for save. Please try again.', 'Save Failed');
+            }
+        }
+
+        function startCategoriesEditorWithBuckets(buckets) {
+            try {
+                // Set global categoriesState and assignments
+                categoriesState = deepCopy(buckets || []);
+                categoryAssignments = {};
+                categoriesState.forEach(cat => {
+                    (cat.emails || []).forEach(e => { if (e && e.id) categoryAssignments[e.id] = cat.name; });
+                });
+                // Ensure modal exists and render
+                let modal = document.getElementById('categoriesReviewModal');
+                if (!modal) {
+                    modal = createCategoriesReviewModal();
+                    document.body.appendChild(modal);
+                }
+                renderCategoriesEditor();
+                modal.style.display = 'block';
+            } catch (e) {
+                console.error('startCategoriesEditorWithBuckets failed:', e);
+                showErrorPopup('Failed to open categories editor with grouping.', 'Open Failed');
+            }
         }
 
         // Load emails when page loads

@@ -19,7 +19,8 @@ const PORT = parseInt(process.env.PORT, 10) || 3000;
 
 // Middleware
 app.use(cors());
-app.use(express.json());
+// Increase JSON body size limit to accommodate facet-analysis payloads from the client
+app.use(express.json({ limit: '2mb' }));
 app.use(express.static('public'));
 
 // Current user - can be changed via API (loaded from .env if present)
@@ -4585,6 +4586,290 @@ app.post('/api/search-by-keywords', (req, res) => {
   } catch (error) {
     console.error('Keyword regex search failed:', error);
     return res.status(500).json({ success: false, error: 'Search failed' });
+  }
+});
+
+/**
+ * Keyword Group Facets
+ * POST /api/keyword-group-facets
+ * Input: { threads: [{ id, subject, messages: [{ from, to[], subject, body, isResponse }] }] }
+ * Output: { success: true, facets: { people: string[], domains: string[], phrases: string[] }, source: 'ai+heuristic'|'heuristic' }
+ *
+ * Notes:
+ * - Uses heuristics to extract common senders/recipients, domains, and common 2–3 word phrases across threads.
+ * - Attempts AI suggestions (OpenAI) and merges with heuristics; falls back to heuristics on error.
+ * - No persistence; used by the Keyword Search results “Facet Box”.
+ */
+app.post('/api/keyword-group-facets', async (req, res) => {
+  try {
+    const { threads } = req.body || {};
+    if (!Array.isArray(threads) || threads.length === 0) {
+      return res.status(400).json({ success: false, error: 'threads array is required' });
+    }
+
+    const MAX_RETURN = 12;
+
+    const stopwords = new Set([
+      'the','a','an','and','or','of','in','on','at','to','for','from','by','with','about','as','is','it','this','that',
+      'be','are','was','were','will','shall','would','should','could','can','do','does','did','has','have','had',
+      'i','you','he','she','we','they','them','me','my','your','our','their','his','her',
+      're','fw','fwd','dear','hi','hello','thanks','thank','regards','best','please'
+    ]);
+
+    const emailRegex = /<?([A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})>?/gi;
+    const domainRegex = /@([A-Z0-9.-]+\.[A-Z]{2,})/i;
+
+    const normalizeText = (s) => String(s || '').replace(/\s+/g, ' ').trim();
+    const lower = (s) => String(s || '').toLowerCase();
+
+    const isSelfAddress = (addr) => {
+      const a = lower(addr || '');
+      const u1 = lower(CURRENT_USER_EMAIL || '');
+      const u2 = lower(SENDING_EMAIL || '');
+      return a.includes(u1) || a.includes(u2);
+    };
+
+    // Collect across threads
+    const peopleCounts = new Map();   // key -> count (distinct thread occurrences)
+    const emailCounts = new Map();
+    const domainCounts = new Map();
+
+    const phraseCounts = new Map();   // phrase -> number of distinct threads containing it
+
+    // Helper: count once per thread
+    const bump = (map, key) => { if (!key) return; map.set(key, (map.get(key) || 0) + 1); };
+
+    // Extract 2-3 word collocations from given text, counting once per thread
+    const extractPhrasesFromText = (text) => {
+      const t = lower(text || '').replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
+      if (!t) return [];
+      const words = t.split(' ').filter(w => w && w.length >= 2 && !stopwords.has(w));
+      const phrases = new Set();
+      for (let n = 2; n <= 3; n++) {
+        for (let i = 0; i + n <= words.length; i++) {
+          const pg = words.slice(i, i + n).join(' ');
+          if (pg.length >= 5) phrases.add(pg);
+        }
+      }
+      return Array.from(phrases);
+    };
+
+    // Extract emails/domains/names from headers
+    const extractPeopleTokens = (header) => {
+      const tokens = [];
+      const s = String(header || '');
+      // IMPORTANT: Use a fresh regex instance per call; global /g regex persists lastIndex across strings
+      const re = /<?([A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})>?/gi;
+      let m;
+      while ((m = re.exec(s)) !== null) {
+        const email = m[1];
+        if (email) tokens.push(email);
+      }
+      // Also include display name tokens (strip email) using a separate fresh regex
+      const nameOnly = s.replace(/<?([A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})>?/gi, '').replace(/[<>"]/g, ' ').replace(/\s+/g, ' ').trim();
+      if (nameOnly && /^[A-Za-z].+/.test(nameOnly)) {
+        // keep concise names, cap length
+        tokens.push(nameOnly.slice(0, 80));
+      }
+      return tokens;
+    };
+
+    // Iterate per thread and count distinct presence
+    for (const thread of threads) {
+      if (!thread) continue;
+
+      const threadPeopleSeen = new Set();
+      const threadEmailsSeen = new Set();
+      const threadDomainsSeen = new Set();
+      const threadPhrasesSeen = new Set();
+
+      const threadSubject = normalizeText(thread.subject || '');
+      const msgs = Array.isArray(thread.messages) ? thread.messages : [];
+
+      // People from messages
+      for (const msg of msgs) {
+        // from
+        for (const tok of extractPeopleTokens(msg.from || '')) {
+          if (/@/i.test(tok)) {
+            if (!isSelfAddress(tok)) threadEmailsSeen.add(tok);
+            const dm = tok.match(domainRegex);
+            if (dm && dm[1]) threadDomainsSeen.add(dm[1].toLowerCase());
+          } else {
+            // display name
+            threadPeopleSeen.add(tok);
+          }
+        }
+        // to
+        const toArr = Array.isArray(msg.to) ? msg.to : (typeof msg.to === 'string' ? [msg.to] : []);
+        for (const taddr of toArr) {
+          for (const tok of extractPeopleTokens(taddr || '')) {
+            if (/@/i.test(tok)) {
+              if (!isSelfAddress(tok)) threadEmailsSeen.add(tok);
+              const dm = tok.match(domainRegex);
+              if (dm && dm[1]) threadDomainsSeen.add(dm[1].toLowerCase());
+            } else {
+              threadPeopleSeen.add(tok);
+            }
+          }
+        }
+
+        // Phrases from subject/body
+        extractPhrasesFromText(msg.subject || '').forEach(p => threadPhrasesSeen.add(p));
+        extractPhrasesFromText(msg.body || '').forEach(p => threadPhrasesSeen.add(p));
+      }
+      // Also consider thread subject
+      extractPhrasesFromText(threadSubject).forEach(p => threadPhrasesSeen.add(p));
+
+      // Commit per-thread presence
+      threadPeopleSeen.forEach(k => bump(peopleCounts, k));
+      threadEmailsSeen.forEach(k => bump(emailCounts, lower(k)));
+      threadDomainsSeen.forEach(k => bump(domainCounts, lower(k)));
+      threadPhrasesSeen.forEach(k => bump(phraseCounts, k));
+    }
+
+    // Rank helpers
+    const rankEntries = (map) => Array.from(map.entries()).sort((a, b) => {
+      if (b[1] !== a[1]) return b[1] - a[1];
+      return a[0].localeCompare(b[0]);
+    });
+
+    // Prepare heuristics
+    const topPeople = rankEntries(peopleCounts).slice(0, MAX_RETURN).map(([k]) => k);
+    const topEmails = rankEntries(emailCounts).slice(0, MAX_RETURN).map(([k]) => k);
+    const topDomains = rankEntries(domainCounts).slice(0, MAX_RETURN).map(([k]) => k);
+    const topPhrases = rankEntries(phraseCounts).slice(0, MAX_RETURN * 2).map(([k]) => k); // get a bit more; AI may re-rank
+
+    // Merge people names + emails into a single 'people' suggestion list (dedup preferring names)
+    const peopleSet = new Set();
+    const mergedPeople = [];
+    for (const name of topPeople) {
+      const key = lower(name);
+      if (!peopleSet.has(key) && key && key.length >= 2) {
+        peopleSet.add(key);
+        mergedPeople.push(name);
+      }
+      if (mergedPeople.length >= MAX_RETURN) break;
+    }
+    for (const em of topEmails) {
+      const key = lower(em);
+      if (!peopleSet.has(key) && key && key.length >= 5) {
+        peopleSet.add(key);
+        mergedPeople.push(em);
+      }
+      if (mergedPeople.length >= MAX_RETURN) break;
+    }
+
+    // Attempt AI refinement
+    let finalPeople = mergedPeople.slice(0, MAX_RETURN);
+    let finalDomains = topDomains.slice(0, MAX_RETURN);
+    let finalPhrases = topPhrases.slice(0, MAX_RETURN);
+    let source = 'heuristic';
+
+    try {
+      // Build compact summary to keep prompt small
+      const compact = threads.slice(0, 30).map(t => ({
+        subject: t.subject || '',
+        froms: Array.from(new Set((t.messages || []).map(m => m.from || ''))).slice(0, 6),
+        tos: Array.from(new Set((t.messages || []).flatMap(m => (Array.isArray(m.to) ? m.to : (m.to ? [m.to] : []))))).slice(0, 6),
+        phrases: Array.from(new Set([
+          ...extractPhrasesFromText(t.subject || '').slice(0, 5),
+          ...[].concat(...(t.messages || []).map(m => extractPhrasesFromText((m.body || '').slice(0, 400)).slice(0, 5)))
+        ])).slice(0, 10)
+      }));
+
+      const SYSTEM = `You help find common facets in email threads for faceted search.
+Given a compact summary of multiple threads (subjects, from/to headers, and a few extracted n-grams), propose:
+- people: sender/recipient names or specific email addresses that are common, excluding the user themselves
+- domains: email domains (e.g., acm.org) common across threads
+- phrases: short 2–4 word literal phrases likely to be useful filters (not generic stopwords)
+
+Return strictly valid JSON: {"people":[], "domains":[], "phrases":[]}
+Keep each list <= ${MAX_RETURN} unique items, concise, literal (no regex), and useful for matching.`;
+
+      const USER = `Compact threads summary:
+${JSON.stringify({ threads: compact, heuristicSeeds: { people: finalPeople, domains: finalDomains, phrases: finalPhrases } }, null, 2)}
+Seed lists are suggestions; improve and deduplicate. Return JSON only.`;
+
+      let aiRaw = null;
+      try {
+        const completion = await openai.chat.completions.create({
+          model: "o3",
+          messages: [
+            { role: "system", content: SYSTEM },
+            { role: "user", content: USER }
+          ],
+          max_completion_tokens: 800,
+          response_format: { type: "json_object" }
+        });
+        aiRaw = completion.choices?.[0]?.message?.content || '';
+      } catch (e) {
+        // retry small model
+        const retry = await openai.chat.completions.create({
+          model: "gpt-4o-mini",
+          messages: [
+            { role: "system", content: SYSTEM },
+            { role: "user", content: USER }
+          ],
+          max_completion_tokens: 800,
+          response_format: { type: "json_object" }
+        });
+        aiRaw = retry.choices?.[0]?.message?.content || '';
+      }
+
+      const parseJson = (txt) => {
+        if (typeof txt === 'object' && txt) return txt;
+        const t = String(txt || '').trim();
+        try { return JSON.parse(t); } catch {}
+        const fence = t.match(/```(?:json)?\s*([\s\S]*?)```/i);
+        if (fence && fence[1]) { try { return JSON.parse(fence[1].trim()); } catch {} }
+        const first = t.indexOf('{'); const last = t.lastIndexOf('}');
+        if (first !== -1 && last !== -1 && last > first) {
+          try { return JSON.parse(t.slice(first, last + 1)); } catch {}
+        }
+        return null;
+      };
+
+      const parsed = parseJson(aiRaw) || {};
+      const aiPeople = Array.isArray(parsed.people) ? parsed.people.map(String) : [];
+      const aiDomains = Array.isArray(parsed.domains) ? parsed.domains.map(String) : [];
+      const aiPhrases = Array.isArray(parsed.phrases) ? parsed.phrases.map(String) : [];
+
+      const dedup = (arr) => {
+        const seen = new Set();
+        const out = [];
+        for (const v of arr) {
+          const k = lower(v || '');
+          if (!k) continue;
+          if (!seen.has(k)) {
+            seen.add(k);
+            out.push(v);
+          }
+          if (out.length >= MAX_RETURN) break;
+        }
+        return out;
+      };
+
+      finalPeople = dedup([...aiPeople, ...finalPeople]).slice(0, MAX_RETURN);
+      finalDomains = dedup([...aiDomains, ...finalDomains]).slice(0, MAX_RETURN);
+      finalPhrases = dedup([...aiPhrases, ...finalPhrases]).slice(0, MAX_RETURN);
+      source = 'ai+heuristic';
+    } catch (e) {
+      // Keep heuristic results
+      source = 'heuristic';
+    }
+
+    return res.json({
+      success: true,
+      facets: {
+        people: finalPeople,
+        domains: finalDomains,
+        phrases: finalPhrases
+      },
+      source
+    });
+  } catch (error) {
+    console.error('keyword-group-facets failed:', error);
+    return res.status(500).json({ success: false, error: 'Failed to compute facets' });
   }
 });
 
