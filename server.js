@@ -27,6 +27,28 @@ let CURRENT_USER_EMAIL = process.env.CURRENT_USER_EMAIL || 'ks4190@columbia.edu'
 // Sending email for Gmail API queries (alias support) - defaults to CURRENT_USER_EMAIL
 let SENDING_EMAIL = process.env.SENDING_EMAIL || process.env.CURRENT_USER_EMAIL || CURRENT_USER_EMAIL;
 
+/**
+ * Map an email to a friendly display name.
+ * Includes known overrides and a sensible fallback (Title Case of local part).
+ */
+function getDisplayNameForUser(email) {
+  try {
+    const e = String(email || '').toLowerCase().trim();
+    // Known users
+    if (e === 'ks4190@columbia.edu') return 'Karthik Sreedhar';
+    if (e === 'lc3251@columbia.edu') return 'Lydia Chilton';
+    // Handle potential variant typo mentioned by user
+    if (e === 'lc3521@columbia.edu') return 'Lydia Chilton';
+    // Fallback: Title Case of local part
+    const local = e.split('@')[0] || '';
+    const parts = local.replace(/[._-]+/g, ' ').split(' ').filter(Boolean);
+    const pretty = parts.map(p => (p ? p[0].toUpperCase() + p.slice(1) : '')).join(' ');
+    return pretty || email || 'You';
+  } catch {
+    return email || 'You';
+  }
+}
+
 // Function to get user-specific paths
 function getUserPaths(userEmail = CURRENT_USER_EMAIL) {
   const USER_DATA_DIR = path.join(__dirname, 'data', userEmail);
@@ -1811,7 +1833,8 @@ app.delete('/api/scenarios', (req, res) => {
 app.get('/api/current-user', (req, res) => {
   res.json({
     currentUser: CURRENT_USER_EMAIL,
-    sendingEmail: SENDING_EMAIL
+    sendingEmail: SENDING_EMAIL,
+    displayName: getDisplayNameForUser(CURRENT_USER_EMAIL)
   });
 });
 
@@ -1899,6 +1922,7 @@ app.post('/api/switch-user', async (req, res) => {
     res.json({ 
       success: true, 
       currentUser: CURRENT_USER_EMAIL,
+      displayName: getDisplayNameForUser(CURRENT_USER_EMAIL),
       gmailInitialized: gmailInitialized,
       message: `Switched to user ${userEmail}` 
     });
@@ -4336,6 +4360,231 @@ app.post('/api/clean-text', async (req, res) => {
       console.error('Heuristic clean failed:', fallbackErr);
       return res.status(500).json({ success: false, error: 'Failed to clean text' });
     }
+  }
+});
+
+/**
+ * Regex search by keywords in response emails or threads
+ * POST /api/search-by-keywords
+ * body: {
+ *   keywords: string[],
+ *   options?: {
+ *     fields?: ['subject','body'],
+ *     caseSensitive?: boolean,
+ *     wholeWord?: boolean,
+ *     groupBy?: 'email' | 'thread' // default 'email'
+ *   }
+ * }
+ * returns:
+ *   if groupBy=email: { success: true, mode: 'email', results: [{ name, emails: [...] }] }
+ *   if groupBy=thread: {
+ *     success: true, mode: 'thread',
+ *     results: [{ name, threads: [...] }],
+ *     allThreads: [...] // all available non-hidden threads searched against
+ *   }
+ */
+app.post('/api/search-by-keywords', (req, res) => {
+  try {
+    const { keywords, options } = req.body || {};
+    const opts = options || {};
+    const fields = Array.isArray(opts.fields) && opts.fields.length ? opts.fields : ['subject', 'body'];
+    const caseSensitive = !!opts.caseSensitive;
+    const wholeWord = !!opts.wholeWord;
+    const groupBy = opts.groupBy === 'thread' ? 'thread' : 'email';
+
+    if (!Array.isArray(keywords) || keywords.length === 0) {
+      return res.status(400).json({ success: false, error: 'keywords array is required' });
+    }
+
+    const escapeRegex = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const buildRegex = (kw) => {
+      // Non-global regex to avoid lastIndex state across multiple tests
+      const flags = caseSensitive ? '' : 'i';
+      const raw = String(kw || '').trim();
+      if (!raw) return null;
+
+      // Build a literal phrase matcher with flexible whitespace between tokens
+      const tokens = raw.split(/\s+/).filter(Boolean);
+      const literalJoined = tokens.map(escapeRegex).join('\\s+');
+      const literalSource = wholeWord ? `\\b${literalJoined}\\b` : literalJoined;
+
+      // Heuristic: treat as a person name ONLY if 2-3 tokens consisting of letters/dots/hyphens
+      const isLikelyName = tokens.length >= 2 &&
+                           tokens.length <= 3 &&
+                           tokens.every(t => /^[A-Za-z][A-Za-z.\-]*$/.test(t));
+
+      if (isLikelyName) {
+        // Name variants: "First [M.] Last" and "Last, First [M.]"
+        const first = escapeRegex(tokens[0]);
+        const last = escapeRegex(tokens[tokens.length - 1]);
+        const middleOpt = '(?:\\s+\\w\\.?\\s+)?'; // optional middle initial between first/last
+        const namePattern1 = `${first}${middleOpt}${last}`;
+        const namePattern2 = `${last},?\\s+${first}(?:\\s+\\w\\.?)?`;
+        const nameCombined = `(?:${namePattern1}|${namePattern2})`;
+        const nameSource = wholeWord ? `\\b${nameCombined}\\b` : nameCombined;
+
+        // Combine literal phrase OR name variants to maximize hits
+        const combined = `(?:${literalSource}|${nameSource})`;
+        try { return new RegExp(combined, flags); } catch (e) { /* fall through */ }
+      }
+
+      // Default: literal phrase matcher
+      try { return new RegExp(literalSource, flags); } catch (e) { return null; }
+    };
+
+    // Hidden filters
+    const hiddenList = loadHiddenThreads();
+    const hiddenThreadIds = new Set((hiddenList || []).map(h => h.id));
+    const hiddenResponseIds = new Set((hiddenList || []).flatMap(h => (h.responseIds || [])));
+
+    if (groupBy === 'thread') {
+      // Gather threads (prefer saved threads; fallback to synthesizing from response emails)
+      let threads = loadEmailThreads() || [];
+      // Normalize legacy entries: synthesize minimal messages when messages are missing, then filter hidden/message-less
+      try {
+        threads = (threads || []).map(t => {
+          if (!t || !t.id) return null;
+          if (Array.isArray(t.messages) && t.messages.length > 0) return t;
+          // Synthesize a two-message thread from stored fields
+          const responseId = t.responseId || t.id;
+          const respDate = t.date || new Date().toISOString();
+          const responseMsg = {
+            id: responseId,
+            from: t.from || 'Unknown Sender',
+            to: [t.originalFrom || 'Unknown Recipient'],
+            date: respDate,
+            subject: t.subject || 'No Subject',
+            body: t.body || '',
+            isResponse: true
+          };
+          const originalMsg = {
+            id: 'original-' + (t.id || responseId),
+            from: t.originalFrom || 'Unknown Sender',
+            to: [t.from || 'Unknown Recipient'],
+            date: new Date(new Date(respDate).getTime() - 3600000).toISOString(),
+            subject: (t.subject || '').replace(/^Re:\s*/i, ''),
+            body: t.originalBody || t.snippet || 'Original content not available',
+            isResponse: false
+          };
+          return { ...t, messages: [originalMsg, responseMsg] };
+        }).filter(Boolean);
+      } catch (e) {
+        console.warn('Failed to normalize legacy threads for keyword search:', e?.message || e);
+      }
+      // Filter out hidden threads and prune empty/message-less entries
+      threads = (threads || []).filter(t => t && t.id && !hiddenThreadIds.has(t.id) && Array.isArray(t.messages) && t.messages.length > 0);
+
+      if (!Array.isArray(threads) || threads.length === 0) {
+        // Fallback: synthesize minimal threads from response emails
+        const responses = (loadResponseEmails() || []).filter(e => !hiddenResponseIds.has(e.id));
+        threads = responses.map(e => ({
+          id: `pseudo-${e.id}`,
+          subject: e.subject || 'No Subject',
+          messages: [
+            {
+              id: `original-${e.id}`,
+              from: e.originalFrom || 'Unknown Sender',
+              to: [e.from || 'Unknown Recipient'],
+              date: new Date(new Date(e.date || Date.now()).getTime() - 3600000).toISOString(),
+              subject: (e.subject || '').replace(/^Re:\s*/i, ''),
+              body: e.originalBody || e.snippet || 'Original content not available',
+              isResponse: false
+            },
+            {
+              id: e.id,
+              from: e.from || 'Unknown Sender',
+              to: [e.originalFrom || 'Unknown Recipient'],
+              date: e.date || new Date().toISOString(),
+              subject: e.subject || 'No Subject',
+              body: e.body || e.snippet || '',
+              isResponse: true
+            }
+          ]
+        }));
+      }
+
+      const results = keywords.map((name) => {
+        const rx = buildRegex(name || '');
+        if (!rx) return { name, threads: [] };
+
+        const matched = threads.filter(t => {
+          let ok = false;
+
+          // Subject match on thread subject and per-message subject when requested
+          if (fields.includes('subject')) {
+            rx.lastIndex = 0;
+            const subj = String(t.subject || '');
+            ok = rx.test(subj);
+            if (!ok && Array.isArray(t.messages)) {
+              for (const m of t.messages) {
+                rx.lastIndex = 0;
+                if (rx.test(String(m.subject || ''))) { ok = true; break; }
+              }
+            }
+          }
+
+          // Body match on messages when requested
+          if (!ok && fields.includes('body') && Array.isArray(t.messages)) {
+            for (const m of t.messages) {
+              rx.lastIndex = 0;
+              if (rx.test(String(m.body || ''))) { ok = true; break; }
+            }
+          }
+          // From match on thread metadata and message From headers
+          if (!ok && fields.includes('from')) {
+            rx.lastIndex = 0;
+            const tf = String(t.originalFrom || t.from || '');
+            ok = rx.test(tf);
+            if (!ok && Array.isArray(t.messages)) {
+              for (const m of t.messages) {
+                rx.lastIndex = 0;
+                if (rx.test(String(m.from || ''))) { ok = true; break; }
+              }
+            }
+          }
+
+          return ok;
+        });
+
+        return { name, threads: matched };
+      });
+
+      return res.json({ success: true, mode: 'thread', results, allThreads: threads });
+    }
+
+    // Default groupBy=email behavior (existing functionality)
+    const responseEmails = loadResponseEmails() || [];
+    const emails = responseEmails.filter(e => !hiddenResponseIds.has(e.id));
+
+    const results = keywords.map((name) => {
+      const rx = buildRegex(name || '');
+      const matched = rx ? emails.filter(e => {
+        // Ensure fresh test for global regex
+        rx.lastIndex = 0;
+        let ok = false;
+        if (fields.includes('subject')) {
+          const subj = String(e.subject || '');
+          ok = rx.test(subj);
+        }
+        if (!ok && fields.includes('body')) {
+          rx.lastIndex = 0;
+          const body = String(e.body || '');
+          ok = rx.test(body);
+        }
+        if (!ok && fields.includes('from')) {
+          rx.lastIndex = 0;
+          const fromA = String(e.originalFrom || e.from || '');
+          ok = rx.test(fromA);
+        }
+        return ok;
+      }) : [];
+      return { name, emails: matched };
+    });
+
+    return res.json({ success: true, mode: 'email', results });
+  } catch (error) {
+    console.error('Keyword regex search failed:', error);
+    return res.status(500).json({ success: false, error: 'Search failed' });
   }
 });
 

@@ -2396,6 +2396,19 @@
         let allEmails = [];
         let currentFilter = 'all';
         let currentCategoriesOrder = [];
+        window.currentUserDisplayName = window.currentUserDisplayName || '';
+        function displayNameFromEmail(email) {
+            try {
+                const e = String(email || '').toLowerCase().trim();
+                if (e === 'ks4190@columbia.edu') return 'Karthik Sreedhar';
+                if (e === 'lc3251@columbia.edu') return 'Lydia Chilton';
+                const local = e.split('@')[0] || '';
+                const parts = local.replace(/[._-]+/g, ' ').split(' ').filter(Boolean);
+                return parts.map(p => p.charAt(0).toUpperCase() + p.slice(1)).join(' ') || email;
+            } catch (e) {
+                return email || 'You';
+            }
+        }
 
         async function loadEmails() {
             const container = document.getElementById('emailContainer');
@@ -2803,7 +2816,7 @@ function getCategoryBadgeStyle(category) {
                 emailDiv.innerHTML = `
                     <div class="email-content">
                         <div class="email-header">
-                            <div class="email-from">Karthik Sreedhar → ${originalSender}</div>
+                            <div class="email-from">${window.currentUserDisplayName || displayNameFromEmail(document.getElementById('currentUser')?.textContent || '')} → ${originalSender}</div>
                             <div class="email-date">${formatDate(email.date)}</div>
                         </div>
                         <div class="email-subject">${email.subject}</div>
@@ -5284,6 +5297,7 @@ function getCategoryBadgeStyle(category) {
                 if (data.success) {
                     // Update UI
                     currentUserSpan.textContent = userEmail;
+                    window.currentUserDisplayName = (data.displayName || displayNameFromEmail(userEmail));
                     
                     // Close dropdown
                     closeUserDropdown();
@@ -7015,26 +7029,47 @@ function previousSlide() {
                 onTertiary: () => { refreshCategoriesInModalAIV2(); },
                 type: 'confirm'
             });
-            // Append "User Guidelines" action below the existing buttons
+            // Append "User Guidelines" and "Keyword Search" actions below the existing buttons
             try {
                 const popup = document.getElementById('customPopup');
                 if (popup) {
                     const extra = document.createElement('div');
                     extra.className = 'popup-actions';
                     extra.style.paddingTop = '0';
-                    const btn = document.createElement('button');
-                    btn.className = 'popup-btn popup-btn-primary';
-                    btn.textContent = 'User Guidelines';
-                    btn.style.width = '100%';
-                    btn.onclick = () => {
+
+                    // User Guidelines button
+                    const ugBtn = document.createElement('button');
+                    ugBtn.className = 'popup-btn popup-btn-primary';
+                    ugBtn.textContent = 'User Guidelines';
+                    ugBtn.style.width = '100%';
+                    ugBtn.onclick = () => {
                         closeCustomPopup();
                         showUserGuidelinesModal();
                     };
-                    extra.appendChild(btn);
-                    popup.querySelector('.popup-content')?.appendChild(extra);
+                    extra.appendChild(ugBtn);
+
+                    // Keyword Search button
+                    const ksRow = document.createElement('div');
+                    ksRow.className = 'popup-actions';
+                    ksRow.style.paddingTop = '0';
+                    const ksBtn = document.createElement('button');
+                    ksBtn.className = 'popup-btn popup-btn-primary';
+                    ksBtn.textContent = 'Keyword Search';
+                    ksBtn.style.width = '100%';
+                    ksBtn.onclick = () => {
+                        closeCustomPopup();
+                        showKeywordSearchModal();
+                    };
+                    ksRow.appendChild(ksBtn);
+
+                    const content = popup.querySelector('.popup-content');
+                    if (content) {
+                        content.appendChild(extra);
+                        content.appendChild(ksRow);
+                    }
                 }
             } catch (e) {
-                console.error('Failed to append User Guidelines button:', e);
+                console.error('Failed to append extra buttons:', e);
             }
         }
 
@@ -7286,6 +7321,430 @@ function previousSlide() {
                 console.error('Guided generation failed:', e);
                 try { hideLoadingOverlay(); } catch (_){}
                 showErrorPopup('Failed to generate categories from guidelines. Please try again.', 'Generation Failed');
+            }
+        }
+        
+        // Keyword Search modal (identical layout to User Guidelines, separate state)
+        let keywordGuidelines = [];
+        let keywordResults = [];
+        let keywordAllThreads = [];
+        let currentKeywordSlideIndex = 0;
+
+        function ensureKeywordSearchModal() {
+            let modal = document.getElementById('keywordSearchModal');
+            if (modal) return modal;
+
+            modal = document.createElement('div');
+            modal.id = 'keywordSearchModal';
+            modal.className = 'modal';
+            modal.innerHTML = `
+                <div class="modal-content" style="max-width: 1000px; max-height: 85vh; display: flex; flex-direction: column;">
+                    <div class="modal-header">
+                        <h2 class="modal-title">Keyword Search</h2>
+                        <button class="close" onclick="closeKeywordSearchModal()">&times;</button>
+                    </div>
+                    <div style="padding: 16px; display: flex; flex-direction: column; gap: 12px; flex: 1 1 auto; min-height: 0;">
+                        <div style="font-size: 13px; color: #666;">
+                            Enter category names as keywords. We will search all emails (subject and body) for these keywords and show grouped results.
+                        </div>
+                        <div style="display:flex; justify-content:flex-end; gap:8px;">
+                            <button class="select-email-btn" id="addKeywordGuidelineBtn" style="background:#28a745;">+ Add Category</button>
+                            <button class="select-email-btn" id="saveKeywordGuidelinesBtn" style="background:#6c757d;">Save</button>
+                        </div>
+                        <div id="keywordGuidelinesEditor" style="flex:1 1 auto; overflow:auto; border:1px solid #e9ecef; border-radius:8px; background:#fff; padding:12px;">
+                            <div class="loading">Loading...</div>
+                        </div>
+                        <div style="display:flex; justify-content:center; gap:12px; padding-top:8px;">
+                            <button class="carousel-btn carousel-btn-cancel" type="button" onclick="closeKeywordSearchModal()">Cancel</button>
+                            <button class="carousel-btn carousel-btn-add" type="button" id="generateFromKeywordsBtn">Generate Categories</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+            modal.addEventListener('click', (ev) => {
+                if (ev.target === modal) closeKeywordSearchModal();
+            });
+            document.body.appendChild(modal);
+
+            // Wire buttons
+            modal.querySelector('#addKeywordGuidelineBtn').addEventListener('click', addKeywordGuidelineRow);
+            modal.querySelector('#saveKeywordGuidelinesBtn').addEventListener('click', saveKeywordGuidelines);
+            modal.querySelector('#generateFromKeywordsBtn').addEventListener('click', generateCategoriesFromKeywords);
+
+            return modal;
+        }
+
+        function closeKeywordSearchModal() {
+            const modal = document.getElementById('keywordSearchModal');
+            if (modal) modal.style.display = 'none';
+        }
+
+        async function showKeywordSearchModal() {
+            const modal = ensureKeywordSearchModal();
+            try {
+                // Load any existing guidelines as a starting point (identical to User Guidelines behavior)
+                const resp = await fetch('/api/category-guidelines');
+                const data = await resp.json();
+                keywordGuidelines = Array.isArray(data.categories) && data.categories.length
+                    ? data.categories.slice()
+                    : [{ name: '', notes: '' }];
+            } catch (e) {
+                console.error('Failed to load guidelines for keyword search:', e);
+                keywordGuidelines = [{ name: '', notes: '' }];
+            }
+            renderKeywordGuidelinesEditor();
+            modal.style.display = 'block';
+        }
+
+        function renderKeywordGuidelinesEditor() {
+            const editor = document.getElementById('keywordGuidelinesEditor');
+            if (!editor) return;
+            if (!Array.isArray(keywordGuidelines) || !keywordGuidelines.length) {
+                editor.innerHTML = '<div class="loading">No categories yet. Click "Add Category" to begin.</div>';
+                return;
+            }
+            editor.innerHTML = '';
+            keywordGuidelines.forEach((g, idx) => {
+                const row = document.createElement('div');
+                row.style.border = '1px solid #e9ecef';
+                row.style.borderLeft = '4px solid #c19a6b';
+                row.style.borderRadius = '6px';
+                row.style.padding = '10px';
+                row.style.marginBottom = '10px';
+                row.innerHTML = `
+                    <div style="display:flex; gap:8px; align-items:center; margin-bottom:8px;">
+                        <label style="min-width:90px; font-size:13px; color:#555;">Category</label>
+                        <input type="text"
+                               value="${(g.name || '').replace(/&/g,'&').replace(/"/g, '"').replace(/</g,'<').replace(/>/g,'>')}"
+                               oninput="keywordGuidelines[${idx}].name = this.value"
+                               placeholder="Category name (keyword to search)"
+                               style="flex:1; padding:8px; border:1px solid #ddd; border-radius:6px; font-size:14px;">
+                        <button class="refinement-delete-btn" style="padding:6px 10px; font-size:12px;" onclick="removeKeywordGuidelineRow(${idx})">Delete</button>
+                    </div>
+                    <div>
+                        <label style="display:block; font-size:13px; color:#555; margin-bottom:6px;">More Info (optional)</label>
+                        <textarea oninput="keywordGuidelines[${idx}].notes = this.value"
+                                  placeholder="Notes (not used in the search, for your reference)"
+                                  style="width:100%; min-height:80px; padding:10px; border:1px solid #ddd; border-radius:6px; font-size:14px; resize:vertical;">${(g.notes || '').replace(/&/g,'&').replace(/</g, '<').replace(/>/g, '>')}</textarea>
+                    </div>
+                `;
+                editor.appendChild(row);
+            });
+        }
+
+        function addKeywordGuidelineRow() {
+            keywordGuidelines.push({ name: '', notes: '' });
+            renderKeywordGuidelinesEditor();
+        }
+
+        function removeKeywordGuidelineRow(index) {
+            keywordGuidelines.splice(index, 1);
+            if (keywordGuidelines.length === 0) keywordGuidelines.push({ name: '', notes: '' });
+            renderKeywordGuidelinesEditor();
+        }
+
+        async function saveKeywordGuidelines() {
+            // Identical persistence as User Guidelines for convenience
+            try {
+                const payload = keywordGuidelines
+                    .map(c => ({ name: String(c?.name || '').trim(), notes: String(c?.notes || '') }))
+                    .filter(c => c.name);
+                const resp = await fetch('/api/category-guidelines', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ categories: payload })
+                });
+                const data = await resp.json();
+                if (!resp.ok || !data.success) throw new Error(data.error || 'Save failed');
+                showSuccessPopup('Saved.', 'Keyword Search');
+            } catch (e) {
+                console.error('Save keyword guidelines failed:', e);
+                showErrorPopup('Failed to save. Please try again.', 'Save Failed');
+            }
+        }
+
+        function ensureKeywordSearchResultsModal() {
+            let modal = document.getElementById('keywordSearchResultsModal');
+            if (modal) return modal;
+
+            modal = document.createElement('div');
+            modal.id = 'keywordSearchResultsModal';
+            modal.className = 'modal';
+            modal.innerHTML = `
+                <div class="modal-content thread-carousel-modal">
+                    <div class="modal-header">
+                        <h2 class="modal-title">Keyword Search Results</h2>
+                        <button class="close" onclick="closeKeywordSearchResultsModal()">&times;</button>
+                    </div>
+                    <div class="thread-carousel-container">
+                        <div class="carousel-header">
+                            <div class="carousel-info" id="keywordCarouselInfo">Loading...</div>
+                            <div class="carousel-controls">
+                                <button class="carousel-nav-btn" id="keywordPrevBtn" onclick="previousKeywordSlide()" disabled>← Previous</button>
+                                <span class="carousel-counter" id="keywordCarouselCounter">1 / 1</span>
+                                <button class="carousel-nav-btn" id="keywordNextBtn" onclick="nextKeywordSlide()" disabled>Next →</button>
+                            </div>
+                        </div>
+                        <div class="thread-carousel" id="keywordResultsCarousel">
+                            <!-- Slides go here -->
+                        </div>
+                        <div class="carousel-actions">
+                            <button class="carousel-btn carousel-btn-cancel" onclick="closeKeywordSearchResultsModal()">Close</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+            modal.addEventListener('click', (ev) => {
+                if (ev.target === modal) closeKeywordSearchResultsModal();
+            });
+            document.body.appendChild(modal);
+            return modal;
+        }
+
+        function closeKeywordSearchResultsModal() {
+            const modal = document.getElementById('keywordSearchResultsModal');
+            if (modal) modal.style.display = 'none';
+            keywordResults = [];
+            currentKeywordSlideIndex = 0;
+        }
+
+        function populateKeywordSearchResultsCarousel() {
+            const carousel = document.getElementById('keywordResultsCarousel');
+            const info = document.getElementById('keywordCarouselInfo');
+            const counter = document.getElementById('keywordCarouselCounter');
+            if (!carousel || !info || !counter) return;
+
+            // Helper to render a single thread as a collapsible block (summary shows subject only)
+            const threadToCollapsibleHTML = (thread) => {
+                const subject = escapeHtml(thread.subject || 'No Subject');
+                const msgs = Array.isArray(thread.messages) ? thread.messages : [];
+                const msgsHtml = msgs.map(m => {
+                    const from = escapeHtml(m.from || 'Unknown Sender');
+                    const date = formatDate(m.date || new Date().toISOString());
+                    const subj = escapeHtml(m.subject || '');
+                    const body = escapeHtml(m.body || '');
+                    const cls = m.isResponse ? 'response' : 'original';
+                    return `
+                        <div class="thread-message-preview ${cls}">
+                            <div class="message-preview-header">
+                                <div class="message-preview-from">${from}${m.isResponse ? ' (Your Response)' : ''}</div>
+                                <div class="message-preview-date">${date}</div>
+                            </div>
+                            <div class="message-preview-subject" style="padding: 8px 12px; font-size: 13px; color: #333;">
+                                <strong>Subject:</strong> ${subj}
+                            </div>
+                            <div class="message-preview-body">${body}</div>
+                        </div>
+                    `;
+                }).join('');
+                return `
+                    <details class="keyword-thread-collapsible" style="margin-bottom: 10px;">
+                        <summary style="cursor: pointer; font-size: 14px; padding: 8px 12px; background:#f8f9fa; border:1px solid #e9ecef; border-radius:6px;">
+                            <strong>${subject}</strong>
+                            <span class="thread-meta" style="color:#666; font-weight:400;"> (${msgs.length} message${msgs.length === 1 ? '' : 's'})</span>
+                        </summary>
+                        <div class="thread-messages" style="margin-top:10px;">
+                            ${msgsHtml || '<div class="no-emails" style="padding: 12px;">No messages available.</div>'}
+                        </div>
+                    </details>
+                `;
+            };
+
+            carousel.innerHTML = '';
+            if (!Array.isArray(keywordResults) || keywordResults.length === 0) {
+                carousel.innerHTML = '<div class="loading">No results to display.</div>';
+                info.textContent = 'No keyword groups';
+                counter.textContent = '0 / 0';
+                return;
+            }
+
+            // Build slides: one per keyword group (threads), already prepared by generateCategoriesFromKeywords()
+            const uniqueTotal = Array.isArray(keywordAllThreads)
+                ? keywordAllThreads.length
+                : (() => {
+                    try {
+                        const ids = new Set();
+                        (keywordResults || []).forEach(g => (g.threads || []).forEach(t => ids.add(t.id)));
+                        return ids.size;
+                    } catch { return 0; }
+                  })();
+            info.textContent = `Found ${keywordResults.length} group${keywordResults.length === 1 ? '' : 's'} • ${uniqueTotal} total thread${uniqueTotal === 1 ? '' : 's'}`;
+            counter.textContent = `1 / ${keywordResults.length}`;
+
+            keywordResults.forEach((group, index) => {
+                const slide = document.createElement('div');
+                slide.className = `thread-slide ${index === 0 ? 'active' : ''}`;
+
+                const threads = Array.isArray(group.threads)
+                    ? group.threads
+                    : []; // Fallback handled below
+                const count = threads.length;
+
+                const itemsHtml = threads.length
+                    ? threads.map(threadToCollapsibleHTML).join('')
+                    : `<div class="no-emails" style="padding: 16px;">No threads matched this keyword.</div>`;
+
+                slide.innerHTML = `
+                    <div class="thread-preview">
+                        <div class="thread-subject">
+                            ${group.isOther 
+                                ? ('Other Threads (no keyword match) — ' + count + ' thread' + (count === 1 ? '' : 's'))
+                                : ('Keyword: ' + escapeHtml(group.name || '') + ' — ' + count + ' thread' + (count === 1 ? '' : 's'))}
+                        </div>
+                        <div class="thread-messages">
+                            ${itemsHtml}
+                        </div>
+                    </div>
+                `;
+                carousel.appendChild(slide);
+            });
+
+            updateKeywordCarouselNavigation();
+        }
+
+        function previousKeywordSlide() {
+            if (currentKeywordSlideIndex > 0) {
+                currentKeywordSlideIndex--;
+                updateKeywordCarouselDisplay();
+            }
+        }
+
+        function nextKeywordSlide() {
+            if (currentKeywordSlideIndex < keywordResults.length - 1) {
+                currentKeywordSlideIndex++;
+                updateKeywordCarouselDisplay();
+            }
+        }
+
+        function updateKeywordCarouselDisplay() {
+            const slides = document.querySelectorAll('#keywordResultsCarousel .thread-slide');
+            slides.forEach((slide, index) => {
+                slide.classList.toggle('active', index === currentKeywordSlideIndex);
+            });
+            const counter = document.getElementById('keywordCarouselCounter');
+            if (counter) counter.textContent = `${currentKeywordSlideIndex + 1} / ${keywordResults.length}`;
+            updateKeywordCarouselNavigation();
+        }
+
+        function updateKeywordCarouselNavigation() {
+            const prevBtn = document.getElementById('keywordPrevBtn');
+            const nextBtn = document.getElementById('keywordNextBtn');
+            if (prevBtn) prevBtn.disabled = currentKeywordSlideIndex === 0;
+            if (nextBtn) nextBtn.disabled = currentKeywordSlideIndex === keywordResults.length - 1;
+        }
+
+        async function generateCategoriesFromKeywords() {
+            try {
+                // Collect category names (keywords)
+                const keywords = (keywordGuidelines || [])
+                    .map(c => String(c?.name || '').trim())
+                    .filter(n => n);
+
+                if (!keywords.length) {
+                    showErrorPopup('Please add at least one category name (keyword).', 'No Keywords');
+                    return;
+                }
+
+                // Prefer backend regex search grouped by thread
+                let results = [];
+                keywordAllThreads = [];
+                try {
+                    const resp = await fetch('/api/search-by-keywords', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            keywords,
+                            options: {
+                                fields: ['subject', 'body', 'from'],
+                                caseSensitive: false,
+                                wholeWord: false,
+                                groupBy: 'thread'
+                            }
+                        })
+                    });
+                    const data = await resp.json();
+                    if (!resp.ok || !data.success) {
+                        throw new Error(data.error || 'Search failed');
+                    }
+                    results = Array.isArray(data.results) ? data.results : [];
+                    keywordAllThreads = Array.isArray(data.allThreads) ? data.allThreads : [];
+                } catch (err) {
+                    console.warn('Backend thread regex search failed, falling back to client filtering by email:', err);
+                    // Fallback: client-side email-level grouping -> synthesize pseudo-threads with one message
+                    let emails = [];
+                    try {
+                        const r = await fetch('/api/response-emails');
+                        const d = await r.json();
+                        emails = Array.isArray(d.emails) ? d.emails : [];
+                    } catch (e) {
+                        console.error('Failed to load response emails for fallback:', e);
+                        emails = [];
+                    }
+                    // Build pseudo threads list and map for "Other" calculation
+                    keywordAllThreads = emails.map(e => ({
+                        id: `pseudo-${e.id}`,
+                        subject: e.subject || 'No Subject',
+                        messages: [
+                            {
+                                id: e.id,
+                                from: e.originalFrom || e.from || 'Unknown Sender',
+                                to: [e.from || 'Unknown Recipient'],
+                                date: e.date || new Date().toISOString(),
+                                subject: e.subject || 'No Subject',
+                                body: e.body || e.snippet || '',
+                                isResponse: true
+                            }
+                        ]
+                    }));
+
+                    results = keywords.map(name => {
+                        const needle = name.toLowerCase();
+                        const matchedThreads = keywordAllThreads.filter(t => {
+                            const threadSubj = String(t.subject || '').toLowerCase();
+                            if (threadSubj.includes(needle)) return true;
+                            return (t.messages || []).some(m => (String(m.subject || '').toLowerCase().includes(needle) ||
+                                                                 String(m.body || '').toLowerCase().includes(needle)));
+                        });
+                        return { name, threads: matchedThreads };
+                    });
+                }
+
+                // Normalize: prune message-less threads but KEEP empty keyword groups so every entered keyword shows
+                try {
+                    results = (results || [])
+                        .map(g => ({
+                            ...g,
+                            threads: (g.threads || []).filter(t => Array.isArray(t.messages) && t.messages.length > 0)
+                        }));
+                } catch (e) {
+                    console.warn('Failed to normalize keyword results:', e);
+                }
+
+                // Compute unmatched threads and append a final "Other Threads" slide (always include, even if empty)
+                try {
+                    const matchedIds = new Set();
+                    results.forEach(g => (g.threads || []).forEach(t => matchedIds.add(t.id)));
+                    const otherThreads = (keywordAllThreads || [])
+                        .filter(t => Array.isArray(t.messages) && t.messages.length > 0)
+                        .filter(t => !matchedIds.has(t.id));
+                    results.push({ name: 'Other Threads', threads: otherThreads, isOther: true });
+                } catch (e) {
+                    console.warn('Failed to compute unmatched threads:', e);
+                }
+
+                keywordResults = results;
+                currentKeywordSlideIndex = 0;
+
+                // Show results carousel
+                const modal = ensureKeywordSearchResultsModal();
+                populateKeywordSearchResultsCarousel();
+                modal.style.display = 'block';
+
+                // Close the entry modal
+                closeKeywordSearchModal();
+            } catch (e) {
+                console.error('Keyword search failed:', e);
+                showErrorPopup('Failed to generate keyword-based categories. Please try again.', 'Keyword Search Failed');
             }
         }
 
@@ -8013,6 +8472,7 @@ function escapeHtml(s) {
                 const response = await fetch('/api/current-user');
                 const data = await response.json();
                 document.getElementById('currentUser').textContent = data.currentUser;
+                window.currentUserDisplayName = data.displayName || displayNameFromEmail(data.currentUser);
             } catch (error) {
                 console.error('Error loading current user:', error);
             }
