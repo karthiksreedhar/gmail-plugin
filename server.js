@@ -5077,6 +5077,222 @@ Return ONLY JSON with exactly N ids (pick the best N overall).`;
   }
 });
 
+/**
+ * Suggest categories from "Other" using rules + AI
+ * POST /api/suggest-categories-from-other
+ * Input: { emailIds: string[] }
+ * Output: {
+ *   success: true,
+ *   suggestions: [
+ *     { name: string, emailIds: string[], source: 'person'|'topic'|'ai' }
+ *   ]
+ * }
+ *
+ * Rules:
+ * 1) Person category: any person (originalFrom sender) appearing in > 5 emails (i.e., >= 6) becomes a suggested category.
+ * 2) Topic category: any subject/body-similarity bucket with > 10 emails (i.e., >= 11) becomes a suggested category.
+ * 3) AI categories: remaining emails are grouped by an OpenAI call; each suggested category must have >= 5 emails.
+ * Notes:
+ * - An email can appear in only one suggestion; precedence order is person -> topic -> ai.
+ */
+app.post('/api/suggest-categories-from-other', async (req, res) => {
+  try {
+    const { emailIds } = req.body || {};
+    if (!Array.isArray(emailIds) || emailIds.length === 0) {
+      return res.status(400).json({ success: false, error: 'emailIds array is required' });
+    }
+
+    const MIN_PERSON = 6; // >5
+    const MIN_TOPIC = 11; // >10
+    const MIN_AI = 5;
+
+    // Load response emails and index by id
+    const allResponses = loadResponseEmails() || [];
+    const byId = new Map(allResponses.map(e => [e.id, e]));
+    const others = emailIds.map(id => byId.get(id)).filter(Boolean);
+
+    if (others.length === 0) {
+      return res.json({ success: true, suggestions: [] });
+    }
+
+    const lower = (s) => String(s || '').toLowerCase().trim();
+    const normSpace = (s) => String(s || '').replace(/\s+/g, ' ').trim();
+
+    // Person extraction from originalFrom (prefer email address)
+    const emailAddrRe = /<?([A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})>?/i;
+    const personKeyOf = (e) => {
+      const src = e.originalFrom || e.from || '';
+      const m = src.match(emailAddrRe);
+      if (m && m[1]) return lower(m[1]);
+      // fallback to simplified display name
+      return lower(src.replace(/<[^>]*>/g, '').replace(/"/g, '').trim());
+    };
+    const personLabelOf = (e) => {
+      const src = e.originalFrom || e.from || '';
+      const m = src.match(emailAddrRe);
+      if (m && m[1]) return src; // keep display name + email if present
+      return src || 'Unknown Person';
+    };
+
+    // 1) Person-based buckets
+    const personBuckets = new Map(); // key -> { label, ids: [] }
+    for (const e of others) {
+      const k = personKeyOf(e);
+      if (!k) continue;
+      if (!personBuckets.has(k)) personBuckets.set(k, { label: personLabelOf(e), ids: [] });
+      personBuckets.get(k).ids.push(e.id);
+    }
+    const personSuggestions = [];
+    for (const [k, v] of personBuckets.entries()) {
+      if ((v.ids || []).length >= MIN_PERSON) {
+        // Category name: use the visible portion of label (prefer display name if available)
+        const label = String(v.label || '').trim();
+        const name = label || `Person: ${k}`;
+        personSuggestions.push({ name, emailIds: v.ids.slice(), source: 'person' });
+      }
+    }
+
+    // Remove used ids to avoid duplicates in later passes
+    const used = new Set(personSuggestions.flatMap(s => s.emailIds));
+    const remainingAfterPerson = others.filter(e => !used.has(e.id));
+
+    // 2) Topic-based buckets from subject + snippet (simple token signature)
+    const stop = new Set([
+      'the','a','an','and','or','of','in','on','at','to','for','from','by','with','about','as','is','it','this','that',
+      'be','are','was','were','will','shall','would','should','could','can','do','does','did','has','have','had',
+      'i','you','he','she','we','they','them','me','my','your','our','their','his','her',
+      're','fw','fwd','dear','hi','hello','thanks','thank','regards','best','please'
+    ]);
+    const tokenize = (s) => lower(s).replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter(w => w && w.length >= 2 && !stop.has(w));
+    const signatureOf = (e) => {
+      const subj = e.subject || '';
+      const text = (e.snippet || e.body || '').slice(0, 300);
+      const toks = tokenize(subj + ' ' + text);
+      if (!toks.length) return '';
+      // pick top few frequent tokens
+      const freq = new Map();
+      toks.forEach(t => freq.set(t, (freq.get(t) || 0) + 1));
+      const tops = Array.from(freq.entries()).sort((a,b) => b[1]-a[1] || a[0].localeCompare(b[0])).slice(0, 3).map(([t]) => t);
+      return tops.join('|');
+    };
+    const topicBuckets = new Map(); // sig -> { tokens: string[], ids: [] }
+    for (const e of remainingAfterPerson) {
+      const sig = signatureOf(e);
+      if (!sig) continue;
+      if (!topicBuckets.has(sig)) topicBuckets.set(sig, { tokens: sig.split('|'), ids: [] });
+      topicBuckets.get(sig).ids.push(e.id);
+    }
+    const topicSuggestions = [];
+    for (const [sig, v] of topicBuckets.entries()) {
+      if ((v.ids || []).length >= MIN_TOPIC) {
+        const tokens = (v.tokens || []).map(t => t.charAt(0).toUpperCase() + t.slice(1));
+        const name = tokens.length ? `Topic: ${tokens.join(' ')}` : 'Topic Cluster';
+        topicSuggestions.push({ name, emailIds: v.ids.slice(), source: 'topic' });
+      }
+    }
+
+    // Remove used ids again
+    topicSuggestions.forEach(s => s.emailIds.forEach(id => used.add(id)));
+    const remaining = others.filter(e => !used.has(e.id));
+
+    // 3) AI suggestions for remaining emails (grouping with min size constraint)
+    const aiSuggestions = [];
+    if (remaining.length >= MIN_AI) {
+      const compact = remaining.map(e => ({
+        id: e.id,
+        subject: e.subject || 'No Subject',
+        from: e.originalFrom || e.from || 'Unknown Sender',
+        date: e.date || new Date().toISOString(),
+        snippet: e.snippet || (e.body ? String(e.body).slice(0, 160) + (e.body.length > 160 ? '...' : '') : 'No content available')
+      }));
+      const SYSTEM = `You group emails into categories. Given a list of emails (id, subject, from, snippet), produce categories with at least ${MIN_AI} items per category.
+Rules:
+- Output only groups with size >= ${MIN_AI}.
+- Use short, descriptive category names that reflect a common theme (person/topic/process).
+- Use each ID at most once.
+- Return strictly valid JSON: {"categories":[{"name":"...","emails":["id1","id2",...]}]}`;
+      const USER = `Emails (JSON):
+${JSON.stringify({ emails: compact }, null, 2)}
+
+Return ONLY the JSON object.`;
+
+      // helper to parse possible JSON outputs
+      const parseJson = (txt) => {
+        if (typeof txt === 'object' && txt) return txt;
+        const t = String(txt || '').trim();
+        try { return JSON.parse(t); } catch {}
+        const fence = t.match(/```(?:json)?\s*([\s\S]*?)```/i);
+        if (fence && fence[1]) { try { return JSON.parse(fence[1].trim()); } catch {} }
+        const first = t.indexOf('{'); const last = t.lastIndexOf('}');
+        if (first !== -1 && last !== -1 && last > first) { try { return JSON.parse(t.slice(first, last + 1)); } catch {} }
+        return null;
+      };
+
+      let raw = null;
+      try {
+        const completion = await openai.chat.completions.create({
+          model: "o3",
+          messages: [
+            { role: "system", content: SYSTEM },
+            { role: "user", content: USER }
+          ],
+          max_completion_tokens: 900,
+          response_format: { type: "json_object" }
+        });
+        raw = completion.choices?.[0]?.message?.content || '';
+      } catch (e1) {
+        try {
+          const retry = await openai.chat.completions.create({
+            model: "gpt-4o-mini",
+            messages: [
+              { role: "system", content: SYSTEM },
+              { role: "user", content: USER }
+            ],
+            max_completion_tokens: 900,
+            response_format: { type: "json_object" }
+          });
+          raw = retry.choices?.[0]?.message?.content || '';
+        } catch (e2) {
+          raw = '';
+        }
+      }
+
+      const parsed = parseJson(raw) || {};
+      const cats = Array.isArray(parsed.categories) ? parsed.categories : [];
+      const seenInAi = new Set();
+      for (const cat of cats) {
+        const nameRaw = (cat && cat.name != null) ? String(cat.name).trim() : '';
+        const ids = Array.isArray(cat?.emails) ? cat.emails.map(String) : [];
+        // de-dup & filter unknown/used ids, enforce min size
+        const valid = [];
+        for (const id of ids) {
+          if (!byId.has(id)) continue;
+          if (used.has(id)) continue;
+          if (seenInAi.has(id)) continue;
+          seenInAi.add(id);
+          valid.push(id);
+        }
+        if (nameRaw && valid.length >= MIN_AI) {
+          aiSuggestions.push({ name: nameRaw.slice(0, 120), emailIds: valid, source: 'ai' });
+          // mark used to prevent overlaps across AI categories too
+          valid.forEach(id => used.add(id));
+        }
+      }
+    }
+
+    const suggestions = [
+      ...personSuggestions,
+      ...topicSuggestions,
+      ...aiSuggestions
+    ];
+
+    return res.json({ success: true, suggestions });
+  } catch (error) {
+    console.error('suggest-categories-from-other failed:', error);
+    return res.status(500).json({ success: false, error: 'Failed to suggest categories' });
+  }
+});
+
 // Serve the main HTML file
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
