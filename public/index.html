@@ -8867,11 +8867,11 @@ function escapeHtml(s) {
 
         function saveKeywordGrouping() {
             try {
-                // Build category buckets from working groups (exclude Other)
+                // Build category buckets from working groups (INCLUDE Other so it appears in the editor)
                 const buckets = [];
                 const groupList = getWorkingGroupsRef();
                 for (const g of groupList) {
-                    if (!g || g.isOther) continue;
+                    if (!g) continue;
                     const emails = [];
                     const seen = new Set();
                     for (const t of (g.threads || [])) {
@@ -8892,16 +8892,26 @@ function escapeHtml(s) {
                             snippet: e.snippet || (e.body ? String(e.body).slice(0, 120) + (e.body.length > 120 ? '...' : '') : 'No content available')
                         });
                     }
-                    // Only include non-empty buckets
-                    if (emails.length) {
-                        buckets.push({ name: g.name || 'Unnamed', originalName: g.name || 'Unnamed', emails });
+
+                    // Name buckets; ensure "Other" shows even if empty
+                    const bucketName = g.isOther ? 'Other' : (g.name || 'Unnamed');
+                    const bucket = { name: bucketName, originalName: bucketName, emails };
+
+                    if (g.isOther) {
+                        // Always include "Other" bucket
+                        buckets.push(bucket);
+                    } else {
+                        // Only include non-empty keyword buckets to avoid clutter
+                        if (emails.length) buckets.push(bucket);
                     }
                 }
+
                 if (!buckets.length) {
-                    showErrorPopup('No matching response emails found to save. Try adding threads that correspond to existing responses.', 'Nothing to Save');
-                    return;
+                    // If only "Other" exists and is empty, still show it so user sees the bucket
+                    buckets.push({ name: 'Other', originalName: 'Other', emails: [] });
                 }
-                // Open Categories editor with pre-populated buckets
+
+                // Open Categories editor with pre-populated buckets (now includes "Other")
                 startCategoriesEditorWithBuckets(buckets);
             } catch (e) {
                 console.error('saveKeywordGrouping failed:', e);
