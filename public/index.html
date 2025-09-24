@@ -8913,6 +8913,8 @@ function escapeHtml(s) {
 
                 // Open Categories editor with pre-populated buckets (now includes "Other")
                 startCategoriesEditorWithBuckets(buckets);
+                // Close the Keyword Search results carousel per UX request
+                try { closeKeywordSearchResultsModal(); } catch (_) {}
             } catch (e) {
                 console.error('saveKeywordGrouping failed:', e);
                 showErrorPopup('Failed to prepare grouping for save. Please try again.', 'Save Failed');
