@@ -7516,9 +7516,23 @@ function previousSlide() {
             if (!carousel || !info || !counter) return;
 
             // Helper to render a single thread as a collapsible block (summary shows subject only)
-            const threadToCollapsibleHTML = (thread) => {
+            const threadToCollapsibleHTML = (thread, currentIdx) => {
                 const subject = escapeHtml(thread.subject || 'No Subject');
                 const msgs = Array.isArray(thread.messages) ? thread.messages : [];
+                // Indicate duplicate membership across keyword groups (excluding "Other")
+                let alsoIn = [];
+                try {
+                    const groups = getWorkingGroupsRef();
+                    alsoIn = groups
+                        .map((g, i) => ({ g, i }))
+                        .filter(x => !x.g.isOther && x.i !== currentIdx)
+                        .filter(x => Array.isArray(x.g.threads) && x.g.threads.some(t => t && t.id === (thread && thread.id)))
+                        .map(x => String(x.g.name || ''))
+                        .slice(0, 5);
+                } catch (_) {}
+                const alsoInHtml = alsoIn.length
+                    ? `<span class="thread-meta" style="margin-left:8px;color:#6f42c1;">Also in: ${alsoIn.map(escapeHtml).join(', ')}</span>`
+                    : '';
                 const msgsHtml = msgs.map(m => {
                     const from = escapeHtml(m.from || 'Unknown Sender');
                     const date = formatDate(m.date || new Date().toISOString());
@@ -7543,6 +7557,7 @@ function previousSlide() {
                         <summary style="cursor: pointer; font-size: 14px; padding: 8px 12px; background:#f8f9fa; border:1px solid #e9ecef; border-radius:6px;">
                             <strong>${subject}</strong>
                             <span class="thread-meta" style="color:#666; font-weight:400;"> (${msgs.length} message${msgs.length === 1 ? '' : 's'})</span>
+                            ${alsoInHtml}
                         </summary>
                         <div class="thread-messages" style="margin-top:10px;">
                             ${msgsHtml || '<div class="no-emails" style="padding: 12px;">No messages available.</div>'}
@@ -7583,7 +7598,7 @@ function previousSlide() {
                 const count = threads.length;
 
                 const itemsHtml = threads.length
-                    ? threads.map(threadToCollapsibleHTML).join('')
+                    ? threads.map(t => threadToCollapsibleHTML(t, index)).join('')
                     : `<div class="no-emails" style="padding: 16px;">No threads matched this keyword.</div>`;
 
                 slide.innerHTML = `
@@ -9024,6 +9039,19 @@ function renderSuggestionsList(idx) {
 function buildSuggestionCard(thread, idx) {
     const subject = escapeHtml(thread.subject || 'No Subject');
     const msgs = Array.isArray(thread.messages) ? thread.messages : [];
+    // Indicate duplicate membership across keyword groups (excluding "Other")
+    let alsoIn = [];
+    try {
+        const groups = getWorkingGroupsRef();
+        alsoIn = groups
+            .filter(g => !g.isOther)
+            .filter(g => Array.isArray(g.threads) && g.threads.some(t => t && t.id === (thread && thread.id)))
+            .map(g => String(g.name || ''))
+            .slice(0, 5);
+    } catch (_) {}
+    const alsoInHtml = alsoIn.length
+        ? `<span class="thread-meta" style="margin-left:8px;color:#6f42c1;">Also in: ${alsoIn.map(escapeHtml).join(', ')}</span>`
+        : '';
     const msgsHtml = msgs.map(m => {
         const from = escapeHtml(m.from || 'Unknown Sender');
         const date = formatDate(m.date || new Date().toISOString());
@@ -9046,7 +9074,7 @@ function buildSuggestionCard(thread, idx) {
     return `
         <details class="keyword-thread-collapsible" style="margin-bottom: 10px; border:1px solid #e9ecef; border-radius:6px; background:#fafafa;">
             <summary style="cursor: pointer; font-size: 14px; padding: 8px 12px; background:#f8f9fa; border-bottom:1px solid #e9ecef; display:flex; justify-content:space-between; align-items:center;">
-                <span><strong>${subject}</strong> <span class="thread-meta" style="color:#666; font-weight:400;">(${msgs.length} message${msgs.length === 1 ? '' : 's'})</span></span>
+                <span><strong>${subject}</strong> <span class="thread-meta" style="color:#666; font-weight:400;">(${msgs.length} message${msgs.length === 1 ? '' : 's'})</span>${alsoInHtml}</span>
                 <span style="display:flex; gap:6px;">
                     <button class="carousel-nav-btn" style="background:#28a745; padding:4px 8px; font-size:12px;" onclick="acceptSuggestedThread(${idx}, '${String(thread.id || '').replace(/'/g, "\\'")}'); event.preventDefault(); event.stopPropagation();">Accept</button>
                     <button class="carousel-nav-btn" style="background:#dc3545; padding:4px 8px; font-size:12px;" onclick="rejectSuggestedThread(${idx}, '${String(thread.id || '').replace(/'/g, "\\'")}'); event.preventDefault(); event.stopPropagation();">Reject</button>
@@ -9112,16 +9140,68 @@ async function suggestMoreThreads(idx) {
             body: JSON.stringify(payload)
         });
 
-        let threads = [];
+        // Primary suggestions via AI
+        let aiThreads = [];
         try {
             const data = await resp.json();
             if (data && data.success && Array.isArray(data.threads)) {
-                threads = data.threads;
+                aiThreads = data.threads;
             }
         } catch (_) {}
 
+        // Heuristic suggestions: partial-token match from the keyword (e.g., "Humor Project" -> include threads with "Humor" but missing "Project")
+        const keyword = String(group.name || '');
+        const rawTokens = keyword.split(/[^A-Za-z0-9]+/).map(s => s.trim()).filter(Boolean);
+        // Keep informative tokens (length >= 3); if filtered empty, fall back to any tokens
+        const tokens = rawTokens.filter(t => t.length >= 3);
+        const useTokens = tokens.length ? tokens : rawTokens;
+
+        const textOf = (t) => {
+            try {
+                const subj = String(t.subject || '');
+                const msgs = Array.isArray(t.messages) ? t.messages : [];
+                const parts = [subj];
+                for (const m of msgs) {
+                    parts.push(String(m.subject || ''));
+                    parts.push(String(m.body || ''));
+                }
+                return parts.join(' ').toLowerCase();
+            } catch { return ''; }
+        };
+
+        const tokenContains = (text, tok) => text.indexOf(String(tok).toLowerCase()) !== -1;
+
+        const partialMatches = [];
+        if (useTokens.length) {
+            for (const t of candidatesRaw) {
+                const text = textOf(t);
+                if (!text) continue;
+                const any = useTokens.some(tok => tokenContains(text, tok));
+                const all = useTokens.every(tok => tokenContains(text, tok));
+                // Include threads that contain at least one token but not all tokens (i.e., partial match)
+                if (any && !all) {
+                    partialMatches.push(t);
+                }
+            }
+        }
+
+        // Merge AI + Heuristic, de-duplicate by id, keep up to 12
+        const seen = new Set();
+        const merged = [];
+        const pushUnique = (arr) => {
+            for (const t of arr) {
+                const id = t && t.id;
+                if (!id || seen.has(id)) continue;
+                seen.add(id);
+                merged.push(t);
+                if (merged.length >= 12) break;
+            }
+        };
+        pushUnique(aiThreads);
+        if (merged.length < 12) pushUnique(partialMatches);
+
         const store = getSuggestionsRef();
-        store[idx] = threads;
+        store[idx] = merged;
         renderSuggestionsList(idx);
     } catch (e) {
         console.error('suggestMoreThreads failed:', e);
@@ -9233,11 +9313,13 @@ function fieldContains(hay, needle) {
             } catch { return false; }
         }
 
-        function removeThreadFromAllGroups(threadId) {
+        function removeThreadFromOtherOnly(threadId) {
             const groups = getWorkingGroupsRef();
             for (const g of groups) {
                 if (!Array.isArray(g.threads)) continue;
-                g.threads = g.threads.filter(t => t && t.id !== threadId);
+                if (g.isOther) {
+                    g.threads = g.threads.filter(t => t && t.id !== threadId);
+                }
             }
         }
 
@@ -9259,10 +9341,11 @@ function fieldContains(hay, needle) {
             const ids = Array.from(new Set((threadIds || []).filter(Boolean)));
             if (!ids.length) return;
             ids.forEach(id => {
-                removeThreadFromAllGroups(id);
+                // Allow threads to appear in multiple keyword groups; only remove from "Other"
+                removeThreadFromOtherOnly(id);
                 addThreadToGroup(id, idx);
             });
-            // Ensure "Other Threads" remains the last group and contains the remainder (optional: we recompute Other)
+            // Rebuild "Other" so it only contains threads not present in any keyword group
             rebuildOtherGroup();
         }
 
