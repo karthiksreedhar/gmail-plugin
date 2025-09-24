@@ -2105,10 +2105,10 @@ app.post('/api/load-email-threads', async (req, res) => {
   try {
     const { threadCount, dateFilter } = req.body;
     
-    if ((!threadCount || threadCount < 1 || threadCount > 100) && dateFilter !== 'today') {
+    if ((!threadCount || threadCount < 1 || threadCount > 500) && dateFilter !== 'today') {
       return res.status(400).json({ 
         success: false, 
-        error: 'Thread count must be between 1 and 100' 
+        error: 'Thread count must be between 1 and 500' 
       });
     }
 
@@ -2270,7 +2270,7 @@ app.post('/api/load-email-threads', async (req, res) => {
       const uniqueThreads = [];
       let fetchAttempts = 0;
       const maxFetchAttempts = 5;
-      let currentSearchLimit = Math.min(threadCount * 5, 500); // Start with 5x to account for duplicates/non-replies (cap 500)
+      let currentSearchLimit = Math.min(threadCount * 5, 2000); // Start with 5x to account for duplicates/non-replies (cap 2000)
 
       while (uniqueThreads.length < threadCount && fetchAttempts < maxFetchAttempts) {
         fetchAttempts++;
@@ -2408,7 +2408,7 @@ app.post('/api/load-email-threads', async (req, res) => {
 
         // If we still need more threads, increase the search limit for next attempt
         if (uniqueThreads.length < threadCount) {
-          currentSearchLimit = Math.min(currentSearchLimit * 2, 500); // Cap at 500
+          currentSearchLimit = Math.min(currentSearchLimit * 2, 2000); // Cap at 2000
           console.log(`Need ${threadCount - uniqueThreads.length} more unique threads, increasing search to ${currentSearchLimit}`);
         }
       }
@@ -4900,6 +4900,12 @@ app.post('/api/keyword-group-suggestions-openai', async (req, res) => {
     const CAND = Array.isArray(candidates) ? candidates : [];
     const K = Math.max(1, Math.min(50, Number.isFinite(topK) ? topK : 12));
 
+    // Keyword tokens (for partial-token matches in suggestions)
+    const rawKeyword = typeof req.body.keyword === 'string' ? req.body.keyword : '';
+    const rawTokens = rawKeyword.split(/[^A-Za-z0-9]+/).map(s => s.trim()).filter(Boolean);
+    const tokensFiltered = rawTokens.filter(t => t.length >= 3);
+    const keywordTokens = tokensFiltered.length ? tokensFiltered : rawTokens;
+
     if (POS.length === 0) {
       return res.status(400).json({ success: false, error: 'positives array is required (at least 1 thread)' });
     }
@@ -4997,6 +5003,13 @@ ${JSON.stringify(compact.candidates, null, 2)}
 Return ONLY JSON with exactly N ids (pick the best N overall).`;
       }
 
+      // Nudge model to include partial-token matches when a multi-word keyword (e.g., "Humor Project") is provided
+      if (keywordTokens.length) {
+        SYSTEM += `
+
+Preference: Include candidates containing any of these keyword tokens (even if not all tokens appear together): ${keywordTokens.join(', ')}`;
+      }
+
       let aiRaw = null;
       try {
         const completion = await openai.chat.completions.create({
@@ -5059,6 +5072,39 @@ Return ONLY JSON with exactly N ids (pick the best N overall).`;
     // Pass 3: rank (ensure we fill remaining)
     if (chosen.length < K) {
       addIds(await aiPick('rank', K - chosen.length));
+    }
+
+    // Heuristic partial-token fill (backend fallback) to ensure threads containing any single keyword token are included
+    if (keywordTokens.length && chosen.length < K) {
+      const textOf = (t) => {
+        try {
+          const subj = String(t.subject || '');
+          const msgs = Array.isArray(t.messages) ? t.messages : [];
+          const parts = [subj];
+          for (const m of msgs) {
+            parts.push(String(m.subject || ''));
+            parts.push(String(m.body || ''));
+          }
+          return parts.join(' ').toLowerCase();
+        } catch { return ''; }
+      };
+      const tokenContains = (text, tok) => text.indexOf(String(tok).toLowerCase()) !== -1;
+
+      const ids = [];
+      for (const t of CAND) {
+        const id = String(t.id || '');
+        if (!id || seen.has(id) || byId.get(id) == null) continue;
+        const text = textOf(t);
+        if (!text) continue;
+        const any = keywordTokens.some(tok => tokenContains(text, tok));
+        const all = keywordTokens.every(tok => tokenContains(text, tok));
+        // Include threads that contain at least one token but not all tokens (i.e., partial match)
+        if (any && !all) {
+          ids.push(id);
+          if (chosen.length + ids.length >= K) break;
+        }
+      }
+      addIds(ids);
     }
 
     // Map to full thread objects

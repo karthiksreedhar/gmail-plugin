@@ -5530,13 +5530,6 @@ function getCategoryBadgeStyle(category) {
             modal.id = 'loadEmailThreadsModal';
             modal.className = 'modal';
 
-            // Build 1..100 options; default select 3
-            const threadOptions = Array.from({ length: 100 }, (_, i) => {
-                const n = i + 1;
-                const label = `${n} Thread${n === 1 ? '' : 's'}`;
-                const sel = n === 3 ? ' selected' : '';
-                return `<option value="${n}"${sel}>${label}</option>`;
-            }).join('');
 
             modal.innerHTML = `
                 <div class="modal-content load-threads-modal">
@@ -5551,11 +5544,14 @@ function getCategoryBadgeStyle(category) {
                         </div>
                         
                         <div class="thread-count-selector">
-                            <label for="threadCountDropdown">Number of Threads to Load:</label>
-                            <select id="threadCountDropdown" class="thread-count-dropdown" size="3">
-                                ${threadOptions}
-                                <option value="today">All from Today</option>
-                            </select>
+                            <label for="threadCountInput">Number of Threads to Load:</label>
+                            <input id="threadCountInput" type="number" min="1" max="500" value="3" step="1" class="thread-count-dropdown" style="width: 120px;" />
+                            <div style="margin-top:8px;">
+                                <label style="display:flex; align-items:center; gap:8px; font-size: 14px;">
+                                    <input id="todayOnlyCheckbox" type="checkbox" />
+                                    <span>All from Today</span>
+                                </label>
+                            </div>
                         </div>
                         
                         <div class="load-threads-actions">
@@ -5569,9 +5565,11 @@ function getCategoryBadgeStyle(category) {
         }
 
         async function loadEmailThreads() {
-            const countVal = document.getElementById('threadCountDropdown').value;
-            const isToday = countVal === 'today';
-            const threadCount = isToday ? null : parseInt(countVal);
+            const cb = document.getElementById('todayOnlyCheckbox');
+            const input = document.getElementById('threadCountInput');
+            const isToday = !!(cb && cb.checked);
+            const countRaw = input ? parseInt(input.value, 10) : NaN;
+            const threadCount = isToday ? null : (Number.isFinite(countRaw) ? Math.min(Math.max(countRaw, 1), 500) : 3);
             lastThreadDateFilter = isToday ? 'today' : null;
             
             // Close the initial modal
@@ -9122,7 +9120,8 @@ async function suggestMoreThreads(idx) {
         const payload = {
             positives: compactThreads(positives),
             candidates: compactThreads(candidatesRaw),
-            topK: 12
+            topK: 12,
+            keyword: String(group.name || '')
         };
 
         // If there are no candidates, show empty
