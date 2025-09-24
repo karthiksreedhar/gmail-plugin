@@ -7574,6 +7574,7 @@ function previousSlide() {
 
             keywordResults.forEach((group, index) => {
                 const slide = document.createElement('div');
+                slide.id = `keyword-slide-${index}`;
                 slide.className = `thread-slide ${index === 0 ? 'active' : ''}`;
 
                 const threads = Array.isArray(group.threads)
@@ -7611,6 +7612,7 @@ function previousSlide() {
                 `;
                 carousel.appendChild(slide);
                 try { renderFacetBoxForGroup(index); } catch (e) { console.error('Facet box render failed:', e); }
+                try { ensureSuggestionsUIForGroup(index); renderSuggestionsList(index); } catch (e) { console.error('Suggestions UI failed:', e); }
             });
 
             updateKeywordCarouselNavigation();
@@ -8743,7 +8745,217 @@ function escapeHtml(s) {
             }
         }
 
-        function fieldContains(hay, needle) {
+        /* ===== Similar Threads Suggestions (Pure OpenAI) ===== */
+
+// Suggestions store per keyword slide index
+let keywordSuggestions = (typeof window !== 'undefined' && window.keywordSuggestions) ? window.keywordSuggestions : {};
+function getSuggestionsRef() {
+    if (typeof window !== 'undefined') {
+        window.keywordSuggestions = window.keywordSuggestions || keywordSuggestions || {};
+        keywordSuggestions = window.keywordSuggestions;
+    }
+    return keywordSuggestions;
+}
+
+function ensureSuggestionsUIForGroup(idx) {
+    try {
+        const slide = document.getElementById(`keyword-slide-${idx}`);
+        if (!slide) return;
+        // Already created?
+        if (slide.querySelector(`#suggestions-box-${idx}`)) return;
+
+        const box = document.createElement('div');
+        box.className = 'suggestions-box';
+        box.id = `suggestions-box-${idx}`;
+        box.style.border = '1px solid #e9ecef';
+        box.style.borderLeft = '4px solid #17a2b8';
+        box.style.borderRadius = '8px';
+        box.style.background = '#fff';
+        box.style.padding = '12px';
+        box.style.marginTop = '12px';
+
+        box.innerHTML = `
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+                <div style="font-weight:600;color:#0c5460;">Suggested Similar Threads (AI)</div>
+                <button id="suggest-btn-${idx}" class="carousel-nav-btn" style="background:#17a2b8;" onclick="suggestMoreThreads(${idx})">Suggest More Threads</button>
+            </div>
+            <div id="suggestions-list-${idx}">
+                <div class="loading">No suggestions yet. Click "Suggest More Threads".</div>
+            </div>
+        `;
+
+        // Append below the thread preview
+        slide.appendChild(box);
+    } catch (e) {
+        console.error('ensureSuggestionsUIForGroup failed:', e);
+    }
+}
+
+function renderSuggestionsList(idx) {
+    try {
+        const listEl = document.getElementById(`suggestions-list-${idx}`);
+        if (!listEl) return;
+        const store = getSuggestionsRef();
+        const items = Array.isArray(store[idx]) ? store[idx] : [];
+        if (!items.length) {
+            listEl.innerHTML = `<div class="loading">No suggestions yet.</div>`;
+            return;
+        }
+        listEl.innerHTML = items.map(t => buildSuggestionCard(t, idx)).join('');
+    } catch (e) {
+        console.error('renderSuggestionsList failed:', e);
+    }
+}
+
+function buildSuggestionCard(thread, idx) {
+    const subject = escapeHtml(thread.subject || 'No Subject');
+    const msgs = Array.isArray(thread.messages) ? thread.messages : [];
+    const msgsHtml = msgs.map(m => {
+        const from = escapeHtml(m.from || 'Unknown Sender');
+        const date = formatDate(m.date || new Date().toISOString());
+        const subj = escapeHtml(m.subject || '');
+        const body = escapeHtml(m.body || '');
+        const cls = m.isResponse ? 'response' : 'original';
+        return `
+            <div class="thread-message-preview ${cls}">
+                <div class="message-preview-header">
+                    <div class="message-preview-from">${from}${m.isResponse ? ' (Your Response)' : ''}</div>
+                    <div class="message-preview-date">${date}</div>
+                </div>
+                <div class="message-preview-subject" style="padding: 8px 12px; font-size: 13px; color: #333;">
+                    <strong>Subject:</strong> ${subj}
+                </div>
+                <div class="message-preview-body">${body}</div>
+            </div>
+        `;
+    }).join('');
+    return `
+        <details class="keyword-thread-collapsible" style="margin-bottom: 10px; border:1px solid #e9ecef; border-radius:6px; background:#fafafa;">
+            <summary style="cursor: pointer; font-size: 14px; padding: 8px 12px; background:#f8f9fa; border-bottom:1px solid #e9ecef; display:flex; justify-content:space-between; align-items:center;">
+                <span><strong>${subject}</strong> <span class="thread-meta" style="color:#666; font-weight:400;">(${msgs.length} message${msgs.length === 1 ? '' : 's'})</span></span>
+                <span style="display:flex; gap:6px;">
+                    <button class="carousel-nav-btn" style="background:#28a745; padding:4px 8px; font-size:12px;" onclick="acceptSuggestedThread(${idx}, '${String(thread.id || '').replace(/'/g, "\\'")}'); event.preventDefault(); event.stopPropagation();">Accept</button>
+                    <button class="carousel-nav-btn" style="background:#dc3545; padding:4px 8px; font-size:12px;" onclick="rejectSuggestedThread(${idx}, '${String(thread.id || '').replace(/'/g, "\\'")}'); event.preventDefault(); event.stopPropagation();">Reject</button>
+                </span>
+            </summary>
+            <div class="thread-messages" style="margin-top:10px;">
+                ${msgsHtml || '<div class="no-emails" style="padding: 12px;">No messages available.</div>'}
+            </div>
+        </details>
+    `;
+}
+
+async function suggestMoreThreads(idx) {
+    try {
+        const btn = document.getElementById(`suggest-btn-${idx}`);
+        if (btn) { btn.disabled = true; btn.textContent = 'Suggesting...'; }
+
+        const groups = getWorkingGroupsRef();
+        const group = groups[idx] || { threads: [] };
+
+        // Positives = threads in the current keyword group
+        const positives = (group.threads || []);
+
+        // Candidates = all threads NOT in the current group already
+        const inGroupIds = new Set((positives || []).map(t => t && t.id).filter(Boolean));
+        const all = Array.isArray(keywordAllThreads) ? keywordAllThreads : [];
+        const candidatesRaw = all.filter(t => t && t.id && !inGroupIds.has(t.id));
+
+        // Compact payload caps (server will also cap)
+        const CAP_MSGS = 6;
+        const CAP_BODY = 800;
+        const compactThreads = (list) => (list || []).map(t => ({
+            id: t.id,
+            subject: t.subject || '',
+            messages: (Array.isArray(t.messages) ? t.messages.slice(-CAP_MSGS) : []).map(m => ({
+                from: m.from || '',
+                to: Array.isArray(m.to) ? m.to.slice(0, 10) : (m.to ? [m.to] : []),
+                subject: m.subject || '',
+                body: String(m.body || '').slice(0, CAP_BODY),
+                isResponse: !!m.isResponse,
+                date: m.date || ''
+            }))
+        }));
+
+        const payload = {
+            positives: compactThreads(positives),
+            candidates: compactThreads(candidatesRaw),
+            topK: 12
+        };
+
+        // If there are no candidates, show empty
+        if (!payload.candidates.length) {
+            const store = getSuggestionsRef();
+            store[idx] = [];
+            renderSuggestionsList(idx);
+            if (btn) { btn.disabled = false; btn.textContent = 'Suggest More Threads'; }
+            return;
+        }
+
+        const resp = await fetch('/api/keyword-group-suggestions-openai', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+
+        let threads = [];
+        try {
+            const data = await resp.json();
+            if (data && data.success && Array.isArray(data.threads)) {
+                threads = data.threads;
+            }
+        } catch (_) {}
+
+        const store = getSuggestionsRef();
+        store[idx] = threads;
+        renderSuggestionsList(idx);
+    } catch (e) {
+        console.error('suggestMoreThreads failed:', e);
+        showErrorPopup('Failed to fetch suggestions. Please try again.', 'Suggest Failed');
+    } finally {
+        const btn = document.getElementById(`suggest-btn-${idx}`);
+        if (btn) { btn.disabled = false; btn.textContent = 'Suggest More Threads'; }
+    }
+}
+
+function acceptSuggestedThread(idx, threadId) {
+    try {
+        // Move into current group (latest wins)
+        moveThreadsToGroup([threadId], idx);
+
+        // Remove from suggestion list
+        const store = getSuggestionsRef();
+        const current = Array.isArray(store[idx]) ? store[idx] : [];
+        store[idx] = current.filter(t => t && t.id !== threadId);
+
+        // Refresh UI: keep on the same slide, rebuild carousel to update counts and content
+        const keepIndex = currentKeywordSlideIndex;
+        populateKeywordSearchResultsCarousel();
+        currentKeywordSlideIndex = Math.min(keepIndex, keywordWorkingGroups.length - 1);
+        updateKeywordCarouselDisplay();
+
+        // Ensure suggestions and facets re-render for this group
+        try { ensureSuggestionsUIForGroup(idx); renderSuggestionsList(idx); } catch (_) {}
+        try { renderFacetBoxForGroup(idx); } catch (_) {}
+    } catch (e) {
+        console.error('acceptSuggestedThread failed:', e);
+        showErrorPopup('Failed to accept thread. Please try again.', 'Accept Failed');
+    }
+}
+
+function rejectSuggestedThread(idx, threadId) {
+    try {
+        const store = getSuggestionsRef();
+        const current = Array.isArray(store[idx]) ? store[idx] : [];
+        store[idx] = current.filter(t => t && t.id !== threadId);
+        renderSuggestionsList(idx);
+    } catch (e) {
+        console.error('rejectSuggestedThread failed:', e);
+        showErrorPopup('Failed to reject suggestion. Please try again.', 'Reject Failed');
+    }
+}
+
+function fieldContains(hay, needle) {
             try {
                 const H = String(hay || '').toLowerCase();
                 const N = String(needle || '').toLowerCase();

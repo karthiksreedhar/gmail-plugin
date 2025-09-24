@@ -4873,6 +4873,210 @@ Seed lists are suggestions; improve and deduplicate. Return JSON only.`;
   }
 });
 
+/**
+ * Keyword Group Suggestions (Pure OpenAI)
+ * POST /api/keyword-group-suggestions-openai
+ * Input: {
+ *   positives: [ { id, subject, messages: [{ from, to[], subject, body, isResponse, date }] } ],
+ *   candidates: [ { id, subject, messages: [{ from, to[], subject, body, isResponse, date }] } ],
+ *   topK?: number (default 12)
+ * }
+ * Output: {
+ *   success: true,
+ *   ids: string[],
+ *   threads: [ full thread objects for returned ids ],
+ *   mode: 'ai'
+ * }
+ *
+ * Behavior:
+ * - Uses ONLY an OpenAI call to pick similar threads; no heuristics/facets are applied server-side.
+ * - The model receives compact summaries of positives and candidates and returns a JSON list of candidate ids.
+ * - No persistence. Client decides how to accept/reject and update the UI.
+ */
+app.post('/api/keyword-group-suggestions-openai', async (req, res) => {
+  try {
+    const { positives, candidates, topK } = req.body || {};
+    const POS = Array.isArray(positives) ? positives : [];
+    const CAND = Array.isArray(candidates) ? candidates : [];
+    const K = Math.max(1, Math.min(50, Number.isFinite(topK) ? topK : 12));
+
+    if (POS.length === 0) {
+      return res.status(400).json({ success: false, error: 'positives array is required (at least 1 thread)' });
+    }
+    if (CAND.length === 0) {
+      return res.status(400).json({ success: false, error: 'candidates array is required (at least 1 thread)' });
+    }
+
+    // Limits to keep prompts compact
+    const CAP_POSITIVES = Math.min(20, POS.length);
+    const CAP_CANDIDATES = Math.min(120, CAND.length);
+    const CAP_MSG_PER_THREAD = 6;
+    const CAP_BODY = 800;
+
+    const uniq = (arr) => Array.from(new Set(arr.filter(Boolean)));
+
+    const compactThread = (t) => {
+      const msgs = Array.isArray(t.messages) ? t.messages.slice(-CAP_MSG_PER_THREAD) : [];
+      const froms = uniq(msgs.map(m => m?.from || '')).slice(0, 6);
+      const tos = uniq(msgs.flatMap(m => {
+        const a = Array.isArray(m?.to) ? m.to : (m?.to ? [m.to] : []);
+        return a;
+      })).slice(0, 8);
+      const bodySnippets = msgs.map(m => String(m?.body || '').slice(0, CAP_BODY));
+      return {
+        id: t.id || '',
+        subject: t.subject || '',
+        froms,
+        tos,
+        bodySnippets
+      };
+    };
+
+    const compact = {
+      positives: POS.slice(0, CAP_POSITIVES).map(compactThread),
+      candidates: CAND.slice(0, CAP_CANDIDATES).map(compactThread)
+    };
+
+    const parseJson = (txt) => {
+      if (typeof txt === 'object' && txt) return txt;
+      const t = String(txt || '').trim();
+      try { return JSON.parse(t); } catch {}
+      const fence = t.match(/```(?:json)?\s*([\s\S]*?)```/i);
+      if (fence && fence[1]) { try { return JSON.parse(fence[1].trim()); } catch {} }
+      const first = t.indexOf('{'); const last = t.lastIndexOf('}');
+      if (first !== -1 && last !== -1 && last > first) { try { return JSON.parse(t.slice(first, last + 1)); } catch {} }
+      return null;
+    };
+
+    async function aiPick(mode, need) {
+      // mode: 'strict' | 'broad' | 'rank'
+      let SYSTEM = '';
+      let USER = '';
+      if (mode === 'strict') {
+        SYSTEM = `You are helping expand an email category by finding similar threads.
+Given examples ("positives") and a candidate list, choose up to N candidates that match the category.
+Be conservative; only include candidates that clearly fit.
+Return strictly valid JSON: {"ids":["<id1>","<id2>", ...]}`;
+        USER = `N = ${need}
+
+POSITIVES:
+${JSON.stringify(compact.positives, null, 2)}
+
+CANDIDATES:
+${JSON.stringify(compact.candidates, null, 2)}
+
+Return ONLY the JSON object described (no commentary, no markdown).`;
+      } else if (mode === 'broad') {
+        SYSTEM = `You are expanding an email category with additional similar threads.
+Be flexible: choose exactly N candidates from the list even if matches are approximate.
+Prioritize similarity in subject terms, senders/recipients, and recurring vocabulary in body snippets.
+If high-confidence matches are fewer than N, include the next best plausible candidates to reach exactly N.
+Return strictly valid JSON: {"ids":["<id1>","<id2>", ...]} (exactly N ids).`;
+        USER = `N = ${need}
+
+POSITIVES:
+${JSON.stringify(compact.positives, null, 2)}
+
+CANDIDATES:
+${JSON.stringify(compact.candidates, null, 2)}
+
+Return ONLY JSON with exactly N ids.`;
+      } else {
+        // rank mode: always return exactly N top-ranked ids
+        SYSTEM = `Rank candidate threads by similarity to the provided positives using subject, senders/recipients, and vocabulary overlap.
+Return exactly N ids of the best-ranked candidates.
+Output strictly valid JSON: {"ids":["<id1>","<id2>", ...]} (exactly N).`;
+        USER = `N = ${need}
+
+POSITIVES:
+${JSON.stringify(compact.positives, null, 2)}
+
+CANDIDATES:
+${JSON.stringify(compact.candidates, null, 2)}
+
+Return ONLY JSON with exactly N ids (pick the best N overall).`;
+      }
+
+      let aiRaw = null;
+      try {
+        const completion = await openai.chat.completions.create({
+          model: "o3",
+          messages: [
+            { role: "system", content: SYSTEM },
+            { role: "user", content: USER }
+          ],
+          max_completion_tokens: 600,
+          response_format: { type: "json_object" }
+        });
+        aiRaw = completion.choices?.[0]?.message?.content || '';
+      } catch (e1) {
+        try {
+          const retry = await openai.chat.completions.create({
+            model: "gpt-4o-mini",
+            messages: [
+              { role: "system", content: SYSTEM },
+              { role: "user", content: USER }
+            ],
+            max_completion_tokens: 600,
+            response_format: { type: "json_object" }
+          });
+          aiRaw = retry.choices?.[0]?.message?.content || '';
+        } catch (e2) {
+          return [];
+        }
+      }
+
+      const parsed = parseJson(aiRaw) || {};
+      const ids = Array.isArray(parsed.ids) ? parsed.ids.map(String) : [];
+      return ids;
+    }
+
+    // Multi-pass: strict -> broad -> rank, aim to return exactly K unique candidates
+    const byId = new Map(CAND.map(t => [String(t.id || ''), t]));
+    const chosen = [];
+    const seen = new Set();
+
+    // Helper to add ids preserving order and uniqueness, limited by K
+    function addIds(ids) {
+      for (const id of ids) {
+        const key = String(id || '');
+        if (!key || seen.has(key)) continue;
+        if (!byId.has(key)) continue;
+        seen.add(key);
+        chosen.push(key);
+        if (chosen.length >= K) break;
+      }
+    }
+
+    // Pass 1: strict (conservative)
+    addIds(await aiPick('strict', K - chosen.length));
+
+    // Pass 2: broad (force exactly remaining count)
+    if (chosen.length < K) {
+      addIds(await aiPick('broad', K - chosen.length));
+    }
+
+    // Pass 3: rank (ensure we fill remaining)
+    if (chosen.length < K) {
+      addIds(await aiPick('rank', K - chosen.length));
+    }
+
+    // Map to full thread objects
+    const selectedThreads = chosen.slice(0, K).map(id => byId.get(id)).filter(Boolean);
+
+    // Ensure exactly K if possible; if still fewer (e.g., too few candidates), just return what we have
+    return res.json({
+      success: true,
+      ids: chosen.slice(0, K),
+      threads: selectedThreads,
+      mode: 'ai'
+    });
+  } catch (error) {
+    console.error('keyword-group-suggestions-openai failed:', error);
+    return res.status(500).json({ success: false, error: 'Failed to compute AI suggestions' });
+  }
+});
+
 // Serve the main HTML file
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
