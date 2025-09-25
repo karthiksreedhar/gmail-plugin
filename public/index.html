@@ -7550,12 +7550,19 @@ function previousSlide() {
                         </div>
                     `;
                 }).join('');
+                const isOtherGroup = (() => { try { return !!getWorkingGroup(currentIdx).isOther; } catch (_) { return false; } })();
+                const safeId = String(thread.id || '').replace(/'/g, "\\'");
                 return `
                     <details class="keyword-thread-collapsible" style="margin-bottom: 10px;">
-                        <summary style="cursor: pointer; font-size: 14px; padding: 8px 12px; background:#f8f9fa; border:1px solid #e9ecef; border-radius:6px;">
-                            <strong>${subject}</strong>
-                            <span class="thread-meta" style="color:#666; font-weight:400;"> (${msgs.length} message${msgs.length === 1 ? '' : 's'})</span>
-                            ${alsoInHtml}
+                        <summary style="cursor: pointer; font-size: 14px; padding: 8px 12px; background:#f8f9fa; border:1px solid #e9ecef; border-radius:6px; display:flex; justify-content:space-between; align-items:center;">
+                            <span>
+                                <strong>${subject}</strong>
+                                <span class="thread-meta" style="color:#666; font-weight:400;"> (${msgs.length} message${msgs.length === 1 ? '' : 's'})</span>
+                                ${alsoInHtml}
+                            </span>
+                            ${!isOtherGroup ? `<span style="display:flex; gap:6px;">
+                                <button class="carousel-nav-btn" style="background:#dc3545; padding:4px 8px; font-size:12px;" onclick="removeThreadFromKeywordGroup(${currentIdx}, '${safeId}'); event.preventDefault(); event.stopPropagation();">Remove</button>
+                            </span>` : ''}
                         </summary>
                         <div class="thread-messages" style="margin-top:10px;">
                             ${msgsHtml || '<div class="no-emails" style="padding: 12px;">No messages available.</div>'}
@@ -9370,6 +9377,58 @@ function fieldContains(hay, needle) {
                 window.keywordWorkingGroups = groups;
             } catch (e) {
                 console.warn('rebuildOtherGroup failed:', e);
+            }
+        }
+
+        function removeThreadFromKeywordGroup(idx, threadId) {
+            try {
+                const groups = getWorkingGroupsRef();
+                if (!Array.isArray(groups) || idx < 0 || idx >= groups.length) return;
+                const g = groups[idx];
+                if (!g || !Array.isArray(g.threads)) return;
+
+                // Remove the thread from the specified keyword group only
+                g.threads = g.threads.filter(t => t && t.id !== threadId);
+
+                // Keep keywordResults in sync with working groups for immediate UI updates
+                try {
+                    if (Array.isArray(keywordResults) && idx >= 0 && idx < keywordResults.length) {
+                        const kg = keywordResults[idx];
+                        if (kg && Array.isArray(kg.threads)) {
+                            kg.threads = kg.threads.filter(t => t && t.id !== threadId);
+                        }
+                        // Ensure "Other" bucket exists and recompute it in keywordResults too
+                        let otherIdx = keywordResults.findIndex(x => x && x.isOther);
+                        if (otherIdx === -1) {
+                            keywordResults.push({ name: 'Other Threads', threads: [], isOther: true });
+                            otherIdx = keywordResults.length - 1;
+                        }
+                        const assigned = new Set();
+                        keywordResults.forEach((gr) => {
+                            if (!gr || !Array.isArray(gr.threads)) return;
+                            if (gr.isOther) return;
+                            gr.threads.forEach(t => { if (t && t.id) assigned.add(t.id); });
+                        });
+                        const allThreads = Array.isArray(keywordAllThreads) ? keywordAllThreads : [];
+                        keywordResults[otherIdx].threads = allThreads.filter(t => t && t.id && !assigned.has(t.id));
+                    }
+                } catch (_) {}
+
+                // Rebuild "Other" so any thread not present in any keyword group moves there
+                rebuildOtherGroup();
+
+                // Re-render the carousel and keep user on the same slide
+                const keepIndex = currentKeywordSlideIndex;
+                populateKeywordSearchResultsCarousel();
+                currentKeywordSlideIndex = Math.min(keepIndex, getWorkingGroupsRef().length - 1);
+                updateKeywordCarouselDisplay();
+
+                // Re-render facets and suggestions for this group (best-effort)
+                try { ensureSuggestionsUIForGroup(idx); renderSuggestionsList(idx); } catch (_) {}
+                try { renderFacetBoxForGroup(idx); } catch (_) {}
+            } catch (e) {
+                console.error('removeThreadFromKeywordGroup failed:', e);
+                showErrorPopup('Failed to remove thread from category. Please try again.', 'Remove Failed');
             }
         }
 
