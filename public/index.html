@@ -7825,19 +7825,19 @@ function previousSlide() {
         }
 
         function matchThreadsByKeyword(threadList, keyword) {
-            const needle = String(keyword || '').toLowerCase();
-            if (!needle) return [];
+            const term = String(keyword || '').trim();
+            if (!term) return [];
+            // Case-insensitive whole-word match against subject/body only
+            const wordRe = new RegExp(`\\b${term.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&')}\\b`, 'i');
             const matches = [];
             for (const t of (threadList || [])) {
                 if (!t || !t.id) continue;
-                const subj = String(t.subject || '').toLowerCase();
-                if (subj.includes(needle)) { matches.push(t); continue; }
+                if (wordRe.test(String(t.subject || ''))) { matches.push(t); continue; }
                 const msgs = Array.isArray(t.messages) ? t.messages : [];
                 let ok = false;
                 for (const m of msgs) {
-                    if (String(m.subject || '').toLowerCase().includes(needle)) { ok = true; break; }
-                    if (String(m.body || '').toLowerCase().includes(needle)) { ok = true; break; }
-                    if (String(m.from || '').toLowerCase().includes(needle)) { ok = true; break; }
+                    if (wordRe.test(String(m.subject || ''))) { ok = true; break; }
+                    if (wordRe.test(String(m.body || ''))) { ok = true; break; }
                 }
                 if (ok) matches.push(t);
             }
@@ -7864,15 +7864,10 @@ function previousSlide() {
                 // Also persist new keywords to the main list for future sessions
                 try { await saveAdditionalKeywords(); } catch (_) {}
 
-                // Compute "Other" candidates
-                const otherIds = computeOtherThreadIds();
+                // Use the FULL thread pool for matching so overlap across existing keyword groups is preserved.
+                // We will still only remove matched threads from the "Other" bucket.
                 const all = Array.isArray(keywordAllThreads) ? keywordAllThreads : [];
-                const otherThreads = all.filter(t => t && t.id && otherIds.has(t.id));
-
-                if (!otherThreads.length) {
-                    showErrorPopup('No threads in “Other” to refine right now.', 'Nothing to Refine');
-                    return;
-                }
+                const matchingPool = all.filter(t => t && t.id);
 
                 // Prepare working groups and render groups
                 const wg = getWorkingGroupsRef();
@@ -7898,7 +7893,7 @@ function previousSlide() {
                 keys.forEach(k => newAssignments.set(k, []));
 
                 for (const k of keys) {
-                    const matched = matchThreadsByKeyword(otherThreads, k);
+                    const matched = matchThreadsByKeyword(matchingPool, k);
                     const ids = matched.map(t => t.id);
                     newAssignments.set(k, ids);
 
@@ -8004,9 +7999,9 @@ function previousSlide() {
                         body: JSON.stringify({
                             keywords,
                             options: {
-                                fields: ['subject', 'body', 'from'],
+                                fields: ['subject', 'body'],
                                 caseSensitive: false,
-                                wholeWord: false,
+                                wholeWord: true,
                                 groupBy: 'thread'
                             }
                         })
@@ -8046,16 +8041,15 @@ function previousSlide() {
                         ]
                     }));
 
-                    results = keywords.map(name => {
-                        const needle = name.toLowerCase();
-                        const matchedThreads = keywordAllThreads.filter(t => {
-                            const threadSubj = String(t.subject || '').toLowerCase();
-                            if (threadSubj.includes(needle)) return true;
-                            return (t.messages || []).some(m => (String(m.subject || '').toLowerCase().includes(needle) ||
-                                                                 String(m.body || '').toLowerCase().includes(needle)));
-                        });
-                        return { name, threads: matchedThreads };
+                results = keywords.map(name => {
+                    const wordRe = new RegExp(`\\b${String(name).replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&')}\\b`, 'i');
+                    const matchedThreads = keywordAllThreads.filter(t => {
+                        if (wordRe.test(String(t.subject || ''))) return true;
+                        const msgs = Array.isArray(t.messages) ? t.messages : [];
+                        return msgs.some(m => (wordRe.test(String(m.subject || '')) || wordRe.test(String(m.body || ''))));
                     });
+                    return { name, threads: matchedThreads };
+                });
                 }
 
                 // Normalize: prune message-less threads but KEEP empty keyword groups so every entered keyword shows
@@ -8931,6 +8925,9 @@ function escapeHtml(s) {
         .replace(/>/g, '>')
         .replace(/"/g, '"')
         .replace(/'/g, '&#039;');
+}
+function escapeRegExp(s) {
+    return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
         function renderSeeCategoryNotesLists() {
