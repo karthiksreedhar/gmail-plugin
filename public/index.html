@@ -2249,6 +2249,7 @@
                 </div>
                 <button class="save-scenario-btn" onclick="saveScenario()">Save Scenario</button>
                 <button class="load-scenario-btn" onclick="showLoadScenarioModal()">Load Scenario</button>
+                <button class="load-scenario-btn" onclick="showCleanThreadsModal()" title="Scan and clean quoted replies across all threads" style="background:#8b4513;">Clean Threads</button>
             </div>
             <h1>Email Twin</h1>
             <div class="header-buttons">
@@ -4170,6 +4171,287 @@ function getCategoryBadgeStyle(category) {
                 btnText.style.display = 'inline';
                 btnLoading.style.display = 'none';
                 saveBtn.disabled = false;
+            }
+        }
+
+        // ===== Global Clean Threads (preview + apply) =====
+        let cleanThreadsState = {
+            scanning: false,
+            applying: false,
+            preview: null, // { threadsScanned, responseMessagesScanned, cleanedCount, changes: [...] }
+            applied: null, // final payload after apply
+            error: null
+        };
+
+        function ensureCleanThreadsModal() {
+            let modal = document.getElementById('cleanThreadsModal');
+            if (modal) return modal;
+            modal = document.createElement('div');
+            modal.id = 'cleanThreadsModal';
+            modal.className = 'modal';
+            modal.innerHTML = `
+                <div class="modal-content" style="max-width: 700px; max-height: 80vh;">
+                    <div class="modal-header">
+                        <h2 class="modal-title">Clean Threads</h2>
+                        <button class="close" onclick="closeCleanThreadsModal()">&times;</button>
+                    </div>
+                    <div id="cleanThreadsBody" style="padding:16px; max-height:60vh; overflow:auto;">
+                        <div class="loading">Preparing cleaner...</div>
+                    </div>
+                    <div id="cleanThreadsActions" style="display:flex; justify-content:center; gap:12px; padding:12px 16px; border-top:1px solid #e9ecef;">
+                        <button class="carousel-btn carousel-btn-cancel" id="cleanCancelBtn" onclick="closeCleanThreadsModal()">Cancel</button>
+                        <button class="carousel-btn carousel-btn-add" id="cleanStartBtn" onclick="startCleanThreadsScan()">
+                            <span class="btn-text">Start Scan</span>
+                            <span class="btn-loading" style="display:none;">Scanning...</span>
+                        </button>
+                    </div>
+                </div>
+            `;
+            modal.addEventListener('click', (ev) => { if (ev.target === modal) closeCleanThreadsModal(); });
+            document.body.appendChild(modal);
+            return modal;
+        }
+
+        function showCleanThreadsModal() {
+            const modal = ensureCleanThreadsModal();
+            cleanThreadsState = { scanning: false, applying: false, preview: null, applied: null, error: null };
+            const body = document.getElementById('cleanThreadsBody');
+            const actions = document.getElementById('cleanThreadsActions');
+            if (body) {
+                body.innerHTML = `
+                    <div style="margin-bottom:10px; color:#555;">
+                        This will scan all stored threads for quoted history (e.g., "On ... wrote:", "-----Original Message-----", or lines beginning with ">") in your responses, and propose cleaned versions that keep only the newest content.
+                    </div>
+                    <ul style="margin-left:18px; color:#666; line-height:1.5;">
+                        <li>Step 1: Preview – scan and show how many messages can be cleaned (no changes saved)</li>
+                        <li>Step 2: Approve & Apply – write cleaned content back to your database</li>
+                    </ul>
+                    <div style="margin-top:12px; padding:10px; background:#fff3cd; border:1px solid #ffe8a1; border-radius:6px; color:#856404;">
+                        Note: This may take some time depending on the number of response messages (uses AI with heuristic fallback).
+                    </div>
+                `;
+            }
+            if (actions) {
+                const startBtn = actions.querySelector('#cleanStartBtn');
+                const cancelBtn = actions.querySelector('#cleanCancelBtn');
+                if (startBtn) {
+                    startBtn.disabled = false;
+                    startBtn.querySelector('.btn-text').style.display = 'inline';
+                    startBtn.querySelector('.btn-loading').style.display = 'none';
+                    startBtn.textContent = ''; // reset text composition
+                    startBtn.innerHTML = '<span class="btn-text">Start Scan</span><span class="btn-loading" style="display:none;">Scanning...</span>';
+                }
+                if (cancelBtn) cancelBtn.disabled = false;
+            }
+            modal.style.display = 'block';
+        }
+
+        function closeCleanThreadsModal() {
+            const modal = document.getElementById('cleanThreadsModal');
+            if (modal) modal.style.display = 'none';
+        }
+
+        async function startCleanThreadsScan() {
+            if (cleanThreadsState.scanning || cleanThreadsState.applying) return;
+            cleanThreadsState.scanning = true;
+            cleanThreadsState.error = null;
+
+            const body = document.getElementById('cleanThreadsBody');
+            const actions = document.getElementById('cleanThreadsActions');
+            const startBtn = actions ? actions.querySelector('#cleanStartBtn') : null;
+            if (startBtn) {
+                startBtn.disabled = true;
+                startBtn.querySelector('.btn-text').style.display = 'none';
+                startBtn.querySelector('.btn-loading').style.display = 'inline';
+            }
+
+            try {
+                if (body) {
+                    body.innerHTML = `
+                        <div class="loading">
+                            <div class="loading-spinner" style="margin-bottom:10px;"></div>
+                            <div>Scanning threads for quoted replies...</div>
+                            <div style="font-size:12px; color:#666; margin-top:6px;">This may take several minutes for large datasets.</div>
+                        </div>
+                    `;
+                }
+
+                const resp = await fetch('/api/clean-all-threads', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ apply: false })
+                });
+                const data = await resp.json();
+
+                if (!resp.ok || !data.success) {
+                    throw new Error(data.error || 'Scan failed');
+                }
+
+                cleanThreadsState.preview = data;
+                renderCleanThreadsPreview();
+            } catch (e) {
+                cleanThreadsState.error = e?.message || String(e);
+                renderCleanThreadsError('Failed to scan threads. Please try again.');
+            } finally {
+                cleanThreadsState.scanning = false;
+            }
+        }
+
+        function renderCleanThreadsPreview() {
+            const body = document.getElementById('cleanThreadsBody');
+            const actions = document.getElementById('cleanThreadsActions');
+            if (!body || !cleanThreadsState.preview) return;
+
+            const p = cleanThreadsState.preview;
+            body.innerHTML = `
+                <div style="margin-bottom:10px; color:#333;">
+                    <strong>Preview Results</strong>
+                </div>
+                <div style="display:flex; gap:12px; flex-wrap:wrap; margin-bottom:10px;">
+                    <div style="flex:1 1 140px; background:#f8f9fa; border:1px solid #e9ecef; border-radius:6px; padding:10px;">
+                        <div style="color:#666; font-size:12px;">Threads Scanned</div>
+                        <div style="font-weight:700; font-size:18px; color:#333;">${p.threadsScanned}</div>
+                    </div>
+                    <div style="flex:1 1 140px; background:#f8f9fa; border:1px solid #e9ecef; border-radius:6px; padding:10px;">
+                        <div style="color:#666; font-size:12px;">Responses Checked</div>
+                        <div style="font-weight:700; font-size:18px; color:#333;">${p.responseMessagesScanned}</div>
+                    </div>
+                    <div style="flex:1 1 140px; background:#f8f9fa; border:1px solid #e9ecef; border-radius:6px; padding:10px;">
+                        <div style="color:#666; font-size:12px;">Clean Candidates</div>
+                        <div style="font-weight:700; font-size:18px; color:#28a745;">${p.cleanedCount}</div>
+                    </div>
+                </div>
+                <div style="color:#666; font-size:12px; margin-bottom:8px;">
+                    We will apply the cleaner only to response messages with quoted history detected. A small sample is shown below.
+                </div>
+                <div style="max-height:220px; overflow:auto; border:1px solid #e9ecef; border-radius:6px; background:#fff;">
+                    ${
+                        Array.isArray(p.changes) && p.changes.length
+                        ? `
+                          <table style="width:100%; border-collapse:collapse; font-size:12px;">
+                            <thead>
+                              <tr style="background:#f8f9fa;">
+                                <th style="text-align:left; padding:6px; border-bottom:1px solid #e9ecef;">Thread</th>
+                                <th style="text-align:left; padding:6px; border-bottom:1px solid #e9ecef;">Message</th>
+                                <th style="text-align:right; padding:6px; border-bottom:1px solid #e9ecef;">Before</th>
+                                <th style="text-align:right; padding:6px; border-bottom:1px solid #e9ecef;">After</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              ${p.changes.map(c => `
+                                <tr>
+                                  <td style="padding:6px; border-bottom:1px solid #f1f3f4;">${(c.threadId || '').slice(0,24)}</td>
+                                  <td style="padding:6px; border-bottom:1px solid #f1f3f4;">${(c.messageId || '').slice(0,24)}</td>
+                                  <td style="padding:6px; border-bottom:1px solid #f1f3f4; text-align:right;">${c.beforeLen}</td>
+                                  <td style="padding:6px; border-bottom:1px solid #f1f3f4; text-align:right; color:#28a745;">${c.afterLen}</td>
+                                </tr>
+                              `).join('')}
+                            </tbody>
+                          </table>
+                        `
+                        : `<div class="no-emails" style="padding:10px;">No sample changes to display.</div>`
+                    }
+                </div>
+            `;
+
+            if (actions) {
+                actions.innerHTML = `
+                    <button class="carousel-btn carousel-btn-cancel" onclick="closeCleanThreadsModal()">Cancel</button>
+                    <button class="carousel-btn carousel-btn-add" id="cleanApplyBtn" onclick="applyCleanThreads()" ${p.cleanedCount > 0 ? '' : 'disabled'}>
+                        <span class="btn-text">Approve & Apply</span>
+                        <span class="btn-loading" style="display:none;">Applying...</span>
+                    </button>
+                `;
+            }
+        }
+
+        function renderCleanThreadsError(msg) {
+            const body = document.getElementById('cleanThreadsBody');
+            const actions = document.getElementById('cleanThreadsActions');
+            if (body) {
+                body.innerHTML = `<div class="error">${msg}</div>`;
+            }
+            if (actions) {
+                actions.innerHTML = `
+                    <button class="carousel-btn carousel-btn-cancel" onclick="closeCleanThreadsModal()">Close</button>
+                    <button class="carousel-btn carousel-btn-add" onclick="startCleanThreadsScan()">Retry</button>
+                `;
+            }
+        }
+
+        async function applyCleanThreads() {
+            if (cleanThreadsState.applying) return;
+            cleanThreadsState.applying = true;
+            cleanThreadsState.error = null;
+
+            const body = document.getElementById('cleanThreadsBody');
+            const applyBtn = document.getElementById('cleanApplyBtn');
+            if (applyBtn) {
+                applyBtn.disabled = true;
+                applyBtn.querySelector('.btn-text').style.display = 'none';
+                applyBtn.querySelector('.btn-loading').style.display = 'inline';
+            }
+
+            try {
+                if (body) {
+                    body.innerHTML = `
+                        <div class="loading">
+                            <div class="loading-spinner" style="margin-bottom:10px;"></div>
+                            <div>Applying cleaned responses to your database...</div>
+                        </div>
+                    `;
+                }
+
+                const resp = await fetch('/api/clean-all-threads', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ apply: true })
+                });
+                const data = await resp.json();
+
+                if (!resp.ok || !data.success) {
+                    throw new Error(data.error || 'Apply failed');
+                }
+
+                cleanThreadsState.applied = data;
+
+                // Final stats
+                if (body) {
+                    body.innerHTML = `
+                        <div style="margin-bottom:10px; color:#333;"><strong>Cleaning Complete</strong></div>
+                        <div style="display:flex; gap:12px; flex-wrap:wrap; margin-bottom:10px;">
+                            <div style="flex:1 1 140px; background:#f8f9fa; border:1px solid #e9ecef; border-radius:6px; padding:10px;">
+                                <div style="color:#666; font-size:12px;">Threads Scanned</div>
+                                <div style="font-weight:700; font-size:18px; color:#333;">${data.threadsScanned}</div>
+                            </div>
+                            <div style="flex:1 1 140px; background:#f8f9fa; border:1px solid #e9ecef; border-radius:6px; padding:10px;">
+                                <div style="color:#666; font-size:12px;">Responses Checked</div>
+                                <div style="font-weight:700; font-size:18px; color:#333;">${data.responseMessagesScanned}</div>
+                            </div>
+                            <div style="flex:1 1 140px; background:#f8f9fa; border:1px solid #e9ecef; border-radius:6px; padding:10px;">
+                                <div style="color:#666; font-size:12px;">Cleaned & Saved</div>
+                                <div style="font-weight:700; font-size:18px; color:#28a745;">${data.cleanedCount}</div>
+                            </div>
+                        </div>
+                        <div style="color:#666; font-size:12px;">
+                            Changes have been written to threads and response emails. You may close this dialog.
+                        </div>
+                    `;
+                }
+
+                const actions = document.getElementById('cleanThreadsActions');
+                if (actions) {
+                    actions.innerHTML = `
+                        <button class="carousel-btn carousel-btn-add" onclick="closeCleanThreadsModal()">Done</button>
+                    `;
+                }
+
+                try { loadEmails(); } catch (_) {}
+            } catch (e) {
+                cleanThreadsState.error = e?.message || String(e);
+                renderCleanThreadsError('Failed to apply cleaned results. Please try again.');
+            } finally {
+                cleanThreadsState.applying = false;
             }
         }
 

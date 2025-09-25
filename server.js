@@ -5339,6 +5339,116 @@ Return ONLY the JSON object.`;
   }
 });
 
+/**
+ * Bulk clean all stored threads' response messages.
+ * - POST /api/clean-all-threads
+ *   body: { apply?: boolean }
+ *   apply=false (default): preview mode; returns counts and sample changes without saving
+ *   apply=true: applies cleaned bodies to both email-threads.json and response-emails.json
+ *
+ * Cleaning logic:
+ * - Scans each thread message flagged isResponse
+ * - Detects quoted history via common markers ("On ... wrote:", "-----Original Message-----", quote markers '>')
+ * - Uses cleanResponseBody() (OpenAI with heuristic fallback) to extract only the newest content
+ * - Updates response-emails record body when message.id matches response email id
+ */
+app.post('/api/clean-all-threads', async (req, res) => {
+  try {
+    const apply = !!(req.body && req.body.apply);
+
+    const threads = loadEmailThreads() || [];
+    const responses = loadResponseEmails() || [];
+    const responseById = new Map((responses || []).map(r => [r.id, r]));
+
+    const threadsScanned = threads.length;
+    let responseMessagesScanned = 0;
+    let cleanedCount = 0;
+    const changes = [];
+
+    const detectQuoted = (text) => {
+      if (typeof text !== 'string' || !text) return false;
+      // Quote markers (">" lines), reply header markers, forwarded blocks
+      if (/(^|\n)>\s?.+/m.test(text)) return true;
+      if (/\bOn[\s\S]{0,400}wrote:\s*/i.test(text)) return true;
+      if (/-----Original Message-----/i.test(text)) return true;
+      if (/Begin forwarded message:/i.test(text)) return true;
+      if (/[\-–—_]{2,}\s*Forwarded message\s*[\-–—_]{2,}/i.test(text)) return true;
+      return false;
+    };
+
+    // Deep-copy threads for safe mutation on apply
+    const updatedThreads = threads.map(t => {
+      const out = { ...t };
+      if (Array.isArray(t.messages)) {
+        out.messages = t.messages.map(m => ({ ...m }));
+      }
+      return out;
+    });
+
+    for (const t of updatedThreads) {
+      if (!Array.isArray(t.messages) || t.messages.length === 0) continue;
+      for (const m of t.messages) {
+        if (!m || !m.isResponse) continue;
+        responseMessagesScanned++;
+        const original = typeof m.body === 'string' ? m.body : '';
+        if (!original || !detectQuoted(original)) continue;
+
+        const cleaned = await cleanResponseBody(original);
+        const cleanedTrim = String(cleaned || '').trim();
+        if (cleanedTrim && cleanedTrim !== original.trim()) {
+          cleanedCount++;
+          changes.push({
+            threadId: t.id,
+            messageId: m.id,
+            beforeLen: original.length,
+            afterLen: cleanedTrim.length
+          });
+
+          if (apply) {
+            // Update thread message
+            m.body = cleanedTrim;
+            // Update response email with same id (if present)
+            const r = responseById.get(m.id);
+            if (r) {
+              r.body = cleanedTrim;
+              // Refresh snippet to reflect new body
+              const sn = cleanedTrim.slice(0, 100);
+              r.snippet = sn + (cleanedTrim.length > 100 ? '...' : '');
+            }
+          }
+        }
+      }
+    }
+
+    if (apply) {
+      try {
+        const paths = getCurrentUserPaths();
+        // Persist threads
+        fs.writeFileSync(paths.EMAIL_THREADS_PATH, JSON.stringify({ threads: updatedThreads }, null, 2));
+        // Persist responses (preserve original array order)
+        const updatedResponses = (responses || []).map(r => responseById.get(r.id) || r);
+        fs.writeFileSync(paths.RESPONSE_EMAILS_PATH, JSON.stringify({ emails: updatedResponses }, null, 2));
+      } catch (e) {
+        console.error('Failed to persist cleaned data:', e);
+        return res.status(500).json({ success: false, error: 'Failed to save cleaned results' });
+      }
+    }
+
+    return res.json({
+      success: true,
+      apply,
+      threadsScanned,
+      responseMessagesScanned,
+      cleanedCount,
+      // Return just a sample of changes to keep payload reasonable
+      changes: changes.slice(0, 100)
+    });
+  } catch (e) {
+    console.error('clean-all-threads failed:', e);
+    return res.status(500).json({ success: false, error: 'Failed to clean threads' });
+  }
+});
+
 // Serve the main HTML file
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
