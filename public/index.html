@@ -7513,20 +7513,74 @@ function previousSlide() {
             const counter = document.getElementById('keywordCarouselCounter');
             if (!carousel || !info || !counter) return;
 
+            // Precompute membership map: threadId -> Set of group names (non-Other) where the thread appears
+            const membershipById = new Map();
+            try {
+                (keywordResults || []).forEach(gr => {
+                    if (!gr || gr.isOther || !Array.isArray(gr.threads)) return;
+                    const name = String(gr.name || '').trim();
+                    gr.threads.forEach(t => {
+                        const id = t && t.id;
+                        if (!id) return;
+                        let set = membershipById.get(id);
+                        if (!set) {
+                            set = new Set();
+                            membershipById.set(id, set);
+                        }
+                        set.add(name);
+                    });
+                });
+            } catch (e) {
+                console.warn('Failed to build keyword group membership map:', e);
+            }
+
             // Helper to render a single thread as a collapsible block (summary shows subject only)
-            const threadToCollapsibleHTML = (thread, currentIdx) => {
+            const threadToCollapsibleHTML = (thread, currentGroupName) => {
                 const subject = escapeHtml(thread.subject || 'No Subject');
                 const msgs = Array.isArray(thread.messages) ? thread.messages : [];
-                // Indicate duplicate membership across keyword groups (excluding "Other")
+                // Indicate duplicate membership across keyword groups (excluding "Other" and the current group by name)
                 let alsoIn = [];
                 try {
-                    const groups = getWorkingGroupsRef();
-                    alsoIn = groups
-                        .map((g, i) => ({ g, i }))
-                        .filter(x => !x.g.isOther && x.i !== currentIdx)
-                        .filter(x => Array.isArray(x.g.threads) && x.g.threads.some(t => t && t.id === (thread && thread.id)))
-                        .map(x => String(x.g.name || ''))
-                        .slice(0, 5);
+                    const currentNameLc = String(currentGroupName || '').trim().toLowerCase();
+                    const id = thread && thread.id;
+                    if (id) {
+                        // Prefer precomputed membership map for accuracy and performance
+                        const set = membershipById.get(id);
+                        if (set && set.size) {
+                            alsoIn = Array.from(set)
+                                .filter(n => String(n || '').trim().toLowerCase() !== currentNameLc)
+                                .slice(0, 5);
+                        } else {
+                            // Fallback: scan rendered results then working groups
+                            const names = [];
+                            if (Array.isArray(keywordResults)) {
+                                for (const gr of keywordResults) {
+                                    if (!gr || gr.isOther) continue;
+                                    const gn = String(gr.name || '').trim();
+                                    if (!gn || gn.toLowerCase() === currentNameLc) continue;
+                                    const has = Array.isArray(gr.threads) && gr.threads.some(t => t && t.id === id);
+                                    if (has) names.push(gn);
+                                }
+                            }
+                            const groups = getWorkingGroupsRef();
+                            if (Array.isArray(groups)) {
+                                for (const g of groups) {
+                                    if (!g || g.isOther) continue;
+                                    const gn = String(g.name || '').trim();
+                                    if (!gn || gn.toLowerCase() === currentNameLc) continue;
+                                    const has = Array.isArray(g.threads) && g.threads.some(t => t && t.id === id);
+                                    if (has) names.push(gn);
+                                }
+                            }
+                            const seen = new Set();
+                            alsoIn = names.filter(n => {
+                                const k = String(n || '').trim().toLowerCase();
+                                if (!k || seen.has(k)) return false;
+                                seen.add(k);
+                                return true;
+                            }).slice(0, 5);
+                        }
+                    }
                 } catch (_) {}
                 const alsoInHtml = alsoIn.length
                     ? `<span class="thread-meta" style="margin-left:8px;color:#6f42c1;">Also in: ${alsoIn.map(escapeHtml).join(', ')}</span>`
@@ -7550,7 +7604,17 @@ function previousSlide() {
                         </div>
                     `;
                 }).join('');
-                const isOtherGroup = (() => { try { return !!getWorkingGroup(currentIdx).isOther; } catch (_) { return false; } })();
+                // Determine whether the current group is the "Other" bucket by name
+                const isOtherGroup = (() => {
+                    try {
+                        const groups = getWorkingGroupsRef();
+                        const currentNameLc = String(currentGroupName || '').toLowerCase();
+                        const g = (groups || []).find(gg => String(gg?.name || '').toLowerCase() === currentNameLc);
+                        return !!(g && g.isOther);
+                    } catch (_) {
+                        return false;
+                    }
+                })();
                 const safeId = String(thread.id || '').replace(/'/g, "\\'");
                 return `
                     <details class="keyword-thread-collapsible" style="margin-bottom: 10px;">
@@ -7561,7 +7625,7 @@ function previousSlide() {
                                 ${alsoInHtml}
                             </span>
                             ${!isOtherGroup ? `<span style="display:flex; gap:6px;">
-                                <button class="carousel-nav-btn" style="background:#dc3545; padding:4px 8px; font-size:12px;" onclick="removeThreadFromKeywordGroup(${currentIdx}, '${safeId}'); event.preventDefault(); event.stopPropagation();">Remove</button>
+                                <button class="carousel-nav-btn" style="background:#dc3545; padding:4px 8px; font-size:12px;" onclick="removeThreadFromKeywordGroupByName('${String(currentGroupName || '').replace(/'/g, "\\'")}', '${safeId}'); event.preventDefault(); event.stopPropagation();">Remove</button>
                             </span>` : ''}
                         </summary>
                         <div class="thread-messages" style="margin-top:10px;">
@@ -7603,7 +7667,7 @@ function previousSlide() {
                 const count = threads.length;
 
                 const itemsHtml = threads.length
-                    ? threads.map(t => threadToCollapsibleHTML(t, index)).join('')
+                    ? threads.map(t => threadToCollapsibleHTML(t, group.name)).join('')
                     : `<div class="no-emails" style="padding: 16px;">No threads matched this keyword.</div>`;
 
                 slide.innerHTML = `
@@ -8275,7 +8339,8 @@ function previousSlide() {
 let suggestCategoriesState = {
     otherIndex: -1,
     suggestions: [], // [{ name, emailIds: [], source }]
-    selected: new Set() // indices of suggestions selected
+    selected: new Set(), // indices of suggestions selected
+    keywords: [] // user-entered keywords for additional category suggestions
 };
 
 function ensureSuggestCategoriesModal() {
@@ -8290,6 +8355,22 @@ function ensureSuggestCategoriesModal() {
                 <h2 class="modal-title">Suggested Categories from "Other"</h2>
                 <button class="close" onclick="closeSuggestCategoriesModal()">&times;</button>
             </div>
+
+            <!-- Additional Keywords toolbar -->
+            <div style="padding: 12px 16px; border-bottom: 1px solid #e9ecef;">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                    <div style="font-weight:600; color:#333;">Additional Keywords</div>
+                    <div style="display:flex; gap:8px;">
+                        <button id="sugAddKwBtn" class="select-email-btn" style="background:#28a745; padding:6px 10px;">+ Add</button>
+                        <button id="sugFindKwBtn" class="select-email-btn" style="background:#6f42c1; padding:6px 10px;">Find by Keywords</button>
+                    </div>
+                </div>
+                <div id="suggestKeywordsEditor"></div>
+                <div style="color:#666; font-size:12px; margin-top:6px;">
+                    Enter one or more keywords. We will search emails in “Other” and propose additional category suggestions for each keyword.
+                </div>
+            </div>
+
             <div id="suggestCategoriesBody" style="padding: 16px; max-height: 60vh; overflow: auto;">
                 <div class="loading">Computing suggestions...</div>
             </div>
@@ -8301,13 +8382,156 @@ function ensureSuggestCategoriesModal() {
     `;
     modal.addEventListener('click', (ev) => { if (ev.target === modal) closeSuggestCategoriesModal(); });
     document.body.appendChild(modal);
+
+    // Wire keyword toolbar buttons
+    try {
+        const addBtn = modal.querySelector('#sugAddKwBtn');
+        const findBtn = modal.querySelector('#sugFindKwBtn');
+        if (addBtn) addBtn.addEventListener('click', addSuggestKeywordRow);
+        if (findBtn) findBtn.addEventListener('click', generateKeywordSuggestionsFromOther);
+    } catch (e) {
+        console.warn('Failed to wire keyword toolbar buttons:', e);
+    }
+
     return modal;
 }
 
 function closeSuggestCategoriesModal() {
     const modal = document.getElementById('suggestCategoriesModal');
     if (modal) modal.style.display = 'none';
-    suggestCategoriesState = { otherIndex: -1, suggestions: [], selected: new Set() };
+    suggestCategoriesState = { otherIndex: -1, suggestions: [], selected: new Set(), keywords: [] };
+}
+
+/* ===== Suggest Categories – Additional Keyword helpers ===== */
+function renderSuggestKeywordsEditor() {
+    try {
+        const host = document.getElementById('suggestKeywordsEditor');
+        if (!host) return;
+        if (!Array.isArray(suggestCategoriesState.keywords) || !suggestCategoriesState.keywords.length) {
+            suggestCategoriesState.keywords = [''];
+        }
+        host.innerHTML = suggestCategoriesState.keywords.map((kw, i) => `
+            <div style="display:flex; gap:8px; align-items:center; margin-bottom:8px;">
+                <input type="text"
+                       value="${String(kw || '').replace(/&/g,'&').replace(/</g,'<').replace(/>/g,'>').replace(/"/g,'"')}"
+                       oninput="suggestCategoriesState.keywords[${i}] = this.value"
+                       placeholder="Enter keyword..."
+                       style="flex:1; padding:8px; border:1px solid #ddd; border-radius:6px; font-size:14px;">
+                <button class="refinement-delete-btn" style="padding:6px 10px; font-size:12px;" onclick="removeSuggestKeywordRow(${i})">Delete</button>
+            </div>
+        `).join('');
+    } catch (e) {
+        console.error('renderSuggestKeywordsEditor failed:', e);
+    }
+}
+function addSuggestKeywordRow() {
+    try {
+        if (!Array.isArray(suggestCategoriesState.keywords)) suggestCategoriesState.keywords = [];
+        suggestCategoriesState.keywords.push('');
+        renderSuggestKeywordsEditor();
+    } catch (e) {
+        console.error('addSuggestKeywordRow failed:', e);
+    }
+}
+function removeSuggestKeywordRow(i) {
+    try {
+        if (!Array.isArray(suggestCategoriesState.keywords)) suggestCategoriesState.keywords = [];
+        suggestCategoriesState.keywords.splice(i, 1);
+        if (!suggestCategoriesState.keywords.length) suggestCategoriesState.keywords.push('');
+        renderSuggestKeywordsEditor();
+    } catch (e) {
+        console.error('removeSuggestKeywordRow failed:', e);
+    }
+}
+function generateKeywordSuggestionsFromOther() {
+    try {
+        const otherIdx = suggestCategoriesState.otherIndex;
+        const otherCat = (categoriesState || [])[otherIdx];
+
+        // Build pools: ALL emails across categories, and ONLY "Other" emails
+        const allEmailObjs = Array.isArray(categoriesState)
+            ? categoriesState.flatMap(c => Array.isArray(c.emails) ? c.emails : [])
+            : [];
+        const otherEmailObjs = Array.isArray(otherCat?.emails) ? otherCat.emails : [];
+
+        const raw = (suggestCategoriesState.keywords || []).map(s => String(s || '').trim()).filter(Boolean);
+        if (!raw.length) {
+            showErrorPopup('Please enter at least one keyword.', 'No Keywords');
+            return;
+        }
+        if (!allEmailObjs.length) {
+            showErrorPopup('No emails available to search. Try refreshing categories first.', 'No Emails');
+            return;
+        }
+
+        // Whole-word, case-insensitive patterns
+        const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const patterns = raw.map(k => ({ name: k, re: new RegExp(`\\b${esc(k)}\\b`, 'i') }));
+
+        // Quick lookup sets
+        const otherIdSet = new Set(otherEmailObjs.map(e => e && e.id).filter(Boolean));
+
+        // For each keyword, search ACROSS ALL emails to decide if a suggestion is relevant,
+        // but collect emailIds ONLY from "Other" for actual movement on Save.
+        const newSug = [];
+        for (const p of patterns) {
+            let anyMatchAcrossAll = false;
+            const otherIds = [];
+
+            for (const e of allEmailObjs) {
+                const subj = String(e?.subject || '');
+                const snip = String(e?.snippet || '');
+                const hit = p.re.test(subj) || p.re.test(snip);
+                if (hit) {
+                    anyMatchAcrossAll = true;
+                    if (otherIdSet.has(e.id)) otherIds.push(e.id);
+                }
+            }
+
+            // Only add a suggestion if the keyword matches something in the dataset at all.
+            // emailIds reflect only "Other" emails so Save will move those out of "Other".
+            if (anyMatchAcrossAll) {
+                const uniqOtherIds = Array.from(new Set(otherIds));
+                newSug.push({ name: p.name, emailIds: uniqOtherIds, source: 'keyword' });
+            }
+        }
+
+        if (!newSug.length) {
+            showErrorPopup('No matches found for the provided keywords across your emails.', 'No Matches');
+            return;
+        }
+
+        // Merge into suggestions list, de-dup by name (case-insensitive), union of emailIds (still Other-only)
+        const existing = suggestCategoriesState.suggestions || [];
+        const map = new Map(); // name lc -> { name, set, source }
+        existing.forEach(s => {
+            const key = String(s?.name || '').toLowerCase();
+            if (!key) return;
+            const set = new Set(Array.isArray(s.emailIds) ? s.emailIds : []);
+            map.set(key, { name: s.name, set, source: s.source || 'ai' });
+        });
+        newSug.forEach(s => {
+            const key = String(s.name || '').toLowerCase();
+            if (!map.has(key)) {
+                map.set(key, { name: s.name, set: new Set(s.emailIds || []), source: s.source || 'keyword' });
+            } else {
+                const ent = map.get(key);
+                (s.emailIds || []).forEach(id => ent.set.add(id));
+                if (ent.source !== 'keyword') ent.source = 'keyword';
+            }
+        });
+
+        suggestCategoriesState.suggestions = Array.from(map.values()).map(x => ({
+            name: x.name,
+            emailIds: Array.from(x.set),
+            source: x.source || 'keyword'
+        }));
+        renderSuggestCategoriesList();
+        showSuccessPopup('Added keyword-based suggestions (searched across all emails). Select the ones you want to create.', 'Suggestions Added');
+    } catch (e) {
+        console.error('generateKeywordSuggestionsFromOther failed:', e);
+        showErrorPopup('Failed to compute keyword suggestions. Please try again.', 'Suggest Failed');
+    }
 }
 
 async function openSuggestCategoriesModal(otherIndex) {
@@ -8317,8 +8541,11 @@ async function openSuggestCategoriesModal(otherIndex) {
         suggestCategoriesState.otherIndex = otherIndex;
         suggestCategoriesState.suggestions = [];
         suggestCategoriesState.selected = new Set();
-        if (body) body.innerHTML = '<div class="loading">Computing suggestions...</div>';
-        modal.style.display = 'block';
+    if (body) body.innerHTML = '<div class="loading">Computing suggestions...</div>';
+    modal.style.display = 'block';
+    // Initialize keyword editor
+    suggestCategoriesState.keywords = [''];
+    renderSuggestKeywordsEditor();
 
         const otherCat = (categoriesState || [])[otherIndex];
         const emailObjs = Array.isArray(otherCat?.emails) ? otherCat.emails : [];
@@ -9690,6 +9917,21 @@ function fieldContains(hay, needle) {
             }
         }
 
+        // Name-based remove to keep behavior robust even if arrays diverge in order
+        function removeThreadFromKeywordGroupByName(groupName, threadId) {
+            try {
+                const nameLc = String(groupName || '').toLowerCase();
+                const groups = getWorkingGroupsRef();
+                const idx = (groups || []).findIndex(g => String(g?.name || '').toLowerCase() === nameLc);
+                if (idx === -1) return;
+
+                // Delegate to index-based path for reuse
+                removeThreadFromKeywordGroup(idx, threadId);
+            } catch (e) {
+                console.error('removeThreadFromKeywordGroupByName failed:', e);
+            }
+        }
+
         function removeThreadFromKeywordGroup(idx, threadId) {
             try {
                 const groups = getWorkingGroupsRef();
@@ -9702,8 +9944,12 @@ function fieldContains(hay, needle) {
 
                 // Keep keywordResults in sync with working groups for immediate UI updates
                 try {
-                    if (Array.isArray(keywordResults) && idx >= 0 && idx < keywordResults.length) {
-                        const kg = keywordResults[idx];
+                    const groupName = String(g.name || '');
+                    const rIdx = Array.isArray(keywordResults)
+                        ? keywordResults.findIndex(kg => String(kg?.name || '').toLowerCase() === groupName.toLowerCase())
+                        : -1;
+                    if (Array.isArray(keywordResults) && rIdx !== -1) {
+                        const kg = keywordResults[rIdx];
                         if (kg && Array.isArray(kg.threads)) {
                             kg.threads = kg.threads.filter(t => t && t.id !== threadId);
                         }
