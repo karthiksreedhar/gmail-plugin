@@ -7619,6 +7619,12 @@ function previousSlide() {
                             <button class="carousel-nav-btn" style="background:#28a745;" onclick="applySelectedFacets(${index})">Add Threads</button>
                         </div>
                     </div>
+                    ${group.isOther ? `
+                        <div style="margin-bottom:12px; padding:14px; border: 2px dashed #17a2b8; border-radius:8px; background:#f0fbff;">
+                            <button class="carousel-nav-btn" style="background:#17a2b8; font-size:16px; padding:10px 14px;" onclick="showAddKeywordsModal(${index})">➕ Add keywords to refine “Other”</button>
+                            <div style="margin-top:6px; color:#0c5460; font-size:12px;">Add one or more keywords to break down the “Other” threads into new categories.</div>
+                        </div>
+                    ` : ''}
                     <div class="thread-preview">
                         <div class="thread-subject">
                             ${group.isOther 
@@ -7667,6 +7673,313 @@ function previousSlide() {
             const nextBtn = document.getElementById('keywordNextBtn');
             if (prevBtn) prevBtn.disabled = currentKeywordSlideIndex === 0;
             if (nextBtn) nextBtn.disabled = currentKeywordSlideIndex === keywordResults.length - 1;
+        }
+
+        /* ===== Add Keywords from “Other” workflow ===== */
+        let additionalKeywords = [];
+
+        function ensureAddKeywordsModal() {
+            let modal = document.getElementById('addKeywordsModal');
+            if (modal) return modal;
+            modal = document.createElement('div');
+            modal.id = 'addKeywordsModal';
+            modal.className = 'modal';
+            modal.innerHTML = `
+                <div class="modal-content" style="max-width: 700px; max-height: 80vh;">
+                    <div class="modal-header" style="border-bottom: 2px solid #17a2b8;">
+                        <h2 class="modal-title">Add Keywords to Refine “Other”</h2>
+                        <button class="close" onclick="closeAddKeywordsModal()">&times;</button>
+                    </div>
+                    <div style="padding: 16px; max-height: 60vh; overflow: auto;">
+                        <div style="color:#666; font-size: 13px; margin-bottom: 10px;">
+                            Enter one or more keywords. We’ll search the unsorted “Other” threads and create new keyword groups.
+                        </div>
+                        <div id="addKeywordsEditor"></div>
+                        <div style="display:flex; gap:8px; margin-top:12px;">
+                            <button class="select-email-btn" style="background:#28a745;" onclick="addKeywordRow()">+ Add Keyword</button>
+                            <button id="addKeywordsSaveBtn" class="select-email-btn" style="background:#6c757d;" onclick="saveAdditionalKeywords()">
+                                <span class="btn-text">Save to Keyword List</span>
+                                <span class="btn-loading" style="display:none;">💾 Saving...</span>
+                            </button>
+                        </div>
+                    </div>
+                    <div style="display:flex; justify-content:center; gap:12px; padding: 12px 16px; border-top:1px solid #e9ecef;">
+                        <button id="addKeywordsCancelBtn" class="carousel-btn carousel-btn-cancel" onclick="closeAddKeywordsModal()">Cancel</button>
+                        <button id="addKeywordsGenerateBtn" class="carousel-btn carousel-btn-add" onclick="generateMoreFromOther()">
+                            <span class="btn-text">Generate</span>
+                            <span class="btn-loading" style="display:none;">⏳ Generating...</span>
+                        </button>
+                    </div>
+                </div>
+            `;
+            modal.addEventListener('click', (ev) => { if (ev.target === modal) closeAddKeywordsModal(); });
+            document.body.appendChild(modal);
+            return modal;
+        }
+
+        function renderAddKeywordsEditor() {
+            const host = document.getElementById('addKeywordsEditor');
+            if (!host) return;
+            if (!Array.isArray(additionalKeywords) || !additionalKeywords.length) {
+                additionalKeywords = [''];
+            }
+            host.innerHTML = additionalKeywords.map((kw, i) => `
+                <div style="display:flex; gap:8px; align-items:center; margin-bottom:8px;">
+                    <input type="text" value="${(kw || '').replace(/&/g,'&').replace(/</g,'<').replace(/>/g,'>').replace(/"/g,'"')}"
+                           oninput="additionalKeywords[${i}] = this.value"
+                           placeholder="Enter keyword..."
+                           style="flex:1; padding:10px; border:1px solid #ddd; border-radius:6px; font-size:14px;">
+                    <button class="refinement-delete-btn" style="padding:8px 10px; font-size:12px;" onclick="removeKeywordRow(${i})">Delete</button>
+                </div>
+            `).join('');
+        }
+
+        function addKeywordRow() {
+            if (!Array.isArray(additionalKeywords)) additionalKeywords = [];
+            additionalKeywords.push('');
+            renderAddKeywordsEditor();
+        }
+
+        function removeKeywordRow(i) {
+            if (!Array.isArray(additionalKeywords)) additionalKeywords = [];
+            additionalKeywords.splice(i, 1);
+            if (!additionalKeywords.length) additionalKeywords.push('');
+            renderAddKeywordsEditor();
+        }
+
+        function showAddKeywordsModal(otherIdx) {
+            // Keep focus on the Other slide by default; index provided if needed later
+            window.__keywordOtherSlideIndex = otherIdx;
+            const modal = ensureAddKeywordsModal();
+            // Initialize with a single empty row
+            additionalKeywords = [''];
+            renderAddKeywordsEditor();
+            modal.style.display = 'block';
+        }
+
+        function closeAddKeywordsModal() {
+            const modal = document.getElementById('addKeywordsModal');
+            if (modal) modal.style.display = 'none';
+        }
+
+        async function saveAdditionalKeywords() {
+            const btn = document.getElementById('addKeywordsSaveBtn');
+            const btnText = btn ? btn.querySelector('.btn-text') : null;
+            const btnLoading = btn ? btn.querySelector('.btn-loading') : null;
+            try {
+                if (btn) btn.disabled = true;
+                if (btnText) btnText.style.display = 'none';
+                if (btnLoading) btnLoading.style.display = 'inline';
+
+                // Merge into keywordGuidelines (unique by name, case-insensitive)
+                const newNames = (additionalKeywords || [])
+                    .map(s => String(s || '').trim())
+                    .filter(Boolean);
+
+                if (!newNames.length) {
+                    showErrorPopup('Please enter at least one keyword.', 'No Keywords');
+                    return;
+                }
+
+                const existing = new Set((keywordGuidelines || []).map(c => String(c?.name || '').toLowerCase()));
+                newNames.forEach(name => {
+                    const key = name.toLowerCase();
+                    if (!existing.has(key)) {
+                        keywordGuidelines.push({ name, notes: '' });
+                        existing.add(key);
+                    }
+                });
+
+                // Persist to backend using the shared saver
+                await saveKeywordGuidelines();
+
+                // Inline confirmation on the button
+                if (btnText) btnText.textContent = 'Saved ✓';
+                showSuccessPopup('Keywords saved to your list.', 'Saved');
+            } catch (e) {
+                console.error('saveAdditionalKeywords failed:', e);
+                showErrorPopup('Failed to save keywords. Please try again.', 'Save Failed');
+            } finally {
+                if (btnLoading) btnLoading.style.display = 'none';
+                if (btn) btn.disabled = false;
+                setTimeout(() => {
+                    try {
+                        if (btnText) btnText.textContent = 'Save to Keyword List';
+                        if (btnText) btnText.style.display = 'inline';
+                    } catch (_) {}
+                }, 1000);
+            }
+        }
+
+        function computeOtherThreadIds() {
+            // Build set of thread IDs assigned to any non-Other group
+            const groups = getWorkingGroupsRef();
+            const assigned = new Set();
+            (groups || []).forEach(g => {
+                if (!g || !Array.isArray(g.threads) || g.isOther) return;
+                g.threads.forEach(t => { if (t && t.id) assigned.add(t.id); });
+            });
+            const all = Array.isArray(keywordAllThreads) ? keywordAllThreads : [];
+            const other = all.filter(t => t && t.id && !assigned.has(t.id)).map(t => t.id);
+            return new Set(other);
+        }
+
+        function matchThreadsByKeyword(threadList, keyword) {
+            const needle = String(keyword || '').toLowerCase();
+            if (!needle) return [];
+            const matches = [];
+            for (const t of (threadList || [])) {
+                if (!t || !t.id) continue;
+                const subj = String(t.subject || '').toLowerCase();
+                if (subj.includes(needle)) { matches.push(t); continue; }
+                const msgs = Array.isArray(t.messages) ? t.messages : [];
+                let ok = false;
+                for (const m of msgs) {
+                    if (String(m.subject || '').toLowerCase().includes(needle)) { ok = true; break; }
+                    if (String(m.body || '').toLowerCase().includes(needle)) { ok = true; break; }
+                    if (String(m.from || '').toLowerCase().includes(needle)) { ok = true; break; }
+                }
+                if (ok) matches.push(t);
+            }
+            return matches;
+        }
+
+        async function generateMoreFromOther() {
+            const genBtn = document.getElementById('addKeywordsGenerateBtn');
+            const genText = genBtn ? genBtn.querySelector('.btn-text') : null;
+            const genLoading = genBtn ? genBtn.querySelector('.btn-loading') : null;
+            try {
+                if (genBtn) genBtn.disabled = true;
+                if (genText) genText.style.display = 'none';
+                if (genLoading) genLoading.style.display = 'inline';
+                // Collect keywords from editor
+                const keys = (additionalKeywords || [])
+                    .map(s => String(s || '').trim())
+                    .filter(Boolean);
+                if (!keys.length) {
+                    showErrorPopup('Please enter at least one keyword.', 'No Keywords');
+                    return;
+                }
+
+                // Also persist new keywords to the main list for future sessions
+                try { await saveAdditionalKeywords(); } catch (_) {}
+
+                // Compute "Other" candidates
+                const otherIds = computeOtherThreadIds();
+                const all = Array.isArray(keywordAllThreads) ? keywordAllThreads : [];
+                const otherThreads = all.filter(t => t && t.id && otherIds.has(t.id));
+
+                if (!otherThreads.length) {
+                    showErrorPopup('No threads in “Other” to refine right now.', 'Nothing to Refine');
+                    return;
+                }
+
+                // Prepare working groups and render groups
+                const wg = getWorkingGroupsRef();
+                if (!Array.isArray(keywordResults)) keywordResults = [];
+
+                // Helper to find or create a group with given name (case-insensitive).
+                const findGroupIndexByName = (arr, name) => {
+                    const n = String(name || '').toLowerCase();
+                    return arr.findIndex(g => String(g?.name || '').toLowerCase() === n && !g.isOther);
+                };
+
+                const ensureGroupBeforeOther = (arr, name) => {
+                    const existsIdx = findGroupIndexByName(arr, name);
+                    if (existsIdx !== -1) return existsIdx;
+                    const otherIdx = arr.findIndex(g => g && g.isOther);
+                    const insertIdx = otherIdx === -1 ? arr.length : otherIdx;
+                    arr.splice(insertIdx, 0, { name, threads: [] });
+                    return insertIdx;
+                };
+
+                // Create/augment groups for each keyword in both structures
+                const newAssignments = new Map(); // name -> array of ids
+                keys.forEach(k => newAssignments.set(k, []));
+
+                for (const k of keys) {
+                    const matched = matchThreadsByKeyword(otherThreads, k);
+                    const ids = matched.map(t => t.id);
+                    newAssignments.set(k, ids);
+
+                    // 1) keywordWorkingGroups (source of truth for operations)
+                    let otherIdxWg = wg.findIndex(g => g && g.isOther);
+                    const targetIdxWg = ensureGroupBeforeOther(wg, k);
+                    // Ensure thread objects map exists
+                    const map = getThreadByIdRef();
+
+                    // Add matched to target group (avoid dups)
+                    const tgt = wg[targetIdxWg];
+                    if (!Array.isArray(tgt.threads)) tgt.threads = [];
+                    const have = new Set(tgt.threads.map(t => t && t.id).filter(Boolean));
+                    for (const id of ids) {
+                        if (have.has(id)) continue;
+                        const full = map.get(id);
+                        if (full) tgt.threads.push(full);
+                    }
+
+                    // Remove matched from Other only
+                    if (otherIdxWg !== -1) {
+                        const otherG = wg[otherIdxWg];
+                        if (Array.isArray(otherG.threads)) {
+                            otherG.threads = otherG.threads.filter(t => t && !ids.includes(t.id));
+                        }
+                    }
+                }
+
+                // After all keywords applied, rebuild "Other" in working groups to reflect removal
+                rebuildOtherGroup();
+
+                // 2) keywordResults (render state)
+                let otherIdxKr = keywordResults.findIndex(g => g && g.isOther);
+                for (const k of keys) {
+                    const ids = newAssignments.get(k) || [];
+                    if (!ids.length) continue;
+
+                    const targetIdxKr = ensureGroupBeforeOther(keywordResults, k);
+                    const tgtKr = keywordResults[targetIdxKr];
+                    if (!Array.isArray(tgtKr.threads)) tgtKr.threads = [];
+                    const haveKr = new Set(tgtKr.threads.map(t => t && t.id).filter(Boolean));
+                    // Add matched full thread objects
+                    for (const id of ids) {
+                        if (haveKr.has(id)) continue;
+                        const full = (Array.isArray(keywordAllThreads) ? keywordAllThreads : []).find(t => t && t.id === id);
+                        if (full) tgtKr.threads.push(full);
+                    }
+                }
+                // Recompute "Other" for keywordResults
+                {
+                    const assigned = new Set();
+                    keywordResults.forEach(gr => {
+                        if (!gr || gr.isOther || !Array.isArray(gr.threads)) return;
+                        gr.threads.forEach(t => { if (t && t.id) assigned.add(t.id); });
+                    });
+                    const allThreads = Array.isArray(keywordAllThreads) ? keywordAllThreads : [];
+                    let otherIdx = keywordResults.findIndex(x => x && x.isOther);
+                    if (otherIdx === -1) {
+                        keywordResults.push({ name: 'Other Threads', threads: [], isOther: true });
+                        otherIdx = keywordResults.length - 1;
+                    }
+                    keywordResults[otherIdx].threads = allThreads.filter(t => t && t.id && !assigned.has(t.id));
+                }
+
+                // Refresh UI: keep user on the “Other” slide
+                const desired = keywordResults.findIndex(g => g && g.isOther);
+                populateKeywordSearchResultsCarousel();
+                currentKeywordSlideIndex = desired >= 0 ? desired : 0;
+                updateKeywordCarouselDisplay();
+
+                // Close modal and notify
+                closeAddKeywordsModal();
+                showSuccessPopup('Created new keyword groups from “Other”. You can continue refining or save the grouping.', 'Refined');
+            } catch (e) {
+                console.error('generateMoreFromOther failed:', e);
+                showErrorPopup('Failed to refine “Other” with new keywords. Please try again.', 'Generate Failed');
+            } finally {
+                if (genLoading) genLoading.style.display = 'none';
+                if (genText) genText.style.display = 'inline';
+                if (genBtn) genBtn.disabled = false;
+            }
         }
 
         async function generateCategoriesFromKeywords() {
