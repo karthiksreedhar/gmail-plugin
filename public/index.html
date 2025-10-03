@@ -7697,7 +7697,7 @@ function previousSlide() {
                         <input type="text"
                                value="${(g.name || '').replace(/&/g,'&').replace(/"/g, '"').replace(/</g,'<').replace(/>/g,'>')}"
                                oninput="keywordGuidelines[${idx}].name = this.value"
-                               placeholder="Category name (keyword to search)"
+                               placeholder="Category name(s) — comma-separated allowed"
                                style="flex:1; padding:8px; border:1px solid #ddd; border-radius:6px; font-size:14px;">
                         <button class="refinement-delete-btn" style="padding:6px 10px; font-size:12px;" onclick="removeKeywordGuidelineRow(${idx})">Delete</button>
                     </div>
@@ -8325,10 +8325,24 @@ function previousSlide() {
 
         async function generateCategoriesFromKeywords() {
             try {
-                // Collect category names (keywords)
-                const keywords = (keywordGuidelines || [])
-                    .map(c => String(c?.name || '').trim())
-                    .filter(n => n);
+                // Collect category names; support comma-separated keywords per row and dedupe (case-insensitive)
+                const rawNames = Array.isArray(keywordGuidelines) ? keywordGuidelines : [];
+                const splitKeywords = [];
+                for (const row of rawNames) {
+                    const name = String(row?.name || '');
+                    if (!name) continue;
+                    name.split(',')
+                        .map(s => String(s || '').trim())
+                        .filter(Boolean)
+                        .forEach(token => splitKeywords.push(token));
+                }
+                const seenKw = new Set();
+                const keywords = splitKeywords.filter(k => {
+                    const key = k.toLowerCase();
+                    if (seenKw.has(key)) return false;
+                    seenKw.add(key);
+                    return true;
+                });
 
                 if (!keywords.length) {
                     showErrorPopup('Please add at least one category name (keyword).', 'No Keywords');
