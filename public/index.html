@@ -9930,121 +9930,174 @@ async function suggestMoreThreads(idx) {
         const btn = document.getElementById(`suggest-btn-${idx}`);
         if (btn) { btn.disabled = true; btn.textContent = 'Suggesting...'; }
 
+        // Working groups and current group (positives)
         const groups = getWorkingGroupsRef();
         const group = groups[idx] || { threads: [] };
+        const positives = Array.isArray(group.threads) ? group.threads : [];
 
-        // Positives = threads in the current keyword group
-        const positives = (group.threads || []);
+        // Candidates = all threads NOT already in this group
+        const allThreads = Array.isArray(keywordAllThreads) ? keywordAllThreads : [];
+        const inGroupIds = new Set(positives.map(t => t && t.id).filter(Boolean));
+        const candidates = allThreads.filter(t => t && t.id && !inGroupIds.has(t.id));
 
-        // Candidates = all threads NOT in the current group already
-        const inGroupIds = new Set((positives || []).map(t => t && t.id).filter(Boolean));
-        const all = Array.isArray(keywordAllThreads) ? keywordAllThreads : [];
-        const candidatesRaw = all.filter(t => t && t.id && !inGroupIds.has(t.id));
-
-        // Compact payload caps (server will also cap)
-        const CAP_MSGS = 6;
-        const CAP_BODY = 800;
-        const compactThreads = (list) => (list || []).map(t => ({
-            id: t.id,
-            subject: t.subject || '',
-            messages: (Array.isArray(t.messages) ? t.messages.slice(-CAP_MSGS) : []).map(m => ({
-                from: m.from || '',
-                to: Array.isArray(m.to) ? m.to.slice(0, 10) : (m.to ? [m.to] : []),
-                subject: m.subject || '',
-                body: String(m.body || '').slice(0, CAP_BODY),
-                isResponse: !!m.isResponse,
-                date: m.date || ''
-            }))
-        }));
-
-        const payload = {
-            positives: compactThreads(positives),
-            candidates: compactThreads(candidatesRaw),
-            topK: 12,
-            keyword: String(group.name || '')
-        };
-
-        // If there are no candidates, show empty
-        if (!payload.candidates.length) {
+        // If no candidates, show empty suggestions and exit
+        if (!candidates.length) {
             const store = getSuggestionsRef();
             store[idx] = [];
             renderSuggestionsList(idx);
-            if (btn) { btn.disabled = false; btn.textContent = 'Suggest More Threads'; }
             return;
         }
 
-        const resp = await fetch('/api/keyword-group-suggestions-openai', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
-        });
+        // Vectorize threads locally with TF-IDF and rank by cosine similarity to the positive centroid
+        // Caps to keep computation reasonable
+        const CAP_MSGS = 6;
+        const CAP_BODY = 800;
 
-        // Primary suggestions via AI
-        let aiThreads = [];
-        try {
-            const data = await resp.json();
-            if (data && data.success && Array.isArray(data.threads)) {
-                aiThreads = data.threads;
-            }
-        } catch (_) {}
-
-        // Heuristic suggestions: partial-token match from the keyword (e.g., "Humor Project" -> include threads with "Humor" but missing "Project")
-        const keyword = String(group.name || '');
-        const rawTokens = keyword.split(/[^A-Za-z0-9]+/).map(s => s.trim()).filter(Boolean);
-        // Keep informative tokens (length >= 3); if filtered empty, fall back to any tokens
-        const tokens = rawTokens.filter(t => t.length >= 3);
-        const useTokens = tokens.length ? tokens : rawTokens;
-
-        const textOf = (t) => {
+        // Tokenization helpers
+        const STOP = new Set([
+            'the','a','an','and','or','of','in','on','at','to','for','from','by','with','about','as','is','it','this','that',
+            'be','are','was','were','will','shall','would','should','could','can','do','does','did','has','have','had',
+            'i','you','he','she','we','they','them','me','my','your','our','their','his','her',
+            're','fw','fwd','dear','hi','hello','thanks','thank','regards','best','please'
+        ]);
+        const normText = (s) => String(s || '').toLowerCase();
+        const extractTextFromThread = (t) => {
             try {
-                const subj = String(t.subject || '');
-                const msgs = Array.isArray(t.messages) ? t.messages : [];
+                const subj = normText(t.subject || '');
+                const msgs = Array.isArray(t.messages) ? t.messages.slice(-CAP_MSGS) : [];
                 const parts = [subj];
                 for (const m of msgs) {
-                    parts.push(String(m.subject || ''));
-                    parts.push(String(m.body || ''));
+                    parts.push(normText(m.subject || ''));
+                    parts.push(normText(String(m.body || '').slice(0, CAP_BODY)));
                 }
-                return parts.join(' ').toLowerCase();
-            } catch { return ''; }
+                return parts.join(' ');
+            } catch {
+                return '';
+            }
+        };
+        const tokenize = (text) => {
+            const words = normText(text).replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter(Boolean);
+            return words.filter(w => w.length >= 2 && !STOP.has(w));
         };
 
-        const tokenContains = (text, tok) => text.indexOf(String(tok).toLowerCase()) !== -1;
+        // Build documents for TF-IDF: positives and candidates
+        const docs = [];
+        const pushDoc = (id, text) => {
+            const toks = tokenize(text);
+            const tf = new Map();
+            for (const w of toks) tf.set(w, (tf.get(w) || 0) + 1);
+            const maxTf = Math.max(1, ...tf.values());
+            docs.push({ id, tf, maxTf });
+        };
 
-        const partialMatches = [];
-        if (useTokens.length) {
-            for (const t of candidatesRaw) {
-                const text = textOf(t);
-                if (!text) continue;
-                const any = useTokens.some(tok => tokenContains(text, tok));
-                const all = useTokens.every(tok => tokenContains(text, tok));
-                // Include threads that contain at least one token but not all tokens (i.e., partial match)
-                if (any && !all) {
-                    partialMatches.push(t);
+        // Build positive docs (if none, use keyword name as pseudo-positive)
+        if (positives.length) {
+            for (const t of positives) {
+                pushDoc(t.id, extractTextFromThread(t));
+            }
+        } else {
+            // Pseudo positive from the group name to avoid empty centroid
+            const seed = normText(group.name || '');
+            pushDoc('__seed__', seed);
+        }
+
+        // Build candidate docs
+        for (const t of candidates) {
+            pushDoc(t.id, extractTextFromThread(t));
+        }
+
+        // Document frequency (DF) and vocabulary
+        const DF = new Map();
+        for (const d of docs) {
+            for (const term of d.tf.keys()) {
+                DF.set(term, (DF.get(term) || 0) + 1);
+            }
+        }
+        const N = docs.length;
+        const IDF = new Map(); // idf(term) = ln((N+1)/(df+1)) + 1
+        for (const [term, df] of DF.entries()) {
+            IDF.set(term, Math.log((N + 1) / (df + 1)) + 1);
+        }
+
+        // Build normalized TF-IDF vectors (sparse as Map<term, weight>)
+        const buildTfidf = (d) => {
+            const vec = new Map();
+            let norm2 = 0;
+            for (const [term, cnt] of d.tf.entries()) {
+                const tf = cnt / d.maxTf;
+                const idf = IDF.get(term) || 0;
+                const w = tf * idf;
+                if (w > 0) {
+                    vec.set(term, w);
+                    norm2 += w * w;
                 }
+            }
+            const norm = Math.sqrt(norm2) || 1;
+            // Normalize to unit length
+            for (const [term, w] of vec.entries()) vec.set(term, w / norm);
+            return vec;
+        };
+
+        // Compute TF-IDF vectors
+        const vectors = new Map(); // id -> Map<term, weight>
+        for (const d of docs) {
+            vectors.set(d.id, buildTfidf(d));
+        }
+
+        // Positive centroid (average of positive vectors, renormalized)
+        const posIds = positives.length ? positives.map(t => t.id) : ['__seed__'];
+        const centroid = new Map();
+        if (posIds.length) {
+            // Sum
+            for (const pid of posIds) {
+                const v = vectors.get(pid) || new Map();
+                for (const [term, w] of v.entries()) {
+                    centroid.set(term, (centroid.get(term) || 0) + w);
+                }
+            }
+            // Average
+            for (const [term, sum] of centroid.entries()) {
+                centroid.set(term, sum / posIds.length);
+            }
+            // Renormalize to unit vector
+            let c2 = 0;
+            for (const w of centroid.values()) c2 += w * w;
+            const cn = Math.sqrt(c2) || 1;
+            for (const [term, w] of centroid.entries()) {
+                centroid.set(term, w / cn);
             }
         }
 
-        // Merge AI + Heuristic, de-duplicate by id, keep up to 12
-        const seen = new Set();
-        const merged = [];
-        const pushUnique = (arr) => {
-            for (const t of arr) {
-                const id = t && t.id;
-                if (!id || seen.has(id)) continue;
-                seen.add(id);
-                merged.push(t);
-                if (merged.length >= 12) break;
+        // Cosine similarity: centroid dot candidate
+        const cosine = (v) => {
+            let dot = 0;
+            // iterate over smaller map for speed; choose centroid (likely smaller) as driver
+            for (const [term, cw] of centroid.entries()) {
+                const vw = v.get(term);
+                if (vw) dot += cw * vw;
             }
+            return dot; // since both are unit vectors
         };
-        pushUnique(aiThreads);
-        if (merged.length < 12) pushUnique(partialMatches);
 
+        // Rank candidates
+        const scored = [];
+        for (const t of candidates) {
+            const v = vectors.get(t.id) || new Map();
+            const score = centroid.size ? cosine(v) : 0;
+            scored.push({ t, score });
+        }
+        scored.sort((a, b) => b.score - a.score);
+
+        // Take top 10 suggestions
+        const top = scored.slice(0, 10).map(s => s.t);
+
+        // Persist and render
         const store = getSuggestionsRef();
-        store[idx] = merged;
+        store[idx] = top;
         renderSuggestionsList(idx);
     } catch (e) {
         console.error('suggestMoreThreads failed:', e);
-        showErrorPopup('Failed to fetch suggestions. Please try again.', 'Suggest Failed');
+        showErrorPopup('Failed to compute suggestions. Please try again.', 'Suggest Failed');
     } finally {
         const btn = document.getElementById(`suggest-btn-${idx}`);
         if (btn) { btn.disabled = false; btn.textContent = 'Suggest More Threads'; }
