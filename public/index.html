@@ -2256,6 +2256,7 @@
                 <button class="generate-btn" onclick="generateResponse()">Generate Response</button>
                 <button class="view-refinements-btn" onclick="showViewRefinementsModal()">View Refinements</button>
                 <button class="view-saved-generations-btn" onclick="showViewSavedGenerationsModal()">View Saved Generations</button>
+                <button class="refresh-btn" onclick="showLoadTodayModal()">📅 Load Today</button>
                 <button class="refresh-btn" onclick="showLoadEmailThreadsModal()">📧 Load Email Threads</button>
             </div>
         </div>
@@ -5796,7 +5797,363 @@ function getCategoryBadgeStyle(category) {
         let hiddenThreads = new Set();
         let lastThreadDateFilter = null;
 
-        async function showLoadEmailThreadsModal() {
+        /* ===== Load Today (Threads + Inbox) ===== */
+let todayThreads = [];
+let todayEmails = [];
+let selectedTodayThreads = new Set();
+let selectedTodayEmails = new Set();
+
+function ensureLoadTodayModal() {
+    let modal = document.getElementById('loadTodayModal');
+    if (modal) return modal;
+    modal = document.createElement('div');
+    modal.id = 'loadTodayModal';
+    modal.className = 'modal';
+    modal.innerHTML = `
+        <div class="modal-content" style="max-width: 1100px; max-height: 85vh;">
+            <div class="modal-header">
+                <h2 class="modal-title">Load Today</h2>
+                <button class="close" onclick="closeLoadTodayModal()">&times;</button>
+            </div>
+            <div style="padding: 16px;">
+                <div style="display:flex; gap:12px; justify-content:flex-end; margin-bottom:12px;">
+                    <button class="carousel-nav-btn" style="background:#667eea;" onclick="refreshLoadToday()">🔄 Refresh</button>
+                    <button class="carousel-nav-btn" id="loadTodaySelectAllThreadsBtn" style="background:#28a745;" onclick="selectAllTodayThreads()">Select All Threads</button>
+                    <button class="carousel-nav-btn" id="loadTodaySelectAllEmailsBtn" style="background:#28a745;" onclick="selectAllTodayEmails()">Select All Emails</button>
+                    <button class="carousel-nav-btn" style="background:#17a2b8;" onclick="addAllToday()">Add All</button>
+                </div>
+                <div style="display:grid; grid-template-columns: 1fr 1fr; gap:16px; max-height:60vh;">
+                    <div style="display:flex; flex-direction:column; min-height:0; border:1px solid #e9ecef; border-radius:8px; background:#fff;">
+                        <div style="padding:10px; border-bottom:1px solid #e9ecef; display:flex; align-items:center; justify-content:space-between;">
+                            <div style="font-weight:600; color:#333;">Today’s Threads</div>
+                            <div id="todayThreadsCount" style="color:#666; font-size:12px;">0</div>
+                        </div>
+                        <div id="todayThreadsList" style="flex:1 1 auto; overflow:auto; padding:10px;">
+                            <div class="loading">Loading threads...</div>
+                        </div>
+                    </div>
+                    <div style="display:flex; flex-direction:column; min-height:0; border:1px solid #e9ecef; border-radius:8px; background:#fff;">
+                        <div style="padding:10px; border-bottom:1px solid #e9ecef; display:flex; align-items:center; justify-content:space-between;">
+                            <div style="font-weight:600; color:#333;">Today’s Inbox Emails</div>
+                            <div id="todayEmailsCount" style="color:#666; font-size:12px;">0</div>
+                        </div>
+                        <div id="todayEmailsList" style="flex:1 1 auto; overflow:auto; padding:10px;">
+                            <div class="loading">Loading emails...</div>
+                        </div>
+                    </div>
+                </div>
+                <div style="display:flex; justify-content:center; gap:12px; padding-top:12px;">
+                    <button class="carousel-btn carousel-btn-cancel" onclick="closeLoadTodayModal()">Cancel</button>
+                    <button class="carousel-btn carousel-btn-add" id="addSelectedTodayBtn" onclick="addSelectedToday()" disabled>Add Selected</button>
+                </div>
+            </div>
+        </div>
+    `;
+    modal.addEventListener('click', (ev) => { if (ev.target === modal) closeLoadTodayModal(); });
+    document.body.appendChild(modal);
+    return modal;
+}
+
+function showLoadTodayModal() {
+    const modal = ensureLoadTodayModal();
+    // reset state
+    todayThreads = [];
+    todayEmails = [];
+    selectedTodayThreads = new Set();
+    selectedTodayEmails = new Set();
+    // placeholders
+    const tl = document.getElementById('todayThreadsList');
+    const el = document.getElementById('todayEmailsList');
+    if (tl) tl.innerHTML = '<div class="loading">Loading threads...</div>';
+    if (el) el.innerHTML = '<div class="loading">Loading emails...</div>';
+    document.getElementById('todayThreadsCount').textContent = '0';
+    document.getElementById('todayEmailsCount').textContent = '0';
+    updateAddSelectedTodayBtn();
+    modal.style.display = 'block';
+    // fetch in parallel
+    loadTodayData();
+}
+
+function closeLoadTodayModal() {
+    const modal = document.getElementById('loadTodayModal');
+    if (modal) modal.style.display = 'none';
+}
+
+async function loadTodayData() {
+    try {
+        const [threadsResp, emailsResp] = await Promise.all([
+            fetch('/api/load-email-threads', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ dateFilter: 'today' })
+            }),
+            fetch('/api/fetch-more-emails', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ dateFilter: 'today' })
+            })
+        ]);
+
+        // Threads
+        try {
+            const tdata = await threadsResp.json();
+            if (threadsResp.ok && tdata && tdata.success && Array.isArray(tdata.threads)) {
+                todayThreads = tdata.threads;
+            } else {
+                todayThreads = [];
+            }
+        } catch (_) {
+            todayThreads = [];
+        }
+
+        // Emails
+        let authNeeded = false;
+        try {
+            const edata = await emailsResp.json();
+            if (emailsResp.status === 401 && edata && edata.needsAuth) {
+                authNeeded = true;
+                todayEmails = [];
+            } else if (emailsResp.ok && edata && edata.success && Array.isArray(edata.emails)) {
+                todayEmails = edata.emails;
+            } else {
+                todayEmails = [];
+            }
+        } catch (_) {
+            todayEmails = [];
+        }
+
+        renderTodayThreadsList();
+        renderTodayEmailsList(authNeeded);
+    } catch (e) {
+        console.error('loadTodayData failed:', e);
+        // basic fallback
+        renderTodayThreadsList();
+        renderTodayEmailsList(false);
+    }
+}
+
+function renderTodayThreadsList() {
+    const host = document.getElementById('todayThreadsList');
+    const count = document.getElementById('todayThreadsCount');
+    if (!host) return;
+    if (count) count.textContent = String(todayThreads.length || 0);
+
+    if (!todayThreads.length) {
+        host.innerHTML = '<div class="no-emails">No threads found for today.</div>';
+        return;
+    }
+    host.innerHTML = todayThreads.map((t, i) => {
+        const subj = (t.subject || 'No Subject');
+        const msgs = Array.isArray(t.messages) ? t.messages : [];
+        const last = msgs.length ? msgs[msgs.length - 1] : null;
+        const date = last?.date || '';
+        const from = last?.from || '';
+        const preview = last?.body ? String(last.body).slice(0, 160) + (last.body.length > 160 ? '...' : '') : '';
+        return `
+            <label style="display:block; border:1px solid #e9ecef; border-radius:6px; padding:10px; margin-bottom:8px; background:#fafafa;">
+                <div style="display:flex; align-items:center; gap:10px;">
+                    <input type="checkbox" id="today-thread-${i}" onchange="toggleTodayThread(${i}, this.checked)">
+                    <div style="flex:1 1 auto; min-width:0;">
+                        <div style="font-weight:600; color:#333; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${subj}</div>
+                        <div style="font-size:12px; color:#666;">${from} • ${formatDate(date)}</div>
+                        <div style="font-size:12px; color:#777; margin-top:4px;">${preview}</div>
+                    </div>
+                </div>
+            </label>
+        `;
+    }).join('');
+}
+
+function renderTodayEmailsList(authNeeded) {
+    const host = document.getElementById('todayEmailsList');
+    const count = document.getElementById('todayEmailsCount');
+    if (!host) return;
+
+    if (authNeeded) {
+        if (count) count.textContent = '0';
+        host.innerHTML = `
+            <div class="error" style="text-align:center;">
+                Gmail authentication required to fetch today’s inbox emails.<br>
+                <button class="select-email-btn" style="margin-top:8px;" onclick="startAuthentication()">Authenticate</button>
+            </div>
+        `;
+        return;
+    }
+
+    if (count) count.textContent = String(todayEmails.length || 0);
+
+    if (!todayEmails.length) {
+        host.innerHTML = '<div class="no-emails">No inbox emails found for today.</div>';
+        return;
+    }
+    host.innerHTML = todayEmails.map((e, i) => {
+        const subj = (e.subject || 'No Subject');
+        const from = (e.from || 'Unknown Sender');
+        const date = e.date || '';
+        const preview = e.body ? String(e.body).slice(0, 160) + (e.body.length > 160 ? '...' : '') : '';
+        const catStyle = getCategoryBadgeStyle(e.category || 'Personal & Life Management');
+        const categoryClass = `category-${(e.category || 'Personal & Life Management').toLowerCase().replace(/\s+/g, '-')}`;
+        return `
+            <label style="display:block; border:1px solid #e9ecef; border-radius:6px; padding:10px; margin-bottom:8px; background:#fafafa;">
+                <div style="display:flex; align-items:center; gap:10px;">
+                    <input type="checkbox" id="today-email-${i}" onchange="toggleTodayEmail(${i}, this.checked)">
+                    <div style="flex:1 1 auto; min-width:0;">
+                        <div style="font-weight:600; color:#333; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${subj}</div>
+                        <div style="font-size:12px; color:#666;">${from} • ${formatDate(date)}</div>
+                        <div style="font-size:12px; color:#777; margin-top:4px;">${preview}</div>
+                        <div class="email-category ${categoryClass}" style="display:inline-block; padding:4px 8px; border-radius:12px; font-size:12px; font-weight:500; margin-top:6px; ${catStyle}">
+                            ${e.category || 'Personal & Life Management'}
+                        </div>
+                    </div>
+                </div>
+            </label>
+        `;
+    }).join('');
+}
+
+function toggleTodayThread(i, checked) {
+    if (checked) selectedTodayThreads.add(i);
+    else selectedTodayThreads.delete(i);
+    updateAddSelectedTodayBtn();
+}
+
+function toggleTodayEmail(i, checked) {
+    if (checked) selectedTodayEmails.add(i);
+    else selectedTodayEmails.delete(i);
+    updateAddSelectedTodayBtn();
+}
+
+function updateAddSelectedTodayBtn() {
+    const btn = document.getElementById('addSelectedTodayBtn');
+    const total = selectedTodayThreads.size + selectedTodayEmails.size;
+    if (!btn) return;
+    btn.disabled = total === 0;
+    btn.textContent = total === 0 ? 'Add Selected' : `Add ${total} Selected`;
+}
+
+function selectAllTodayThreads() {
+    selectedTodayThreads.clear();
+    for (let i = 0; i < todayThreads.length; i++) {
+        selectedTodayThreads.add(i);
+        const cb = document.getElementById(`today-thread-${i}`);
+        if (cb) cb.checked = true;
+    }
+    updateAddSelectedTodayBtn();
+    const b = document.getElementById('loadTodaySelectAllThreadsBtn');
+    if (b) {
+        const t = b.textContent;
+        b.textContent = 'All Threads ✓';
+        b.disabled = true;
+        setTimeout(() => { try { b.textContent = t; b.disabled = false; } catch(_){} }, 900);
+    }
+}
+
+function selectAllTodayEmails() {
+    selectedTodayEmails.clear();
+    for (let i = 0; i < todayEmails.length; i++) {
+        selectedTodayEmails.add(i);
+        const cb = document.getElementById(`today-email-${i}`);
+        if (cb) cb.checked = true;
+    }
+    updateAddSelectedTodayBtn();
+    const b = document.getElementById('loadTodaySelectAllEmailsBtn');
+    if (b) {
+        const t = b.textContent;
+        b.textContent = 'All Emails ✓';
+        b.disabled = true;
+        setTimeout(() => { try { b.textContent = t; b.disabled = false; } catch(_){} }, 900);
+    }
+}
+
+function addAllToday() {
+    selectAllTodayThreads();
+    selectAllTodayEmails();
+    addSelectedToday();
+}
+
+async function addSelectedToday() {
+    const threadsToAdd = Array.from(selectedTodayThreads).map(i => todayThreads[i]).filter(Boolean);
+    const emailsToAdd = Array.from(selectedTodayEmails).map(i => todayEmails[i]).filter(Boolean);
+
+    if (!threadsToAdd.length && !emailsToAdd.length) {
+        showErrorPopup('Please select at least one thread or email to add.', 'Nothing Selected');
+        return;
+    }
+
+    showLoadingOverlay('Adding Items', 'Starting...', false);
+    let addedThreads = 0, failedThreads = 0;
+    let addedEmails = 0, failedEmails = 0;
+
+    try {
+        // Add threads in a single request when possible, fallback in chunks if error
+        if (threadsToAdd.length) {
+            try {
+                updateLoadingOverlayMessage('Adding Threads', `Submitting ${threadsToAdd.length} thread(s)...`);
+                const resp = await fetch('/api/add-email-threads', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ threads: threadsToAdd })
+                });
+                const data = await resp.json().catch(() => ({}));
+                if (resp.ok && data && data.success) {
+                    addedThreads = typeof data.addedCount === 'number' ? data.addedCount : threadsToAdd.length;
+                } else {
+                    failedThreads = threadsToAdd.length;
+                }
+            } catch (e) {
+                console.warn('Bulk add threads failed, skipping:', e);
+                failedThreads = threadsToAdd.length;
+            }
+        }
+
+        // Add emails one-by-one to allow partial success
+        if (emailsToAdd.length) {
+            for (let i = 0; i < emailsToAdd.length; i++) {
+                updateLoadingOverlayMessage('Adding Emails', `Processing ${i + 1} of ${emailsToAdd.length}...`);
+                try {
+                    const resp = await fetch('/api/add-approved-email', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ email: emailsToAdd[i] })
+                    });
+                    const data = await resp.json().catch(() => ({}));
+                    if (resp.ok && data && data.success) {
+                        addedEmails++;
+                    } else {
+                        failedEmails++;
+                    }
+                } catch {
+                    failedEmails++;
+                }
+            }
+        }
+
+        hideLoadingOverlay();
+        closeLoadTodayModal();
+
+        const parts = [];
+        if (addedThreads) parts.push(`${addedThreads} thread${addedThreads === 1 ? '' : 's'} added`);
+        if (addedEmails) parts.push(`${addedEmails} email${addedEmails === 1 ? '' : 's'} added`);
+        if (failedThreads) parts.push(`${failedThreads} thread${failedThreads === 1 ? '' : 's'} failed`);
+        if (failedEmails) parts.push(`${failedEmails} email${failedEmails === 1 ? '' : 's'} failed`);
+        showSuccessPopup(parts.length ? `Completed: ${parts.join(', ')}.` : 'No items were added.', 'Load Today');
+
+        // Refresh main lists
+        try { loadEmails(); } catch(_) {}
+        try { loadUnrepliedEmails(); } catch(_) {}
+    } catch (e) {
+        console.error('addSelectedToday failed:', e);
+        try { hideLoadingOverlay(); } catch(_){}
+        showErrorPopup('Failed to add selected items. Please try again.', 'Add Failed');
+    }
+}
+
+function refreshLoadToday() {
+    // Keep current modal open and refetch
+    loadTodayData();
+}
+
+async function showLoadEmailThreadsModal() {
             // Create modal HTML if it doesn't exist
             let modal = document.getElementById('loadEmailThreadsModal');
             if (!modal) {
