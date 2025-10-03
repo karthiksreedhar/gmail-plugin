@@ -6900,6 +6900,7 @@ function previousSlide() {
                                 Email 1 of 1
                             </div>
                             <div style="display: flex; gap: 12px;">
+                                <button class="popup-btn popup-btn-success" onclick="approveAllRemainingEmails()" title="Approve all remaining emails in this session">Select All</button>
                                 <button class="popup-btn popup-btn-secondary" onclick="rejectCurrentEmail()">❌ Reject</button>
                                 <button class="popup-btn popup-btn-success" onclick="approveCurrentEmail()">✅ Approve</button>
                             </div>
@@ -6987,7 +6988,63 @@ function previousSlide() {
             }
         }
 
-        function rejectCurrentEmail() {
+        async function approveAllRemainingEmails() {
+    try {
+        const remaining = Array.isArray(emailsToApprove) ? emailsToApprove.slice(currentApprovalIndex) : [];
+        if (!remaining.length) {
+            showErrorPopup('No remaining emails to approve.', 'Nothing to Approve');
+            return;
+        }
+
+        showConfirmPopup(
+            `Approve all remaining ${remaining.length} email${remaining.length === 1 ? '' : 's'}?`,
+            async () => {
+                try {
+                    showLoadingOverlay('Approving Emails', `Processing 0 of ${remaining.length}...`, false);
+                    let success = 0;
+                    let failed = 0;
+
+                    for (let i = 0; i < remaining.length; i++) {
+                        const email = remaining[i];
+                        updateLoadingOverlayMessage('Approving Emails', `Processing ${i + 1} of ${remaining.length}...`);
+                        try {
+                            const resp = await fetch('/api/add-approved-email', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ email })
+                            });
+                            const data = await resp.json().catch(() => ({}));
+                            if (!resp.ok || !data.success) {
+                                failed++;
+                            } else {
+                                success++;
+                            }
+                        } catch {
+                            failed++;
+                        }
+                    }
+
+                    hideLoadingOverlay();
+                    // Finish the batch flow and show standard completion UI
+                    showApprovalComplete();
+                    // Optional summary
+                    showSuccessPopup(`Approved ${success} email${success === 1 ? '' : 's'}${failed ? ` • ${failed} failed` : ''}.`, 'Batch Approved');
+                } catch (e) {
+                    console.error('approveAllRemainingEmails batch failed:', e);
+                    try { hideLoadingOverlay(); } catch (_){}
+                    showErrorPopup('Batch approval failed. Some emails may not have been saved.', 'Batch Failed');
+                }
+            },
+            () => {},
+            'Approve All'
+        );
+    } catch (e) {
+        console.error('approveAllRemainingEmails failed:', e);
+        showErrorPopup('Could not start batch approval. Please try again.', 'Operation Failed');
+    }
+}
+
+function rejectCurrentEmail() {
             // Simply move to next email without adding to database
             currentApprovalIndex++;
             showNextEmailApproval();
