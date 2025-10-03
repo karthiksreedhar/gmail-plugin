@@ -6546,12 +6546,24 @@ function previousSlide() {
                         
                         <div class="load-threads-actions">
                             <button class="load-threads-btn load-threads-btn-cancel" onclick="closeLoadMoreEmailsModal()">Cancel</button>
+                            <button class="load-threads-btn load-threads-btn-load" onclick="fetchAllFromToday()" style="background:#17a2b8;">Load All From Today</button>
                             <button class="load-threads-btn load-threads-btn-load" onclick="fetchMoreEmails()">Fetch Emails</button>
                         </div>
                     </div>
                 </div>
             `;
             return modal;
+        }
+
+        function fetchAllFromToday() {
+            try {
+                const countSel = document.getElementById('emailCountDropdown');
+                if (countSel) countSel.value = 'today';
+            } catch (e) {
+                console.warn('Unable to set dropdown to today:', e);
+            }
+            // Reuse existing flow
+            fetchMoreEmails();
         }
 
         async function fetchMoreEmails() {
@@ -6655,6 +6667,7 @@ function previousSlide() {
                             <div class="carousel-info" id="loadMoreCarouselInfo">Loading emails...</div>
                             <div class="carousel-controls">
                                 <button class="carousel-nav-btn" onclick="refreshLoadMoreEmails()" style="background: #667eea; margin-right: 10px;">🔄 Refresh Emails</button>
+                                <button class="carousel-nav-btn" id="selectAllLoadMoreBtn" onclick="selectAllLoadMoreEmails()" style="background:#28a745; margin-right: 10px;">Select All</button>
                                 <button class="carousel-nav-btn" id="loadMorePrevBtn" onclick="previousLoadMoreSlide()" disabled>← Previous</button>
                                 <span class="carousel-counter" id="loadMoreCarouselCounter">1 / 1</span>
                                 <button class="carousel-nav-btn" id="loadMoreNextBtn" onclick="nextLoadMoreSlide()" disabled>Next →</button>
@@ -6759,6 +6772,36 @@ function previousSlide() {
             }
             
             updateUseEmailsButton();
+        }
+
+        function selectAllLoadMoreEmails() {
+            try {
+                // Select every email in the current loaded list
+                selectedLoadMoreEmails.clear();
+                for (let i = 0; i < (loadMoreEmailsData ? loadMoreEmailsData.length : 0); i++) {
+                    selectedLoadMoreEmails.add(i);
+                    const cb = document.getElementById(`loadMoreEmail-${i}`);
+                    if (cb) cb.checked = true;
+                }
+                // Update CTA
+                updateUseEmailsButton();
+
+                // Brief success feedback on the button
+                const btn = document.getElementById('selectAllLoadMoreBtn');
+                if (btn) {
+                    const original = btn.textContent;
+                    btn.textContent = 'All Selected ✓';
+                    btn.disabled = true;
+                    setTimeout(() => {
+                        try {
+                            btn.textContent = original;
+                            btn.disabled = false;
+                        } catch (_) {}
+                    }, 900);
+                }
+            } catch (e) {
+                console.error('selectAllLoadMoreEmails failed:', e);
+            }
         }
 
         function updateUseEmailsButton() {
