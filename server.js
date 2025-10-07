@@ -65,7 +65,8 @@ function getUserPaths(userEmail = CURRENT_USER_EMAIL) {
     NOTES_PATH: path.join(USER_DATA_DIR, 'notes.json'),
     CATEGORIES_PATH: path.join(USER_DATA_DIR, 'categories.json'),
     CATEGORY_GUIDELINES_PATH: path.join(USER_DATA_DIR, 'category-guidelines.json'),
-    HIDDEN_THREADS_PATH: path.join(USER_DATA_DIR, 'hidden-threads.json')
+    HIDDEN_THREADS_PATH: path.join(USER_DATA_DIR, 'hidden-threads.json'),
+    CATEGORY_SUMMARIES_PATH: path.join(USER_DATA_DIR, 'categorysummaries.json')
   };
 }
 
@@ -579,6 +580,29 @@ function saveCategoryGuidelines(categories) {
     updatedAt: new Date().toISOString()
   };
   fs.writeFileSync(paths.CATEGORY_GUIDELINES_PATH, JSON.stringify(payload, null, 2));
+}
+
+// Category summaries persistence helpers
+function loadCategorySummaries() {
+  const paths = getCurrentUserPaths();
+  const data = loadEmailData(paths.CATEGORY_SUMMARIES_PATH);
+  if (!data) return {};
+  if (data.summaries && typeof data.summaries === 'object') {
+    return data.summaries;
+  }
+  return (typeof data === 'object' && data) ? data : {};
+}
+
+function saveCategorySummaries(summaries) {
+  const paths = getCurrentUserPaths();
+  if (!fs.existsSync(paths.USER_DATA_DIR)) {
+    fs.mkdirSync(paths.USER_DATA_DIR, { recursive: true });
+  }
+  const payload = {
+    summaries: summaries || {},
+    updatedAt: new Date().toISOString()
+  };
+  fs.writeFileSync(paths.CATEGORY_SUMMARIES_PATH, JSON.stringify(payload, null, 2));
 }
 
 // Categories list persistence (authoritative category names/order across the app)
@@ -4336,6 +4360,198 @@ app.delete('/api/notes/:id', (req, res) => {
   } catch (error) {
     console.error('Error deleting note:', error);
     res.status(500).json({ error: 'Failed to delete note' });
+  }
+});
+
+/**
+ * Category Summaries API
+ * - GET /api/category-summaries
+ * - POST /api/category-summaries  ({ name, summary } or { summaries: { [name]: string } })
+ * - POST /api/generate-category-summaries ({ categories: string[], overwrite?: boolean })
+ * - POST /api/category-summary-qa ({ category, question })
+ */
+app.get('/api/category-summaries', (req, res) => {
+  try {
+    const summaries = loadCategorySummaries();
+    return res.json({ summaries });
+  } catch (e) {
+    console.error('Error loading category summaries:', e);
+    return res.status(500).json({ summaries: {} });
+  }
+});
+
+app.post('/api/category-summaries', (req, res) => {
+  try {
+    const { name, summary, summaries } = req.body || {};
+    const existing = loadCategorySummaries();
+
+    if (typeof name === 'string' && typeof summary === 'string') {
+      existing[name] = summary;
+      saveCategorySummaries(existing);
+      return res.json({ success: true, saved: 1 });
+    }
+
+    if (summaries && typeof summaries === 'object') {
+      let count = 0;
+      Object.keys(summaries).forEach(k => {
+        const v = summaries[k];
+        if (typeof v === 'string') {
+          existing[k] = v;
+          count++;
+        }
+      });
+      saveCategorySummaries(existing);
+      return res.json({ success: true, saved: count });
+    }
+
+    return res.status(400).json({ success: false, error: 'Invalid payload. Provide { name, summary } or { summaries: { [name]: string } }' });
+  } catch (e) {
+    console.error('Error saving category summaries:', e);
+    return res.status(500).json({ success: false, error: 'Failed to save summaries' });
+  }
+});
+
+app.post('/api/generate-category-summaries', async (req, res) => {
+  try {
+    const { categories } = req.body || {};
+    const overwrite = (req.body && Object.prototype.hasOwnProperty.call(req.body, 'overwrite')) ? !!req.body.overwrite : true;
+
+    if (!Array.isArray(categories) || categories.length === 0) {
+      return res.status(400).json({ success: false, error: 'categories array is required' });
+    }
+
+    const responses = loadResponseEmails() || [];
+    const notesAll = loadNotes() || [];
+    const guidelines = loadCategoryGuidelines() || [];
+    const current = loadCategorySummaries();
+
+    const result = {};
+    for (const catName of categories) {
+      try {
+        // Skip if not overwriting and summary exists
+        if (!overwrite && current[catName]) {
+          result[catName] = current[catName];
+          continue;
+        }
+
+        const sampleEmails = (responses || []).filter(e => String(e.category || '').toLowerCase() === String(catName || '').toLowerCase());
+        // Build compact examples (limit to keep prompt small)
+        const MAX_EX = 30;
+        const compact = sampleEmails.slice(0, MAX_EX).map(e => ({
+          subject: e.subject || 'No Subject',
+          from: e.originalFrom || e.from || 'Unknown Sender',
+          date: e.date || '',
+          snippet: e.snippet || (e.body ? String(e.body).slice(0, 180) + (e.body.length > 180 ? '...' : '') : '')
+        }));
+
+        const catNotes = (notesAll || []).filter(n => n.category === catName).map(n => n.text || '');
+        const guideForCat = (guidelines || []).find(g => String(g?.name || '').toLowerCase() === String(catName || '').toLowerCase());
+
+        const SYSTEM = `You write concise knowledge-base summaries for a user's email categories.
+Given a category name and examples of emails that belong in it, write a short, actionable summary describing:
+- What kinds of emails belong here (themes and patterns)
+- Typical intent of senders and common requests
+- Recommended handling/triage approach and response strategies
+- Any key policies, constraints, or style preferences (if provided)
+Keep it concise (120–180 words). Avoid PII. Use a professional, first-person tone. Output plain text only.`;
+
+        const USER = `CATEGORY: ${catName}
+
+${guideForCat && guideForCat.notes ? `USER GUIDELINES FOR THIS CATEGORY:\n${guideForCat.notes}\n\n` : ''}${catNotes.length ? `NOTES FOR THIS CATEGORY:\n- ${catNotes.join('\n- ')}\n\n` : ''}EXAMPLE EMAILS (subject, from, snippet):
+${JSON.stringify(compact, null, 2)}`;
+
+        let summaryText = '';
+        try {
+          const completion = await openai.chat.completions.create({
+            model: "o3",
+            messages: [
+              { role: "system", content: SYSTEM },
+              { role: "user", content: USER }
+            ],
+            max_completion_tokens: 600
+          });
+          summaryText = (completion.choices?.[0]?.message?.content || '').trim();
+        } catch (apiErr) {
+          console.warn('OpenAI summarization failed for category:', catName, apiErr?.message || apiErr);
+          summaryText = `Summary for ${catName}: This category groups similar emails. Recommended handling: prioritize, respond with appropriate tone, and follow any established policies.`;
+        }
+
+        result[catName] = summaryText;
+        current[catName] = summaryText;
+      } catch (innerErr) {
+        console.error('Error generating summary for category:', catName, innerErr);
+      }
+    }
+
+    saveCategorySummaries(current);
+    return res.json({ success: true, summaries: result });
+  } catch (e) {
+    console.error('Error generating category summaries:', e);
+    return res.status(500).json({ success: false, error: 'Failed to generate category summaries' });
+  }
+});
+
+app.post('/api/category-summary-qa', async (req, res) => {
+  try {
+    const { category, question } = req.body || {};
+    if (!category || !question) {
+      return res.status(400).json({ success: false, error: 'category and question are required' });
+    }
+
+    const summaries = loadCategorySummaries();
+    const summary = summaries[category] || '';
+    const responses = loadResponseEmails() || [];
+    const notesAll = loadNotes() || [];
+
+    const examples = (responses || [])
+      .filter(e => String(e.category || '').toLowerCase() === String(category || '').toLowerCase())
+      .slice(0, 20)
+      .map(e => ({
+        subject: e.subject || 'No Subject',
+        from: e.originalFrom || e.from || 'Unknown Sender',
+        snippet: e.snippet || (e.body ? String(e.body).slice(0, 160) + (e.body.length > 160 ? '...' : '') : '')
+      }));
+
+    const catNotes = (notesAll || []).filter(n => n.category === category).map(n => n.text || '');
+
+    const SYSTEM = `You answer user questions about a specific email category based on a short summary, notes, and a few example emails.
+- If the answer is clear from the provided context, answer concisely (2–6 sentences).
+- If the context is insufficient, say you don't have enough information instead of guessing.
+- Do not fabricate specifics. Avoid PII. Output plain text.`;
+
+    const USER = `CATEGORY: ${category}
+CATEGORY SUMMARY:
+${summary || '(none saved yet)'}
+
+NOTES:
+${catNotes.length ? '- ' + catNotes.join('\n- ') : '(none)'}
+
+EXAMPLE EMAILS (subject/from/snippet):
+${JSON.stringify(examples, null, 2)}
+
+QUESTION:
+${question}`;
+
+    let answer = '';
+    try {
+      const completion = await openai.chat.completions.create({
+        model: "o3",
+        messages: [
+          { role: "system", content: SYSTEM },
+          { role: "user", content: USER }
+        ],
+        max_completion_tokens: 400
+      });
+      answer = (completion.choices?.[0]?.message?.content || '').trim();
+    } catch (apiErr) {
+      console.warn('OpenAI Q&A failed:', apiErr?.message || apiErr);
+      answer = "I don't have enough information to answer that confidently.";
+    }
+
+    return res.json({ success: true, answer });
+  } catch (e) {
+    console.error('Error in category summary Q&A:', e);
+    return res.status(500).json({ success: false, error: 'Failed to answer question' });
   }
 });
 

@@ -5810,19 +5810,19 @@ function ensureLoadTodayModal() {
     modal.id = 'loadTodayModal';
     modal.className = 'modal';
     modal.innerHTML = `
-        <div class="modal-content" style="max-width: 1100px; max-height: 85vh;">
+            <div class="modal-content" style="max-width: 1400px; width: 95vw; max-height: 90vh; display:flex; flex-direction:column;">
             <div class="modal-header">
                 <h2 class="modal-title">Load Today</h2>
                 <button class="close" onclick="closeLoadTodayModal()">&times;</button>
             </div>
-            <div style="padding: 16px;">
+            <div style="padding: 16px; display:flex; flex-direction:column; gap:12px; flex:1 1 auto; min-height:0;">
                 <div style="display:flex; gap:12px; justify-content:flex-end; margin-bottom:12px;">
                     <button class="carousel-nav-btn" style="background:#667eea;" onclick="refreshLoadToday()">🔄 Refresh</button>
                     <button class="carousel-nav-btn" id="loadTodaySelectAllThreadsBtn" style="background:#28a745;" onclick="selectAllTodayThreads()">Select All Threads</button>
                     <button class="carousel-nav-btn" id="loadTodaySelectAllEmailsBtn" style="background:#28a745;" onclick="selectAllTodayEmails()">Select All Emails</button>
                     <button class="carousel-nav-btn" style="background:#17a2b8;" onclick="addAllToday()">Add All</button>
                 </div>
-                <div style="display:grid; grid-template-columns: 1fr 1fr; gap:16px; max-height:60vh;">
+                <div style="display:grid; grid-template-columns: 1fr 1fr; gap:16px; flex:1 1 auto; min-height:0;">
                     <div style="display:flex; flex-direction:column; min-height:0; border:1px solid #e9ecef; border-radius:8px; background:#fff;">
                         <div style="padding:10px; border-bottom:1px solid #e9ecef; display:flex; align-items:center; justify-content:space-between;">
                             <div style="font-weight:600; color:#333;">Today’s Threads</div>
@@ -5950,7 +5950,7 @@ function renderTodayThreadsList() {
         const from = last?.from || '';
         const preview = last?.body ? String(last.body).slice(0, 160) + (last.body.length > 160 ? '...' : '') : '';
         return `
-            <label style="display:block; border:1px solid #e9ecef; border-radius:6px; padding:10px; margin-bottom:8px; background:#fafafa;">
+            <label style="display:block; border:1px solid #e9ecef; border-radius:6px; padding:10px; margin-bottom:8px; background:#fafafa; white-space: normal;">
                 <div style="display:flex; align-items:center; gap:10px;">
                     <input type="checkbox" id="today-thread-${i}" onchange="toggleTodayThread(${i}, this.checked)">
                     <div style="flex:1 1 auto; min-width:0;">
@@ -5994,7 +5994,7 @@ function renderTodayEmailsList(authNeeded) {
         const catStyle = getCategoryBadgeStyle(e.category || 'Personal & Life Management');
         const categoryClass = `category-${(e.category || 'Personal & Life Management').toLowerCase().replace(/\s+/g, '-')}`;
         return `
-            <label style="display:block; border:1px solid #e9ecef; border-radius:6px; padding:10px; margin-bottom:8px; background:#fafafa;">
+            <label style="display:block; border:1px solid #e9ecef; border-radius:6px; padding:10px; margin-bottom:8px; background:#fafafa; white-space: normal;">
                 <div style="display:flex; align-items:center; gap:10px;">
                     <input type="checkbox" id="today-email-${i}" onchange="toggleTodayEmail(${i}, this.checked)">
                     <div style="flex:1 1 auto; min-width:0;">
@@ -8782,39 +8782,41 @@ function rejectCurrentEmail() {
 
         async function generateCategoriesFromKeywords() {
             try {
-                // Collect category names; support comma-separated keywords per row and dedupe (case-insensitive)
-                const rawNames = Array.isArray(keywordGuidelines) ? keywordGuidelines : [];
-                const splitKeywords = [];
-                for (const row of rawNames) {
-                    const name = String(row?.name || '');
-                    if (!name) continue;
-                    name.split(',')
+                // Build rows: each row may contain multiple comma-separated keywords that should map to ONE category
+                // Example: "ta, grading, assignment" -> category label "ta" (first token), matching emails contain any of the tokens
+                const rowsRaw = Array.isArray(keywordGuidelines) ? keywordGuidelines : [];
+                const rows = [];
+                for (const row of rowsRaw) {
+                    const raw = String(row?.name || '').trim();
+                    if (!raw) continue;
+                    const tokens = raw
+                        .split(',')
                         .map(s => String(s || '').trim())
-                        .filter(Boolean)
-                        .forEach(token => splitKeywords.push(token));
+                        .filter(Boolean);
+                    if (!tokens.length) continue;
+                    const label = tokens[0]; // Use the first token as the category name/label
+                    rows.push({ label, tokens });
                 }
-                const seenKw = new Set();
-                const keywords = splitKeywords.filter(k => {
-                    const key = k.toLowerCase();
-                    if (seenKw.has(key)) return false;
-                    seenKw.add(key);
-                    return true;
-                });
 
-                if (!keywords.length) {
+                if (!rows.length) {
                     showErrorPopup('Please add at least one category name (keyword).', 'No Keywords');
                     return;
                 }
 
-                // Prefer backend regex search grouped by thread
-                let results = [];
+                // Unique token list across all rows (case-sensitive by value but we’ll map by lowercase)
+                const tokenSet = new Set();
+                rows.forEach(r => r.tokens.forEach(t => tokenSet.add(t)));
+                const allTokens = Array.from(tokenSet);
+
+                // Prefer backend regex search grouped by thread (returns results per token)
+                let perTokenResults = [];
                 keywordAllThreads = [];
                 try {
                     const resp = await fetch('/api/search-by-keywords', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
-                            keywords,
+                            keywords: allTokens,
                             options: {
                                 fields: ['subject', 'body'],
                                 caseSensitive: false,
@@ -8827,7 +8829,7 @@ function rejectCurrentEmail() {
                     if (!resp.ok || !data.success) {
                         throw new Error(data.error || 'Search failed');
                     }
-                    results = Array.isArray(data.results) ? data.results : [];
+                    perTokenResults = Array.isArray(data.results) ? data.results : [];
                     keywordAllThreads = Array.isArray(data.allThreads) ? data.allThreads : [];
                 } catch (err) {
                     console.warn('Backend thread regex search failed, falling back to client filtering by email:', err);
@@ -8841,7 +8843,7 @@ function rejectCurrentEmail() {
                         console.error('Failed to load response emails for fallback:', e);
                         emails = [];
                     }
-                    // Build pseudo threads list and map for "Other" calculation
+                    // Build pseudo threads list (single-message) for local matching and subsequent UI operations
                     keywordAllThreads = emails.map(e => ({
                         id: `pseudo-${e.id}`,
                         subject: e.subject || 'No Subject',
@@ -8858,43 +8860,65 @@ function rejectCurrentEmail() {
                         ]
                     }));
 
-                results = keywords.map(name => {
-                    const wordRe = new RegExp(`\\b${String(name).replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&')}\\b`, 'i');
-                    const matchedThreads = keywordAllThreads.filter(t => {
-                        if (wordRe.test(String(t.subject || ''))) return true;
-                        const msgs = Array.isArray(t.messages) ? t.messages : [];
-                        return msgs.some(m => (wordRe.test(String(m.subject || '')) || wordRe.test(String(m.body || ''))));
+                    // Locally compute per-token matches
+                    perTokenResults = allTokens.map(tok => {
+                        const wordRe = new RegExp(`\\b${String(tok).replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&')}\\b`, 'i');
+                        const matchedThreads = keywordAllThreads.filter(t => {
+                            if (wordRe.test(String(t.subject || ''))) return true;
+                            const msgs = Array.isArray(t.messages) ? t.messages : [];
+                            return msgs.some(m => (wordRe.test(String(m.subject || '')) || wordRe.test(String(m.body || ''))));
+                        });
+                        return { name: tok, threads: matchedThreads };
                     });
-                    return { name, threads: matchedThreads };
-                });
                 }
 
-                // Normalize: prune message-less threads but KEEP empty keyword groups so every entered keyword shows
-                try {
-                    results = (results || [])
-                        .map(g => ({
-                            ...g,
-                            threads: (g.threads || []).filter(t => Array.isArray(t.messages) && t.messages.length > 0)
-                        }));
-                } catch (e) {
-                    console.warn('Failed to normalize keyword results:', e);
-                }
+                // Build a quick lookup: token (lowercased) -> threads[]
+                const tokenToThreads = new Map();
+                (perTokenResults || []).forEach(entry => {
+                    const key = String(entry?.name || '').toLowerCase();
+                    const arr = Array.isArray(entry?.threads) ? entry.threads : [];
+                    // Keep only threads with messages (sanity)
+                    const clean = arr.filter(t => Array.isArray(t.messages) && t.messages.length > 0);
+                    tokenToThreads.set(key, clean);
+                });
+
+                // Merge tokens within each row into a single category (OR semantics across tokens)
+                const groups = [];
+                const usedIds = new Set();
+                rows.forEach(row => {
+                    const seen = new Set();
+                    const union = [];
+                    row.tokens.forEach(tok => {
+                        const key = String(tok || '').toLowerCase();
+                        const list = tokenToThreads.get(key) || [];
+                        for (const t of list) {
+                            if (!t || !t.id) continue;
+                            if (seen.has(t.id)) continue;
+                            seen.add(t.id);
+                            union.push(t);
+                        }
+                    });
+                    groups.push({
+                        name: row.label,
+                        threads: union
+                    });
+                    union.forEach(t => usedIds.add(t.id));
+                });
 
                 // Compute unmatched threads and append a final "Other Threads" slide (always include, even if empty)
                 try {
-                    const matchedIds = new Set();
-                    results.forEach(g => (g.threads || []).forEach(t => matchedIds.add(t.id)));
                     const otherThreads = (keywordAllThreads || [])
                         .filter(t => Array.isArray(t.messages) && t.messages.length > 0)
-                        .filter(t => !matchedIds.has(t.id));
-                    results.push({ name: 'Other Threads', threads: otherThreads, isOther: true });
+                        .filter(t => !usedIds.has(t.id));
+                    groups.push({ name: 'Other Threads', threads: otherThreads, isOther: true });
                 } catch (e) {
                     console.warn('Failed to compute unmatched threads:', e);
                 }
 
-                keywordResults = results;
-                // Working copy for interactive grouping (latest wins, unique assignment)
-                window.keywordWorkingGroups = JSON.parse(JSON.stringify(results));
+                // Persist results for UI
+                keywordResults = groups;
+                // Working copy for interactive grouping (latest wins, unique assignment when moving)
+                window.keywordWorkingGroups = JSON.parse(JSON.stringify(groups));
                 // Build thread index for fast lookups
                 window.threadById = new Map();
                 (keywordAllThreads || []).forEach(t => { try { if (t && t.id) window.threadById.set(t.id, t); } catch(_){} });
@@ -8924,9 +8948,10 @@ function rejectCurrentEmail() {
                         <button class="close" onclick="closeCategoriesReviewModal()">&times;</button>
                     </div>
                     <div style="padding: 16px; display: flex; flex-direction: column; gap: 12px; flex: 1 1 auto; min-height: 0;">
-                        <div style="display: flex; gap: 12px; align-items: center;">
+                        <div style="display: flex; gap: 12px; align-items: center; flex-wrap: wrap;">
                             <button class="select-email-btn" onclick="addNewCategory()">+ Add Category</button>
                             <button class="select-email-btn" onclick="promptRefreshCategoriesMode()">🔄 Refresh Categories</button>
+                            <button class="select-email-btn" onclick="showSummarizeCategoriesModal()" title="Generate or edit summaries for one or more categories" style="background:#17a2b8;">🧠 Summarize Categories</button>
                             <span style="color:#666; font-size:12px;">Drag emails between categories. Click “Approve & Save” to apply changes.</span>
                         </div>
                         <div id="categoriesEditorContainer" style="flex: 0 0 60vh; height: 60vh; min-height: 0; overflow: hidden;">
@@ -8967,7 +8992,7 @@ function rejectCurrentEmail() {
                 col.setAttribute('data-category', cat.name);
                 col.setAttribute('ondragover', 'categoriesAllowDrop(event)');
                 col.setAttribute('ondrop', `categoriesHandleDrop(event, ${index})`);
-                col.style.minWidth = '300px';
+                col.style.minWidth = '360px';
                 col.style.background = '#f8f9fa';
                 col.style.border = '1px solid #e9ecef';
                 col.style.borderRadius = '8px';
@@ -9008,9 +9033,20 @@ function rejectCurrentEmail() {
                 notesBtn.style.borderColor = '#6c757d';
                 notesBtn.addEventListener('click', () => showCategoryNotesModal(cat.name));
 
+                const summaryBtn = document.createElement('button');
+                summaryBtn.textContent = 'View Summary';
+                summaryBtn.className = 'select-email-btn';
+                summaryBtn.style.padding = '4px 8px';
+                summaryBtn.style.fontSize = '12px';
+                summaryBtn.style.background = '#5a67d8';
+                summaryBtn.style.borderColor = '#5a67d8';
+                summaryBtn.title = 'View/edit the saved summary and ask questions';
+                summaryBtn.addEventListener('click', () => showCategorySummaryModal(cat.name));
+
                 title.appendChild(nameSpan);
                 title.appendChild(renameBtn);
                 title.appendChild(notesBtn);
+                title.appendChild(summaryBtn);
                 // Add "Suggest Categories" for the Other bucket
                 try {
                     if (String(cat.name || '').toLowerCase() === 'other') {
@@ -9636,6 +9672,336 @@ categoriesState[index].name = newName;
         function closeCategoryNotesModal() {
             const modal = document.getElementById('categoryNotesModal');
             if (modal) modal.style.display = 'none';
+        }
+
+        // ===== Category Summaries: selection, generation, editor, and per-category view/QA =====
+        function ensureSummarizeCategoriesModal() {
+            let modal = document.getElementById('summarizeCategoriesModal');
+            if (modal) return modal;
+            modal = document.createElement('div');
+            modal.id = 'summarizeCategoriesModal';
+            modal.className = 'modal';
+            modal.innerHTML = `
+                <div class="modal-content" style="max-width: 700px; max-height: 80vh;">
+                    <div class="modal-header">
+                        <h2 class="modal-title">Summarize Categories</h2>
+                        <button class="close" onclick="closeSummarizeCategoriesModal()">&times;</button>
+                    </div>
+                    <div style="padding:16px; max-height:60vh; overflow:auto;">
+                        <div style="color:#666; font-size:13px; margin-bottom:8px;">
+                            Select one or more categories to summarize. You can edit and save the generated summaries.
+                        </div>
+                        <div id="summarizeCategoriesList" style="border:1px solid #e9ecef; border-radius:8px; background:#fff; padding:10px; max-height:45vh; overflow:auto;">
+                            <div class="loading">Loading categories...</div>
+                        </div>
+                        <div style="margin-top:12px; display:flex; align-items:center; gap:10px;">
+                            <label style="display:flex; align-items:center; gap:6px; font-size:13px; color:#333;">
+                                <input type="checkbox" id="summarizeOverwriteCheckbox" checked>
+                                <span>Overwrite existing summaries</span>
+                            </label>
+                        </div>
+                    </div>
+                    <div style="display:flex; justify-content:center; gap:12px; padding:12px 16px; border-top:1px solid #e9ecef;">
+                        <button class="carousel-btn carousel-btn-cancel" onclick="closeSummarizeCategoriesModal()">Cancel</button>
+                        <button class="carousel-btn carousel-btn-add" id="summarizeGenerateBtn" onclick="summarizeSelectedCategories()">
+                            <span class="btn-text">Summarize</span>
+                            <span class="btn-loading" style="display:none;">Summarizing...</span>
+                        </button>
+                    </div>
+                </div>
+            `;
+            modal.addEventListener('click', (ev) => { if (ev.target === modal) closeSummarizeCategoriesModal(); });
+            document.body.appendChild(modal);
+            return modal;
+        }
+
+        function showSummarizeCategoriesModal() {
+            const modal = ensureSummarizeCategoriesModal();
+            const list = document.getElementById('summarizeCategoriesList');
+            try {
+                const names = Array.isArray(categoriesState) ? categoriesState.map(c => c && c.name).filter(Boolean) : [];
+                if (!names.length) {
+                    list.innerHTML = '<div class="no-emails" style="padding:10px;">No categories available.</div>';
+                } else {
+                    list.innerHTML = names.map((name, i) => `
+                        <label style="display:flex; align-items:center; gap:10px; border:1px solid #e9ecef; border-radius:6px; padding:8px; margin-bottom:8px; background:#fafafa;">
+                            <input type="checkbox" id="summ-cat-${i}" data-cat="${String(name).replace(/"/g, '"')}">
+                            <span style="font-weight:600; color:#333;">${name}</span>
+                        </label>
+                    `).join('');
+                }
+            } catch (e) {
+                list.innerHTML = '<div class="error">Failed to load categories.</div>';
+            }
+            modal.style.display = 'block';
+        }
+
+        function closeSummarizeCategoriesModal() {
+            const modal = document.getElementById('summarizeCategoriesModal');
+            if (modal) modal.style.display = 'none';
+        }
+
+        function ensureSummariesEditorModal() {
+            let modal = document.getElementById('summariesEditorModal');
+            if (modal) return modal;
+            modal = document.createElement('div');
+            modal.id = 'summariesEditorModal';
+            modal.className = 'modal';
+            modal.innerHTML = `
+                <div class="modal-content" style="max-width: 900px; max-height: 80vh;">
+                    <div class="modal-header">
+                        <h2 class="modal-title">Edit Category Summaries</h2>
+                        <button class="close" onclick="closeSummariesEditorModal()">&times;</button>
+                    </div>
+                    <div id="summariesEditorBody" style="padding:16px; max-height:60vh; overflow:auto;">
+                        <div class="loading">Preparing editor...</div>
+                    </div>
+                    <div style="display:flex; justify-content:center; gap:12px; padding:12px 16px; border-top:1px solid #e9ecef;">
+                        <button class="carousel-btn carousel-btn-cancel" onclick="closeSummariesEditorModal()">Close</button>
+                        <button class="carousel-btn carousel-btn-add" id="saveSummariesBtn" onclick="saveEditedSummaries()">
+                            <span class="btn-text">Save All</span>
+                            <span class="btn-loading" style="display:none;">Saving...</span>
+                        </button>
+                    </div>
+                </div>
+            `;
+            modal.addEventListener('click', (ev) => { if (ev.target === modal) closeSummariesEditorModal(); });
+            document.body.appendChild(modal);
+            return modal;
+        }
+
+        function renderSummariesEditor(summariesMap) {
+            const host = document.getElementById('summariesEditorBody');
+            if (!host) return;
+            const names = Object.keys(summariesMap || {});
+            if (!names.length) {
+                host.innerHTML = '<div class="no-emails" style="padding:12px;">No summaries generated.</div>';
+                return;
+            }
+            host.innerHTML = names.map(name => {
+                const val = summariesMap[name] || '';
+                return `
+                    <div style="border:1px solid #e9ecef; border-left:4px solid #5a67d8; border-radius:6px; background:#fff; padding:10px; margin-bottom:10px;">
+                        <div style="font-weight:600; color:#333; margin-bottom:6px;">${name}</div>
+                        <textarea class="summary-editor" data-cat="${name.replace(/"/g, '"')}"
+                                  style="width:100%; min-height:100px; padding:10px; border:1px solid #ddd; border-radius:6px; font-size:14px; resize:vertical;">${val.replace(/&/g,'&').replace(/</g,'<').replace(/>/g,'>').replace(/"/g,'"')}</textarea>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        async function summarizeSelectedCategories() {
+            try {
+                const btn = document.getElementById('summarizeGenerateBtn');
+                const txt = btn ? btn.querySelector('.btn-text') : null;
+                const ld = btn ? btn.querySelector('.btn-loading') : null;
+                if (btn) btn.disabled = true;
+                if (txt) txt.style.display = 'none';
+                if (ld) ld.style.display = 'inline';
+
+                const checks = Array.from(document.querySelectorAll('#summarizeCategoriesList input[type="checkbox"]'));
+                const selected = checks.filter(c => c.checked).map(c => c.getAttribute('data-cat')).filter(Boolean);
+                if (!selected.length) {
+                    showErrorPopup('Please select at least one category.', 'No Categories Selected');
+                    if (btn) btn.disabled = false;
+                    if (txt) txt.style.display = 'inline';
+                    if (ld) ld.style.display = 'none';
+                    return;
+                }
+                const overwrite = !!document.getElementById('summarizeOverwriteCheckbox')?.checked;
+
+                const resp = await fetch('/api/generate-category-summaries', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ categories: selected, overwrite })
+                });
+                const data = await resp.json();
+                if (!resp.ok || !data.success) {
+                    throw new Error(data.error || 'Generation failed');
+                }
+
+                // Open editor with results
+                window.__tempSummaries__ = data.summaries || {};
+                closeSummarizeCategoriesModal();
+                const editor = ensureSummariesEditorModal();
+                renderSummariesEditor(window.__tempSummaries__);
+                editor.style.display = 'block';
+            } catch (e) {
+                console.error('summarizeSelectedCategories failed:', e);
+                showErrorPopup('Failed to generate summaries. Please try again.', 'Summarize Failed');
+            } finally {
+                const btn = document.getElementById('summarizeGenerateBtn');
+                const txt = btn ? btn.querySelector('.btn-text') : null;
+                const ld = btn ? btn.querySelector('.btn-loading') : null;
+                if (txt) txt.style.display = 'inline';
+                if (ld) ld.style.display = 'none';
+                if (btn) btn.disabled = false;
+            }
+        }
+
+        function closeSummariesEditorModal() {
+            const modal = document.getElementById('summariesEditorModal');
+            if (modal) modal.style.display = 'none';
+        }
+
+        async function saveEditedSummaries() {
+            try {
+                const btn = document.getElementById('saveSummariesBtn');
+                const txt = btn ? btn.querySelector('.btn-text') : null;
+                const ld = btn ? btn.querySelector('.btn-loading') : null;
+                if (btn) btn.disabled = true;
+                if (txt) txt.style.display = 'none';
+                if (ld) ld.style.display = 'inline';
+
+                const fields = Array.from(document.querySelectorAll('#summariesEditorBody .summary-editor'));
+                const summaries = {};
+                fields.forEach(f => {
+                    const name = f.getAttribute('data-cat');
+                    const val = f.value || '';
+                    if (name) summaries[name] = val;
+                });
+
+                const resp = await fetch('/api/category-summaries', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ summaries })
+                });
+                const data = await resp.json();
+                if (!resp.ok || !data.success) {
+                    throw new Error(data.error || 'Save failed');
+                }
+
+                showSuccessPopup('Summaries saved successfully.', 'Saved');
+                closeSummariesEditorModal();
+            } catch (e) {
+                console.error('saveEditedSummaries failed:', e);
+                showErrorPopup('Failed to save summaries. Please try again.', 'Save Failed');
+            } finally {
+                const btn = document.getElementById('saveSummariesBtn');
+                const txt = btn ? btn.querySelector('.btn-text') : null;
+                const ld = btn ? btn.querySelector('.btn-loading') : null;
+                if (txt) txt.style.display = 'inline';
+                if (ld) ld.style.display = 'none';
+                if (btn) btn.disabled = false;
+            }
+        }
+
+        function ensureCategorySummaryModal() {
+            let modal = document.getElementById('categorySummaryModal');
+            if (modal) return modal;
+            modal = document.createElement('div');
+            modal.id = 'categorySummaryModal';
+            modal.className = 'modal';
+            modal.innerHTML = `
+                <div class="modal-content" style="max-width: 800px; max-height: 80vh;">
+                    <div class="modal-header">
+                        <h2 class="modal-title">Category Summary: <span id="catSummaryTitle"></span></h2>
+                        <button class="close" onclick="closeCategorySummaryModal()">&times;</button>
+                    </div>
+                    <div style="padding:16px; display:flex; flex-direction:column; gap:12px; max-height:60vh; overflow:auto;">
+                        <div>
+                            <label style="display:block; font-weight:600; margin-bottom:6px; color:#333;">Summary</label>
+                            <textarea id="catSummaryEditor" style="width:100%; min-height:160px; padding:10px; border:1px solid #ddd; border-radius:6px; font-size:14px; resize:vertical;"></textarea>
+                            <div style="margin-top:8px; text-align:right;">
+                                <button class="select-email-btn" style="background:#28a745;" onclick="saveCurrentCategorySummary()">
+                                    Save Summary
+                                </button>
+                            </div>
+                        </div>
+                        <div style="border-top:1px solid #e9ecef; padding-top:10px;">
+                            <label style="display:block; font-weight:600; margin-bottom:6px; color:#333;">Ask a Question</label>
+                            <input id="catSummaryQuestion" type="text" placeholder="Ask about this category..." 
+                                   style="width:100%; padding:10px; border:1px solid #ddd; border-radius:6px; font-size:14px; margin-bottom:8px;">
+                            <div style="text-align:right;">
+                                <button class="select-email-btn" style="background:#17a2b8;" onclick="askCategoryQuestion()">Ask</button>
+                            </div>
+                            <div id="catSummaryAnswer" style="margin-top:8px; white-space:pre-wrap; color:#333;"></div>
+                        </div>
+                    </div>
+                </div>
+            `;
+            modal.addEventListener('click', (ev) => { if (ev.target === modal) closeCategorySummaryModal(); });
+            document.body.appendChild(modal);
+            return modal;
+        }
+
+        function closeCategorySummaryModal() {
+            const modal = document.getElementById('categorySummaryModal');
+            if (modal) modal.style.display = 'none';
+        }
+
+        let __currentSummaryCategory = '';
+        async function showCategorySummaryModal(category) {
+            try {
+                __currentSummaryCategory = category;
+                const modal = ensureCategorySummaryModal();
+                const titleEl = document.getElementById('catSummaryTitle');
+                const editor = document.getElementById('catSummaryEditor');
+                const answer = document.getElementById('catSummaryAnswer');
+                if (titleEl) titleEl.textContent = category;
+                if (answer) answer.textContent = '';
+                // Load existing summaries
+                let existing = {};
+                try {
+                    const resp = await fetch('/api/category-summaries');
+                    const data = await resp.json();
+                    existing = data && data.summaries ? data.summaries : {};
+                } catch (_) {}
+                const txt = existing && typeof existing[category] === 'string' ? existing[category] : '';
+                if (editor) editor.value = txt;
+                modal.style.display = 'block';
+            } catch (e) {
+                console.error('showCategorySummaryModal failed:', e);
+                showErrorPopup('Failed to load summary.', 'Load Failed');
+            }
+        }
+
+        async function saveCurrentCategorySummary() {
+            try {
+                const editor = document.getElementById('catSummaryEditor');
+                const val = editor ? editor.value : '';
+                const resp = await fetch('/api/category-summaries', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name: __currentSummaryCategory, summary: val })
+                });
+                const data = await resp.json();
+                if (!resp.ok || !data.success) {
+                    throw new Error(data.error || 'Save failed');
+                }
+                showSuccessPopup('Summary saved.', 'Saved');
+            } catch (e) {
+                console.error('saveCurrentCategorySummary failed:', e);
+                showErrorPopup('Failed to save summary.', 'Save Failed');
+            }
+        }
+
+        async function askCategoryQuestion() {
+            try {
+                const input = document.getElementById('catSummaryQuestion');
+                const answer = document.getElementById('catSummaryAnswer');
+                const q = input ? String(input.value || '').trim() : '';
+                if (!q) {
+                    showErrorPopup('Please enter a question.', 'Missing Question');
+                    return;
+                }
+                if (answer) answer.textContent = 'Thinking...';
+                const resp = await fetch('/api/category-summary-qa', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ category: __currentSummaryCategory, question: q })
+                });
+                const data = await resp.json();
+                if (!resp.ok || !data.success) {
+                    throw new Error(data.error || 'Q&A failed');
+                }
+                if (answer) answer.textContent = data.answer || 'No answer.';
+            } catch (e) {
+                console.error('askCategoryQuestion failed:', e);
+                showErrorPopup('Failed to answer question.', 'Q&A Failed');
+                const answer = document.getElementById('catSummaryAnswer');
+                if (answer) answer.textContent = '';
+            }
         }
 
         async function showCategoryNotesModal(category) {
