@@ -4131,6 +4131,20 @@ function getCategoryBadgeStyle(category) {
                 return;
             }
 
+            // Attempt to locate the original email from known lists to pass along id/webUrl for deep-linking
+            let originalId = '';
+            let originalWebUrl = '';
+            try {
+                const match = (Array.isArray(unrepliedEmails) ? unrepliedEmails : []).find(e =>
+                    String(e.subject || '') === String(subject || '') &&
+                    String(e.from || '') === String(sender || '')
+                );
+                if (match) {
+                    originalId = match.id || '';
+                    originalWebUrl = match.webUrl || '';
+                }
+            } catch (_) {}
+
             // Show loading state
             const saveBtn = document.querySelector('.save-response-btn');
             const btnText = saveBtn.querySelector('.btn-text');
@@ -4150,7 +4164,9 @@ function getCategoryBadgeStyle(category) {
                         originalEmail: {
                             sender: sender || 'Unknown Sender',
                             subject: subject || 'No Subject',
-                            body: emailBody
+                            body: emailBody,
+                            id: originalId || undefined,
+                            webUrl: originalWebUrl || undefined
                         },
                         generatedResponse: currentGeneratedResponse,
                         justification: '' // Could add justification if needed
@@ -4160,7 +4176,19 @@ function getCategoryBadgeStyle(category) {
                 const data = await response.json();
 
                 if (data.success) {
-                    showSuccessPopup('Response saved successfully!', 'Response Saved');
+                    if (data.gmailLink) {
+                        // Show popup with link to Gmail
+                        showCustomPopup({
+                            title: 'Response Saved',
+                            message: `Your response was saved successfully.<br><br><a href="${data.gmailLink}" target="_blank" rel="noopener" style="color:#1a73e8; text-decoration:underline;">Open this email in Gmail</a>`,
+                            icon: 'success',
+                            primaryText: 'Close',
+                            type: 'alert',
+                            onPrimary: () => {}
+                        });
+                    } else {
+                        showSuccessPopup('Response saved successfully!', 'Response Saved');
+                    }
                 } else {
                     showErrorPopup('Failed to save response: ' + (data.error || 'Unknown error'), 'Save Failed');
                 }

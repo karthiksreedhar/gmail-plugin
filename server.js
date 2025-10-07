@@ -407,11 +407,31 @@ async function getGmailEmail(messageId) {
     const headers = message.payload.headers;
     
     // Extract email details
+    // Extract headers
     const subject = headers.find(h => h.name === 'Subject')?.value || 'No Subject';
     const from = headers.find(h => h.name === 'From')?.value || 'Unknown Sender';
     const to = headers.find(h => h.name === 'To')?.value || 'Unknown Recipient';
     const date = headers.find(h => h.name === 'Date')?.value || new Date().toISOString();
     const threadId = message.threadId;
+    // RFC 822 Message-ID (for robust Gmail web link via search)
+    const messageIdHeader =
+      headers.find(h => String(h.name || '').toLowerCase() === 'message-id')?.value ||
+      headers.find(h => String(h.name || '').toLowerCase() === 'messageid')?.value ||
+      '';
+
+    // Best-effort Gmail web URL to this message (prefer Message-ID search)
+    let webUrl = '';
+    try {
+      if (messageIdHeader) {
+        const frag = 'rfc822msgid:' + messageIdHeader;
+        webUrl = `https://mail.google.com/mail/u/0/#search/${encodeURIComponent(frag)}`;
+      } else {
+        const q = `from:${from} subject:"${subject}"`;
+        webUrl = `https://mail.google.com/mail/u/0/#search/${encodeURIComponent(q)}`;
+      }
+    } catch (_) {
+      webUrl = '';
+    }
 
     // Extract body using recursive function
     let body = extractEmailBody(message.payload);
@@ -432,7 +452,8 @@ async function getGmailEmail(messageId) {
       to,
       date,
       body: body || message.snippet || 'No content available',
-      snippet: message.snippet || ''
+      snippet: message.snippet || '',
+      webUrl
     };
   } catch (error) {
     console.error('Error getting Gmail email:', error);
@@ -1403,8 +1424,25 @@ app.post('/api/save-generation', async (req, res) => {
     };
     
     emailMemory.savedGenerations.push(savedGeneration);
+
+    // Best-effort Gmail link to the original email (if known)
+    let gmailLink = '';
+    try {
+      const orig = originalEmail || {};
+      if (orig.webUrl) {
+        gmailLink = orig.webUrl;
+      } else if (orig.id && gmail) {
+        const msg = await getGmailEmail(orig.id);
+        gmailLink = msg.webUrl || '';
+      } else if (orig.sender && orig.subject) {
+        const q = `from:${orig.sender} subject:"${orig.subject}"`;
+        gmailLink = `https://mail.google.com/mail/u/0/#search/${encodeURIComponent(q)}`;
+      }
+    } catch (e) {
+      // ignore and proceed without link
+    }
     
-    res.json({ success: true, id: savedGeneration.id });
+    res.json({ success: true, id: savedGeneration.id, gmailLink });
   } catch (error) {
     console.error('Error saving generation:', error);
     res.status(500).json({ error: 'Failed to save generation' });
@@ -2607,7 +2645,8 @@ app.post('/api/fetch-more-emails', async (req, res) => {
                 body: emailData.body,
                 snippet: emailData.snippet || (emailData.body ? emailData.body.substring(0, 100) + (emailData.body.length > 100 ? '...' : '') : 'No content available'),
                 category: categorizeEmail(emailData.subject || '', emailData.body || '', emailData.from || ''),
-                source: 'gmail-api'
+                source: 'gmail-api',
+                webUrl: emailData.webUrl || ''
               };
 
               uniqueEmails.push(processedEmail);
@@ -2698,7 +2737,8 @@ app.post('/api/fetch-more-emails', async (req, res) => {
                 body: emailData.body,
                 snippet: emailData.snippet || (emailData.body ? emailData.body.substring(0, 100) + (emailData.body.length > 100 ? '...' : '') : 'No content available'),
                 category: categorizeEmail(emailData.subject, emailData.body, emailData.from),
-                source: 'gmail-api'
+                source: 'gmail-api',
+                webUrl: emailData.webUrl || ''
               };
               
               uniqueEmails.push(processedEmail);
