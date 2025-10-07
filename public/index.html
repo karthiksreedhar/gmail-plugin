@@ -3001,7 +3001,10 @@ function getCategoryBadgeStyle(category) {
                             <div class="form-group">
                                 <label for="contextInput" style="display:flex; align-items:center; justify-content:space-between;">
                                     <span>Additional Context:</span>
-                                    <button type="button" id="seeCategoryNotesBtn" class="select-email-btn" style="display:none;">See Category Notes</button>
+                                    <div style="display:flex; gap:8px;">
+                                        <button type="button" id="seeCategorySummaryBtn" class="select-email-btn" style="display:none;">See Category Summary</button>
+                                        <button type="button" id="seeCategoryNotesBtn" class="select-email-btn" style="display:none;">See Category Notes</button>
+                                    </div>
                                 </label>
                                 <textarea id="contextInput" rows="3" placeholder="Any additional context or specific instructions (optional)"></textarea>
                             </div>
@@ -3174,9 +3177,10 @@ function getCategoryBadgeStyle(category) {
             document.getElementById('emailBodyInput').value = email.body;
 
             // If a category is present on the test email, set current context category
-            // and reveal the "See Category Notes" button to keep UX consistent with inbox emails.
+            // and reveal the "See Category Notes" and "See Category Summary" buttons to keep UX consistent with inbox emails.
             currentContextCategory = email.category || '';
             const seeNotesBtn = document.getElementById('seeCategoryNotesBtn');
+            const seeSummaryBtn = document.getElementById('seeCategorySummaryBtn');
             if (seeNotesBtn) {
                 if (currentContextCategory) {
                     seeNotesBtn.style.display = 'inline-block';
@@ -3184,6 +3188,15 @@ function getCategoryBadgeStyle(category) {
                 } else {
                     seeNotesBtn.style.display = 'none';
                     seeNotesBtn.onclick = null;
+                }
+            }
+            if (seeSummaryBtn) {
+                if (currentContextCategory) {
+                    seeSummaryBtn.style.display = 'inline-block';
+                    seeSummaryBtn.onclick = () => showCategorySummaryModal(currentContextCategory);
+                } else {
+                    seeSummaryBtn.style.display = 'none';
+                    seeSummaryBtn.onclick = null;
                 }
             }
             
@@ -3383,9 +3396,10 @@ function getCategoryBadgeStyle(category) {
             document.getElementById('subjectInput').value = email.subject;
             document.getElementById('emailBodyInput').value = email.body;
             
-            // Set current category and reveal "See Category Notes" button
+            // Set current category and reveal "See Category Notes" and "See Category Summary" buttons
             currentContextCategory = email.category || '';
             const seeNotesBtn = document.getElementById('seeCategoryNotesBtn');
+            const seeSummaryBtn = document.getElementById('seeCategorySummaryBtn');
             if (seeNotesBtn) {
                 if (currentContextCategory) {
                     seeNotesBtn.style.display = 'inline-block';
@@ -3393,6 +3407,15 @@ function getCategoryBadgeStyle(category) {
                 } else {
                     seeNotesBtn.style.display = 'none';
                     seeNotesBtn.onclick = null;
+                }
+            }
+            if (seeSummaryBtn) {
+                if (currentContextCategory) {
+                    seeSummaryBtn.style.display = 'inline-block';
+                    seeSummaryBtn.onclick = () => showCategorySummaryModal(currentContextCategory);
+                } else {
+                    seeSummaryBtn.style.display = 'none';
+                    seeSummaryBtn.onclick = null;
                 }
             }
 
