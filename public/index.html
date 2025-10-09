@@ -6009,12 +6009,12 @@ function ensureLoadTodayModal() {
                 <h2 class="modal-title">Load Today</h2>
                 <button class="close" onclick="closeLoadTodayModal()">&times;</button>
             </div>
-                <div style="padding: 20px; display:flex; flex-direction:column; gap:16px; flex:1 1 auto; min-height:0;">
-                <div style="display:flex; gap:16px; justify-content:flex-end; margin-bottom:16px; flex-wrap:wrap;">
-                    <button class="carousel-nav-btn" style="background:#667eea;" onclick="refreshLoadToday()">🔄 Refresh</button>
-                    <button class="carousel-nav-btn" id="loadTodaySelectAllThreadsBtn" style="background:#28a745;" onclick="selectAllTodayThreads()">Select All Threads</button>
-                    <button class="carousel-nav-btn" id="loadTodaySelectAllEmailsBtn" style="background:#28a745;" onclick="selectAllTodayEmails()">Select All Emails</button>
-                    <button class="carousel-nav-btn" style="background:#17a2b8;" onclick="addAllToday()">Add All</button>
+        <div style="padding: 20px; display:flex; flex-direction:column; gap:16px; flex:1 1 auto; min-height:0;">
+                <div style="display:flex; gap:12px; justify-content:flex-end; margin-bottom:0; flex-wrap:wrap; position:sticky; top:0; z-index:1001; padding:12px 16px; background:#fff; border-bottom:2px solid #e9ecef; box-shadow:0 2px 8px rgba(0,0,0,0.1); flex-shrink:0;">
+                    <button class="carousel-nav-btn" style="background:#667eea; margin:0;" onclick="refreshLoadToday()">🔄 Refresh</button>
+                    <button class="carousel-nav-btn" id="loadTodaySelectAllThreadsBtn" style="background:#28a745; margin:0;" onclick="selectAllTodayThreads()">Select All Threads</button>
+                    <button class="carousel-nav-btn" id="loadTodaySelectAllEmailsBtn" style="background:#28a745; margin:0;" onclick="selectAllTodayEmails()">Select All Emails</button>
+                    <button class="carousel-nav-btn" style="background:#17a2b8; margin:0;" onclick="addAllToday()">Add All</button>
                 </div>
                 <div style="display:grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap:16px; flex:1 1 auto; min-height:0; min-width:0; width:100%; overflow:hidden;">
                     <div style="display:flex; flex-direction:column; min-height:0; min-width:0; border:1px solid #e9ecef; border-radius:8px; background:#fff;">
@@ -6203,71 +6203,66 @@ function renderTodayThreadsList() {
     }).join('');
 }
 
-function renderTodayEmailsList(authNeeded) {
-    const host = document.getElementById('todayEmailsList');
-    const count = document.getElementById('todayEmailsCount');
-    if (!host) return;
+        function renderTodayEmailsList(authNeeded) {
+            const host = document.getElementById('todayEmailsList');
+            const count = document.getElementById('todayEmailsCount');
+            if (!host) return;
 
-    if (authNeeded) {
-        if (count) count.textContent = '0';
-        host.innerHTML = `
-            <div class="error" style="text-align:center;">
-                Gmail authentication required to fetch today's inbox emails.<br>
-                <button class="select-email-btn" style="margin-top:8px;" onclick="startAuthentication()">Authenticate</button>
-            </div>
-        `;
-        return;
-    }
-
-    if (count) count.textContent = String(todayEmails.length || 0);
-
-    if (!todayEmails.length) {
-        host.innerHTML = '<div class="no-emails">No inbox emails found for today.</div>';
-        return;
-    }
-    
-    // Clear the container first
-    host.innerHTML = '';
-    
-    // Create each email as a proper DOM element (not HTML string) to ensure proper rendering
-    todayEmails.forEach((e, i) => {
-        const subj = escapeHtml(e.subject || 'No Subject');
-        const from = escapeHtml(e.from || 'Unknown Sender');
-        const date = e.date || '';
-        const rawBody = typeof e.body === 'string' ? e.body : '';
-        const previewText = rawBody.replace(/\s+/g, ' ').trim();
-        const preview = previewText ? previewText.slice(0, 160) + (previewText.length > 160 ? '...' : '') : '';
-        const safePreview = escapeHtml(preview);
-        const catStyle = getCategoryBadgeStyle(e.category || 'Personal & Life Management');
-        const categoryClass = `category-${(e.category || 'Personal & Life Management').toLowerCase().replace(/\s+/g, '-')}`;
-        
-        // Create wrapper div
-        const wrapper = document.createElement('div');
-        wrapper.style.cssText = 'display: block; width: 100%; margin-bottom: 8px; box-sizing: border-box;';
-        
-        // Create label
-        const label = document.createElement('label');
-        label.style.cssText = 'display: block; width: 100%; box-sizing: border-box; border: 1px solid #e9ecef; border-radius: 6px; padding: 10px; background: #fafafa; cursor: pointer;';
-        
-        // Build inner HTML for the label
-        label.innerHTML = `
-            <div style="display:flex; align-items:center; gap:10px; width:100%;">
-                <input type="checkbox" id="today-email-${i}" onchange="toggleTodayEmail(${i}, this.checked)" style="flex-shrink:0;">
-                <div style="flex:1 1 auto; min-width:0; max-width:100%; overflow:hidden;">
-                    <div style="font-weight:600; color:#333; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${subj}</div>
-                    <div style="font-size:12px; color:#666; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${from} • ${formatDate(date)}</div>
-                    <div style="font-size:12px; color:#777; margin-top:4px; word-wrap:break-word; overflow-wrap:anywhere; line-height:1.4; max-height:4.2em; overflow:hidden;">${safePreview}</div>
-                    <div class="email-category ${categoryClass}" style="display:inline-block; padding:4px 8px; border-radius:12px; font-size:12px; font-weight:500; margin-top:6px; ${catStyle}">
-                        ${e.category || 'Personal & Life Management'}
+            if (authNeeded) {
+                if (count) count.textContent = '0';
+                host.innerHTML = `
+                    <div class="error" style="text-align:center;">
+                        Gmail authentication required to fetch today's inbox emails.<br>
+                        <button class="select-email-btn" style="margin-top:8px;" onclick="startAuthentication()">Authenticate</button>
                     </div>
-                </div>
-            </div>
-        `;
-        
-        wrapper.appendChild(label);
-        host.appendChild(wrapper);
-    });
-}
+                `;
+                return;
+            }
+
+            if (count) count.textContent = String(todayEmails.length || 0);
+
+            if (!todayEmails.length) {
+                host.innerHTML = '<div class="no-emails">No inbox emails found for today.</div>';
+                return;
+            }
+            
+            // Clear the container completely and build HTML string for guaranteed vertical rendering
+            const emailsHTML = todayEmails.map((e, i) => {
+                const subj = escapeHtml(e.subject || 'No Subject');
+                const from = escapeHtml(e.from || 'Unknown Sender');
+                const date = e.date || '';
+                const rawBody = typeof e.body === 'string' ? e.body : '';
+                const previewText = rawBody.replace(/\s+/g, ' ').trim();
+                const preview = previewText ? previewText.slice(0, 160) + (previewText.length > 160 ? '...' : '') : '';
+                const safePreview = escapeHtml(preview);
+                const catStyle = getCategoryBadgeStyle(e.category || 'Personal & Life Management');
+                const categoryClass = `category-${(e.category || 'Personal & Life Management').toLowerCase().replace(/\s+/g, '-')}`;
+                
+                return `
+                    <div style="display: block !important; width: 100% !important; margin-bottom: 8px; clear: both;">
+                        <label style="display: block !important; width: 100% !important; box-sizing: border-box; border: 1px solid #e9ecef; border-radius: 6px; padding: 10px; background: #fafafa; cursor: pointer;">
+                            <table style="width: 100%; border-collapse: collapse;">
+                                <tr>
+                                    <td style="width: 30px; vertical-align: top; padding-right: 10px;">
+                                        <input type="checkbox" id="today-email-${i}" onchange="toggleTodayEmail(${i}, this.checked)">
+                                    </td>
+                                    <td style="vertical-align: top;">
+                                        <div style="font-weight:600; color:#333; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${subj}</div>
+                                        <div style="font-size:12px; color:#666; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; margin-top: 2px;">${from} • ${formatDate(date)}</div>
+                                        <div style="font-size:12px; color:#777; margin-top:4px; line-height:1.4;">${safePreview}</div>
+                                        <div class="email-category ${categoryClass}" style="display:inline-block; padding:4px 8px; border-radius:12px; font-size:12px; font-weight:500; margin-top:6px; ${catStyle}">
+                                            ${e.category || 'Personal & Life Management'}
+                                        </div>
+                                    </td>
+                                </tr>
+                            </table>
+                        </label>
+                    </div>
+                `;
+            }).join('');
+            
+            host.innerHTML = emailsHTML;
+        }
 
 function toggleTodayThread(i, checked) {
     if (checked) selectedTodayThreads.add(i);
