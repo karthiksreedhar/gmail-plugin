@@ -2190,7 +2190,7 @@ app.post('/api/load-email-threads', async (req, res) => {
     const HIDDEN_THREAD_IDS = new Set((hiddenList || []).map(h => h.id));
     const HIDDEN_RESPONSE_IDS = new Set((hiddenList || []).flatMap(h => (h.responseIds || [])));
 
-    if (dateFilter === 'today') {
+    if (dateFilter === 'today' || dateFilter === 'priority3d') {
       try {
         // Load existing email threads and response emails to check for duplicates
         const existingEmailThreads = loadEmailThreads();
@@ -2200,8 +2200,10 @@ app.post('/api/load-email-threads', async (req, res) => {
 
         // Build Gmail query for today (local timezone)
         const now = new Date();
-        const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-        const tomorrow = new Date(start.getTime() + 24 * 60 * 60 * 1000);
+        const startBase = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        const isPriorityMode = dateFilter === 'priority3d';
+        const start = isPriorityMode ? new Date(startBase.getTime() - 3 * 24 * 60 * 60 * 1000) : startBase;
+        const tomorrow = new Date(startBase.getTime() + 24 * 60 * 60 * 1000);
         const formatDateForGmail = (d) => {
           const y = d.getFullYear();
           const m = String(d.getMonth() + 1).padStart(2, '0');
@@ -2212,7 +2214,7 @@ app.post('/api/load-email-threads', async (req, res) => {
         const before = formatDateForGmail(tomorrow);
         // New logic: include ALL threads you participated in that have a NEW message today
         // 1) Search inbox for today's messages (any sender)
-        const searchQuery = `in:inbox after:${after} before:${before}`;
+        const searchQuery = `in:inbox ${isPriorityMode ? 'is:important ' : ''}after:${after} before:${before}`;
         console.log(`Loading all email threads (new mail today) using query: ${searchQuery}`);
         const inboxMessagesToday = await searchGmailEmails(searchQuery, 500);
 
@@ -2631,14 +2633,16 @@ app.post('/api/fetch-more-emails', async (req, res) => {
       });
     }
 
-    if (dateFilter === 'today') {
+    if (dateFilter === 'today' || dateFilter === 'priority3d') {
       try {
         const existingUnrepliedEmails = loadUnrepliedEmails();
 
         // Build Gmail query for today (local timezone)
         const now = new Date();
-        const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-        const tomorrow = new Date(start.getTime() + 24 * 60 * 60 * 1000);
+        const startBase = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        const isPriorityMode = dateFilter === 'priority3d';
+        const start = isPriorityMode ? new Date(startBase.getTime() - 3 * 24 * 60 * 60 * 1000) : startBase;
+        const tomorrow = new Date(startBase.getTime() + 24 * 60 * 60 * 1000);
         const formatDateForGmail = (d) => {
           const y = d.getFullYear();
           const m = String(d.getMonth() + 1).padStart(2, '0');
@@ -2647,7 +2651,7 @@ app.post('/api/fetch-more-emails', async (req, res) => {
         };
         const after = formatDateForGmail(start);
         const before = formatDateForGmail(tomorrow);
-        const searchQuery = `in:inbox after:${after} before:${before}`;
+        const searchQuery = `in:inbox ${isPriorityMode ? 'is:important ' : ''}after:${after} before:${before}`;
 
         console.log(`Fetching all emails from today with query: ${searchQuery}`);
 

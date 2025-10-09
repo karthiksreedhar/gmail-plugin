@@ -2412,7 +2412,9 @@
                 <button class="load-scenario-btn" onclick="showLoadScenarioModal()">Load Scenario</button>
                 <button class="load-scenario-btn" onclick="showCleanThreadsModal()" title="Scan and clean quoted replies across all threads" style="background:#8b4513;">Clean Threads</button>
             </div>
-            <h1>Email Twin</h1>
+            <div style="flex:1; display:flex; justify-content:center;">
+                <button class="refresh-btn" onclick="showLoadPriorityModal()" title="Load important emails and threads from last 3 days">⭐ Load Priority Emails</button>
+            </div>
             <div class="header-buttons">
                 <button class="refresh-btn" onclick="showLoadTodayModal()">📅 Load Today</button>
                 <button class="refresh-btn" onclick="showLoadEmailThreadsModal()">📧 Load Email Threads</button>
@@ -6067,6 +6069,7 @@ function ensureLoadTodayModal() {
 }
 
 function showLoadTodayModal() {
+    window.__loadDateFilter = 'today';
     const modal = ensureLoadTodayModal();
     // reset state
     todayThreads = [];
@@ -6083,6 +6086,33 @@ function showLoadTodayModal() {
     updateAddSelectedTodayBtn();
     modal.style.display = 'block';
     // fetch in parallel
+    loadTodayData();
+}
+
+function showLoadPriorityModal() {
+    try { window.__loadDateFilter = 'priority3d'; } catch (_) {}
+    const modal = ensureLoadTodayModal();
+    // reset state (same as Load Today)
+    todayThreads = [];
+    todayEmails = [];
+    selectedTodayThreads = new Set();
+    selectedTodayEmails = new Set();
+    const tl = document.getElementById('todayThreadsList');
+    const el = document.getElementById('todayEmailsList');
+    if (tl) tl.innerHTML = '<div class="loading">Loading threads...</div>';
+    if (el) el.innerHTML = '<div class="loading">Loading emails...</div>';
+    const tc = document.getElementById('todayThreadsCount');
+    const ec = document.getElementById('todayEmailsCount');
+    if (tc) tc.textContent = '0';
+    if (ec) ec.textContent = '0';
+    updateAddSelectedTodayBtn();
+    modal.style.display = 'block';
+    // Update modal title to reflect priority mode
+    try {
+        const titleEl = document.querySelector('#loadTodayModal .modal-title');
+        if (titleEl) titleEl.textContent = 'Load Priority (Last 3 Days)';
+    } catch (_) {}
+    // Fetch data with priority filter
     loadTodayData();
 }
 
@@ -6135,12 +6165,12 @@ async function loadTodayData() {
             fetch('/api/load-email-threads', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ dateFilter: 'today' })
+                body: JSON.stringify({ dateFilter: (window.__loadDateFilter === 'priority3d' ? 'priority3d' : 'today') })
             }),
             fetch('/api/fetch-more-emails', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ dateFilter: 'today' })
+                body: JSON.stringify({ dateFilter: (window.__loadDateFilter === 'priority3d' ? 'priority3d' : 'today') })
             })
         ]);
 
