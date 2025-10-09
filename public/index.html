@@ -2562,6 +2562,7 @@
         let currentFilter = 'all';
         let currentCategoriesOrder = [];
         window.currentUserDisplayName = window.currentUserDisplayName || '';
+window.__categoryChats = window.__categoryChats || {};
         function displayNameFromEmail(email) {
             try {
                 const e = String(email || '').toLowerCase().trim();
@@ -10211,12 +10212,15 @@ categoriesState[index].name = newName;
                         </div>
                         <div style="border-top:1px solid #e9ecef; padding-top:10px;">
                             <label style="display:block; font-weight:600; margin-bottom:6px; color:#333;">Ask a Question</label>
-                            <input id="catSummaryQuestion" type="text" placeholder="Ask about this category..." 
-                                   style="width:100%; padding:10px; border:1px solid #ddd; border-radius:6px; font-size:14px; margin-bottom:8px;">
-                            <div style="text-align:right;">
-                                <button class="select-email-btn" style="background:#17a2b8;" onclick="askCategoryQuestion()">Ask</button>
+                            <div id="catSummaryChat" style="max-height:240px; overflow:auto; border:1px solid #e9ecef; border-radius:8px; padding:10px; background:#fff; margin-bottom:8px;">
+                                <div style="color:#666; font-style:italic; text-align:center;">Start the conversation by asking a question about this category.</div>
                             </div>
-                            <div id="catSummaryAnswer" style="margin-top:8px; white-space:pre-wrap; color:#333;"></div>
+                            <div style="display:flex; gap:8px;">
+                                <input id="catSummaryQuestionInput" type="text" placeholder="Type your question..." 
+                                       style="flex:1; padding:10px; border:1px solid #ddd; border-radius:6px; font-size:14px;">
+                                <button class="select-email-btn" style="background:#17a2b8;" onclick="askCategoryQuestion()">Send</button>
+                                <button class="select-email-btn" style="background:#6c757d;" onclick="resetCategoryChat()">Reset</button>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -10238,9 +10242,8 @@ categoriesState[index].name = newName;
                 const modal = ensureCategorySummaryModal();
                 const titleEl = document.getElementById('catSummaryTitle');
                 const editor = document.getElementById('catSummaryEditor');
-                const answer = document.getElementById('catSummaryAnswer');
                 if (titleEl) titleEl.textContent = category;
-                if (answer) answer.textContent = '';
+
                 // Load existing summaries
                 let existing = {};
                 try {
@@ -10250,7 +10253,29 @@ categoriesState[index].name = newName;
                 } catch (_) {}
                 const txt = existing && typeof existing[category] === 'string' ? existing[category] : '';
                 if (editor) editor.value = txt;
+
+                // Initialize chat history for this category and render
+                window.__categoryChats = window.__categoryChats || {};
+                window.__categoryChats[category] = window.__categoryChats[category] || [];
+
                 modal.style.display = 'block';
+
+                // Render chat and wire Enter-to-send
+                setTimeout(() => {
+                    try {
+                        renderCategoryChat(true);
+                        const inputEl = document.getElementById('catSummaryQuestionInput');
+                        if (inputEl) {
+                            inputEl.onkeydown = (ev) => {
+                                if (ev.key === 'Enter') {
+                                    ev.preventDefault();
+                                    askCategoryQuestion();
+                                }
+                            };
+                            inputEl.focus();
+                        }
+                    } catch (_) {}
+                }, 0);
             } catch (e) {
                 console.error('showCategorySummaryModal failed:', e);
                 showErrorPopup('Failed to load summary.', 'Load Failed');
@@ -10279,29 +10304,99 @@ categoriesState[index].name = newName;
 
         async function askCategoryQuestion() {
             try {
-                const input = document.getElementById('catSummaryQuestion');
-                const answer = document.getElementById('catSummaryAnswer');
+                const input = document.getElementById('catSummaryQuestionInput');
                 const q = input ? String(input.value || '').trim() : '';
                 if (!q) {
                     showErrorPopup('Please enter a question.', 'Missing Question');
                     return;
                 }
-                if (answer) answer.textContent = 'Thinking...';
+
+                // Clear input immediately
+                if (input) input.value = '';
+
+                // Ensure chat store for current category
+                const cat = __currentSummaryCategory;
+                window.__categoryChats = window.__categoryChats || {};
+                const chat = (window.__categoryChats[cat] = window.__categoryChats[cat] || []);
+
+                // Append user message and a placeholder assistant "Thinking..."
+                chat.push({ role: 'user', content: q });
+                chat.push({ role: 'assistant', content: 'Thinking...' });
+                renderCategoryChat(true);
+
+                // Send with full history excluding the last placeholder
+                const history = chat.slice(0, chat.length - 1);
+
                 const resp = await fetch('/api/category-summary-qa', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ category: __currentSummaryCategory, question: q })
+                    body: JSON.stringify({ category: cat, question: q, history })
                 });
                 const data = await resp.json();
-                if (!resp.ok || !data.success) {
-                    throw new Error(data.error || 'Q&A failed');
-                }
-                if (answer) answer.textContent = data.answer || 'No answer.';
+
+                // Replace placeholder with real answer
+                const answerText = (resp.ok && data && data.success && data.answer) ? data.answer : "I don't have enough information to answer that confidently.";
+                chat[chat.length - 1] = { role: 'assistant', content: answerText };
+                renderCategoryChat(true);
             } catch (e) {
                 console.error('askCategoryQuestion failed:', e);
+                // Fallback: replace placeholder if present
+                try {
+                    const chat = window.__categoryChats?.[__currentSummaryCategory];
+                    if (Array.isArray(chat) && chat.length && chat[chat.length - 1]?.content === 'Thinking...') {
+                        chat[chat.length - 1] = { role: 'assistant', content: "I couldn't get an answer right now." };
+                        renderCategoryChat(true);
+                    }
+                } catch (_) {}
                 showErrorPopup('Failed to answer question.', 'Q&A Failed');
-                const answer = document.getElementById('catSummaryAnswer');
-                if (answer) answer.textContent = '';
+            }
+        }
+
+function renderCategoryChat(scrollToEnd) {
+            try {
+                const host = document.getElementById('catSummaryChat');
+                if (!host) return;
+                const cat = __currentSummaryCategory;
+                const chat = (window.__categoryChats && window.__categoryChats[cat]) ? window.__categoryChats[cat] : [];
+
+                if (!chat.length) {
+                    host.innerHTML = '<div style="color:#666; font-style:italic; text-align:center;">Start the conversation by asking a question about this category.</div>';
+                } else {
+                    host.innerHTML = chat.map(m => {
+                        const isUser = String(m.role || '') === 'user';
+                        const align = isUser ? 'flex-end' : 'flex-start';
+                        const bg = isUser ? '#e3f2fd' : '#f8f9fa';
+                        const border = isUser ? '#90caf9' : '#e9ecef';
+                        const safe = escapeHtml(m.content || '');
+                        return `
+                            <div style="display:flex; justify-content:${align}; margin:6px 0;">
+                                <div style="max-width:80%; white-space:pre-wrap; padding:8px 10px; border:1px solid ${border}; border-radius:8px; background:${bg}; color:#333;">
+                                    ${safe}
+                                </div>
+                            </div>
+                        `;
+                    }).join('');
+                }
+
+                if (scrollToEnd) {
+                    host.scrollTop = host.scrollHeight;
+                } else {
+                    setTimeout(() => { try { host.scrollTop = host.scrollHeight; } catch(_){} }, 0);
+                }
+            } catch (e) {
+                console.error('renderCategoryChat failed:', e);
+            }
+        }
+
+function resetCategoryChat() {
+            try {
+                const cat = __currentSummaryCategory;
+                if (!cat) return;
+                window.__categoryChats = window.__categoryChats || {};
+                window.__categoryChats[cat] = [];
+                renderCategoryChat(true);
+            } catch (e) {
+                console.error('resetCategoryChat failed:', e);
             }
         }
 

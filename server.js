@@ -2167,7 +2167,7 @@ app.post('/api/load-email-threads', async (req, res) => {
   try {
     const { threadCount, dateFilter } = req.body;
     
-    if ((!threadCount || threadCount < 1 || threadCount > 500) && dateFilter !== 'today') {
+    if ((!threadCount || threadCount < 1 || threadCount > 500) && dateFilter !== 'today' && dateFilter !== 'priority3d') {
       return res.status(400).json({ 
         success: false, 
         error: 'Thread count must be between 1 and 500' 
@@ -4566,16 +4566,18 @@ ${JSON.stringify(compact, null, 2)}`;
 
 app.post('/api/category-summary-qa', async (req, res) => {
   try {
-    const { category, question } = req.body || {};
+    const { category, question, history } = req.body || {};
     if (!category || !question) {
       return res.status(400).json({ success: false, error: 'category and question are required' });
     }
 
+    // Load context
     const summaries = loadCategorySummaries();
     const summary = summaries[category] || '';
     const responses = loadResponseEmails() || [];
     const notesAll = loadNotes() || [];
 
+    // Compact examples for context
     const examples = (responses || [])
       .filter(e => String(e.category || '').toLowerCase() === String(category || '').toLowerCase())
       .slice(0, 20)
@@ -4587,12 +4589,14 @@ app.post('/api/category-summary-qa', async (req, res) => {
 
     const catNotes = (notesAll || []).filter(n => n.category === category).map(n => n.text || '');
 
+    // System prompt remains the same
     const SYSTEM = `You answer user questions about a specific email category based on a short summary, notes, and a few example emails.
 - If the answer is clear from the provided context, answer concisely (2–6 sentences).
 - If the context is insufficient, say you don't have enough information instead of guessing.
 - Do not fabricate specifics. Avoid PII. Output plain text.`;
 
-    const USER = `CATEGORY: ${category}
+    // Pack category context into a single user message so the chat can be multi-turn
+    const CONTEXT = `CATEGORY: ${category}
 CATEGORY SUMMARY:
 ${summary || '(none saved yet)'}
 
@@ -4600,24 +4604,37 @@ NOTES:
 ${catNotes.length ? '- ' + catNotes.join('\n- ') : '(none)'}
 
 EXAMPLE EMAILS (subject/from/snippet):
-${JSON.stringify(examples, null, 2)}
+${JSON.stringify(examples, null, 2)}`;
 
-QUESTION:
-${question}`;
+    // Normalize incoming history (optional) and cap to recent exchanges
+    const normalizedHistory = Array.isArray(history) ? history : [];
+    const cleanedHistory = normalizedHistory
+      .map(m => {
+        const role = String(m?.role || '').toLowerCase() === 'assistant' ? 'assistant' : 'user';
+        const content = String(m?.content || '').trim();
+        return content ? { role, content } : null;
+      })
+      .filter(Boolean)
+      .slice(-12); // last ~12 turns to control context size
+
+    // Construct messages: system -> context -> history -> current question
+    const messages = [
+      { role: 'system', content: SYSTEM },
+      { role: 'user', content: CONTEXT },
+      ...cleanedHistory,
+      { role: 'user', content: question }
+    ];
 
     let answer = '';
     try {
       const completion = await openai.chat.completions.create({
         model: "o3",
-        messages: [
-          { role: "system", content: SYSTEM },
-          { role: "user", content: USER }
-        ],
-        max_completion_tokens: 400
+        messages,
+        max_completion_tokens: 600
       });
       answer = (completion.choices?.[0]?.message?.content || '').trim();
     } catch (apiErr) {
-      console.warn('OpenAI Q&A failed:', apiErr?.message || apiErr);
+      console.warn('OpenAI Q&A (chat) failed:', apiErr?.message || apiErr);
       answer = "I don't have enough information to answer that confidently.";
     }
 
