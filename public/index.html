@@ -2224,6 +2224,149 @@
         .loading-cancel-btn:hover {
             background: #c82333;
         }
+
+        /* Load Today lists: cleaned up — handled with modal-scoped rules below */
+
+
+        /* Load Today modal: global hardening inside modal only */
+        #loadTodayModal, 
+        #loadTodayModal * {
+            /* Kill any possibility of multicol/flow fragments leaking in from ancestors */
+            -webkit-column-count: auto !important;
+            column-count: auto !important;
+            -webkit-columns: auto !important;
+            columns: auto !important;
+            -webkit-column-width: auto !important;
+            column-width: auto !important;
+            column-gap: 0 !important;
+
+            /* Prevent width collapse and any horizontal overflow chains */
+            min-width: 0 !important;
+            max-width: 100% !important;
+            overflow-x: hidden !important;
+            box-sizing: border-box !important;
+        }
+
+        /* Load Today lists: modal-scoped vertical flow (no global overrides) */
+        #loadTodayModal #todayThreadsList,
+        #loadTodayModal #todayEmailsList {
+            display: flex;
+            flex-direction: column;
+            align-items: stretch;
+            gap: 8px;
+            overflow-y: auto;
+            overflow-x: hidden;
+            min-width: 0;
+            max-width: 100%;
+        }
+        #loadTodayModal #todayThreadsList > *,
+        #loadTodayModal #todayEmailsList > * {
+            display: block;
+            width: 100%;
+            max-width: 100%;
+            flex: 0 0 auto;
+            box-sizing: border-box;
+        }
+        /* Ensure no multi-column or grid behavior sneaks in inside the lists only (hard reset) */
+        #loadTodayModal #todayThreadsList,
+        #loadTodayModal #todayEmailsList,
+        #loadTodayModal #todayThreadsList *,
+        #loadTodayModal #todayEmailsList * {
+            /* Hard disable any multicol behavior and force a single column */
+            -webkit-column-count: 1 !important;
+            column-count: 1 !important;
+            -webkit-columns: auto !important;
+            columns: auto !important;
+            -webkit-column-width: auto !important;
+            column-width: auto !important;
+            column-gap: 0 !important;
+
+            /* Kill any accidental grid layouts inside list trees */
+            grid-template-columns: none !important;
+            grid-auto-flow: row !important;
+            grid-auto-columns: auto !important;
+            grid-auto-rows: auto !important;
+
+            /* Prevent float-based multi-column fallbacks */
+            float: none !important;
+
+            /* Keep normal horizontal text flow and sizing */
+            white-space: normal !important;
+            writing-mode: horizontal-tb !important;
+            max-width: 100% !important;
+
+            /* Ensure long URLs/text never collapse widths */
+            word-break: break-word !important;
+            word-break: break-all !important; /* older engines */
+            overflow-wrap: anywhere !important;
+            hyphens: auto !important;
+        }
+
+        /* Lists themselves are isolated formatting contexts to avoid ancestor columns bleeding in */
+        #loadTodayModal #todayThreadsList,
+        #loadTodayModal #todayEmailsList {
+            isolation: isolate !important;
+            width: 100% !important;
+            max-width: 100% !important;
+        }
+
+        /* Prevent items from being split across columns in any edge cases */
+        #loadTodayModal #todayThreadsList > *,
+        #loadTodayModal #todayEmailsList > * {
+            break-inside: avoid-column !important;
+            page-break-inside: avoid !important;
+        }
+
+        /* Force the lists themselves to be true 1D flex columns with no wrapping */
+        #loadTodayModal #todayThreadsList,
+        #loadTodayModal #todayEmailsList {
+            display: flex !important;
+            flex-direction: column !important;
+            flex-wrap: nowrap !important;
+            align-items: stretch !important;
+            align-content: flex-start !important;
+        }
+
+        /* Make each item a full-width block card (labels included) */
+        #loadTodayModal #todayThreadsList > *,
+        #loadTodayModal #todayEmailsList > *,
+        #loadTodayModal #todayThreadsList label,
+        #loadTodayModal #todayEmailsList label {
+            display: block !important;
+            width: 100% !important;
+            max-width: 100% !important;
+            min-width: 0 !important;
+            box-sizing: border-box !important;
+            flex: 0 0 auto !important;
+            float: none !important;
+            clear: both !important;
+            break-inside: avoid !important;
+        }
+
+        /* Extra hardening: prevent width collapse and forced wrapping issues */
+        #loadTodayModal #todayThreadsList,
+        #loadTodayModal #todayEmailsList,
+        #loadTodayModal #todayThreadsList *,
+        #loadTodayModal #todayEmailsList * {
+            min-width: 0 !important;
+            overflow-x: hidden !important;
+            word-break: break-word !important;
+            overflow-wrap: anywhere !important;
+        }
+
+        /* Ensure the card content area can expand within the inner flex row */
+        #loadTodayModal #todayThreadsList label > div,
+        #loadTodayModal #todayEmailsList label > div {
+            width: 100% !important;
+        }
+        #loadTodayModal #todayThreadsList label > div > div,
+        #loadTodayModal #todayEmailsList label > div > div {
+            flex: 1 1 auto !important;
+            min-width: 0 !important;
+            max-width: 100% !important;
+        }
+
+
     </style>
 </head>
 <body>
@@ -2253,11 +2396,11 @@
             </div>
             <h1>Email Twin</h1>
             <div class="header-buttons">
-                <button class="generate-btn" onclick="generateResponse()">Generate Response</button>
-                <button class="view-refinements-btn" onclick="showViewRefinementsModal()">View Refinements</button>
-                <button class="view-saved-generations-btn" onclick="showViewSavedGenerationsModal()">View Saved Generations</button>
                 <button class="refresh-btn" onclick="showLoadTodayModal()">📅 Load Today</button>
                 <button class="refresh-btn" onclick="showLoadEmailThreadsModal()">📧 Load Email Threads</button>
+                <button class="view-saved-generations-btn" onclick="showViewSavedGenerationsModal()">View Saved Generations</button>
+                <button class="view-refinements-btn" onclick="showViewRefinementsModal()">View Refinements</button>
+                <button class="generate-btn" onclick="generateResponse()">Generate Response</button>
             </div>
         </div>
 
@@ -5861,39 +6004,39 @@ function ensureLoadTodayModal() {
     modal.id = 'loadTodayModal';
     modal.className = 'modal';
     modal.innerHTML = `
-            <div class="modal-content" style="max-width: 1400px; width: 95vw; max-height: 90vh; display:flex; flex-direction:column;">
+            <div class="modal-content" style="max-width: 1400px; width: 95vw; height: 85vh; max-height: 85vh; display:flex; flex-direction:column;">
             <div class="modal-header">
                 <h2 class="modal-title">Load Today</h2>
                 <button class="close" onclick="closeLoadTodayModal()">&times;</button>
             </div>
-            <div style="padding: 16px; display:flex; flex-direction:column; gap:12px; flex:1 1 auto; min-height:0;">
-                <div style="display:flex; gap:12px; justify-content:flex-end; margin-bottom:12px;">
+                <div style="padding: 20px; display:flex; flex-direction:column; gap:16px; flex:1 1 auto; min-height:0;">
+                <div style="display:flex; gap:16px; justify-content:flex-end; margin-bottom:16px; flex-wrap:wrap;">
                     <button class="carousel-nav-btn" style="background:#667eea;" onclick="refreshLoadToday()">🔄 Refresh</button>
                     <button class="carousel-nav-btn" id="loadTodaySelectAllThreadsBtn" style="background:#28a745;" onclick="selectAllTodayThreads()">Select All Threads</button>
                     <button class="carousel-nav-btn" id="loadTodaySelectAllEmailsBtn" style="background:#28a745;" onclick="selectAllTodayEmails()">Select All Emails</button>
                     <button class="carousel-nav-btn" style="background:#17a2b8;" onclick="addAllToday()">Add All</button>
                 </div>
-                <div style="display:grid; grid-template-columns: 1fr 1fr; gap:16px; flex:1 1 auto; min-height:0;">
-                    <div style="display:flex; flex-direction:column; min-height:0; border:1px solid #e9ecef; border-radius:8px; background:#fff;">
+                <div style="display:grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap:16px; flex:1 1 auto; min-height:0; min-width:0; width:100%; overflow:hidden;">
+                    <div style="display:flex; flex-direction:column; min-height:0; min-width:0; border:1px solid #e9ecef; border-radius:8px; background:#fff;">
                         <div style="padding:10px; border-bottom:1px solid #e9ecef; display:flex; align-items:center; justify-content:space-between;">
                             <div style="font-weight:600; color:#333;">Today’s Threads</div>
                             <div id="todayThreadsCount" style="color:#666; font-size:12px;">0</div>
                         </div>
-                        <div id="todayThreadsList" style="flex:1 1 auto; overflow:auto; padding:10px;">
+                        <div id="todayThreadsList" style="flex:1 1 auto; overflow-y:auto; overflow-x:hidden; padding:10px; word-break:break-word; overflow-wrap:anywhere; display:flex; flex-direction:column; min-width:0; max-width:100%;">
                             <div class="loading">Loading threads...</div>
                         </div>
                     </div>
-                    <div style="display:flex; flex-direction:column; min-height:0; border:1px solid #e9ecef; border-radius:8px; background:#fff;">
+                    <div style="display:flex; flex-direction:column; min-height:0; min-width:0; border:1px solid #e9ecef; border-radius:8px; background:#fff;">
                         <div style="padding:10px; border-bottom:1px solid #e9ecef; display:flex; align-items:center; justify-content:space-between;">
                             <div style="font-weight:600; color:#333;">Today’s Inbox Emails</div>
                             <div id="todayEmailsCount" style="color:#666; font-size:12px;">0</div>
                         </div>
-                        <div id="todayEmailsList" style="flex:1 1 auto; overflow:auto; padding:10px;">
+                        <div id="todayEmailsList" style="flex:1 1 auto; overflow-y:auto; overflow-x:hidden; padding:10px; word-break:break-word; overflow-wrap:anywhere; display:flex; flex-direction:column; min-width:0; max-width:100%;">
                             <div class="loading">Loading emails...</div>
                         </div>
                     </div>
                 </div>
-                <div style="display:flex; justify-content:center; gap:12px; padding-top:12px;">
+                <div style="display:flex; justify-content:center; gap:16px; padding:20px 16px 16px 16px; border-top:1px solid #e9ecef; background:#fff; flex-shrink:0;">
                     <button class="carousel-btn carousel-btn-cancel" onclick="closeLoadTodayModal()">Cancel</button>
                     <button class="carousel-btn carousel-btn-add" id="addSelectedTodayBtn" onclick="addSelectedToday()" disabled>Add Selected</button>
                 </div>
@@ -5928,6 +6071,44 @@ function showLoadTodayModal() {
 function closeLoadTodayModal() {
     const modal = document.getElementById('loadTodayModal');
     if (modal) modal.style.display = 'none';
+}
+
+/* Programmatic guard to enforce single-column vertical stacking after content is rendered */
+function enforceLoadTodayVertical(node) {
+    try {
+        if (!node) return;
+        node.style.display = 'flex';
+        node.style.flexDirection = 'column';
+        node.style.alignItems = 'stretch';
+        node.style.overflowX = 'hidden';
+        node.style.minWidth = '0';
+        node.style.maxWidth = '100%';
+        node.style.width = '100%';
+
+        /* Explicitly disable CSS multicol and grid on the container */
+        node.style.columnCount = '1';
+        node.style.columns = 'auto';
+        node.style.columnWidth = 'auto';
+        node.style.webkitColumnCount = '1';
+        node.style.webkitColumns = 'auto';
+        node.style.gridTemplateColumns = 'none';
+        node.style.gridAutoFlow = 'row';
+
+        const kids = node.children || [];
+        for (let i = 0; i < kids.length; i++) {
+            const k = kids[i];
+            if (!k || !(k.style)) continue;
+            k.style.display = 'block';
+            k.style.width = '100%';
+            k.style.maxWidth = '100%';
+            k.style.minWidth = '0';
+            k.style.float = 'none';
+            k.style.clear = 'both';
+            k.style.flex = '0 0 auto';
+            k.style.breakInside = 'avoid-column';
+            k.style.pageBreakInside = 'avoid';
+        }
+    } catch (_) {}
 }
 
 async function loadTodayData() {
@@ -5975,6 +6156,11 @@ async function loadTodayData() {
 
         renderTodayThreadsList();
         renderTodayEmailsList(authNeeded);
+        /* Enforce vertical stacking post-render as a final guard */
+        try {
+            enforceLoadTodayVertical(document.getElementById('todayEmailsList'));
+            enforceLoadTodayVertical(document.getElementById('todayThreadsList'));
+        } catch (_) {}
     } catch (e) {
         console.error('loadTodayData failed:', e);
         // basic fallback
@@ -5994,14 +6180,16 @@ function renderTodayThreadsList() {
         return;
     }
     host.innerHTML = todayThreads.map((t, i) => {
-        const subj = (t.subject || 'No Subject');
+        const subj = escapeHtml(t.subject || 'No Subject');
         const msgs = Array.isArray(t.messages) ? t.messages : [];
         const last = msgs.length ? msgs[msgs.length - 1] : null;
         const date = last?.date || '';
-        const from = last?.from || '';
-        const preview = last?.body ? String(last.body).slice(0, 160) + (last.body.length > 160 ? '...' : '') : '';
+        const from = escapeHtml(last?.from || '');
+        const rawLastBody = typeof last?.body === 'string' ? last.body : '';
+                const previewText = rawLastBody.replace(/\s+/g, ' ').trim();
+        const preview = escapeHtml(previewText ? previewText.slice(0, 160) + (previewText.length > 160 ? '...' : '') : '');
         return `
-            <label style="display:block; border:1px solid #e9ecef; border-radius:6px; padding:10px; margin-bottom:8px; background:#fafafa; white-space: normal;">
+            <label style="display:block; width:100%; box-sizing:border-box; clear:both; border:1px solid #e9ecef; border-radius:6px; padding:10px; margin-bottom:8px; background:#fafafa; white-space: normal;">
                 <div style="display:flex; align-items:center; gap:10px;">
                     <input type="checkbox" id="today-thread-${i}" onchange="toggleTodayThread(${i}, this.checked)">
                     <div style="flex:1 1 auto; min-width:0;">
@@ -6024,7 +6212,7 @@ function renderTodayEmailsList(authNeeded) {
         if (count) count.textContent = '0';
         host.innerHTML = `
             <div class="error" style="text-align:center;">
-                Gmail authentication required to fetch today’s inbox emails.<br>
+                Gmail authentication required to fetch today's inbox emails.<br>
                 <button class="select-email-btn" style="margin-top:8px;" onclick="startAuthentication()">Authenticate</button>
             </div>
         `;
@@ -6037,29 +6225,48 @@ function renderTodayEmailsList(authNeeded) {
         host.innerHTML = '<div class="no-emails">No inbox emails found for today.</div>';
         return;
     }
-    host.innerHTML = todayEmails.map((e, i) => {
-        const subj = (e.subject || 'No Subject');
-        const from = (e.from || 'Unknown Sender');
+    
+    // Clear the container first
+    host.innerHTML = '';
+    
+    // Create each email as a proper DOM element (not HTML string) to ensure proper rendering
+    todayEmails.forEach((e, i) => {
+        const subj = escapeHtml(e.subject || 'No Subject');
+        const from = escapeHtml(e.from || 'Unknown Sender');
         const date = e.date || '';
-        const preview = e.body ? String(e.body).slice(0, 160) + (e.body.length > 160 ? '...' : '') : '';
+        const rawBody = typeof e.body === 'string' ? e.body : '';
+        const previewText = rawBody.replace(/\s+/g, ' ').trim();
+        const preview = previewText ? previewText.slice(0, 160) + (previewText.length > 160 ? '...' : '') : '';
+        const safePreview = escapeHtml(preview);
         const catStyle = getCategoryBadgeStyle(e.category || 'Personal & Life Management');
         const categoryClass = `category-${(e.category || 'Personal & Life Management').toLowerCase().replace(/\s+/g, '-')}`;
-        return `
-            <label style="display:block; border:1px solid #e9ecef; border-radius:6px; padding:10px; margin-bottom:8px; background:#fafafa; white-space: normal;">
-                <div style="display:flex; align-items:center; gap:10px;">
-                    <input type="checkbox" id="today-email-${i}" onchange="toggleTodayEmail(${i}, this.checked)">
-                    <div style="flex:1 1 auto; min-width:0;">
-                        <div style="font-weight:600; color:#333; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${subj}</div>
-                        <div style="font-size:12px; color:#666;">${from} • ${formatDate(date)}</div>
-                        <div style="font-size:12px; color:#777; margin-top:4px;">${preview}</div>
-                        <div class="email-category ${categoryClass}" style="display:inline-block; padding:4px 8px; border-radius:12px; font-size:12px; font-weight:500; margin-top:6px; ${catStyle}">
-                            ${e.category || 'Personal & Life Management'}
-                        </div>
+        
+        // Create wrapper div
+        const wrapper = document.createElement('div');
+        wrapper.style.cssText = 'display: block; width: 100%; margin-bottom: 8px; box-sizing: border-box;';
+        
+        // Create label
+        const label = document.createElement('label');
+        label.style.cssText = 'display: block; width: 100%; box-sizing: border-box; border: 1px solid #e9ecef; border-radius: 6px; padding: 10px; background: #fafafa; cursor: pointer;';
+        
+        // Build inner HTML for the label
+        label.innerHTML = `
+            <div style="display:flex; align-items:center; gap:10px; width:100%;">
+                <input type="checkbox" id="today-email-${i}" onchange="toggleTodayEmail(${i}, this.checked)" style="flex-shrink:0;">
+                <div style="flex:1 1 auto; min-width:0; max-width:100%; overflow:hidden;">
+                    <div style="font-weight:600; color:#333; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${subj}</div>
+                    <div style="font-size:12px; color:#666; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${from} • ${formatDate(date)}</div>
+                    <div style="font-size:12px; color:#777; margin-top:4px; word-wrap:break-word; overflow-wrap:anywhere; line-height:1.4; max-height:4.2em; overflow:hidden;">${safePreview}</div>
+                    <div class="email-category ${categoryClass}" style="display:inline-block; padding:4px 8px; border-radius:12px; font-size:12px; font-weight:500; margin-top:6px; ${catStyle}">
+                        ${e.category || 'Personal & Life Management'}
                     </div>
                 </div>
-            </label>
+            </div>
         `;
-    }).join('');
+        
+        wrapper.appendChild(label);
+        host.appendChild(wrapper);
+    });
 }
 
 function toggleTodayThread(i, checked) {
@@ -9043,7 +9250,7 @@ function rejectCurrentEmail() {
                 col.setAttribute('data-category', cat.name);
                 col.setAttribute('ondragover', 'categoriesAllowDrop(event)');
                 col.setAttribute('ondrop', `categoriesHandleDrop(event, ${index})`);
-                col.style.minWidth = '360px';
+                col.style.minWidth = '420px';
                 col.style.background = '#f8f9fa';
                 col.style.border = '1px solid #e9ecef';
                 col.style.borderRadius = '8px';
@@ -10314,14 +10521,14 @@ categoriesState[index].name = newName;
             if (modal) modal.style.display = 'none';
         }
 
-        // HTML-escape utility (correctly encodes special chars)
+        /* HTML-escape utility (correctly encodes special chars) */
 function escapeHtml(s) {
     return String(s)
         .replace(/&/g, '&')
         .replace(/</g, '<')
         .replace(/>/g, '>')
         .replace(/"/g, '"')
-        .replace(/'/g, '&#039;');
+        .replace(/'/g, '&#39;');
 }
 function escapeRegExp(s) {
     return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
