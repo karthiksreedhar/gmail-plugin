@@ -6228,26 +6228,63 @@ function renderTodayThreadsList() {
         host.innerHTML = '<div class="no-emails">No threads found for today.</div>';
         return;
     }
+
+    // Build identical cards to the "Today’s Inbox Emails" list, including category badges
     host.innerHTML = todayThreads.map((t, i) => {
-        const subj = escapeHtml(t.subject || 'No Subject');
+        const subjRaw = t.subject || 'No Subject';
+        const subj = escapeHtml(subjRaw);
         const msgs = Array.isArray(t.messages) ? t.messages : [];
         const last = msgs.length ? msgs[msgs.length - 1] : null;
         const date = last?.date || '';
-        const from = escapeHtml(last?.from || '');
+        const from = escapeHtml(last?.from || 'Unknown Sender');
+
         const rawLastBody = typeof last?.body === 'string' ? last.body : '';
-                const previewText = rawLastBody.replace(/\s+/g, ' ').trim();
+        const previewText = rawLastBody.replace(/\s+/g, ' ').trim();
         const preview = escapeHtml(previewText ? previewText.slice(0, 160) + (previewText.length > 160 ? '...' : '') : '');
+
+        // Derive a category for the thread:
+        // 1) Prefer the latest response message's id matched to an existing response email in allEmails
+        // 2) Fallback to matching by exact subject in allEmails
+        // 3) Fallback to a safe default
+        let catName = '';
+        try {
+            const latestResp = [...msgs].reverse().find(m => m && m.isResponse && m.id);
+            if (!catName && latestResp && latestResp.id && Array.isArray(allEmails)) {
+                const matchById = allEmails.find(e => e && e.id === latestResp.id);
+                if (matchById && matchById.category) catName = matchById.category;
+            }
+            if (!catName && Array.isArray(allEmails)) {
+                const matchBySubject = allEmails.find(e => e && e.subject === subjRaw && e.category);
+                if (matchBySubject && matchBySubject.category) catName = matchBySubject.category;
+            }
+        } catch (_) {}
+        if (!catName) catName = 'Personal & Life Management';
+
+        const categoryClass = `category-${catName.toLowerCase().replace(/\s+/g, '-')}`;
+        const catStyle = getCategoryBadgeStyle(catName);
+        const catDisplay = escapeHtml(catName);
+
+        // Mirror the exact structure used in renderTodayEmailsList for visual parity
         return `
-            <label style="display:block; width:100%; box-sizing:border-box; clear:both; border:1px solid #e9ecef; border-radius:6px; padding:10px; margin-bottom:8px; background:#fafafa; white-space: normal;">
-                <div style="display:flex; align-items:center; gap:10px;">
-                    <input type="checkbox" id="today-thread-${i}" onchange="toggleTodayThread(${i}, this.checked)">
-                    <div style="flex:1 1 auto; min-width:0;">
-                        <div style="font-weight:600; color:#333; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${subj}</div>
-                        <div style="font-size:12px; color:#666;">${from} • ${formatDate(date)}</div>
-                        <div style="font-size:12px; color:#777; margin-top:4px;">${preview}</div>
-                    </div>
-                </div>
-            </label>
+            <div style="display: block !important; width: 100% !important; margin-bottom: 8px; clear: both;">
+                <label style="display: block !important; width: 100% !important; box-sizing: border-box; border: 1px solid #e9ecef; border-radius: 6px; padding: 10px; background: #fafafa; cursor: pointer;">
+                    <table style="width: 100%; border-collapse: collapse;">
+                        <tr>
+                            <td style="width: 30px; vertical-align: top; padding-right: 10px;">
+                                <input type="checkbox" id="today-thread-${i}" onchange="toggleTodayThread(${i}, this.checked)">
+                            </td>
+                            <td style="vertical-align: top;">
+                                <div style="font-weight:600; color:#333; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${subj}</div>
+                                <div style="font-size:12px; color:#666; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; margin-top: 2px;">${from} • ${formatDate(date)}</div>
+                                <div style="font-size:12px; color:#777; margin-top:4px; line-height:1.4;">${preview}</div>
+                                <div class="email-category ${categoryClass}" style="display:inline-block; padding:4px 8px; border-radius:12px; font-size:12px; font-weight:500; margin-top:6px; ${catStyle}">
+                                    ${catDisplay}
+                                </div>
+                            </td>
+                        </tr>
+                    </table>
+                </label>
+            </div>
         `;
     }).join('');
 }
@@ -10336,7 +10373,7 @@ categoriesState[index].name = newName;
 
                 // Replace placeholder with real answer
                 const answerText = (resp.ok && data && data.success && data.answer) ? data.answer : "I don't have enough information to answer that confidently.";
-                chat[chat.length - 1] = { role: 'assistant', content: answerText };
+                chat[chat.length - 1] = { role: 'assistant', content: normalizeChatContent(answerText) };
                 renderCategoryChat(true);
             } catch (e) {
                 console.error('askCategoryQuestion failed:', e);
@@ -10367,10 +10404,10 @@ function renderCategoryChat(scrollToEnd) {
                         const align = isUser ? 'flex-end' : 'flex-start';
                         const bg = isUser ? '#e3f2fd' : '#f8f9fa';
                         const border = isUser ? '#90caf9' : '#e9ecef';
-                        const safe = escapeHtml(m.content || '');
+                        const safe = escapeHtml(normalizeChatContent(m.content || ''));
                         return `
-                            <div style="display:flex; justify-content:${align}; margin:6px 0;">
-                                <div style="max-width:80%; white-space:pre-wrap; padding:8px 10px; border:1px solid ${border}; border-radius:8px; background:${bg}; color:#333;">
+                            <div style="display:flex; justify-content:${align}; margin:4px 0;">
+                                <div style="max-width:55%; white-space:pre-wrap; padding:6px 8px; border:1px solid ${border}; border-radius:6px; background:${bg}; color:#333; font-size:12.5px; line-height:1.35; text-indent:0;">
                                     ${safe}
                                 </div>
                             </div>
@@ -10659,7 +10696,34 @@ function resetCategoryChat() {
             if (modal) modal.style.display = 'none';
         }
 
-        /* HTML-escape utility (correctly encodes special chars) */
+        /* Normalize chat message content:
+   - Strip BOM and leading whitespace (including Unicode NBSP/space variants)
+   - Remove leading tabs/spaces at the start of EACH line (fixes "tab at beginning" issue)
+   - Collapse 3+ blank lines down to max 2 */
+function normalizeChatContent(text) {
+    try {
+        let s = String(text || '');
+
+        // Normalize non-breaking spaces to regular spaces first
+        s = s.replace(/\u00A0/g, ' ');
+
+        // Remove optional BOM and any leading whitespace at the very start (unicode aware)
+        s = s.replace(/^\uFEFF?/, '');
+        s = s.replace(/^[\s\u00A0\u1680\u2000-\u200B\u202F\u205F\u3000]+/, '');
+
+        // Remove leading spaces/tabs (including unicode spaces) on every line
+        s = s.replace(/^[\t \u00A0\u1680\u2000-\u200B\u202F\u205F\u3000]+/gm, '');
+
+        // Collapse excessive blank lines
+        s = s.replace(/\n{3,}/g, '\n\n');
+
+        return s;
+    } catch (_) {
+        return String(text || '');
+    }
+}
+
+/* HTML-escape utility (correctly encodes special chars) */
 function escapeHtml(s) {
     return String(s)
         .replace(/&/g, '&')
