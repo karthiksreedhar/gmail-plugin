@@ -2210,77 +2210,70 @@ app.post('/api/load-email-threads', async (req, res) => {
         };
         const after = formatDateForGmail(start);
         const before = formatDateForGmail(tomorrow);
-        const searchQuery = `from:${SENDING_EMAIL} in:sent after:${after} before:${before}`;
+        // New logic: include ALL threads you participated in that have a NEW message today
+        // 1) Search inbox for today's messages (any sender)
+        const searchQuery = `in:inbox after:${after} before:${before}`;
+        console.log(`Loading all email threads (new mail today) using query: ${searchQuery}`);
+        const inboxMessagesToday = await searchGmailEmails(searchQuery, 500);
 
-        console.log(`Loading all email threads from today using query: ${searchQuery}`);
+        // 2) Collect unique threadIds from today's inbox messages
+        const todaysThreadIds = new Set();
+        for (const msg of inboxMessagesToday) {
+          if (msg.threadId && !processedThreadIds.has(msg.threadId)) {
+            todaysThreadIds.add(msg.threadId);
+          }
+        }
 
-        const sentEmails = await searchGmailEmails(searchQuery, 200);
+        // 3) For each thread, load full thread and include it if:
+        //    - The thread contains at least one message dated today (inclusive of [start, before))
+        //    - You have participated in the thread (at least one message sent by CURRENT_USER_EMAIL or SENDING_EMAIL)
+        const me1 = (SENDING_EMAIL || CURRENT_USER_EMAIL || '').toLowerCase();
+        const me2 = (CURRENT_USER_EMAIL || '').toLowerCase();
 
-        for (const sentEmail of sentEmails) {
+        const isInTodayWindow = (iso) => {
           try {
-            if (processedThreadIds.has(sentEmail.threadId)) continue;
+            const d = new Date(iso);
+            return d >= start && d < tomorrow;
+          } catch { return false; }
+        };
 
-            const sentEmailData = await getGmailEmail(sentEmail.id);
+        for (const threadId of todaysThreadIds) {
+          try {
+            if (processedThreadIds.has(threadId)) continue;
 
-            // Keep replies only, consistent with previous behavior
-            const isReply = sentEmailData.subject.toLowerCase().startsWith('re:');
-            // Skip hidden threads/responses
-            const isHidden = HIDDEN_THREAD_IDS.has(`thread-${sentEmail.threadId}`) || HIDDEN_RESPONSE_IDS.has(sentEmailData.id);
-            if (isHidden) {
-              processedThreadIds.add(sentEmail.threadId);
-              continue;
-            }
-            if (!isReply) {
-              processedThreadIds.add(sentEmail.threadId);
-              continue;
-            }
-
-            // Check duplicates
-            const isDuplicateThread = existingEmailThreads.some(existing => 
-              existing.id === `thread-${sentEmail.threadId}` ||
-              existing.id === sentEmailData.id
-            );
-            const isDuplicateResponse = existingResponseEmails.some(existing =>
-              existing.id === sentEmailData.id
-            );
-            const isAlreadyAdded = uniqueThreads.some(added =>
-              added.id === `thread-${sentEmail.threadId}` ||
-              added.messages.some(msg => msg.id === sentEmailData.id)
-            );
-            if (isDuplicateThread || isDuplicateResponse || isAlreadyAdded) {
-              processedThreadIds.add(sentEmail.threadId);
+            // Skip hidden threads
+            if (HIDDEN_THREAD_IDS.has(`thread-${threadId}`)) {
+              processedThreadIds.add(threadId);
               continue;
             }
 
-            // Get thread to find original message
             const threadResponse = await gmail.users.threads.get({
               userId: 'me',
-              id: sentEmail.threadId
+              id: threadId
             });
+
             const threadMessages = threadResponse.data.messages || [];
-            const originalMessage = threadMessages.find(msg => {
-              const msgHeaders = msg.payload.headers;
-              const msgFrom = msgHeaders.find(h => h.name === 'From')?.value || '';
-              return !msgFrom.includes(CURRENT_USER_EMAIL);
-            });
-            if (!originalMessage) {
-              processedThreadIds.add(sentEmail.threadId);
+            if (!threadMessages.length) {
+              processedThreadIds.add(threadId);
               continue;
             }
 
-            const originalEmailData = await getGmailEmail(originalMessage.id);
-
-            // Build full thread with all messages (multi-email thread support)
+            // Build full thread with all messages
             const allMsgs = [];
+            let hasNewToday = false;
+            let hasParticipated = false;
+
             for (const msg of threadMessages) {
               try {
                 const data = await getGmailEmail(msg.id);
                 const toArr = (data.to || '').split(',').map(email => email.trim()).filter(Boolean);
                 const lowerFrom = (data.from || '').toLowerCase();
-                const me1 = (SENDING_EMAIL || CURRENT_USER_EMAIL || '').toLowerCase();
-                const me2 = (CURRENT_USER_EMAIL || '').toLowerCase();
                 const isResp = lowerFrom.includes(me1) || lowerFrom.includes(me2);
+                if (isResp) hasParticipated = true;
+                if (isInTodayWindow(data.date)) hasNewToday = true;
+
                 const cleanedBody = isResp ? await cleanResponseBody(data.body) : data.body;
+
                 allMsgs.push({
                   id: data.id,
                   from: data.from,
@@ -2294,25 +2287,61 @@ app.post('/api/load-email-threads', async (req, res) => {
                 console.error('Error building full thread message:', e);
               }
             }
-            allMsgs.sort((a, b) => new Date(a.date) - new Date(b.date));
-            const thread = {
-              id: `thread-${sentEmail.threadId}`,
-              subject: sentEmailData.subject,
-              messages: allMsgs
-            };
 
-            uniqueThreads.push(thread);
-            processedThreadIds.add(sentEmail.threadId);
+            // Only include threads with a new message today where the user has participated previously
+            if (!hasNewToday || !hasParticipated) {
+              processedThreadIds.add(threadId);
+              continue;
+            }
+
+            allMsgs.sort((a, b) => new Date(a.date) - new Date(b.date));
+
+            // Subject: take subject from latest message if available
+            const latest = allMsgs[allMsgs.length - 1];
+            const subjectForThread = latest?.subject || 'No Subject';
+
+            // Skip if any response in this thread is hidden
+            const hasHiddenResponse = allMsgs.some(m => m.isResponse && HIDDEN_RESPONSE_IDS.has(m.id));
+            if (hasHiddenResponse) {
+              processedThreadIds.add(threadId);
+              continue;
+            }
+
+            // De-dup against existing DB entries and in-batch
+            const threadKey = `thread-${threadId}`;
+            const isDuplicateThread = existingEmailThreads.some(existing =>
+              existing.id === threadKey ||
+              existing.id === latest?.id
+            );
+            const isDuplicateResponse = existingResponseEmails.some(existing =>
+              latest && existing.id === latest.id
+            );
+            const isAlreadyAdded = uniqueThreads.some(added =>
+              added.id === threadKey ||
+              (latest && added.messages.some(msg => msg.id === latest.id))
+            );
+            if (isDuplicateThread || isDuplicateResponse || isAlreadyAdded) {
+              processedThreadIds.add(threadId);
+              continue;
+            }
+
+            uniqueThreads.push({
+              id: threadKey,
+              subject: subjectForThread,
+              messages: allMsgs
+            });
+
+            processedThreadIds.add(threadId);
           } catch (emailErr) {
             console.error('Error processing today thread:', emailErr);
           }
         }
 
-        console.log(`Loaded ${uniqueThreads.length} threads from today`);
+        console.log(`Loaded ${uniqueThreads.length} threads from today (participated + new mail today)`);
         return res.json({
           success: true,
           threads: uniqueThreads,
-          message: `Loaded ${uniqueThreads.length} email threads from today`
+          message: `Loaded ${uniqueThreads.length} email threads with new messages today`
         });
       } catch (err) {
         console.error('Error loading today threads:', err);

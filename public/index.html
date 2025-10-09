@@ -2367,6 +2367,24 @@
         }
 
 
+        /* Ensure the card content area can expand within the inner flex row */
+        #loadTodayModal #todayThreadsList label > div,
+        #loadTodayModal #todayEmailsList label > div {
+            width: 100% !important;
+        }
+        #loadTodayModal #todayThreadsList label > div > div,
+        #loadTodayModal #todayEmailsList label > div > div {
+            flex: 1 1 auto !important;
+            min-width: 0 !important;
+            max-width: 100% !important;
+        }
+
+        /* Load Today controls spacing override: restore horizontal gaps killed by modal hardening */
+        #loadTodayModal .load-today-controls {
+            gap: 12px !important;
+            column-gap: 12px !important; /* explicit to override column-gap:0 !important */
+            row-gap: 12px;
+        }
     </style>
 </head>
 <body>
@@ -6010,7 +6028,7 @@ function ensureLoadTodayModal() {
                 <button class="close" onclick="closeLoadTodayModal()">&times;</button>
             </div>
         <div style="padding: 20px; display:flex; flex-direction:column; gap:16px; flex:1 1 auto; min-height:0;">
-                <div style="display:flex; gap:12px; justify-content:flex-end; margin-bottom:0; flex-wrap:wrap; position:sticky; top:0; z-index:1001; padding:12px 16px; background:#fff; border-bottom:2px solid #e9ecef; box-shadow:0 2px 8px rgba(0,0,0,0.1); flex-shrink:0;">
+                <div class="load-today-controls" style="display:flex; gap:12px; justify-content:flex-end; margin-bottom:0; flex-wrap:wrap; position:sticky; top:0; z-index:1001; padding:12px 16px; background:#fff; border-bottom:2px solid #e9ecef; box-shadow:0 2px 8px rgba(0,0,0,0.1); flex-shrink:0;">
                     <button class="carousel-nav-btn" style="background:#667eea; margin:0;" onclick="refreshLoadToday()">🔄 Refresh</button>
                     <button class="carousel-nav-btn" id="loadTodaySelectAllThreadsBtn" style="background:#28a745; margin:0;" onclick="selectAllTodayThreads()">Select All Threads</button>
                     <button class="carousel-nav-btn" id="loadTodaySelectAllEmailsBtn" style="background:#28a745; margin:0;" onclick="selectAllTodayEmails()">Select All Emails</button>
