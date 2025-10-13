@@ -8759,6 +8759,7 @@ function rejectCurrentEmail() {
                             ${itemsHtml}
                         </div>
                     </div>
+                    ${group.isOther ? '' : `
                     <div id="suggestions-anchor-${index}"></div>
                     <div class="facet-box" id="facet-box-${index}" style="border:1px solid #e9ecef;border-left:4px solid #6f42c1;border-radius:8px;background:#fff;padding:12px;margin-top:12px;margin-bottom:12px;">
                         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
@@ -8772,6 +8773,7 @@ function rejectCurrentEmail() {
                             <button class="carousel-nav-btn" style="background:#28a745;" onclick="applySelectedFacets(${index})">Add Threads</button>
                         </div>
                     </div>
+                    `}
                     ${group.isOther ? `
                         <div style="margin-bottom:12px; padding:14px; border: 2px dashed #17a2b8; border-radius:8px; background:#f0fbff;">
                             <button class="carousel-nav-btn" style="background:#17a2b8; font-size:16px; padding:10px 14px;" onclick="showAddKeywordsModal(${index})">➕ Add keywords to refine “Other”</button>
@@ -8780,8 +8782,10 @@ function rejectCurrentEmail() {
                     ` : ''}
                 `;
                 carousel.appendChild(slide);
-                try { renderFacetBoxForGroup(index); } catch (e) { console.error('Facet box render failed:', e); }
-                try { ensureSuggestionsUIForGroup(index); renderSuggestionsList(index); } catch (e) { console.error('Suggestions UI failed:', e); }
+                if (!group.isOther) {
+                    try { renderFacetBoxForGroup(index); } catch (e) { console.error('Facet box render failed:', e); }
+                    try { ensureSuggestionsUIForGroup(index); renderSuggestionsList(index); } catch (e) { console.error('Suggestions UI failed:', e); }
+                }
             });
 
             updateKeywordCarouselNavigation();
@@ -11110,6 +11114,10 @@ function getSuggestionsRef() {
 
 function ensureSuggestionsUIForGroup(idx) {
     try {
+        // Skip suggestions for the "Other" bucket
+        const grp = getWorkingGroup(idx);
+        if (grp && grp.isOther) return;
+
         const slide = document.getElementById(`keyword-slide-${idx}`);
         if (!slide) return;
         // Already created?
