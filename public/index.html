@@ -8749,7 +8749,18 @@ function rejectCurrentEmail() {
                     : `<div class="no-emails" style="padding: 16px;">No threads matched this keyword.</div>`;
 
                 slide.innerHTML = `
-                    <div class="facet-box" id="facet-box-${index}" style="border:1px solid #e9ecef;border-left:4px solid #6f42c1;border-radius:8px;background:#fff;padding:12px;margin-bottom:12px;">
+                    <div class="thread-preview">
+                        <div class="thread-subject">
+                            ${group.isOther 
+                                ? ('Other Threads (no keyword match) — ' + count + ' thread' + (count === 1 ? '' : 's'))
+                                : ('Keyword: ' + escapeHtml(group.name || '') + ' — ' + count + ' thread' + (count === 1 ? '' : 's'))}
+                        </div>
+                        <div class="thread-messages">
+                            ${itemsHtml}
+                        </div>
+                    </div>
+                    <div id="suggestions-anchor-${index}"></div>
+                    <div class="facet-box" id="facet-box-${index}" style="border:1px solid #e9ecef;border-left:4px solid #6f42c1;border-radius:8px;background:#fff;padding:12px;margin-top:12px;margin-bottom:12px;">
                         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
                             <div style="font-weight:600;color:#6f42c1;">Suggested Facets</div>
                             <button class="carousel-nav-btn" style="background:#6f42c1;" onclick="regenerateFacetsForGroup(${index})">Regenerate</button>
@@ -8767,16 +8778,6 @@ function rejectCurrentEmail() {
                             <div style="margin-top:6px; color:#0c5460; font-size:12px;">Add one or more keywords to break down the “Other” threads into new categories.</div>
                         </div>
                     ` : ''}
-                    <div class="thread-preview">
-                        <div class="thread-subject">
-                            ${group.isOther 
-                                ? ('Other Threads (no keyword match) — ' + count + ' thread' + (count === 1 ? '' : 's'))
-                                : ('Keyword: ' + escapeHtml(group.name || '') + ' — ' + count + ' thread' + (count === 1 ? '' : 's'))}
-                        </div>
-                        <div class="thread-messages">
-                            ${itemsHtml}
-                        </div>
-                    </div>
                 `;
                 carousel.appendChild(slide);
                 try { renderFacetBoxForGroup(index); } catch (e) { console.error('Facet box render failed:', e); }
@@ -11134,8 +11135,10 @@ function ensureSuggestionsUIForGroup(idx) {
             </div>
         `;
 
-        // Append below the thread preview
-        slide.appendChild(box);
+        // Append below the thread preview (prefer anchor if present)
+        const anchor = document.getElementById(`suggestions-anchor-${idx}`);
+        if (anchor) anchor.appendChild(box);
+        else slide.appendChild(box);
     } catch (e) {
         console.error('ensureSuggestionsUIForGroup failed:', e);
     }
@@ -11515,6 +11518,8 @@ function fieldContains(hay, needle) {
         function moveThreadsToGroup(threadIds, idx) {
             const ids = Array.from(new Set((threadIds || []).filter(Boolean)));
             if (!ids.length) return;
+
+            // Update working groups (source of truth)
             ids.forEach(id => {
                 // Allow threads to appear in multiple keyword groups; only remove from "Other"
                 removeThreadFromOtherOnly(id);
@@ -11522,6 +11527,49 @@ function fieldContains(hay, needle) {
             });
             // Rebuild "Other" so it only contains threads not present in any keyword group
             rebuildOtherGroup();
+
+            // Keep rendered keywordResults in sync so UI reflects additions immediately
+            try {
+                const groups = getWorkingGroupsRef();
+                const target = groups[idx];
+                const targetName = String(target?.name || '');
+                if (!Array.isArray(keywordResults)) window.keywordResults = (keywordResults = []);
+
+                // Ensure target group exists in keywordResults (insert before Other)
+                let rIdx = keywordResults.findIndex(kg => String(kg?.name || '').toLowerCase() === targetName.toLowerCase() && !kg.isOther);
+                if (rIdx === -1) {
+                    let otherIdx = keywordResults.findIndex(x => x && x.isOther);
+                    const insertIdx = otherIdx === -1 ? keywordResults.length : otherIdx;
+                    keywordResults.splice(insertIdx, 0, { name: targetName, threads: [] });
+                    rIdx = insertIdx;
+                }
+
+                const tgtKr = keywordResults[rIdx];
+                if (!Array.isArray(tgtKr.threads)) tgtKr.threads = [];
+                const have = new Set(tgtKr.threads.map(t => t && t.id).filter(Boolean));
+                const map = getThreadByIdRef();
+
+                ids.forEach(id => {
+                    const full = map.get(id);
+                    if (full && !have.has(id)) {
+                        tgtKr.threads.push(full);
+                    }
+                });
+
+                // Recompute "Other" bucket in keywordResults to exclude newly assigned threads
+                let otherIdx = keywordResults.findIndex(x => x && x.isOther);
+                if (otherIdx === -1) {
+                    keywordResults.push({ name: 'Other Threads', threads: [], isOther: true });
+                    otherIdx = keywordResults.length - 1;
+                }
+                const assigned = new Set();
+                keywordResults.forEach(gr => {
+                    if (!gr || gr.isOther || !Array.isArray(gr.threads)) return;
+                    gr.threads.forEach(t => { if (t && t.id) assigned.add(t.id); });
+                });
+                const allThreads = Array.isArray(keywordAllThreads) ? keywordAllThreads : [];
+                keywordResults[otherIdx].threads = allThreads.filter(t => t && t.id && !assigned.has(t.id));
+            } catch (_) {}
         }
 
         function rebuildOtherGroup() {
