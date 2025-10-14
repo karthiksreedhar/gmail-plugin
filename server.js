@@ -2379,11 +2379,17 @@ app.post('/api/load-email-threads', async (req, res) => {
           }
         }
 
-        console.log(`Loaded ${uniqueThreads.length} threads from today (participated + new mail today)`);
+        if (uniqueThreads.length === 0) {
+          console.warn(`[Load Priority] No threads loaded for ${isPriorityMode ? 'last 3 days (priority)' : 'today'}. Possible reasons: no new messages in the window, you did not participate in those threads, threads are hidden, or they were filtered out as duplicates. Query used: ${searchQuery}`);
+        } else {
+          console.log(`[Load Priority] Loaded ${uniqueThreads.length} threads (${isPriorityMode ? 'last 3 days priority' : 'today'})`);
+        }
         return res.json({
           success: true,
           threads: uniqueThreads,
-          message: `Loaded ${uniqueThreads.length} email threads with new messages today`
+          message: isPriorityMode
+            ? `Loaded ${uniqueThreads.length} email threads with new messages in the last 3 days (priority)`
+            : `Loaded ${uniqueThreads.length} email threads with new messages today`
         });
       } catch (err) {
         console.error('Error loading today threads:', err);
@@ -2693,7 +2699,7 @@ app.post('/api/fetch-more-emails', async (req, res) => {
         const before = formatDateForGmail(tomorrow);
         const searchQuery = `in:inbox ${isPriorityMode ? 'is:important ' : ''}after:${after} before:${before}`;
 
-        console.log(`Fetching all emails from today with query: ${searchQuery}`);
+        console.log(`[Load Priority] Fetching ${isPriorityMode ? 'priority (last 3 days)' : 'today'} emails with query: ${searchQuery}`);
 
         const emailMessages = await searchGmailEmails(searchQuery, 200);
         const uniqueEmails = [];
@@ -2730,11 +2736,17 @@ app.post('/api/fetch-more-emails', async (req, res) => {
           }
         }
 
-        console.log(`Successfully processed ${uniqueEmails.length} emails from today`);
+        if (uniqueEmails.length === 0) {
+          console.warn(`[Load Priority] No emails loaded for ${isPriorityMode ? 'last 3 days (priority)' : 'today'}. Gmail returned ${emailMessages.length} messages for query but ${uniqueEmails.length} unique after filtering (duplicates/existing). Query used: ${searchQuery}`);
+        } else {
+          console.log(`[Load Priority] Loaded ${uniqueEmails.length} ${isPriorityMode ? 'priority' : 'today'} emails`);
+        }
 
         return res.json({
           success: true,
-          message: `Fetched ${uniqueEmails.length} emails from today`,
+          message: isPriorityMode
+            ? `Fetched ${uniqueEmails.length} emails from last 3 days (priority)`
+            : `Fetched ${uniqueEmails.length} emails from today`,
           emails: uniqueEmails,
           fallback: false,
           fetchAttempts: 1
