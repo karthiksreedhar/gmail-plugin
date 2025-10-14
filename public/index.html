@@ -8401,10 +8401,12 @@ function rejectCurrentEmail() {
         }
         
         // Keyword Search modal (identical layout to User Guidelines, separate state)
-        let keywordGuidelines = [];
-        let keywordResults = [];
-        let keywordAllThreads = [];
-        let currentKeywordSlideIndex = 0;
+let keywordGuidelines = [];
+let keywordResults = [];
+let keywordAllThreads = [];
+let currentKeywordSlideIndex = 0;
+// Selection store for "Other" group threads in the Keyword Results carousel
+let selectedOtherThreadIds = new Set();
 
         function ensureKeywordSearchModal() {
             let modal = document.getElementById('keywordSearchModal');
@@ -8591,6 +8593,9 @@ function rejectCurrentEmail() {
             const counter = document.getElementById('keywordCarouselCounter');
             if (!carousel || !info || !counter) return;
 
+            // Enforce "Other" as the last page before rendering
+            ensureOtherLastOrder();
+
             // Precompute membership map: threadId -> Set of group names (non-Other) where the thread appears
             const membershipById = new Map();
             try {
@@ -8702,9 +8707,11 @@ function rejectCurrentEmail() {
                                 <span class="thread-meta" style="color:#666; font-weight:400;"> (${msgs.length} message${msgs.length === 1 ? '' : 's'})</span>
                                 ${alsoInHtml}
                             </span>
-                            ${!isOtherGroup ? `<span style="display:flex; gap:6px;">
+                            ${isOtherGroup ? `<span style="display:flex; gap:6px; align-items:center;">
+                                <input type="checkbox" class="thread-select-checkbox" style="margin-left:8px;" onchange="toggleOtherThreadSelection('${safeId}', this.checked)" ${selectedOtherThreadIds && selectedOtherThreadIds.has(thread.id) ? 'checked' : ''} onclick="event.stopPropagation()">
+                            </span>` : `<span style="display:flex; gap:6px;">
                                 <button class="carousel-nav-btn" style="background:#dc3545; padding:4px 8px; font-size:12px;" onclick="removeThreadFromKeywordGroupByName('${String(currentGroupName || '').replace(/'/g, "\\'")}', '${safeId}'); event.preventDefault(); event.stopPropagation();">Remove</button>
-                            </span>` : ''}
+                            </span>`}
                         </summary>
                         <div class="thread-messages" style="margin-top:10px;">
                             ${msgsHtml || '<div class="no-emails" style="padding: 12px;">No messages available.</div>'}
@@ -8755,6 +8762,11 @@ function rejectCurrentEmail() {
                                 ? ('Other Threads (no keyword match) — ' + count + ' thread' + (count === 1 ? '' : 's'))
                                 : ('Keyword: ' + escapeHtml(group.name || '') + ' — ' + count + ' thread' + (count === 1 ? '' : 's'))}
                         </div>
+                        ${group.isOther ? `
+                        <div style="display:flex; justify-content:flex-end; align-items:center; gap:8px; margin-bottom:8px;">
+                            <button class="carousel-nav-btn" id="other-move-btn-${index}" onclick="openMoveSelectedModal(${index})" disabled>Move Selected</button>
+                        </div>
+                        ` : ''}
                         <div class="thread-messages">
                             ${itemsHtml}
                         </div>
@@ -8785,6 +8797,8 @@ function rejectCurrentEmail() {
                 if (!group.isOther) {
                     try { renderFacetBoxForGroup(index); } catch (e) { console.error('Facet box render failed:', e); }
                     try { ensureSuggestionsUIForGroup(index); renderSuggestionsList(index); } catch (e) { console.error('Suggestions UI failed:', e); }
+                } else {
+                    try { updateOtherMoveButton(index); } catch (e) { console.error('Other move button update failed:', e); }
                 }
             });
 
@@ -8820,6 +8834,141 @@ function rejectCurrentEmail() {
             const nextBtn = document.getElementById('keywordNextBtn');
             if (prevBtn) prevBtn.disabled = currentKeywordSlideIndex === 0;
             if (nextBtn) nextBtn.disabled = currentKeywordSlideIndex === keywordResults.length - 1;
+        }
+
+        // ===== Move Selected (from Other) =====
+        function toggleOtherThreadSelection(threadId, checked) {
+            try {
+                if (!threadId) return;
+                if (checked) selectedOtherThreadIds.add(threadId);
+                else selectedOtherThreadIds.delete(threadId);
+                // Update the move button on the current slide
+                updateOtherMoveButton(currentKeywordSlideIndex);
+            } catch (e) {
+                console.error('toggleOtherThreadSelection failed:', e);
+            }
+        }
+
+        function updateOtherMoveButton(idx) {
+            try {
+                // Enable/disable solely based on selection count for the rendered "Other" slide index
+                const btn = document.getElementById(`other-move-btn-${idx}`);
+                if (!btn) return;
+                const count = (selectedOtherThreadIds instanceof Set) ? selectedOtherThreadIds.size : 0;
+                btn.disabled = count === 0;
+                btn.textContent = count === 0 ? 'Move Selected' : `Move ${count} Selected`;
+            } catch (e) {
+                console.error('updateOtherMoveButton failed:', e);
+            }
+        }
+
+        function ensureMoveThreadsModal() {
+            let modal = document.getElementById('moveThreadsModal');
+            if (modal) return modal;
+            modal = document.createElement('div');
+            modal.id = 'moveThreadsModal';
+            modal.className = 'modal';
+            modal.innerHTML = `
+                <div class="modal-content" style="max-width: 520px; max-height: 70vh;">
+                    <div class="modal-header" style="border-bottom: 2px solid #17a2b8;">
+                        <h2 class="modal-title">Move Selected Threads</h2>
+                        <button class="close" onclick="closeMoveThreadsModal()">&times;</button>
+                    </div>
+                    <div style="padding:16px;">
+                        <div style="margin-bottom:12px; color:#666; font-size:13px;">
+                            Choose a destination category to move the selected threads from “Other”.
+                        </div>
+                        <div class="form-group">
+                            <label for="moveTargetSelect">Destination Category</label>
+                            <select id="moveTargetSelect" style="width:100%; padding:10px; border:1px solid #ddd; border-radius:6px; font-size:14px;"></select>
+                        </div>
+                    </div>
+                    <div style="display:flex; justify-content:center; gap:12px; padding:12px 16px; border-top:1px solid #e9ecef;">
+                        <button class="carousel-btn carousel-btn-cancel" onclick="closeMoveThreadsModal()">Cancel</button>
+                        <button class="carousel-btn carousel-btn-add" onclick="applyMoveSelected()">Move</button>
+                    </div>
+                </div>
+            `;
+            modal.addEventListener('click', (ev) => { if (ev.target === modal) closeMoveThreadsModal(); });
+            document.body.appendChild(modal);
+            return modal;
+        }
+
+        function closeMoveThreadsModal() {
+            const modal = document.getElementById('moveThreadsModal');
+            if (modal) modal.style.display = 'none';
+        }
+
+        function openMoveSelectedModal(fromIdx) {
+            try {
+                // Only open if there is at least one selection
+                if (!selectedOtherThreadIds || selectedOtherThreadIds.size === 0) {
+                    showErrorPopup('Please select at least one thread in “Other”.', 'No Selection');
+                    return;
+                }
+                window.__currentMoveFromIdx = fromIdx;
+                const modal = ensureMoveThreadsModal();
+                // Populate destination list from working groups (exclude Other)
+                const sel = modal.querySelector('#moveTargetSelect');
+                const groups = getWorkingGroupsRef();
+                const options = (groups || [])
+                    .filter(g => g && !g.isOther && g.name)
+                    .map(g => String(g.name));
+                sel.innerHTML = options.length
+                    ? options.map(n => `<option value="${n.replace(/"/g, '"')}">${n}</option>`).join('')
+                    : '<option value="" disabled>No categories available</option>';
+                modal.style.display = 'block';
+            } catch (e) {
+                console.error('openMoveSelectedModal failed:', e);
+            }
+        }
+
+        function applyMoveSelected() {
+            try {
+                const modal = document.getElementById('moveThreadsModal');
+                const sel = modal ? modal.querySelector('#moveTargetSelect') : null;
+                const targetName = sel ? String(sel.value || '').trim() : '';
+                if (!targetName) {
+                    showErrorPopup('Please choose a destination category.', 'Missing Destination');
+                    return;
+                }
+                const groups = getWorkingGroupsRef();
+                const targetIdx = (groups || []).findIndex(g => String(g?.name || '').toLowerCase() === targetName.toLowerCase());
+                if (targetIdx === -1) {
+                    showErrorPopup('Destination category not found.', 'Invalid Destination');
+                    return;
+                }
+                const ids = Array.from(selectedOtherThreadIds);
+                if (!ids.length) {
+                    closeMoveThreadsModal();
+                    return;
+                }
+
+                // Move and refresh
+                moveThreadsToGroup(ids, targetIdx);
+                selectedOtherThreadIds.clear();
+
+                // Re-render carousel and jump to the "Other" slide in the rendered results
+                populateKeywordSearchResultsCarousel();
+                try {
+                    const otherIdx = Array.isArray(window.keywordResults)
+                        ? window.keywordResults.findIndex(g => g && g.isOther)
+                        : -1;
+                    currentKeywordSlideIndex = otherIdx >= 0
+                        ? otherIdx
+                        : Math.max(0, (window.keywordResults || []).length - 1);
+                } catch (_) {
+                    currentKeywordSlideIndex = Math.max(0, (window.keywordResults || []).length - 1);
+                }
+                updateKeywordCarouselDisplay();
+
+                try { updateOtherMoveButton(currentKeywordSlideIndex); } catch (_) {}
+                closeMoveThreadsModal();
+                showSuccessPopup('Selected threads moved successfully.', 'Moved');
+            } catch (e) {
+                console.error('applyMoveSelected failed:', e);
+                showErrorPopup('Failed to move selected threads. Please try again.', 'Move Failed');
+            }
         }
 
         /* ===== Add Keywords from “Other” workflow ===== */
@@ -10859,6 +11008,26 @@ function escapeRegExp(s) {
             return threadById instanceof Map ? threadById : new Map();
         }
 
+        // Ensure "Other" group is the last slide in both the working groups and rendered results
+        function ensureOtherLastOrder() {
+            try {
+                if (Array.isArray(window.keywordWorkingGroups)) {
+                    window.keywordWorkingGroups = window.keywordWorkingGroups
+                        .slice()
+                        .sort((a, b) => ((a && a.isOther) ? 1 : 0) - ((b && b.isOther) ? 1 : 0));
+                    keywordWorkingGroups = window.keywordWorkingGroups;
+                }
+                if (Array.isArray(window.keywordResults)) {
+                    window.keywordResults = window.keywordResults
+                        .slice()
+                        .sort((a, b) => ((a && a.isOther) ? 1 : 0) - ((b && b.isOther) ? 1 : 0));
+                    keywordResults = window.keywordResults;
+                }
+            } catch (e) {
+                console.warn('ensureOtherLastOrder failed:', e);
+            }
+        }
+
         function getWorkingGroup(idx) {
             const groups = getWorkingGroupsRef();
             return groups[idx] || { name: '', threads: [] };
@@ -11577,6 +11746,9 @@ function fieldContains(hay, needle) {
                 });
                 const allThreads = Array.isArray(keywordAllThreads) ? keywordAllThreads : [];
                 keywordResults[otherIdx].threads = allThreads.filter(t => t && t.id && !assigned.has(t.id));
+
+                // Keep "Other" last after updates
+                ensureOtherLastOrder();
             } catch (_) {}
         }
 
@@ -11656,6 +11828,9 @@ function fieldContains(hay, needle) {
                         const allThreads = Array.isArray(keywordAllThreads) ? keywordAllThreads : [];
                         keywordResults[otherIdx].threads = allThreads.filter(t => t && t.id && !assigned.has(t.id));
                     }
+
+                    // Keep "Other" last after removal
+                    ensureOtherLastOrder();
                 } catch (_) {}
 
                 // Rebuild "Other" so any thread not present in any keyword group moves there
