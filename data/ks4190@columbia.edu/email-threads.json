@@ -1664,6 +1664,648 @@
           "isResponse": false
         }
       ]
+    },
+    {
+      "id": "thread-19970c26270aeae7",
+      "subject": "Re: FWK - json results from last night game",
+      "from": "Karthik Sreedhar <ks4190@columbia.edu>",
+      "originalFrom": "Shlomo <shlomosavyon@gmail.com>",
+      "date": "Tue, 23 Sep 2025 08:39:19 -0400",
+      "body": "Hi,\n\nThanks for sharing, I got a little unexpectedly busy this week, but will\nwork on a script by the end of the week and let you know as I progress/if I\nhave any other questions!\n\nThanks,\nKarthik",
+      "originalBody": "The below is the latest prompt template\n\nGenerate a single HTML report of player charts from this JSON file.\n\nGeneral formatting\n\n- Title = player name once (no initials).\n\n- Everyone starts at 1000 and show the start time under the x-axis at the\nfirst hand.\n\n- Mark highest (black), lowest (red), and the final score (black if ≥1000,\nred if <1000).\n\n- At the highest point also add caption (small, left-aligned,\nword-per-line):\nThe\nMost\n#\nFor\nThe\nnight\n\n- At the lowest point add caption (small, left-aligned, word-per-line, in\nred):\n\nThe\nLowest\n#\nFor\nThe\nnight\n\n- X-axis = EST with ticks every 20 minutes.\n\n- Y-axis = ‘Points at end of every hand’ from 350 to 1450 in steps of 100.\n\n- Remove any “Matplotlib Chart” text.\n\n- Output a single self-contained HTML file (charts embedded as base64 PNG).\n\n- One section per player, sorted alphabetically.\n\nEvent annotations (smaller fonts, stacked, left-aligned, no overlaps)\n\n- Use small, non-bold font for all annotations (game names, Scoops, Quads,\nStraight Flushes, deltas).\n\n- Game names must be stacked one word per line and left-aligned.\n\n- Placement rules:\n\n   • Wins (Δ > 50) → place above the line.\n\n   • Losses (Δ < -50) → place below the line.\n\n- Always avoid overlapping labels: stagger left/right, jitter vertically,\nand use angled arrows if crowded.\n\n- Show delta under the game name, stacked: e.g.\n\nFifty\nThree\n2\nRows\n+93\nScoops - Mark scoops as stacked label:\nScoop\n+<points>\nHH:M\n- Prefer below the line if space, otherwise above.\n- Include the exact EST time.\n\nQuads\n\n- For Quads, show the actual rank repeated four times, stacked, with points\nand time, e.g.:\n\n   KKKK\n\n   +36\n\n   23:28\n\n- Parse from hand data, not just defaulting to AAAA.\n\nStraight Flush\n- Show as stacked, e.g.:\nSF to Q\n+72\n22:14\n\n- If top card < Q, just say “Straight Flush”.\n\n- Always include points and time.\n\nImplementation details\n\n- Never overlap labels or arrows; if space is tight, angle arrows outward\nand push labels left/right.\n\n- All labels must remain readable and uncluttered.",
+      "responseId": "1997695e805f94da",
+      "messages": [
+        {
+          "id": "19970c26270aeae7",
+          "from": "Shlomo <shlomosavyon@gmail.com>",
+          "to": [
+            "\"ks4190@columbia.edu\" <ks4190@columbia.edu>"
+          ],
+          "date": "Mon, 22 Sep 2025 05:29:22 -0400",
+          "subject": "FWK - json results from last night game",
+          "body": "The below is the latest prompt template\n\nGenerate a single HTML report of player charts from this JSON file.\n\nGeneral formatting\n\n- Title = player name once (no initials).\n\n- Everyone starts at 1000 and show the start time under the x-axis at the\nfirst hand.\n\n- Mark highest (black), lowest (red), and the final score (black if ≥1000,\nred if <1000).\n\n- At the highest point also add caption (small, left-aligned,\nword-per-line):\nThe\nMost\n#\nFor\nThe\nnight\n\n- At the lowest point add caption (small, left-aligned, word-per-line, in\nred):\n\nThe\nLowest\n#\nFor\nThe\nnight\n\n- X-axis = EST with ticks every 20 minutes.\n\n- Y-axis = ‘Points at end of every hand’ from 350 to 1450 in steps of 100.\n\n- Remove any “Matplotlib Chart” text.\n\n- Output a single self-contained HTML file (charts embedded as base64 PNG).\n\n- One section per player, sorted alphabetically.\n\nEvent annotations (smaller fonts, stacked, left-aligned, no overlaps)\n\n- Use small, non-bold font for all annotations (game names, Scoops, Quads,\nStraight Flushes, deltas).\n\n- Game names must be stacked one word per line and left-aligned.\n\n- Placement rules:\n\n   • Wins (Δ > 50) → place above the line.\n\n   • Losses (Δ < -50) → place below the line.\n\n- Always avoid overlapping labels: stagger left/right, jitter vertically,\nand use angled arrows if crowded.\n\n- Show delta under the game name, stacked: e.g.\n\nFifty\nThree\n2\nRows\n+93\nScoops - Mark scoops as stacked label:\nScoop\n+<points>\nHH:M\n- Prefer below the line if space, otherwise above.\n- Include the exact EST time.\n\nQuads\n\n- For Quads, show the actual rank repeated four times, stacked, with points\nand time, e.g.:\n\n   KKKK\n\n   +36\n\n   23:28\n\n- Parse from hand data, not just defaulting to AAAA.\n\nStraight Flush\n- Show as stacked, e.g.:\nSF to Q\n+72\n22:14\n\n- If top card < Q, just say “Straight Flush”.\n\n- Always include points and time.\n\nImplementation details\n\n- Never overlap labels or arrows; if space is tight, angle arrows outward\nand push labels left/right.\n\n- All labels must remain readable and uncluttered.",
+          "isResponse": false
+        },
+        {
+          "id": "1997695e805f94da",
+          "from": "Karthik Sreedhar <ks4190@columbia.edu>",
+          "to": [
+            "ShlomoSavyon@gmail.com"
+          ],
+          "date": "Tue, 23 Sep 2025 08:39:19 -0400",
+          "subject": "Re: FWK - json results from last night game",
+          "body": "Hi,\n\nThanks for sharing, I got a little unexpectedly busy this week, but will\nwork on a script by the end of the week and let you know as I progress/if I\nhave any other questions!\n\nThanks,\nKarthik",
+          "isResponse": true
+        }
+      ]
+    },
+    {
+      "id": "thread-19971a3bf3b67416",
+      "subject": "Re:",
+      "from": "Karthik Sreedhar <ks4190@columbia.edu>",
+      "originalFrom": "Lydia Chilton <chilton@cs.columbia.edu>",
+      "date": "Mon, 22 Sep 2025 09:47:45 -0400",
+      "body": "Sorry just saw the invite, yes that works!",
+      "originalBody": "still come to the meeting. Even half baked I want to hear how it's going -\nmainly so I don't forget what's going on :)\n\nGroup is feedback for th others is also very helpful. We can probably keep\nthe meeting short.\n\nTomorrow works! How about 9:30 NYC time?\n\nOn Mon, Sep 22, 2025 at 9:36 AM Karthik Sreedhar <ks4190@columbia.edu>\nwrote:\n\n> Hi,\n>\n> I’m still working on the categorization recursive search, I wouldn’t have\n> much to show today — I can still join the meeting if that would be helpful\n> but if possible do you have time tomorrow to chat? It can be very brief,\n> just for me to quickly have you run the process so I can gauge where it is.\n>\n> Thanks,\n> Karthik",
+      "responseId": "19971ae58d485c5e",
+      "messages": [
+        {
+          "id": "19971a3bf3b67416",
+          "from": "Karthik Sreedhar <ks4190@columbia.edu>",
+          "to": [
+            "\"Lydia B. Chilton\" <lc3251@columbia.edu>"
+          ],
+          "date": "Mon, 22 Sep 2025 09:36:09 -0400",
+          "subject": "No Subject",
+          "body": "Hi,\n\nI’m still working on the categorization recursive search, I wouldn’t have much to show today — I can still join the meeting if that would be helpful but if possible do you have time tomorrow to chat? It can be very brief, just for me to quickly have you run the process so I can gauge where it is.\n\nThanks,\nKarthik",
+          "isResponse": true
+        },
+        {
+          "id": "19971aa40031b43f",
+          "from": "Lydia Chilton <chilton@cs.columbia.edu>",
+          "to": [
+            "Karthik Sreedhar <ks4190@columbia.edu>"
+          ],
+          "date": "Mon, 22 Sep 2025 09:43:13 -0400",
+          "subject": "Re:",
+          "body": "still come to the meeting. Even half baked I want to hear how it's going -\nmainly so I don't forget what's going on :)\n\nGroup is feedback for th others is also very helpful. We can probably keep\nthe meeting short.\n\nTomorrow works! How about 9:30 NYC time?\n\nOn Mon, Sep 22, 2025 at 9:36 AM Karthik Sreedhar <ks4190@columbia.edu>\nwrote:\n\n> Hi,\n>\n> I’m still working on the categorization recursive search, I wouldn’t have\n> much to show today — I can still join the meeting if that would be helpful\n> but if possible do you have time tomorrow to chat? It can be very brief,\n> just for me to quickly have you run the process so I can gauge where it is.\n>\n> Thanks,\n> Karthik",
+          "isResponse": false
+        },
+        {
+          "id": "19971ade049f2ac0",
+          "from": "Karthik Sreedhar <ks4190@columbia.edu>",
+          "to": [
+            "Lydia Chilton <chilton@cs.columbia.edu>"
+          ],
+          "date": "Mon, 22 Sep 2025 09:47:08 -0400",
+          "subject": "Re:",
+          "body": "Ok will join! And 9:30 AM, correct? But PM also works if that’s easier for you.",
+          "isResponse": true
+        },
+        {
+          "id": "19971ae58d485c5e",
+          "from": "Karthik Sreedhar <ks4190@columbia.edu>",
+          "to": [
+            "Lydia Chilton <chilton@cs.columbia.edu>"
+          ],
+          "date": "Mon, 22 Sep 2025 09:47:45 -0400",
+          "subject": "Re:",
+          "body": "Sorry just saw the invite, yes that works!",
+          "isResponse": true
+        }
+      ]
+    },
+    {
+      "id": "thread-1995edabdec913b2",
+      "subject": "Re: random feature request for gmail twin",
+      "from": "Karthik Sreedhar <ks4190@columbia.edu>",
+      "originalFrom": "Lydia Chilton <chilton@cs.columbia.edu>",
+      "date": "Thu, 18 Sep 2025 19:30:39 -0400",
+      "body": "Sounds good ! I spent today working on letting the user put in categories they want , tomorrow morning before our meeting I’ll try some more to see if I can automate it, will keep this in mind!",
+      "originalBody": "I recently submitted a grant for TRI with Andrew Head. Of course, we\nwaiting until the last minute. Most of our history of collaboration is in\nmy inbox.\n\nI'd love to be able to 1) find all the emails related to the grant and 2)\nanalyze them to see how and went we actually did the work... so for next\ntime I could have a better estimate of the time it takes and our cadence\nfor working.\n\nNot necessarily an immediate thing, just a goal to keep on the list :)",
+      "responseId": "1995f2a9ae5f45f4",
+      "messages": [
+        {
+          "id": "1995edabdec913b2",
+          "from": "Lydia Chilton <chilton@cs.columbia.edu>",
+          "to": [
+            "Karthik Sreedhar <ks4190@columbia.edu>"
+          ],
+          "date": "Thu, 18 Sep 2025 18:03:21 -0400",
+          "subject": "random feature request for gmail twin",
+          "body": "I recently submitted a grant for TRI with Andrew Head. Of course, we\nwaiting until the last minute. Most of our history of collaboration is in\nmy inbox.\n\nI'd love to be able to 1) find all the emails related to the grant and 2)\nanalyze them to see how and went we actually did the work... so for next\ntime I could have a better estimate of the time it takes and our cadence\nfor working.\n\nNot necessarily an immediate thing, just a goal to keep on the list :)",
+          "isResponse": false
+        },
+        {
+          "id": "1995f2a9ae5f45f4",
+          "from": "Karthik Sreedhar <ks4190@columbia.edu>",
+          "to": [
+            "Lydia Chilton <chilton@cs.columbia.edu>"
+          ],
+          "date": "Thu, 18 Sep 2025 19:30:39 -0400",
+          "subject": "Re: random feature request for gmail twin",
+          "body": "Sounds good ! I spent today working on letting the user put in categories they want , tomorrow morning before our meeting I’ll try some more to see if I can automate it, will keep this in mind!",
+          "isResponse": true
+        }
+      ]
+    },
+    {
+      "id": "thread-198e70048730ad24",
+      "subject": "Re: Canceled event: Post DAPlab - riya karthik lydia @ Tue Aug 26, 2025 2pm - 3pm (EDT) (Karthik Sreedhar)",
+      "from": "Karthik Sreedhar <ks4190@columbia.edu>",
+      "originalFrom": "\"Lydia B. Chilton\" <lc3251@columbia.edu>",
+      "date": "Tue, 26 Aug 2025 12:09:53 -0400",
+      "body": "Honestly I can actually probably do this time, I woke up a little unwell and am not sure if I’m going to make it to orientation - but I can definitely join via zoom from home!",
+      "originalBody": "This event has been canceled and removed from your calendar.\n\nPost DAPlab - riya karthik lydia\nTuesday Aug 26, 2025 ⋅ 2pm – 3pm\nEastern Time - New York\n\nJoin Zoom Meeting\nhttps://columbiauniversity.zoom.us/j/91536754408?pwd=Oe9qD3CXdkDtMWP5eyNUqWh8yRjO7O.1&jst=2 \n\t\nJoin by phone\n(US) +1 669-900-6833\npasscode: 281244\n\t\nJoin using SIP\n91536754408@zoomcrc.com\npasscode: 281244\n\nJoining instructions\nhttps://urldefense.proofpoint.com/v2/url?u=https-3A__www.google.com_url-3Fq-3Dhttps-3A__applications.zoom.us_addon_invitation_detail-3FmeetingUuid-253DBZPcZn4WSVC4oMKGmNiZ6A-25253D-25253D-2526signature-253D691569a4972328b0bae52db349bf22c946e9e1d5236e771d897717ce351f991a-2526v-253D1-26sa-3DD-26source-3Dcalendar-26usg-3DAOvVaw1bvWzGXOW-2DfJ-2DlCHtsOeNw&d=DwIGaQ&c=009klHSCxuh5AI1vNQzSO0KGjl4nbi2Q0M1QLJX9BeE&r=2WR0ko0o4Val5uK--6ILz02ebCRgynFBUs9x2LG9Eeg&m=RnfulDLiUWb_obUz7FV5dStGYwQi6X0Ja3ravEnAdMa-ZrGx_iMLnSMR2BflAXxt&s=pNOVBJwnqbsEc5qiQcSMWS4MFOXR2I_nAabVbauzmKQ&e= \n\t\nJoining notes\nMeeting host: lc3251@columbia.edu\n\nJoin Zoom Meeting:\nhttps://columbiauniversity.zoom.us/j/91536754408?pwd=Oe9qD3CXdkDtMWP5eyNUqWh8yRjO7O.1&jst=2 \n\nOrganizer\nLydia B. Chilton\nlc3251@columbia.edu\n\nGuests\nLydia B. Chilton - organizer\nKarthik Sreedhar\nRiya Sahni\n\n~~//~~\nInvitation from Google Calendar: https://calendar.google.com/calendar/ \n\nYou are receiving this email because you are subscribed to calendar  \nnotifications. To stop receiving these emails, go to  \nhttps://calendar.google.com/calendar/r/settings , select this calendar, and  \nchange \"Other notifications\".\n\nForwarding this invitation could allow any recipient to send a response to  \nthe organizer, be added to the guest list, invite others regardless of  \ntheir own invitation status, or modify your RSVP.\n\nLearn more https://urldefense.proofpoint.com/v2/url?u=https-3A__support.google.com_calendar_answer_37135-23forwarding&d=DwIGaQ&c=009klHSCxuh5AI1vNQzSO0KGjl4nbi2Q0M1QLJX9BeE&r=2WR0ko0o4Val5uK--6ILz02ebCRgynFBUs9x2LG9Eeg&m=RnfulDLiUWb_obUz7FV5dStGYwQi6X0Ja3ravEnAdMa-ZrGx_iMLnSMR2BflAXxt&s=yERsm419m5_0N_R43zrauMZh6Sxdjxl1AbGKm-I6Ixk&e=",
+      "responseId": "198e724caa18c886",
+      "messages": [
+        {
+          "id": "198e70048730ad24",
+          "from": "\"Lydia B. Chilton\" <lc3251@columbia.edu>",
+          "to": [
+            "Karthik Sreedhar <ks4190@columbia.edu>"
+          ],
+          "date": "Tue, 26 Aug 2025 15:30:08 +0000",
+          "subject": "Canceled event: Post DAPlab - riya karthik lydia @ Tue Aug 26, 2025 2pm - 3pm (EDT) (Karthik Sreedhar)",
+          "body": "This event has been canceled and removed from your calendar.\n\nPost DAPlab - riya karthik lydia\nTuesday Aug 26, 2025 ⋅ 2pm – 3pm\nEastern Time - New York\n\nJoin Zoom Meeting\nhttps://columbiauniversity.zoom.us/j/91536754408?pwd=Oe9qD3CXdkDtMWP5eyNUqWh8yRjO7O.1&jst=2 \n\t\nJoin by phone\n(US) +1 669-900-6833\npasscode: 281244\n\t\nJoin using SIP\n91536754408@zoomcrc.com\npasscode: 281244\n\nJoining instructions\nhttps://urldefense.proofpoint.com/v2/url?u=https-3A__www.google.com_url-3Fq-3Dhttps-3A__applications.zoom.us_addon_invitation_detail-3FmeetingUuid-253DBZPcZn4WSVC4oMKGmNiZ6A-25253D-25253D-2526signature-253D691569a4972328b0bae52db349bf22c946e9e1d5236e771d897717ce351f991a-2526v-253D1-26sa-3DD-26source-3Dcalendar-26usg-3DAOvVaw1bvWzGXOW-2DfJ-2DlCHtsOeNw&d=DwIGaQ&c=009klHSCxuh5AI1vNQzSO0KGjl4nbi2Q0M1QLJX9BeE&r=2WR0ko0o4Val5uK--6ILz02ebCRgynFBUs9x2LG9Eeg&m=RnfulDLiUWb_obUz7FV5dStGYwQi6X0Ja3ravEnAdMa-ZrGx_iMLnSMR2BflAXxt&s=pNOVBJwnqbsEc5qiQcSMWS4MFOXR2I_nAabVbauzmKQ&e= \n\t\nJoining notes\nMeeting host: lc3251@columbia.edu\n\nJoin Zoom Meeting:\nhttps://columbiauniversity.zoom.us/j/91536754408?pwd=Oe9qD3CXdkDtMWP5eyNUqWh8yRjO7O.1&jst=2 \n\nOrganizer\nLydia B. Chilton\nlc3251@columbia.edu\n\nGuests\nLydia B. Chilton - organizer\nKarthik Sreedhar\nRiya Sahni\n\n~~//~~\nInvitation from Google Calendar: https://calendar.google.com/calendar/ \n\nYou are receiving this email because you are subscribed to calendar  \nnotifications. To stop receiving these emails, go to  \nhttps://calendar.google.com/calendar/r/settings , select this calendar, and  \nchange \"Other notifications\".\n\nForwarding this invitation could allow any recipient to send a response to  \nthe organizer, be added to the guest list, invite others regardless of  \ntheir own invitation status, or modify your RSVP.\n\nLearn more https://urldefense.proofpoint.com/v2/url?u=https-3A__support.google.com_calendar_answer_37135-23forwarding&d=DwIGaQ&c=009klHSCxuh5AI1vNQzSO0KGjl4nbi2Q0M1QLJX9BeE&r=2WR0ko0o4Val5uK--6ILz02ebCRgynFBUs9x2LG9Eeg&m=RnfulDLiUWb_obUz7FV5dStGYwQi6X0Ja3ravEnAdMa-ZrGx_iMLnSMR2BflAXxt&s=yERsm419m5_0N_R43zrauMZh6Sxdjxl1AbGKm-I6Ixk&e=",
+          "isResponse": false
+        },
+        {
+          "id": "198e724caa18c886",
+          "from": "Karthik Sreedhar <ks4190@columbia.edu>",
+          "to": [
+            "\"Lydia B. Chilton\" <lc3251@columbia.edu>"
+          ],
+          "date": "Tue, 26 Aug 2025 12:09:53 -0400",
+          "subject": "Re: Canceled event: Post DAPlab - riya karthik lydia @ Tue Aug 26, 2025 2pm - 3pm (EDT) (Karthik Sreedhar)",
+          "body": "Honestly I can actually probably do this time, I woke up a little unwell and am not sure if I’m going to make it to orientation - but I can definitely join via zoom from home!",
+          "isResponse": true
+        }
+      ]
+    },
+    {
+      "id": "thread-1989a52784e2307b",
+      "subject": "Re: Fw: Invitation from Carson at 110-114 Ridge St",
+      "from": "Karthik Sreedhar <ks4190@columbia.edu>",
+      "originalFrom": "Sreedhar Sivakumaran <sreedhar_sivakumaran@yahoo.com>",
+      "date": "Mon, 11 Aug 2025 14:20:12 -0400",
+      "body": "thank you, i think i get all the emails so it should be ok if you mute them\nor something",
+      "originalBody": "----- Forwarded Message ----- From: Carson <noreply@carson.live>To: \"sreedhar_sivakumaran@yahoo.com\" <sreedhar_sivakumaran@yahoo.com>Sent: Monday, August 11, 2025 at 10:09:37 AM PDTSubject: Invitation from Carson at 110-114 Ridge St\n  #yiv6492247414 body, #yiv6492247414 p, #yiv6492247414 div {font-family:arial, helvetica, sans-serif;font-size:14px;}#yiv6492247414 body {color:#575757;}#yiv6492247414 body a {color:#1188E6;text-decoration:none;}#yiv6492247414 p {margin:0;padding:0;}#yiv6492247414 table.yiv6492247414wrapper {width:100% !important;table-layout:fixed;}#yiv6492247414 img.yiv6492247414max-width {max-width:100% !important;}#yiv6492247414 .yiv6492247414column.yiv6492247414of-2 {width:50%;}#yiv6492247414 .yiv6492247414column.yiv6492247414of-3 {width:33.333%;}#yiv6492247414 .yiv6492247414column.yiv6492247414of-4 {width:25%;}#yiv6492247414 ul ul ul ul {list-style-type:disc !important;}#yiv6492247414 ol ol {list-style-type:lower-roman !important;}#yiv6492247414 ol ol ol {list-style-type:lower-latin !important;}#yiv6492247414 ol ol ol ol {list-style-type:decimal !important;}@media screen and (max-width:480px) {#yiv6492247414 .yiv6492247414preheader .yiv6492247414rightColumnContent, #yiv6492247414 .yiv6492247414footer .yiv6492247414rightColumnContent {text-align:left !important;}#yiv6492247414 .yiv6492247414preheader .yiv6492247414rightColumnContent div, #yiv6492247414 .yiv6492247414preheader .yiv6492247414rightColumnContent span, #yiv6492247414 .yiv6492247414footer .yiv6492247414rightColumnContent div, #yiv6492247414 .yiv6492247414footer .yiv6492247414rightColumnContent span {text-align:left !important;}#yiv6492247414 .yiv6492247414preheader .yiv6492247414rightColumnContent, #yiv6492247414 .yiv6492247414preheader .yiv6492247414leftColumnContent {font-size:80% !important;padding:5px 0;}#yiv6492247414 table.yiv6492247414wrapper-mobile {width:100% !important;table-layout:fixed;}#yiv6492247414 img.yiv6492247414max-width {height:auto !important;max-width:100% !important;}#yiv6492247414 a.yiv6492247414bulletproof-button {display:block !important;width:auto !important;font-size:80%;padding-left:0 !important;padding-right:0 !important;}#yiv6492247414 .yiv6492247414columns {width:100% !important;}#yiv6492247414 .yiv6492247414column {display:block !important;width:100% !important;padding-left:0 !important;padding-right:0 !important;margin-left:0 !important;margin-right:0 !important;}#yiv6492247414 .yiv6492247414social-icon-column {display:inline-block !important;}}    \n|  \n|  \n|  \n| \n|  \n\n  |\n\n|  |\n\n| \n| \n|    |\n\n |\n\n| \n|  \n\n   110-114 Ridge St has implemented Carson to provide a new level of technology-enabled services for residents.   \n\n  Please open this invite on your smart phone to download and install Carson as soon as possible.  \n\n  Set Up My Carson Account  \n\n  Do not go directly to Apple App Store or Google Play stores to search for Carson, you can only install by clicking on the above buttons in this email invite.  \n |\n\n |\n\n |\n\n| FEATURES |\n\n|  \n|  |\n\n  |\n\n|  |\n\n|  Carson’s 24/7 remote doorman lets deliveries in and notifies you |\n\n|  Open doors in your building through the app |\n\n| View your entrance in live HD video |\n\n|  |\n\n|   |\n\n|  Submit service requests with pictures and comments |\n\n|   |\n\n| Receive announcements from management |\n\n|  |\n\n|   |\n\n| Make your rent or common charge payment |\n\n|   |\n\n| Manage your visitors’ entry |\n\n|  |\n\n|  |\n\n| \n| Learn More |\n\n |\n\n|  \n|  |\n\n  |\n\n|   \n 88 University Place, Fl 9 New York, NY 10003 \n Copyright (C) 2025 Carson Living. All rights reserved. \n   |\n\n |\n\n  |\n\n  |\n\n  |",
+      "responseId": "1989a5c88822320d",
+      "messages": [
+        {
+          "id": "1989a52784e2307b",
+          "from": "Sreedhar Sivakumaran <sreedhar_sivakumaran@yahoo.com>",
+          "to": [
+            "Karthik Sreedhar <ks4190@columbia.edu>"
+          ],
+          "date": "Mon, 11 Aug 2025 18:09:05 +0000 (UTC)",
+          "subject": "Fw: Invitation from Carson at 110-114 Ridge St",
+          "body": "----- Forwarded Message ----- From: Carson <noreply@carson.live>To: \"sreedhar_sivakumaran@yahoo.com\" <sreedhar_sivakumaran@yahoo.com>Sent: Monday, August 11, 2025 at 10:09:37 AM PDTSubject: Invitation from Carson at 110-114 Ridge St\n  #yiv6492247414 body, #yiv6492247414 p, #yiv6492247414 div {font-family:arial, helvetica, sans-serif;font-size:14px;}#yiv6492247414 body {color:#575757;}#yiv6492247414 body a {color:#1188E6;text-decoration:none;}#yiv6492247414 p {margin:0;padding:0;}#yiv6492247414 table.yiv6492247414wrapper {width:100% !important;table-layout:fixed;}#yiv6492247414 img.yiv6492247414max-width {max-width:100% !important;}#yiv6492247414 .yiv6492247414column.yiv6492247414of-2 {width:50%;}#yiv6492247414 .yiv6492247414column.yiv6492247414of-3 {width:33.333%;}#yiv6492247414 .yiv6492247414column.yiv6492247414of-4 {width:25%;}#yiv6492247414 ul ul ul ul {list-style-type:disc !important;}#yiv6492247414 ol ol {list-style-type:lower-roman !important;}#yiv6492247414 ol ol ol {list-style-type:lower-latin !important;}#yiv6492247414 ol ol ol ol {list-style-type:decimal !important;}@media screen and (max-width:480px) {#yiv6492247414 .yiv6492247414preheader .yiv6492247414rightColumnContent, #yiv6492247414 .yiv6492247414footer .yiv6492247414rightColumnContent {text-align:left !important;}#yiv6492247414 .yiv6492247414preheader .yiv6492247414rightColumnContent div, #yiv6492247414 .yiv6492247414preheader .yiv6492247414rightColumnContent span, #yiv6492247414 .yiv6492247414footer .yiv6492247414rightColumnContent div, #yiv6492247414 .yiv6492247414footer .yiv6492247414rightColumnContent span {text-align:left !important;}#yiv6492247414 .yiv6492247414preheader .yiv6492247414rightColumnContent, #yiv6492247414 .yiv6492247414preheader .yiv6492247414leftColumnContent {font-size:80% !important;padding:5px 0;}#yiv6492247414 table.yiv6492247414wrapper-mobile {width:100% !important;table-layout:fixed;}#yiv6492247414 img.yiv6492247414max-width {height:auto !important;max-width:100% !important;}#yiv6492247414 a.yiv6492247414bulletproof-button {display:block !important;width:auto !important;font-size:80%;padding-left:0 !important;padding-right:0 !important;}#yiv6492247414 .yiv6492247414columns {width:100% !important;}#yiv6492247414 .yiv6492247414column {display:block !important;width:100% !important;padding-left:0 !important;padding-right:0 !important;margin-left:0 !important;margin-right:0 !important;}#yiv6492247414 .yiv6492247414social-icon-column {display:inline-block !important;}}    \n|  \n|  \n|  \n| \n|  \n\n  |\n\n|  |\n\n| \n| \n|    |\n\n |\n\n| \n|  \n\n   110-114 Ridge St has implemented Carson to provide a new level of technology-enabled services for residents.   \n\n  Please open this invite on your smart phone to download and install Carson as soon as possible.  \n\n  Set Up My Carson Account  \n\n  Do not go directly to Apple App Store or Google Play stores to search for Carson, you can only install by clicking on the above buttons in this email invite.  \n |\n\n |\n\n |\n\n| FEATURES |\n\n|  \n|  |\n\n  |\n\n|  |\n\n|  Carson’s 24/7 remote doorman lets deliveries in and notifies you |\n\n|  Open doors in your building through the app |\n\n| View your entrance in live HD video |\n\n|  |\n\n|   |\n\n|  Submit service requests with pictures and comments |\n\n|   |\n\n| Receive announcements from management |\n\n|  |\n\n|   |\n\n| Make your rent or common charge payment |\n\n|   |\n\n| Manage your visitors’ entry |\n\n|  |\n\n|  |\n\n| \n| Learn More |\n\n |\n\n|  \n|  |\n\n  |\n\n|   \n 88 University Place, Fl 9 New York, NY 10003 \n Copyright (C) 2025 Carson Living. All rights reserved. \n   |\n\n |\n\n  |\n\n  |\n\n  |",
+          "isResponse": false
+        },
+        {
+          "id": "1989a5c88822320d",
+          "from": "Karthik Sreedhar <ks4190@columbia.edu>",
+          "to": [
+            "Sreedhar Sivakumaran <sreedhar_sivakumaran@yahoo.com>"
+          ],
+          "date": "Mon, 11 Aug 2025 14:20:12 -0400",
+          "subject": "Re: Fw: Invitation from Carson at 110-114 Ridge St",
+          "body": "thank you, i think i get all the emails so it should be ok if you mute them\nor something",
+          "isResponse": true
+        }
+      ]
+    },
+    {
+      "id": "thread-1988f1f21d1b4779",
+      "subject": "Re: Tool",
+      "from": "Karthik Sreedhar <ks4190@columbia.edu>",
+      "originalFrom": "Lydia Chilton <chilton@cs.columbia.edu>",
+      "date": "Sat, 9 Aug 2025 10:11:18 -0400",
+      "body": "",
+      "originalBody": "my flight's at six.  definitely send it!\n\nCan you join the riya call anyway?\n\nOn Sat, Aug 9, 2025 at 9:57 AM Karthik Sreedhar <ks4190@columbia.edu> wrote:\n\n> Hey I’m still working on finishing up - not sure when your flight is but\n> hopefully will send link within the next hour and a half if you’re able to\n> take a look or meet after, but no worries if not.",
+      "responseId": "1988f2c1e17e79bb",
+      "messages": [
+        {
+          "id": "1988f1f21d1b4779",
+          "from": "Karthik Sreedhar <ks4190@columbia.edu>",
+          "to": [
+            "\"Lydia B. Chilton\" <lc3251@columbia.edu>"
+          ],
+          "date": "Sat, 9 Aug 2025 09:57:07 -0400",
+          "subject": "Tool",
+          "body": "Hey I’m still working on finishing up - not sure when your flight is but hopefully will send link within the next hour and a half if you’re able to take a look or meet after, but no worries if not.",
+          "isResponse": true
+        },
+        {
+          "id": "1988f2349098199c",
+          "from": "Lydia Chilton <chilton@cs.columbia.edu>",
+          "to": [
+            "Karthik Sreedhar <ks4190@columbia.edu>"
+          ],
+          "date": "Sat, 9 Aug 2025 10:01:37 -0400",
+          "subject": "Re: Tool",
+          "body": "my flight's at six.  definitely send it!\n\nCan you join the riya call anyway?\n\nOn Sat, Aug 9, 2025 at 9:57 AM Karthik Sreedhar <ks4190@columbia.edu> wrote:\n\n> Hey I’m still working on finishing up - not sure when your flight is but\n> hopefully will send link within the next hour and a half if you’re able to\n> take a look or meet after, but no worries if not.",
+          "isResponse": false
+        },
+        {
+          "id": "1988f2c1e17e79bb",
+          "from": "Karthik Sreedhar <ks4190@columbia.edu>",
+          "to": [
+            "Lydia Chilton <chilton@cs.columbia.edu>"
+          ],
+          "date": "Sat, 9 Aug 2025 10:11:18 -0400",
+          "subject": "Re: Tool",
+          "body": "",
+          "isResponse": true
+        }
+      ]
+    },
+    {
+      "id": "thread-198820ad63ed400f",
+      "subject": "Re: Canceled event: Riya (+Karthik) Lydia @ Thu Aug 7, 2025 10am - 10:30am (EDT) (Karthik Sreedhar)",
+      "from": "Karthik Sreedhar <ks4190@columbia.edu>",
+      "originalFrom": "\"Lydia B. Chilton\" <lc3251@columbia.edu>",
+      "date": "Thu, 7 Aug 2025 06:18:00 -0400",
+      "body": "is there any chance we could still find a time to meet at some point today?\nupdated the system to allow for feedback on generations, and also changed\nprompts/updated backend to use gpt4.0 instead of 3.5 and think it's a lot\nbetter. there are some example generated responses to the email we'd been\nworking with saved (https://email-twin-frontend.onrender.com/generations)\nif you want to take a look (it might take like 2min to load if you open it\nand i haven't been using the site right before). main site still at\nhttps://email-twin-frontend.onrender.com/",
+      "originalBody": "This event has been canceled and removed from your calendar.\n\nRiya (+Karthik) Lydia\nThursday Aug 7, 2025 ⋅ 10am – 10:30am\nEastern Time - New York\n\nJoin Zoom Meeting\nhttps://columbiauniversity.zoom.us/j/93446650868?pwd=lcDaYxoghFqQVlR41Ox6u5v3YOmaOO.1&jst=2 \n\t\nJoin by phone\n(US) +1 309-205-3325\npasscode: 651107\n\t\nJoin using SIP\n93446650868@zoomcrc.com\npasscode: 651107\n\nJoining instructions\nhttps://urldefense.proofpoint.com/v2/url?u=https-3A__www.google.com_url-3Fq-3Dhttps-3A__applications.zoom.us_addon_invitation_detail-3FmeetingUuid-253D70prl6OIQS6vtlzLXuA4-25252BQ-25253D-25253D-2526signature-253D34c4cac421c1611a520392028320cc2fc3e7bde39e6fced2d3f615fa91435ca9-2526v-253D1-26sa-3DD-26source-3Dcalendar-26usg-3DAOvVaw1MOU40EEjoCDL7ET7DWXHW&d=DwIGaQ&c=009klHSCxuh5AI1vNQzSO0KGjl4nbi2Q0M1QLJX9BeE&r=2WR0ko0o4Val5uK--6ILz02ebCRgynFBUs9x2LG9Eeg&m=vB30e3tNFwYZyqdINHlwA41TjKSwtGjswNknldePh92a9WO1rj9mrZ-yTR2-oDo6&s=HaqHcY3duK58ibqmN7ty9yZkl30OFCi7G4zQy13gwk4&e= \n\t\nJoining notes\nMeeting host: lc3251@columbia.edu\n\nJoin Zoom Meeting:\nhttps://columbiauniversity.zoom.us/j/93446650868?pwd=lcDaYxoghFqQVlR41Ox6u5v3YOmaOO.1&jst=2 \n\nOrganizer\nLydia B. Chilton\nlc3251@columbia.edu\n\nGuests\nLydia B. Chilton - organizer\nKarthik Sreedhar\nRiya Sahni\n\n~~//~~\nInvitation from Google Calendar: https://calendar.google.com/calendar/ \n\nYou are receiving this email because you are subscribed to calendar  \nnotifications. To stop receiving these emails, go to  \nhttps://calendar.google.com/calendar/r/settings , select this calendar, and  \nchange \"Other notifications\".\n\nForwarding this invitation could allow any recipient to send a response to  \nthe organizer, be added to the guest list, invite others regardless of  \ntheir own invitation status, or modify your RSVP.\n\nLearn more https://urldefense.proofpoint.com/v2/url?u=https-3A__support.google.com_calendar_answer_37135-23forwarding&d=DwIGaQ&c=009klHSCxuh5AI1vNQzSO0KGjl4nbi2Q0M1QLJX9BeE&r=2WR0ko0o4Val5uK--6ILz02ebCRgynFBUs9x2LG9Eeg&m=vB30e3tNFwYZyqdINHlwA41TjKSwtGjswNknldePh92a9WO1rj9mrZ-yTR2-oDo6&s=wd7eABnCTyBozuQtlB5RwDqNUXtN2QAwwZB_q5Iq1l0&e=",
+      "responseId": "19884099fbeceed4",
+      "messages": [
+        {
+          "id": "198820ad63ed400f",
+          "from": "\"Lydia B. Chilton\" <lc3251@columbia.edu>",
+          "to": [
+            "Karthik Sreedhar <ks4190@columbia.edu>"
+          ],
+          "date": "Thu, 07 Aug 2025 01:00:02 +0000",
+          "subject": "Canceled event: Riya (+Karthik) Lydia @ Thu Aug 7, 2025 10am - 10:30am (EDT) (Karthik Sreedhar)",
+          "body": "This event has been canceled and removed from your calendar.\n\nRiya (+Karthik) Lydia\nThursday Aug 7, 2025 ⋅ 10am – 10:30am\nEastern Time - New York\n\nJoin Zoom Meeting\nhttps://columbiauniversity.zoom.us/j/93446650868?pwd=lcDaYxoghFqQVlR41Ox6u5v3YOmaOO.1&jst=2 \n\t\nJoin by phone\n(US) +1 309-205-3325\npasscode: 651107\n\t\nJoin using SIP\n93446650868@zoomcrc.com\npasscode: 651107\n\nJoining instructions\nhttps://urldefense.proofpoint.com/v2/url?u=https-3A__www.google.com_url-3Fq-3Dhttps-3A__applications.zoom.us_addon_invitation_detail-3FmeetingUuid-253D70prl6OIQS6vtlzLXuA4-25252BQ-25253D-25253D-2526signature-253D34c4cac421c1611a520392028320cc2fc3e7bde39e6fced2d3f615fa91435ca9-2526v-253D1-26sa-3DD-26source-3Dcalendar-26usg-3DAOvVaw1MOU40EEjoCDL7ET7DWXHW&d=DwIGaQ&c=009klHSCxuh5AI1vNQzSO0KGjl4nbi2Q0M1QLJX9BeE&r=2WR0ko0o4Val5uK--6ILz02ebCRgynFBUs9x2LG9Eeg&m=vB30e3tNFwYZyqdINHlwA41TjKSwtGjswNknldePh92a9WO1rj9mrZ-yTR2-oDo6&s=HaqHcY3duK58ibqmN7ty9yZkl30OFCi7G4zQy13gwk4&e= \n\t\nJoining notes\nMeeting host: lc3251@columbia.edu\n\nJoin Zoom Meeting:\nhttps://columbiauniversity.zoom.us/j/93446650868?pwd=lcDaYxoghFqQVlR41Ox6u5v3YOmaOO.1&jst=2 \n\nOrganizer\nLydia B. Chilton\nlc3251@columbia.edu\n\nGuests\nLydia B. Chilton - organizer\nKarthik Sreedhar\nRiya Sahni\n\n~~//~~\nInvitation from Google Calendar: https://calendar.google.com/calendar/ \n\nYou are receiving this email because you are subscribed to calendar  \nnotifications. To stop receiving these emails, go to  \nhttps://calendar.google.com/calendar/r/settings , select this calendar, and  \nchange \"Other notifications\".\n\nForwarding this invitation could allow any recipient to send a response to  \nthe organizer, be added to the guest list, invite others regardless of  \ntheir own invitation status, or modify your RSVP.\n\nLearn more https://urldefense.proofpoint.com/v2/url?u=https-3A__support.google.com_calendar_answer_37135-23forwarding&d=DwIGaQ&c=009klHSCxuh5AI1vNQzSO0KGjl4nbi2Q0M1QLJX9BeE&r=2WR0ko0o4Val5uK--6ILz02ebCRgynFBUs9x2LG9Eeg&m=vB30e3tNFwYZyqdINHlwA41TjKSwtGjswNknldePh92a9WO1rj9mrZ-yTR2-oDo6&s=wd7eABnCTyBozuQtlB5RwDqNUXtN2QAwwZB_q5Iq1l0&e=",
+          "isResponse": false
+        },
+        {
+          "id": "19884099fbeceed4",
+          "from": "Karthik Sreedhar <ks4190@columbia.edu>",
+          "to": [
+            "\"Lydia B. Chilton\" <lc3251@columbia.edu>"
+          ],
+          "date": "Thu, 7 Aug 2025 06:18:00 -0400",
+          "subject": "Re: Canceled event: Riya (+Karthik) Lydia @ Thu Aug 7, 2025 10am - 10:30am (EDT) (Karthik Sreedhar)",
+          "body": "is there any chance we could still find a time to meet at some point today?\nupdated the system to allow for feedback on generations, and also changed\nprompts/updated backend to use gpt4.0 instead of 3.5 and think it's a lot\nbetter. there are some example generated responses to the email we'd been\nworking with saved (https://email-twin-frontend.onrender.com/generations)\nif you want to take a look (it might take like 2min to load if you open it\nand i haven't been using the site right before). main site still at\nhttps://email-twin-frontend.onrender.com/",
+          "isResponse": true
+        },
+        {
+          "id": "1988418809090d22",
+          "from": "Lydia Chilton <chilton@cs.columbia.edu>",
+          "to": [
+            "Karthik Sreedhar <ks4190@columbia.edu>"
+          ],
+          "date": "Thu, 7 Aug 2025 06:34:01 -0400",
+          "subject": "Re: Canceled event: Riya (+Karthik) Lydia @ Thu Aug 7, 2025 10am - 10:30am (EDT) (Karthik Sreedhar)",
+          "body": "Yes! I can’t wait… I feel like there are much better models than 4… 4o is\nmy favorite, but maybe even a reasoning model like o3…. Plus got 5 should\ncome out today… we could try that.\n\nCan you try these models on my example and send me the results on email (or\na doc)\n\nAlso, we should try the system with and without my reasoning some point\nsoon. Maybe not now… but definitely once we get gpt 5 :)\n\nOn Thu, Aug 7, 2025 at 06:19 Karthik Sreedhar <ks4190@columbia.edu> wrote:\n\n> is there any chance we could still find a time to meet at some point\n> today? updated the system to allow for feedback on generations, and also\n> changed prompts/updated backend to use gpt4.0 instead of 3.5 and think it's\n> a lot better. there are some example generated responses to the email we'd\n> been working with saved (\n> https://urldefense.proofpoint.com/v2/url?u=https-3A__email-2Dtwin-2Dfrontend.onrender.com_generations&d=DwIFaQ&c=009klHSCxuh5AI1vNQzSO0KGjl4nbi2Q0M1QLJX9BeE&r=2WR0ko0o4Val5uK--6ILz02ebCRgynFBUs9x2LG9Eeg&m=aAxJAE_WubpFWExPT4-k9ahjVSO4YKFKkKbgu0ws1Eq4qS2BHNdFp8PwOf8TUsHP&s=xgJVZtV1HIoVuOisFRFtQLCqXRTHBmiwlJQUw-n6vJA&e= \n> <https://urldefense.proofpoint.com/v2/url?u=https-3A__email-2Dtwin-2Dfrontend.onrender.com_generations&d=DwMFaQ&c=009klHSCxuh5AI1vNQzSO0KGjl4nbi2Q0M1QLJX9BeE&r=-_LS5uo2o7-geJ5gnr0XLcB_sGrtzBYehOspkA3M8gk&m=TM_Nd8Rg60fAmISdDIwV_rwJAfHZGJdso7DrnfbFXBGjfRde4zwU4W8FuwW8Xj2W&s=cgM7V9R2wuqznxUASy6Jej8R7BF4Nj1v9MFY7m77a4g&e=>)\n> if you want to take a look (it might take like 2min to load if you open it\n> and i haven't been using the site right before). main site still at\n> https://urldefense.proofpoint.com/v2/url?u=https-3A__email-2Dtwin-2Dfrontend.onrender.com_&d=DwIFaQ&c=009klHSCxuh5AI1vNQzSO0KGjl4nbi2Q0M1QLJX9BeE&r=2WR0ko0o4Val5uK--6ILz02ebCRgynFBUs9x2LG9Eeg&m=aAxJAE_WubpFWExPT4-k9ahjVSO4YKFKkKbgu0ws1Eq4qS2BHNdFp8PwOf8TUsHP&s=Wakoa7hcF94ZrDSnX_rN61op3OFDwOIRjn02DtSKZTE&e= \n> <https://urldefense.proofpoint.com/v2/url?u=https-3A__email-2Dtwin-2Dfrontend.onrender.com_&d=DwMFaQ&c=009klHSCxuh5AI1vNQzSO0KGjl4nbi2Q0M1QLJX9BeE&r=-_LS5uo2o7-geJ5gnr0XLcB_sGrtzBYehOspkA3M8gk&m=TM_Nd8Rg60fAmISdDIwV_rwJAfHZGJdso7DrnfbFXBGjfRde4zwU4W8FuwW8Xj2W&s=i4H6OXDTYXl9XNBszp56zL28mVEJ92qKPq32RcegtUM&e=>\n>\n> On Wed, Aug 6, 2025 at 9:00 PM Lydia B. Chilton <lc3251@columbia.edu>\n> wrote:\n>\n>> Riya (+Karthik) Lydia\n>>\n>>\n>> This event has been canceled and removed from your calendar.\n>>\n>> Join Zoom Meeting\n>> <https://columbiauniversity.zoom.us/j/93446650868?pwd=lcDaYxoghFqQVlR41Ox6u5v3YOmaOO.1&jst=2 >\n>> columbiauniversity.zoom.us/j/934...\n>> <https://columbiauniversity.zoom.us/j/93446650868?pwd=lcDaYxoghFqQVlR41Ox6u5v3YOmaOO.1&jst=2 >\n>> ID: 93446650868\n>> passcode: 651107\n>> Join by phone(US) +1 309-205-3325 <+13092053325,,93446650868#>\n>> passcode: 651107\n>> Join using SIP93446650868@zoomcrc.com\n>> passcode: 651107\n>>\n>> Joining instructions\n>> <https://urldefense.proofpoint.com/v2/url?u=https-3A__www.google.com_url-3Fq-3Dhttps-3A__applications.zoom.us_addon_invitation_detail-3FmeetingUuid-253D70prl6OIQS6vtlzLXuA4-25252BQ-25253D-25253D-2526signature-253D34c4cac421c1611a520392028320cc2fc3e7bde39e6fced2d3f615fa91435ca9-2526v-253D1-26sa-3DD-26source-3Dcalendar-26usg-3DAOvVaw1MOU40EEjoCDL7ET7DWXHW&d=DwMFaQ&c=009klHSCxuh5AI1vNQzSO0KGjl4nbi2Q0M1QLJX9BeE&r=2WR0ko0o4Val5uK--6ILz02ebCRgynFBUs9x2LG9Eeg&m=vB30e3tNFwYZyqdINHlwA41TjKSwtGjswNknldePh92a9WO1rj9mrZ-yTR2-oDo6&s=HaqHcY3duK58ibqmN7ty9yZkl30OFCi7G4zQy13gwk4&e=>\n>> Joining notesMeeting host: lc3251@columbia.edu\n>>\n>> Join Zoom Meeting:\n>>\n>> https://columbiauniversity.zoom.us/j/93446650868?pwd=lcDaYxoghFqQVlR41Ox6u5v3YOmaOO.1&jst=2 \n>> <https://urldefense.proofpoint.com/v2/url?u=https-3A__www.google.com_url-3Fq-3Dhttps-253A-252F-252Fcolumbiauniversity.zoom.us-252Fj-252F93446650868-253Fpwd-253DlcDaYxoghFqQVlR41Ox6u5v3YOmaOO.1-2526jst-253D2-26sa-3DD-26source-3Dcalendar-26ust-3D1754960400000000-26usg-3DAOvVaw1ybX5SP5mecu2zquoo81cz&d=DwMFaQ&c=009klHSCxuh5AI1vNQzSO0KGjl4nbi2Q0M1QLJX9BeE&r=2WR0ko0o4Val5uK--6ILz02ebCRgynFBUs9x2LG9Eeg&m=vB30e3tNFwYZyqdINHlwA41TjKSwtGjswNknldePh92a9WO1rj9mrZ-yTR2-oDo6&s=CvUz72TJHFJ4gnY42KyNQv73eTeEYjzXdiHYYlr8sXg&e=>\n>> WhenThursday Aug 7, 2025 ⋅ 10am – 10:30am (Eastern Time - New York)\n>> Guests\n>> Lydia B. Chilton <lc3251@columbia.edu> - organizer\n>> Karthik Sreedhar <ks4190@columbia.edu>\n>> Riya Sahni <rs4640@columbia.edu>\n>>\n>> Invitation from Google Calendar <https://calendar.google.com/calendar/ >\n>>\n>> You are receiving this email because you are subscribed to calendar\n>> notifications. To stop receiving these emails, go to Calendar settings\n>> <https://calendar.google.com/calendar/r/settings >, select this calendar,\n>> and change \"Other notifications\".\n>>\n>> Forwarding this invitation could allow any recipient to send a response\n>> to the organizer, be added to the guest list, invite others regardless of\n>> their own invitation status, or modify your RSVP. Learn more\n>> <https://urldefense.proofpoint.com/v2/url?u=https-3A__support.google.com_calendar_answer_37135-23forwarding&d=DwMFaQ&c=009klHSCxuh5AI1vNQzSO0KGjl4nbi2Q0M1QLJX9BeE&r=2WR0ko0o4Val5uK--6ILz02ebCRgynFBUs9x2LG9Eeg&m=vB30e3tNFwYZyqdINHlwA41TjKSwtGjswNknldePh92a9WO1rj9mrZ-yTR2-oDo6&s=wd7eABnCTyBozuQtlB5RwDqNUXtN2QAwwZB_q5Iq1l0&e=>\n>>\n>",
+          "isResponse": false
+        }
+      ]
+    },
+    {
+      "id": "thread-1987b8bf3cc44eef",
+      "subject": "Re: Updated invitation: karthik lydia - TRY TOOL @ Tue Aug 5, 2025 6pm - 7pm (EDT) (Karthik Sreedhar)",
+      "from": "Karthik Sreedhar <ks4190@columbia.edu>",
+      "originalFrom": "\"Lydia B. Chilton\" <lc3251@columbia.edu>",
+      "date": "Tue, 5 Aug 2025 17:11:35 -0400",
+      "body": "might be closer to 6:30 for me sorry!\nSent from my iPhone",
+      "originalBody": "This event has been updated\nChanged: time\n\nkarthik lydia - TRY TOOL\nTuesday Aug 5, 2025 ⋅ 6pm – 7pm\nEastern Time - New York\n\nJoin Zoom Meeting\nhttps://columbiauniversity.zoom.us/j/96226233853?pwd=bWDKTVeshyPXqbLIhjtRXeoUcJjjbP.1&jst=2 \n\t\nJoin by phone\n(US) +1 669-444-9171\npasscode: 965471\n\t\nJoin using SIP\n96226233853@zoomcrc.com\npasscode: 965471\n\nJoining instructions\nhttps://urldefense.proofpoint.com/v2/url?u=https-3A__www.google.com_url-3Fq-3Dhttps-3A__applications.zoom.us_addon_invitation_detail-3FmeetingUuid-253DdbW506WyTXaqHcYYcoi34g-25253D-25253D-2526signature-253D94c8636ae1849cc455f4a8aa53c36bf2199164198ed75db38a09d1b31389451e-2526v-253D1-26sa-3DD-26source-3Dcalendar-26usg-3DAOvVaw3-5F4805RIw0hpRuS77ouCnn&d=DwIGaQ&c=009klHSCxuh5AI1vNQzSO0KGjl4nbi2Q0M1QLJX9BeE&r=2WR0ko0o4Val5uK--6ILz02ebCRgynFBUs9x2LG9Eeg&m=TwVPqc8N1lfT148EndUCuT3dc3n2kDuOHijAHlSc0Xe2WipgDQLYsvBRXtBRglgT&s=6kaMFRnffdu4Xm6E3HuMWv_Qk8CacLMjOFI_7cK0rrs&e= \n\t\nJoining notes\nMeeting host: lc3251@columbia.edu\n\nJoin Zoom Meeting:\nhttps://columbiauniversity.zoom.us/j/96226233853?pwd=bWDKTVeshyPXqbLIhjtRXeoUcJjjbP.1&jst=2 \n\nOrganizer\nLydia B. Chilton\nlc3251@columbia.edu\n\nGuests\nLydia B. Chilton - organizer\nKarthik Sreedhar\nView all guest info  \nhttps://calendar.google.com/calendar/event?action=VIEW&eid=MnNwcDV0b25xbnQ3dG5taWRpNnBidGk5MnQga3M0MTkwQGNvbHVtYmlhLmVkdQ&tok=MTkjbGMzMjUxQGNvbHVtYmlhLmVkdWNmMDQyMjA5ZmEwMzNlZjJkMGEwZWE0NWNiZmQ2YzU5MDJkMzVlZDY&ctz=America%2FNew_York&hl=en&es=1 \n\nReply for ks4190@columbia.edu and view more details  \nhttps://calendar.google.com/calendar/event?action=VIEW&eid=MnNwcDV0b25xbnQ3dG5taWRpNnBidGk5MnQga3M0MTkwQGNvbHVtYmlhLmVkdQ&tok=MTkjbGMzMjUxQGNvbHVtYmlhLmVkdWNmMDQyMjA5ZmEwMzNlZjJkMGEwZWE0NWNiZmQ2YzU5MDJkMzVlZDY&ctz=America%2FNew_York&hl=en&es=1 \nYour attendance is optional.\n\n~~//~~\nInvitation from Google Calendar: https://calendar.google.com/calendar/ \n\nYou are receiving this email because you are subscribed to calendar  \nnotifications. To stop receiving these emails, go to  \nhttps://calendar.google.com/calendar/r/settings , select this calendar, and  \nchange \"Other notifications\".\n\nForwarding this invitation could allow any recipient to send a response to  \nthe organizer, be added to the guest list, invite others regardless of  \ntheir own invitation status, or modify your RSVP.\n\nLearn more https://urldefense.proofpoint.com/v2/url?u=https-3A__support.google.com_calendar_answer_37135-23forwarding&d=DwIGaQ&c=009klHSCxuh5AI1vNQzSO0KGjl4nbi2Q0M1QLJX9BeE&r=2WR0ko0o4Val5uK--6ILz02ebCRgynFBUs9x2LG9Eeg&m=TwVPqc8N1lfT148EndUCuT3dc3n2kDuOHijAHlSc0Xe2WipgDQLYsvBRXtBRglgT&s=yFPv-1y-OOkN0EApDk3FxYrMip4yovSIwXldi88aAKM&e=",
+      "responseId": "1987c139c8ad0338",
+      "messages": [
+        {
+          "id": "1987b8bf3cc44eef",
+          "from": "\"Lydia B. Chilton\" <lc3251@columbia.edu>",
+          "to": [
+            "Karthik Sreedhar <ks4190@columbia.edu>"
+          ],
+          "date": "Tue, 05 Aug 2025 18:43:44 +0000",
+          "subject": "Updated invitation: karthik lydia - TRY TOOL @ Tue Aug 5, 2025 6pm - 7pm (EDT) (Karthik Sreedhar)",
+          "body": "This event has been updated\nChanged: time\n\nkarthik lydia - TRY TOOL\nTuesday Aug 5, 2025 ⋅ 6pm – 7pm\nEastern Time - New York\n\nJoin Zoom Meeting\nhttps://columbiauniversity.zoom.us/j/96226233853?pwd=bWDKTVeshyPXqbLIhjtRXeoUcJjjbP.1&jst=2 \n\t\nJoin by phone\n(US) +1 669-444-9171\npasscode: 965471\n\t\nJoin using SIP\n96226233853@zoomcrc.com\npasscode: 965471\n\nJoining instructions\nhttps://urldefense.proofpoint.com/v2/url?u=https-3A__www.google.com_url-3Fq-3Dhttps-3A__applications.zoom.us_addon_invitation_detail-3FmeetingUuid-253DdbW506WyTXaqHcYYcoi34g-25253D-25253D-2526signature-253D94c8636ae1849cc455f4a8aa53c36bf2199164198ed75db38a09d1b31389451e-2526v-253D1-26sa-3DD-26source-3Dcalendar-26usg-3DAOvVaw3-5F4805RIw0hpRuS77ouCnn&d=DwIGaQ&c=009klHSCxuh5AI1vNQzSO0KGjl4nbi2Q0M1QLJX9BeE&r=2WR0ko0o4Val5uK--6ILz02ebCRgynFBUs9x2LG9Eeg&m=TwVPqc8N1lfT148EndUCuT3dc3n2kDuOHijAHlSc0Xe2WipgDQLYsvBRXtBRglgT&s=6kaMFRnffdu4Xm6E3HuMWv_Qk8CacLMjOFI_7cK0rrs&e= \n\t\nJoining notes\nMeeting host: lc3251@columbia.edu\n\nJoin Zoom Meeting:\nhttps://columbiauniversity.zoom.us/j/96226233853?pwd=bWDKTVeshyPXqbLIhjtRXeoUcJjjbP.1&jst=2 \n\nOrganizer\nLydia B. Chilton\nlc3251@columbia.edu\n\nGuests\nLydia B. Chilton - organizer\nKarthik Sreedhar\nView all guest info  \nhttps://calendar.google.com/calendar/event?action=VIEW&eid=MnNwcDV0b25xbnQ3dG5taWRpNnBidGk5MnQga3M0MTkwQGNvbHVtYmlhLmVkdQ&tok=MTkjbGMzMjUxQGNvbHVtYmlhLmVkdWNmMDQyMjA5ZmEwMzNlZjJkMGEwZWE0NWNiZmQ2YzU5MDJkMzVlZDY&ctz=America%2FNew_York&hl=en&es=1 \n\nReply for ks4190@columbia.edu and view more details  \nhttps://calendar.google.com/calendar/event?action=VIEW&eid=MnNwcDV0b25xbnQ3dG5taWRpNnBidGk5MnQga3M0MTkwQGNvbHVtYmlhLmVkdQ&tok=MTkjbGMzMjUxQGNvbHVtYmlhLmVkdWNmMDQyMjA5ZmEwMzNlZjJkMGEwZWE0NWNiZmQ2YzU5MDJkMzVlZDY&ctz=America%2FNew_York&hl=en&es=1 \nYour attendance is optional.\n\n~~//~~\nInvitation from Google Calendar: https://calendar.google.com/calendar/ \n\nYou are receiving this email because you are subscribed to calendar  \nnotifications. To stop receiving these emails, go to  \nhttps://calendar.google.com/calendar/r/settings , select this calendar, and  \nchange \"Other notifications\".\n\nForwarding this invitation could allow any recipient to send a response to  \nthe organizer, be added to the guest list, invite others regardless of  \ntheir own invitation status, or modify your RSVP.\n\nLearn more https://urldefense.proofpoint.com/v2/url?u=https-3A__support.google.com_calendar_answer_37135-23forwarding&d=DwIGaQ&c=009klHSCxuh5AI1vNQzSO0KGjl4nbi2Q0M1QLJX9BeE&r=2WR0ko0o4Val5uK--6ILz02ebCRgynFBUs9x2LG9Eeg&m=TwVPqc8N1lfT148EndUCuT3dc3n2kDuOHijAHlSc0Xe2WipgDQLYsvBRXtBRglgT&s=yFPv-1y-OOkN0EApDk3FxYrMip4yovSIwXldi88aAKM&e=",
+          "isResponse": false
+        },
+        {
+          "id": "1987c139c8ad0338",
+          "from": "Karthik Sreedhar <ks4190@columbia.edu>",
+          "to": [
+            "\"Lydia B. Chilton\" <lc3251@columbia.edu>"
+          ],
+          "date": "Tue, 5 Aug 2025 17:11:35 -0400",
+          "subject": "Re: Updated invitation: karthik lydia - TRY TOOL @ Tue Aug 5, 2025 6pm - 7pm (EDT) (Karthik Sreedhar)",
+          "body": "might be closer to 6:30 for me sorry!\nSent from my iPhone",
+          "isResponse": true
+        }
+      ]
+    },
+    {
+      "id": "thread-1987af8ab05bd788",
+      "subject": "Re: Updated invitation: karthik lydia - TRY TOOL @ Tue Aug 5, 2025 2:30pm - 3:30pm (EDT) (Karthik Sreedhar)",
+      "from": "Karthik Sreedhar <ks4190@columbia.edu>",
+      "originalFrom": "\"Lydia B. Chilton\" <lc3251@columbia.edu>",
+      "date": "Tue, 5 Aug 2025 14:31:20 -0400",
+      "body": "on the zoom!",
+      "originalBody": "This event has been updated\nChanged: time\n\nkarthik lydia - TRY TOOL\nTuesday Aug 5, 2025 ⋅ 2:30pm – 3:30pm\nEastern Time - New York\n\nJoin Zoom Meeting\nhttps://columbiauniversity.zoom.us/j/96226233853?pwd=bWDKTVeshyPXqbLIhjtRXeoUcJjjbP.1&jst=2 \n\t\nJoin by phone\n(US) +1 669-444-9171\npasscode: 965471\n\t\nJoin using SIP\n96226233853@zoomcrc.com\npasscode: 965471\n\nJoining instructions\nhttps://urldefense.proofpoint.com/v2/url?u=https-3A__www.google.com_url-3Fq-3Dhttps-3A__applications.zoom.us_addon_invitation_detail-3FmeetingUuid-253DdbW506WyTXaqHcYYcoi34g-25253D-25253D-2526signature-253D94c8636ae1849cc455f4a8aa53c36bf2199164198ed75db38a09d1b31389451e-2526v-253D1-26sa-3DD-26source-3Dcalendar-26usg-3DAOvVaw3-5F4805RIw0hpRuS77ouCnn&d=DwIGaQ&c=009klHSCxuh5AI1vNQzSO0KGjl4nbi2Q0M1QLJX9BeE&r=2WR0ko0o4Val5uK--6ILz02ebCRgynFBUs9x2LG9Eeg&m=nI0_I1JRmra4bGFBGOK_Xh4wJrOzGLSaoYRJzJLgjJxWQf16hQPRtoON78nl3m1t&s=jMlBNL5RQzRRhxBI4QAovZEBfx9nESwUxKqxbQAZOn8&e= \n\t\nJoining notes\nMeeting host: lc3251@columbia.edu\n\nJoin Zoom Meeting:\nhttps://columbiauniversity.zoom.us/j/96226233853?pwd=bWDKTVeshyPXqbLIhjtRXeoUcJjjbP.1&jst=2 \n\nOrganizer\nLydia B. Chilton\nlc3251@columbia.edu\n\nGuests\nLydia B. Chilton - organizer\nKarthik Sreedhar\nView all guest info  \nhttps://calendar.google.com/calendar/event?action=VIEW&eid=MnNwcDV0b25xbnQ3dG5taWRpNnBidGk5MnQga3M0MTkwQGNvbHVtYmlhLmVkdQ&tok=MTkjbGMzMjUxQGNvbHVtYmlhLmVkdWNmMDQyMjA5ZmEwMzNlZjJkMGEwZWE0NWNiZmQ2YzU5MDJkMzVlZDY&ctz=America%2FNew_York&hl=en&es=1 \n\nReply for ks4190@columbia.edu and view more details  \nhttps://calendar.google.com/calendar/event?action=VIEW&eid=MnNwcDV0b25xbnQ3dG5taWRpNnBidGk5MnQga3M0MTkwQGNvbHVtYmlhLmVkdQ&tok=MTkjbGMzMjUxQGNvbHVtYmlhLmVkdWNmMDQyMjA5ZmEwMzNlZjJkMGEwZWE0NWNiZmQ2YzU5MDJkMzVlZDY&ctz=America%2FNew_York&hl=en&es=1 \nYour attendance is optional.\n\n~~//~~\nInvitation from Google Calendar: https://calendar.google.com/calendar/ \n\nYou are receiving this email because you are subscribed to calendar  \nnotifications. To stop receiving these emails, go to  \nhttps://calendar.google.com/calendar/r/settings , select this calendar, and  \nchange \"Other notifications\".\n\nForwarding this invitation could allow any recipient to send a response to  \nthe organizer, be added to the guest list, invite others regardless of  \ntheir own invitation status, or modify your RSVP.\n\nLearn more https://urldefense.proofpoint.com/v2/url?u=https-3A__support.google.com_calendar_answer_37135-23forwarding&d=DwIGaQ&c=009klHSCxuh5AI1vNQzSO0KGjl4nbi2Q0M1QLJX9BeE&r=2WR0ko0o4Val5uK--6ILz02ebCRgynFBUs9x2LG9Eeg&m=nI0_I1JRmra4bGFBGOK_Xh4wJrOzGLSaoYRJzJLgjJxWQf16hQPRtoON78nl3m1t&s=TH0CUju_6UYmxA12KNFUT153aG7qRMUlpxJcGywYOxQ&e=",
+      "responseId": "1987b8094e08bd92",
+      "messages": [
+        {
+          "id": "1987af8ab05bd788",
+          "from": "\"Lydia B. Chilton\" <lc3251@columbia.edu>",
+          "to": [
+            "Karthik Sreedhar <ks4190@columbia.edu>"
+          ],
+          "date": "Tue, 05 Aug 2025 16:02:51 +0000",
+          "subject": "Updated invitation: karthik lydia - TRY TOOL @ Tue Aug 5, 2025 2:30pm - 3:30pm (EDT) (Karthik Sreedhar)",
+          "body": "This event has been updated\nChanged: time\n\nkarthik lydia - TRY TOOL\nTuesday Aug 5, 2025 ⋅ 2:30pm – 3:30pm\nEastern Time - New York\n\nJoin Zoom Meeting\nhttps://columbiauniversity.zoom.us/j/96226233853?pwd=bWDKTVeshyPXqbLIhjtRXeoUcJjjbP.1&jst=2 \n\t\nJoin by phone\n(US) +1 669-444-9171\npasscode: 965471\n\t\nJoin using SIP\n96226233853@zoomcrc.com\npasscode: 965471\n\nJoining instructions\nhttps://urldefense.proofpoint.com/v2/url?u=https-3A__www.google.com_url-3Fq-3Dhttps-3A__applications.zoom.us_addon_invitation_detail-3FmeetingUuid-253DdbW506WyTXaqHcYYcoi34g-25253D-25253D-2526signature-253D94c8636ae1849cc455f4a8aa53c36bf2199164198ed75db38a09d1b31389451e-2526v-253D1-26sa-3DD-26source-3Dcalendar-26usg-3DAOvVaw3-5F4805RIw0hpRuS77ouCnn&d=DwIGaQ&c=009klHSCxuh5AI1vNQzSO0KGjl4nbi2Q0M1QLJX9BeE&r=2WR0ko0o4Val5uK--6ILz02ebCRgynFBUs9x2LG9Eeg&m=nI0_I1JRmra4bGFBGOK_Xh4wJrOzGLSaoYRJzJLgjJxWQf16hQPRtoON78nl3m1t&s=jMlBNL5RQzRRhxBI4QAovZEBfx9nESwUxKqxbQAZOn8&e= \n\t\nJoining notes\nMeeting host: lc3251@columbia.edu\n\nJoin Zoom Meeting:\nhttps://columbiauniversity.zoom.us/j/96226233853?pwd=bWDKTVeshyPXqbLIhjtRXeoUcJjjbP.1&jst=2 \n\nOrganizer\nLydia B. Chilton\nlc3251@columbia.edu\n\nGuests\nLydia B. Chilton - organizer\nKarthik Sreedhar\nView all guest info  \nhttps://calendar.google.com/calendar/event?action=VIEW&eid=MnNwcDV0b25xbnQ3dG5taWRpNnBidGk5MnQga3M0MTkwQGNvbHVtYmlhLmVkdQ&tok=MTkjbGMzMjUxQGNvbHVtYmlhLmVkdWNmMDQyMjA5ZmEwMzNlZjJkMGEwZWE0NWNiZmQ2YzU5MDJkMzVlZDY&ctz=America%2FNew_York&hl=en&es=1 \n\nReply for ks4190@columbia.edu and view more details  \nhttps://calendar.google.com/calendar/event?action=VIEW&eid=MnNwcDV0b25xbnQ3dG5taWRpNnBidGk5MnQga3M0MTkwQGNvbHVtYmlhLmVkdQ&tok=MTkjbGMzMjUxQGNvbHVtYmlhLmVkdWNmMDQyMjA5ZmEwMzNlZjJkMGEwZWE0NWNiZmQ2YzU5MDJkMzVlZDY&ctz=America%2FNew_York&hl=en&es=1 \nYour attendance is optional.\n\n~~//~~\nInvitation from Google Calendar: https://calendar.google.com/calendar/ \n\nYou are receiving this email because you are subscribed to calendar  \nnotifications. To stop receiving these emails, go to  \nhttps://calendar.google.com/calendar/r/settings , select this calendar, and  \nchange \"Other notifications\".\n\nForwarding this invitation could allow any recipient to send a response to  \nthe organizer, be added to the guest list, invite others regardless of  \ntheir own invitation status, or modify your RSVP.\n\nLearn more https://urldefense.proofpoint.com/v2/url?u=https-3A__support.google.com_calendar_answer_37135-23forwarding&d=DwIGaQ&c=009klHSCxuh5AI1vNQzSO0KGjl4nbi2Q0M1QLJX9BeE&r=2WR0ko0o4Val5uK--6ILz02ebCRgynFBUs9x2LG9Eeg&m=nI0_I1JRmra4bGFBGOK_Xh4wJrOzGLSaoYRJzJLgjJxWQf16hQPRtoON78nl3m1t&s=TH0CUju_6UYmxA12KNFUT153aG7qRMUlpxJcGywYOxQ&e=",
+          "isResponse": false
+        },
+        {
+          "id": "1987b41b792cd91d",
+          "from": "Karthik Sreedhar <ks4190@columbia.edu>",
+          "to": [
+            "\"Lydia B. Chilton\" <lc3251@columbia.edu>"
+          ],
+          "date": "Tue, 5 Aug 2025 13:22:29 -0400",
+          "subject": "Re: Updated invitation: karthik lydia - TRY TOOL @ Tue Aug 5, 2025 2:30pm - 3:30pm (EDT) (Karthik Sreedhar)",
+          "body": "",
+          "isResponse": true
+        },
+        {
+          "id": "1987b8094e08bd92",
+          "from": "Karthik Sreedhar <ks4190@columbia.edu>",
+          "to": [
+            "\"Lydia B. Chilton\" <lc3251@columbia.edu>"
+          ],
+          "date": "Tue, 5 Aug 2025 14:31:20 -0400",
+          "subject": "Re: Updated invitation: karthik lydia - TRY TOOL @ Tue Aug 5, 2025 2:30pm - 3:30pm (EDT) (Karthik Sreedhar)",
+          "body": "on the zoom!",
+          "isResponse": true
+        }
+      ]
+    },
+    {
+      "id": "thread-19876ce897401c22",
+      "subject": "Re: Fw: Resident Memo – Community Guidelines & Building Security",
+      "from": "Karthik Sreedhar <ks4190@columbia.edu>",
+      "originalFrom": "MD2 Support <support@md2pg.com>",
+      "date": "Tue, 5 Aug 2025 11:05:49 -0400",
+      "body": "yea i get all these thanks though!",
+      "originalBody": "Dear Residents,\n\nManagement's  committed  to maintaining a safe and comfortable living\nenvironment. Residents are urged to follow these important guidelines:\n\n   - *Be mindful of noise levels*—please refrain from playing loud music or\n   TV between 9:30 PM and 9:00 AM\n   - *Clean up after yourself *in all shared spaces, including hallways,\n   staircases, and laundry rooms.\n   - *Dispose of garbage and recycling properly*—please use designated bins\n   and avoid leaving trash in hallways or common areas.\n   - *Smoking is strictly prohibited anywhere on the premises.* Violations\n   will result in a $250 fine.\n   - *Do not buzz in anyone you do not personally know.* Unauthorized entry\n   compromises the safety of the entire building.\n   - *Ensure the front door fully closes and locks behind you* when\n   entering or exiting the building.\n   - *If you notice someone inside the building who appears unauthorized*,\n   report it to management immediately.\n   - *Package safety:* If you are expecting a delivery, retrieve it as soon\n   as possible to help prevent theft. If your building has a designated\n   package room, please ensure the door is securely closed after use.\n\nWe appreciate your cooperation in keeping our community safe and secure.\nIf you have any questions or concerns, please feel free to reach out.\n\nBest Regards,\nMD Squared Property Group",
+      "responseId": "1987ac46c443a50e",
+      "messages": [
+        {
+          "id": "19876ce897401c22",
+          "from": "MD2 Support <support@md2pg.com>",
+          "to": [
+            "Unknown Recipient"
+          ],
+          "date": "Tue, 5 Aug 2025 00:38:23 +0400",
+          "subject": "Resident Memo – Community Guidelines & Building Security",
+          "body": "Dear Residents,\n\nManagement's  committed  to maintaining a safe and comfortable living\nenvironment. Residents are urged to follow these important guidelines:\n\n   - *Be mindful of noise levels*—please refrain from playing loud music or\n   TV between 9:30 PM and 9:00 AM\n   - *Clean up after yourself *in all shared spaces, including hallways,\n   staircases, and laundry rooms.\n   - *Dispose of garbage and recycling properly*—please use designated bins\n   and avoid leaving trash in hallways or common areas.\n   - *Smoking is strictly prohibited anywhere on the premises.* Violations\n   will result in a $250 fine.\n   - *Do not buzz in anyone you do not personally know.* Unauthorized entry\n   compromises the safety of the entire building.\n   - *Ensure the front door fully closes and locks behind you* when\n   entering or exiting the building.\n   - *If you notice someone inside the building who appears unauthorized*,\n   report it to management immediately.\n   - *Package safety:* If you are expecting a delivery, retrieve it as soon\n   as possible to help prevent theft. If your building has a designated\n   package room, please ensure the door is securely closed after use.\n\nWe appreciate your cooperation in keeping our community safe and secure.\nIf you have any questions or concerns, please feel free to reach out.\n\nBest Regards,\nMD Squared Property Group",
+          "isResponse": false
+        },
+        {
+          "id": "1987abcfd2aa59de",
+          "from": "sreedhar_sivakumaran@yahoo.com",
+          "to": [
+            "ks4190@columbia.edu"
+          ],
+          "date": "Tue, 5 Aug 2025 14:57:39 +0000 (UTC)",
+          "subject": "Fw: Resident Memo – Community Guidelines & Building Security",
+          "body": "----- Forwarded Message ----- From: MD2 Support <support@md2pg.com>Cc: Amar Omeragic <amar.omeragic@md2pg.com>; Al Shehada <alshehada@md2pg.com>; Jacob Benezra <jacob.benezra@md2pg.com>Sent: Tuesday, August 5, 2025 at 04:38:23 AM GMT+8Subject: Resident Memo – Community Guidelines & Building Security\n Dear Residents,\n\nManagement's  committed  to maintaining a safe and comfortable living environment. Residents are urged to follow these important guidelines:\n\n   - Be mindful of noise levels—please refrain from playing loud music or TV between 9:30 PM and 9:00 AM\n   - Clean up after yourself in all shared spaces, including hallways, staircases, and laundry rooms.\n   - Dispose of garbage and recycling properly—please use designated bins and avoid leaving trash in hallways or common areas.\n   - Smoking is strictly prohibited anywhere on the premises. Violations will result in a $250 fine.\n   - Do not buzz in anyone you do not personally know. Unauthorized entry compromises the safety of the entire building.\n   - Ensure the front door fully closes and locks behind you when entering or exiting the building.\n   - If you notice someone inside the building who appears unauthorized, report it to management immediately.\n   - Package safety: If you are expecting a delivery, retrieve it as soon as possible to help prevent theft. If your building has a designated package room, please ensure the door is securely closed after use.\nWe appreciate your cooperation in keeping our community safe and secure.  If you have any questions or concerns, please feel free to reach out.\n\nBest Regards,\nMD Squared Property Group",
+          "isResponse": false
+        },
+        {
+          "id": "1987ac46c443a50e",
+          "from": "Karthik Sreedhar <ks4190@columbia.edu>",
+          "to": [
+            "sreedhar_sivakumaran@yahoo.com"
+          ],
+          "date": "Tue, 5 Aug 2025 11:05:49 -0400",
+          "subject": "Re: Fw: Resident Memo – Community Guidelines & Building Security",
+          "body": "yea i get all these thanks though!",
+          "isResponse": true
+        }
+      ]
+    },
+    {
+      "id": "thread-1987aa27a7ec47f1",
+      "subject": "Re: Updated invitation: karthik lydia - TRY TOOL @ Tue Aug 5, 2025 3pm - 4pm (EDT) (Karthik Sreedhar)",
+      "from": "Karthik Sreedhar <ks4190@columbia.edu>",
+      "originalFrom": "\"Lydia B. Chilton\" <lc3251@columbia.edu>",
+      "date": "Tue, 5 Aug 2025 10:53:14 -0400",
+      "body": "I'd be on zoom and have to leave by 3:15, you could use the site then and\nthen we can sync later? or we can just meet in the evening if that still\nworks",
+      "originalBody": "This event has been updated\nChanged: time\n\nkarthik lydia - TRY TOOL\nTuesday Aug 5, 2025 ⋅ 3pm – 4pm\nEastern Time - New York\n\nJoin Zoom Meeting\nhttps://columbiauniversity.zoom.us/j/96226233853?pwd=bWDKTVeshyPXqbLIhjtRXeoUcJjjbP.1&jst=2 \n\t\nJoin by phone\n(US) +1 669-444-9171\npasscode: 965471\n\t\nJoin using SIP\n96226233853@zoomcrc.com\npasscode: 965471\n\nJoining instructions\nhttps://urldefense.proofpoint.com/v2/url?u=https-3A__www.google.com_url-3Fq-3Dhttps-3A__applications.zoom.us_addon_invitation_detail-3FmeetingUuid-253DdbW506WyTXaqHcYYcoi34g-25253D-25253D-2526signature-253D94c8636ae1849cc455f4a8aa53c36bf2199164198ed75db38a09d1b31389451e-2526v-253D1-26sa-3DD-26source-3Dcalendar-26usg-3DAOvVaw3-5F4805RIw0hpRuS77ouCnn&d=DwIGaQ&c=009klHSCxuh5AI1vNQzSO0KGjl4nbi2Q0M1QLJX9BeE&r=2WR0ko0o4Val5uK--6ILz02ebCRgynFBUs9x2LG9Eeg&m=8irVJzPtkkyczYwdOXvBPaI-XsTwg6TgvNKoGZxSpuCX2-BCaPgk93klNQ6sHs67&s=iBHntiRTh3-wszS3cbmK7vb9zFFbZwtNmGNgxBb2zoc&e= \n\t\nJoining notes\nMeeting host: lc3251@columbia.edu\n\nJoin Zoom Meeting:\nhttps://columbiauniversity.zoom.us/j/96226233853?pwd=bWDKTVeshyPXqbLIhjtRXeoUcJjjbP.1&jst=2 \n\nOrganizer\nLydia B. Chilton\nlc3251@columbia.edu\n\nGuests\nLydia B. Chilton - organizer\nKarthik Sreedhar\nView all guest info  \nhttps://calendar.google.com/calendar/event?action=VIEW&eid=MnNwcDV0b25xbnQ3dG5taWRpNnBidGk5MnQga3M0MTkwQGNvbHVtYmlhLmVkdQ&tok=MTkjbGMzMjUxQGNvbHVtYmlhLmVkdWNmMDQyMjA5ZmEwMzNlZjJkMGEwZWE0NWNiZmQ2YzU5MDJkMzVlZDY&ctz=America%2FNew_York&hl=en&es=1 \n\nReply for ks4190@columbia.edu and view more details  \nhttps://calendar.google.com/calendar/event?action=VIEW&eid=MnNwcDV0b25xbnQ3dG5taWRpNnBidGk5MnQga3M0MTkwQGNvbHVtYmlhLmVkdQ&tok=MTkjbGMzMjUxQGNvbHVtYmlhLmVkdWNmMDQyMjA5ZmEwMzNlZjJkMGEwZWE0NWNiZmQ2YzU5MDJkMzVlZDY&ctz=America%2FNew_York&hl=en&es=1 \nYour attendance is optional.\n\n~~//~~\nInvitation from Google Calendar: https://calendar.google.com/calendar/ \n\nYou are receiving this email because you are subscribed to calendar  \nnotifications. To stop receiving these emails, go to  \nhttps://calendar.google.com/calendar/r/settings , select this calendar, and  \nchange \"Other notifications\".\n\nForwarding this invitation could allow any recipient to send a response to  \nthe organizer, be added to the guest list, invite others regardless of  \ntheir own invitation status, or modify your RSVP.\n\nLearn more https://urldefense.proofpoint.com/v2/url?u=https-3A__support.google.com_calendar_answer_37135-23forwarding&d=DwIGaQ&c=009klHSCxuh5AI1vNQzSO0KGjl4nbi2Q0M1QLJX9BeE&r=2WR0ko0o4Val5uK--6ILz02ebCRgynFBUs9x2LG9Eeg&m=8irVJzPtkkyczYwdOXvBPaI-XsTwg6TgvNKoGZxSpuCX2-BCaPgk93klNQ6sHs67&s=gLn0uabnxTXlsbQziw-mio_KT3bU_HHpjEukrPgmfYE&e=",
+      "responseId": "1987ab8e6df44210",
+      "messages": [
+        {
+          "id": "1987aa27a7ec47f1",
+          "from": "\"Lydia B. Chilton\" <lc3251@columbia.edu>",
+          "to": [
+            "Karthik Sreedhar <ks4190@columbia.edu>"
+          ],
+          "date": "Tue, 05 Aug 2025 14:28:42 +0000",
+          "subject": "Updated invitation: karthik lydia - TRY TOOL @ Tue Aug 5, 2025 3pm - 4pm (EDT) (Karthik Sreedhar)",
+          "body": "This event has been updated\nChanged: time\n\nkarthik lydia - TRY TOOL\nTuesday Aug 5, 2025 ⋅ 3pm – 4pm\nEastern Time - New York\n\nJoin Zoom Meeting\nhttps://columbiauniversity.zoom.us/j/96226233853?pwd=bWDKTVeshyPXqbLIhjtRXeoUcJjjbP.1&jst=2 \n\t\nJoin by phone\n(US) +1 669-444-9171\npasscode: 965471\n\t\nJoin using SIP\n96226233853@zoomcrc.com\npasscode: 965471\n\nJoining instructions\nhttps://urldefense.proofpoint.com/v2/url?u=https-3A__www.google.com_url-3Fq-3Dhttps-3A__applications.zoom.us_addon_invitation_detail-3FmeetingUuid-253DdbW506WyTXaqHcYYcoi34g-25253D-25253D-2526signature-253D94c8636ae1849cc455f4a8aa53c36bf2199164198ed75db38a09d1b31389451e-2526v-253D1-26sa-3DD-26source-3Dcalendar-26usg-3DAOvVaw3-5F4805RIw0hpRuS77ouCnn&d=DwIGaQ&c=009klHSCxuh5AI1vNQzSO0KGjl4nbi2Q0M1QLJX9BeE&r=2WR0ko0o4Val5uK--6ILz02ebCRgynFBUs9x2LG9Eeg&m=8irVJzPtkkyczYwdOXvBPaI-XsTwg6TgvNKoGZxSpuCX2-BCaPgk93klNQ6sHs67&s=iBHntiRTh3-wszS3cbmK7vb9zFFbZwtNmGNgxBb2zoc&e= \n\t\nJoining notes\nMeeting host: lc3251@columbia.edu\n\nJoin Zoom Meeting:\nhttps://columbiauniversity.zoom.us/j/96226233853?pwd=bWDKTVeshyPXqbLIhjtRXeoUcJjjbP.1&jst=2 \n\nOrganizer\nLydia B. Chilton\nlc3251@columbia.edu\n\nGuests\nLydia B. Chilton - organizer\nKarthik Sreedhar\nView all guest info  \nhttps://calendar.google.com/calendar/event?action=VIEW&eid=MnNwcDV0b25xbnQ3dG5taWRpNnBidGk5MnQga3M0MTkwQGNvbHVtYmlhLmVkdQ&tok=MTkjbGMzMjUxQGNvbHVtYmlhLmVkdWNmMDQyMjA5ZmEwMzNlZjJkMGEwZWE0NWNiZmQ2YzU5MDJkMzVlZDY&ctz=America%2FNew_York&hl=en&es=1 \n\nReply for ks4190@columbia.edu and view more details  \nhttps://calendar.google.com/calendar/event?action=VIEW&eid=MnNwcDV0b25xbnQ3dG5taWRpNnBidGk5MnQga3M0MTkwQGNvbHVtYmlhLmVkdQ&tok=MTkjbGMzMjUxQGNvbHVtYmlhLmVkdWNmMDQyMjA5ZmEwMzNlZjJkMGEwZWE0NWNiZmQ2YzU5MDJkMzVlZDY&ctz=America%2FNew_York&hl=en&es=1 \nYour attendance is optional.\n\n~~//~~\nInvitation from Google Calendar: https://calendar.google.com/calendar/ \n\nYou are receiving this email because you are subscribed to calendar  \nnotifications. To stop receiving these emails, go to  \nhttps://calendar.google.com/calendar/r/settings , select this calendar, and  \nchange \"Other notifications\".\n\nForwarding this invitation could allow any recipient to send a response to  \nthe organizer, be added to the guest list, invite others regardless of  \ntheir own invitation status, or modify your RSVP.\n\nLearn more https://urldefense.proofpoint.com/v2/url?u=https-3A__support.google.com_calendar_answer_37135-23forwarding&d=DwIGaQ&c=009klHSCxuh5AI1vNQzSO0KGjl4nbi2Q0M1QLJX9BeE&r=2WR0ko0o4Val5uK--6ILz02ebCRgynFBUs9x2LG9Eeg&m=8irVJzPtkkyczYwdOXvBPaI-XsTwg6TgvNKoGZxSpuCX2-BCaPgk93klNQ6sHs67&s=gLn0uabnxTXlsbQziw-mio_KT3bU_HHpjEukrPgmfYE&e=",
+          "isResponse": false
+        },
+        {
+          "id": "1987ab8e6df44210",
+          "from": "Karthik Sreedhar <ks4190@columbia.edu>",
+          "to": [
+            "\"Lydia B. Chilton\" <lc3251@columbia.edu>"
+          ],
+          "date": "Tue, 5 Aug 2025 10:53:14 -0400",
+          "subject": "Re: Updated invitation: karthik lydia - TRY TOOL @ Tue Aug 5, 2025 3pm - 4pm (EDT) (Karthik Sreedhar)",
+          "body": "I'd be on zoom and have to leave by 3:15, you could use the site then and\nthen we can sync later? or we can just meet in the evening if that still\nworks",
+          "isResponse": true
+        }
+      ]
+    },
+    {
+      "id": "thread-1987597f9dcf1b09",
+      "subject": "Re:",
+      "from": "Karthik Sreedhar <ks4190@columbia.edu>",
+      "originalFrom": "Lydia Chilton <chilton@cs.columbia.edu>",
+      "date": "Tue, 5 Aug 2025 07:58:26 -0400",
+      "body": "",
+      "originalBody": "yeah, I may have to move the time, but tomorrow works for me.\n\nOn Mon, Aug 4, 2025 at 10:59 AM Karthik Sreedhar <ks4190@columbia.edu>\nwrote:\n\n> Hi I'm very sorry for late notice, can we skip today and meet tomorrow?\n> Still working on hosting : ( (im using render, took me a little to switch\n> to use mongo / now just debugging why buttons work locally but not on\n> site). I'll be at lunch tomorrow and be ready to meet after, and will send\n> the site / come by your office as soon as I work through it today\n>",
+      "responseId": "1987a1907fe4c0fa",
+      "messages": [
+        {
+          "id": "1987597f9dcf1b09",
+          "from": "Karthik Sreedhar <ks4190@columbia.edu>",
+          "to": [
+            "Lydia Chilton <chilton@cs.columbia.edu>"
+          ],
+          "date": "Mon, 4 Aug 2025 10:36:07 -0400",
+          "subject": "No Subject",
+          "body": "Hi I'm very sorry for late notice, can we skip today and meet tomorrow? Still working on hosting : ( (im using render, took me a little to switch to use mongo / now just debugging why buttons work locally but not on site). I'll be at lunch tomorrow and be ready to meet after, and will send the site / come by your office as soon as I work through it today",
+          "isResponse": true
+        },
+        {
+          "id": "19875a7b18be1d7f",
+          "from": "Lydia Chilton <chilton@cs.columbia.edu>",
+          "to": [
+            "Karthik Sreedhar <ks4190@columbia.edu>"
+          ],
+          "date": "Mon, 4 Aug 2025 11:16:06 -0400",
+          "subject": "Re:",
+          "body": "yeah, I may have to move the time, but tomorrow works for me.\n\nOn Mon, Aug 4, 2025 at 10:59 AM Karthik Sreedhar <ks4190@columbia.edu>\nwrote:\n\n> Hi I'm very sorry for late notice, can we skip today and meet tomorrow?\n> Still working on hosting : ( (im using render, took me a little to switch\n> to use mongo / now just debugging why buttons work locally but not on\n> site). I'll be at lunch tomorrow and be ready to meet after, and will send\n> the site / come by your office as soon as I work through it today\n>",
+          "isResponse": false
+        },
+        {
+          "id": "19875aec06823f8a",
+          "from": "Karthik Sreedhar <ks4190@columbia.edu>",
+          "to": [
+            "Lydia Chilton <chilton@cs.columbia.edu>"
+          ],
+          "date": "Mon, 4 Aug 2025 11:22:34 -0400",
+          "subject": "Re:",
+          "body": "I have an MRI at 4:15 tomorrow, is there any chance you can meet anytime earlier than 3 (I can be on campus by 8am)? If not no worries, but I’ll have to leave a bit early and be remote I apologize",
+          "isResponse": true
+        },
+        {
+          "id": "19875b585b00c829",
+          "from": "Lydia Chilton <chilton@cs.columbia.edu>",
+          "to": [
+            "Karthik Sreedhar <ks4190@columbia.edu>"
+          ],
+          "date": "Mon, 4 Aug 2025 11:31:12 -0400",
+          "subject": "Re:",
+          "body": "no problem! done :)\n\nOn Mon, Aug 4, 2025 at 11:24 AM Karthik Sreedhar <ks4190@columbia.edu>\nwrote:\n\n> I have an MRI at 4:15 tomorrow, is there any chance you can meet anytime\n> earlier than 3 (I can be on campus by 8am)? If not no worries, but I’ll\n> have to leave a bit early and be remote I apologize\n>\n> On Aug 4, 2025, at 11:16 AM, Lydia Chilton <chilton@cs.columbia.edu>\n> wrote:\n>\n> ﻿\n> yeah, I may have to move the time, but tomorrow works for me.\n>\n> On Mon, Aug 4, 2025 at 10:59 AM Karthik Sreedhar <ks4190@columbia.edu>\n> wrote:\n>\n>> Hi I'm very sorry for late notice, can we skip today and meet tomorrow?\n>> Still working on hosting : ( (im using render, took me a little to switch\n>> to use mongo / now just debugging why buttons work locally but not on\n>> site). I'll be at lunch tomorrow and be ready to meet after, and will send\n>> the site / come by your office as soon as I work through it today\n>>\n>",
+          "isResponse": false
+        },
+        {
+          "id": "1987a1907fe4c0fa",
+          "from": "Karthik Sreedhar <ks4190@columbia.edu>",
+          "to": [
+            "Lydia Chilton <chilton@cs.columbia.edu>"
+          ],
+          "date": "Tue, 5 Aug 2025 07:58:26 -0400",
+          "subject": "Re:",
+          "body": "",
+          "isResponse": true
+        }
+      ]
+    },
+    {
+      "id": "thread-199c93336cb9da13",
+      "subject": "Re: Canceled event: Karthik Riya lydia @ Thu Oct 9, 2025 11:45am - 12:45pm (EDT) (Karthik Sreedhar)",
+      "from": "Karthik Sreedhar <ks4190@columbia.edu>",
+      "originalFrom": "\"Lydia B. Chilton\" <lc3251@columbia.edu>",
+      "date": "Thu, 9 Oct 2025 16:00:22 -0400",
+      "body": "Sounds good, we can also do tomorrow (or another time) if it’s inconvenient!",
+      "originalBody": "This event has been canceled and removed from your calendar.\n\nKarthik Riya lydia\nThursday Oct 9, 2025 ⋅ 11:45am – 12:45pm\nEastern Time - New York\n\nJoin Zoom Meeting\nhttps://columbiauniversity.zoom.us/j/97324282426?pwd=nRsL2aFldAnaQFlNcu30okWUp0Whbf.1&jst=2 \n\t\nJoin by phone\n(US) +1 309-205-3325\npasscode: 402734\n\t\nJoin using SIP\n97324282426@zoomcrc.com\npasscode: 402734\n\nJoining instructions\nhttps://urldefense.com/v3/__https://www.google.com/url?q=https:**Aapplications.zoom.us*addon*invitation*detail*meetingUuid*3DXXsfL7X0QKKDKS*252B0a7K1Xw*253D*253D*26signature*3D4cef1a0e5ee47575f8ed3c8dc9fa8bf653c101c9e4bfb714a8bf2304086d5f63*26v*3D1&sa=D&source=calendar&usg=AOvVaw1pZWmmQgMu9Kagzfd3v5x3__;Ly8vLy8_JSUlJSUlJSU!!BDUfV1Et5lrpZQ!WeRTHZeWVTNh5aHlh95mHTvBdFh2lfzrv_87jJ_iHKhMqH3uRoDJ784B0t6PtGhbyk1pXZS6VdI14mrZ7Zu1GZJG$ \n\t\nJoining notes\nMeeting host: lc3251@columbia.edu\n\nJoin Zoom Meeting:\nhttps://columbiauniversity.zoom.us/j/97324282426?pwd=nRsL2aFldAnaQFlNcu30okWUp0Whbf.1&jst=2 \n\nOrganizer\nLydia B. Chilton\nlc3251@columbia.edu\n\nGuests\nLydia B. Chilton - organizer\nKarthik Sreedhar\nRiya Sahni\n\n~~//~~\nInvitation from Google Calendar: https://urldefense.com/v3/__https://calendar.google.com/calendar/__;!!BDUfV1Et5lrpZQ!WeRTHZeWVTNh5aHlh95mHTvBdFh2lfzrv_87jJ_iHKhMqH3uRoDJ784B0t6PtGhbyk1pXZS6VdI14mrZ7fUaln_x$ \n\nYou are receiving this email because you are subscribed to calendar  \nnotifications. To stop receiving these emails, go to  \nhttps://urldefense.com/v3/__https://calendar.google.com/calendar/r/settings__;!!BDUfV1Et5lrpZQ!WeRTHZeWVTNh5aHlh95mHTvBdFh2lfzrv_87jJ_iHKhMqH3uRoDJ784B0t6PtGhbyk1pXZS6VdI14mrZ7aAfCDWM$ , select this calendar, and  \nchange \"Other notifications\".\n\nForwarding this invitation could allow any recipient to send a response to  \nthe organizer, be added to the guest list, invite others regardless of  \ntheir own invitation status, or modify your RSVP.\n\nLearn more https://urldefense.com/v3/__https://support.google.com/calendar/answer/37135*forwarding__;Iw!!BDUfV1Et5lrpZQ!WeRTHZeWVTNh5aHlh95mHTvBdFh2lfzrv_87jJ_iHKhMqH3uRoDJ784B0t6PtGhbyk1pXZS6VdI14mrZ7V5s6-n7$",
+      "responseId": "199ca8f9aa2f836e",
+      "messages": [
+        {
+          "id": "199c93336cb9da13",
+          "from": "\"Lydia B. Chilton\" <lc3251@columbia.edu>",
+          "to": [
+            "Karthik Sreedhar <ks4190@columbia.edu>"
+          ],
+          "date": "Thu, 09 Oct 2025 13:39:56 +0000",
+          "subject": "Canceled event: Karthik Riya lydia @ Thu Oct 9, 2025 11:45am - 12:45pm (EDT) (Karthik Sreedhar)",
+          "body": "This event has been canceled and removed from your calendar.\n\nKarthik Riya lydia\nThursday Oct 9, 2025 ⋅ 11:45am – 12:45pm\nEastern Time - New York\n\nJoin Zoom Meeting\nhttps://columbiauniversity.zoom.us/j/97324282426?pwd=nRsL2aFldAnaQFlNcu30okWUp0Whbf.1&jst=2 \n\t\nJoin by phone\n(US) +1 309-205-3325\npasscode: 402734\n\t\nJoin using SIP\n97324282426@zoomcrc.com\npasscode: 402734\n\nJoining instructions\nhttps://urldefense.com/v3/__https://www.google.com/url?q=https:**Aapplications.zoom.us*addon*invitation*detail*meetingUuid*3DXXsfL7X0QKKDKS*252B0a7K1Xw*253D*253D*26signature*3D4cef1a0e5ee47575f8ed3c8dc9fa8bf653c101c9e4bfb714a8bf2304086d5f63*26v*3D1&sa=D&source=calendar&usg=AOvVaw1pZWmmQgMu9Kagzfd3v5x3__;Ly8vLy8_JSUlJSUlJSU!!BDUfV1Et5lrpZQ!WeRTHZeWVTNh5aHlh95mHTvBdFh2lfzrv_87jJ_iHKhMqH3uRoDJ784B0t6PtGhbyk1pXZS6VdI14mrZ7Zu1GZJG$ \n\t\nJoining notes\nMeeting host: lc3251@columbia.edu\n\nJoin Zoom Meeting:\nhttps://columbiauniversity.zoom.us/j/97324282426?pwd=nRsL2aFldAnaQFlNcu30okWUp0Whbf.1&jst=2 \n\nOrganizer\nLydia B. Chilton\nlc3251@columbia.edu\n\nGuests\nLydia B. Chilton - organizer\nKarthik Sreedhar\nRiya Sahni\n\n~~//~~\nInvitation from Google Calendar: https://urldefense.com/v3/__https://calendar.google.com/calendar/__;!!BDUfV1Et5lrpZQ!WeRTHZeWVTNh5aHlh95mHTvBdFh2lfzrv_87jJ_iHKhMqH3uRoDJ784B0t6PtGhbyk1pXZS6VdI14mrZ7fUaln_x$ \n\nYou are receiving this email because you are subscribed to calendar  \nnotifications. To stop receiving these emails, go to  \nhttps://urldefense.com/v3/__https://calendar.google.com/calendar/r/settings__;!!BDUfV1Et5lrpZQ!WeRTHZeWVTNh5aHlh95mHTvBdFh2lfzrv_87jJ_iHKhMqH3uRoDJ784B0t6PtGhbyk1pXZS6VdI14mrZ7aAfCDWM$ , select this calendar, and  \nchange \"Other notifications\".\n\nForwarding this invitation could allow any recipient to send a response to  \nthe organizer, be added to the guest list, invite others regardless of  \ntheir own invitation status, or modify your RSVP.\n\nLearn more https://urldefense.com/v3/__https://support.google.com/calendar/answer/37135*forwarding__;Iw!!BDUfV1Et5lrpZQ!WeRTHZeWVTNh5aHlh95mHTvBdFh2lfzrv_87jJ_iHKhMqH3uRoDJ784B0t6PtGhbyk1pXZS6VdI14mrZ7V5s6-n7$",
+          "isResponse": false
+        },
+        {
+          "id": "199c975227ba3a46",
+          "from": "Karthik Sreedhar <ks4190@columbia.edu>",
+          "to": [
+            "\"Lydia B. Chilton\" <lc3251@columbia.edu>"
+          ],
+          "date": "Thu, 9 Oct 2025 10:51:42 -0400",
+          "subject": "Re: Canceled event: Karthik Riya lydia @ Thu Oct 9, 2025 11:45am - 12:45pm (EDT) (Karthik Sreedhar)",
+          "body": "Would love to meet later today (I’ll be on campus in the morning, can stay longer if needed) or tomorrow after the class, I made the update to load priority emails as well as added some more features for summarization. If you pull the latest version you can also try it yourself",
+          "isResponse": true
+        },
+        {
+          "id": "199c98a010a4b3d8",
+          "from": "Lydia Chilton <chilton@cs.columbia.edu>",
+          "to": [
+            "Karthik Sreedhar <ks4190@columbia.edu>"
+          ],
+          "date": "Thu, 9 Oct 2025 11:14:32 -0400",
+          "subject": "Re: Canceled event: Karthik Riya lydia @ Thu Oct 9, 2025 11:45am - 12:45pm (EDT) (Karthik Sreedhar)",
+          "body": "4pm?\n\nOn Thu, Oct 9, 2025 at 10:52 AM Karthik Sreedhar <ks4190@columbia.edu>\nwrote:\n\n> Would love to meet later today (I’ll be on campus in the morning, can stay\n> longer if needed) or tomorrow after the class, I made the update to load\n> priority emails as well as added some more features for summarization. If\n> you pull the latest version you can also try it yourself\n>\n> On Oct 9, 2025, at 9:40 AM, Lydia B. Chilton <lc3251@columbia.edu> wrote:\n>\n> ﻿ Karthik Riya lydia\n>\n>\n> This event has been canceled and removed from your calendar.\n>\n> Join Zoom Meeting\n> <https://columbiauniversity.zoom.us/j/97324282426?pwd=nRsL2aFldAnaQFlNcu30okWUp0Whbf.1&jst=2 >\n> columbiauniversity.zoom.us/j/973...\n> <https://columbiauniversity.zoom.us/j/97324282426?pwd=nRsL2aFldAnaQFlNcu30okWUp0Whbf.1&jst=2 >\n> ID: 97324282426\n> passcode: 402734\n> Join by phone(US) +1 309-205-3325 <+13092053325,,97324282426#>\n> passcode: 402734\n> Join using SIP97324282426@zoomcrc.com\n> passcode: 402734\n>\n> Joining instructions\n> <https://urldefense.com/v3/__https://www.google.com/url?q=https:**Aapplications.zoom.us*addon*invitation*detail*meetingUuid*3DXXsfL7X0QKKDKS*252B0a7K1Xw*253D*253D*26signature*3D4cef1a0e5ee47575f8ed3c8dc9fa8bf653c101c9e4bfb714a8bf2304086d5f63*26v*3D1&sa=D&source=calendar&usg=AOvVaw1pZWmmQgMu9Kagzfd3v5x3__;Ly8vLy8_JSUlJSUlJSU!!BDUfV1Et5lrpZQ!WeRTHZeWVTNh5aHlh95mHTvBdFh2lfzrv_87jJ_iHKhMqH3uRoDJ784B0t6PtGhbyk1pXZS6VdI14mrZ7Zu1GZJG$>\n> Joining notesMeeting host: lc3251@columbia.edu\n>\n> Join Zoom Meeting:\n>\n> https://columbiauniversity.zoom.us/j/97324282426?pwd=nRsL2aFldAnaQFlNcu30okWUp0Whbf.1&jst=2 \n> <https://urldefense.com/v3/__https://www.google.com/url?q=https*3A*2F*2Fcolumbiauniversity.zoom.us*2Fj*2F97324282426*3Fpwd*3DnRsL2aFldAnaQFlNcu30okWUp0Whbf.1*26jst*3D2&sa=D&source=calendar&ust=1760449140000000&usg=AOvVaw0LalNAkkJlr5QiepInWBpN__;JSUlJSUlJSUl!!BDUfV1Et5lrpZQ!WeRTHZeWVTNh5aHlh95mHTvBdFh2lfzrv_87jJ_iHKhMqH3uRoDJ784B0t6PtGhbyk1pXZS6VdI14mrZ7Tf-ipVp$>\n> WhenThursday Oct 9, 2025 ⋅ 11:45am – 12:45pm (Eastern Time - New York)\n> Guests\n> Lydia B. Chilton <lc3251@columbia.edu> - organizer\n> Karthik Sreedhar <ks4190@columbia.edu>\n> Riya Sahni <rs4640@columbia.edu>\n>\n> Invitation from Google Calendar\n> <https://urldefense.com/v3/__https://calendar.google.com/calendar/__;!!BDUfV1Et5lrpZQ!WeRTHZeWVTNh5aHlh95mHTvBdFh2lfzrv_87jJ_iHKhMqH3uRoDJ784B0t6PtGhbyk1pXZS6VdI14mrZ7fUaln_x$>\n>\n> You are receiving this email because you are subscribed to calendar\n> notifications. To stop receiving these emails, go to Calendar settings\n> <https://urldefense.com/v3/__https://calendar.google.com/calendar/r/settings__;!!BDUfV1Et5lrpZQ!WeRTHZeWVTNh5aHlh95mHTvBdFh2lfzrv_87jJ_iHKhMqH3uRoDJ784B0t6PtGhbyk1pXZS6VdI14mrZ7aAfCDWM$>,\n> select this calendar, and change \"Other notifications\".\n>\n> Forwarding this invitation could allow any recipient to send a response to\n> the organizer, be added to the guest list, invite others regardless of\n> their own invitation status, or modify your RSVP. Learn more\n> <https://urldefense.com/v3/__https://support.google.com/calendar/answer/37135*forwarding__;Iw!!BDUfV1Et5lrpZQ!WeRTHZeWVTNh5aHlh95mHTvBdFh2lfzrv_87jJ_iHKhMqH3uRoDJ784B0t6PtGhbyk1pXZS6VdI14mrZ7V5s6-n7$>\n> <mime-attachment.ics>\n> <invite.ics>\n>\n>",
+          "isResponse": false
+        },
+        {
+          "id": "199c9adad8023b4d",
+          "from": "Karthik Sreedhar <ks4190@columbia.edu>",
+          "to": [
+            "Lydia Chilton <chilton@cs.columbia.edu>"
+          ],
+          "date": "Thu, 9 Oct 2025 11:53:35 -0400",
+          "subject": "Re: Canceled event: Karthik Riya lydia @ Thu Oct 9, 2025 11:45am - 12:45pm (EDT) (Karthik Sreedhar)",
+          "body": "Works for me! i have PT before so would have to be on zoom though sorry",
+          "isResponse": true
+        },
+        {
+          "id": "199ca832a3bbacff",
+          "from": "Karthik Sreedhar <ks4190@columbia.edu>",
+          "to": [
+            "Lydia Chilton <chilton@cs.columbia.edu>"
+          ],
+          "date": "Thu, 9 Oct 2025 15:46:47 -0400",
+          "subject": "Re: Canceled event: Karthik Riya lydia @ Thu Oct 9, 2025 11:45am - 12:45pm (EDT) (Karthik Sreedhar)",
+          "body": "Following up! Or did you mean 4 tomorrow? That works too!",
+          "isResponse": true
+        },
+        {
+          "id": "199ca8e15074ca5e",
+          "from": "Lydia Chilton <chilton@cs.columbia.edu>",
+          "to": [
+            "Karthik Sreedhar <ks4190@columbia.edu>"
+          ],
+          "date": "Thu, 9 Oct 2025 15:58:35 -0400",
+          "subject": "Re: Canceled event: Karthik Riya lydia @ Thu Oct 9, 2025 11:45am - 12:45pm (EDT) (Karthik Sreedhar)",
+          "body": "Hopping in a cab. Let me call you from there when I get in one :)\n\nOn Thu, Oct 9, 2025 at 15:47 Karthik Sreedhar <ks4190@columbia.edu> wrote:\n\n> Following up! Or did you mean 4 tomorrow? That works too!\n>\n> On Oct 9, 2025, at 11:53 AM, Karthik Sreedhar <ks4190@columbia.edu> wrote:\n>\n> ﻿\n>\n> Works for me! i have PT before so would have to be on zoom though sorry\n>\n> On Oct 9, 2025, at 11:14 AM, Lydia Chilton <chilton@cs.columbia.edu>\n> wrote:\n>\n> ﻿\n> 4pm?\n>\n> On Thu, Oct 9, 2025 at 10:52 AM Karthik Sreedhar <ks4190@columbia.edu>\n> wrote:\n>\n>> Would love to meet later today (I’ll be on campus in the morning, can\n>> stay longer if needed) or tomorrow after the class, I made the update to\n>> load priority emails as well as added some more features for summarization.\n>> If you pull the latest version you can also try it yourself\n>>\n>> On Oct 9, 2025, at 9:40 AM, Lydia B. Chilton <lc3251@columbia.edu> wrote:\n>>\n>> ﻿ Karthik Riya lydia\n>>\n>>\n>> This event has been canceled and removed from your calendar.\n>>\n>> Join Zoom Meeting\n>> <https://columbiauniversity.zoom.us/j/97324282426?pwd=nRsL2aFldAnaQFlNcu30okWUp0Whbf.1&jst=2 >\n>> columbiauniversity.zoom.us/j/973...\n>> <https://columbiauniversity.zoom.us/j/97324282426?pwd=nRsL2aFldAnaQFlNcu30okWUp0Whbf.1&jst=2 >\n>> ID: 97324282426\n>> passcode: 402734\n>> Join by phone(US) +1 309-205-3325 <+13092053325,,97324282426#>\n>> passcode: 402734\n>> Join using SIP97324282426@zoomcrc.com\n>> passcode: 402734\n>>\n>> Joining instructions\n>> <https://urldefense.com/v3/__https://www.google.com/url?q=https:**Aapplications.zoom.us*addon*invitation*detail*meetingUuid*3DXXsfL7X0QKKDKS*252B0a7K1Xw*253D*253D*26signature*3D4cef1a0e5ee47575f8ed3c8dc9fa8bf653c101c9e4bfb714a8bf2304086d5f63*26v*3D1&sa=D&source=calendar&usg=AOvVaw1pZWmmQgMu9Kagzfd3v5x3__;Ly8vLy8_JSUlJSUlJSU!!BDUfV1Et5lrpZQ!WeRTHZeWVTNh5aHlh95mHTvBdFh2lfzrv_87jJ_iHKhMqH3uRoDJ784B0t6PtGhbyk1pXZS6VdI14mrZ7Zu1GZJG$>\n>> Joining notesMeeting host: lc3251@columbia.edu\n>>\n>> Join Zoom Meeting:\n>>\n>> https://columbiauniversity.zoom.us/j/97324282426?pwd=nRsL2aFldAnaQFlNcu30okWUp0Whbf.1&jst=2 \n>> <https://urldefense.com/v3/__https://www.google.com/url?q=https*3A*2F*2Fcolumbiauniversity.zoom.us*2Fj*2F97324282426*3Fpwd*3DnRsL2aFldAnaQFlNcu30okWUp0Whbf.1*26jst*3D2&sa=D&source=calendar&ust=1760449140000000&usg=AOvVaw0LalNAkkJlr5QiepInWBpN__;JSUlJSUlJSUl!!BDUfV1Et5lrpZQ!WeRTHZeWVTNh5aHlh95mHTvBdFh2lfzrv_87jJ_iHKhMqH3uRoDJ784B0t6PtGhbyk1pXZS6VdI14mrZ7Tf-ipVp$>\n>> WhenThursday Oct 9, 2025 ⋅ 11:45am – 12:45pm (Eastern Time - New York)\n>> Guests\n>> Lydia B. Chilton <lc3251@columbia.edu> - organizer\n>> Karthik Sreedhar <ks4190@columbia.edu>\n>> Riya Sahni <rs4640@columbia.edu>\n>>\n>> Invitation from Google Calendar\n>> <https://urldefense.com/v3/__https://calendar.google.com/calendar/__;!!BDUfV1Et5lrpZQ!WeRTHZeWVTNh5aHlh95mHTvBdFh2lfzrv_87jJ_iHKhMqH3uRoDJ784B0t6PtGhbyk1pXZS6VdI14mrZ7fUaln_x$>\n>>\n>> You are receiving this email because you are subscribed to calendar\n>> notifications. To stop receiving these emails, go to Calendar settings\n>> <https://urldefense.com/v3/__https://calendar.google.com/calendar/r/settings__;!!BDUfV1Et5lrpZQ!WeRTHZeWVTNh5aHlh95mHTvBdFh2lfzrv_87jJ_iHKhMqH3uRoDJ784B0t6PtGhbyk1pXZS6VdI14mrZ7aAfCDWM$>,\n>> select this calendar, and change \"Other notifications\".\n>>\n>> Forwarding this invitation could allow any recipient to send a response\n>> to the organizer, be added to the guest list, invite others regardless of\n>> their own invitation status, or modify your RSVP. Learn more\n>> <https://urldefense.com/v3/__https://support.google.com/calendar/answer/37135*forwarding__;Iw!!BDUfV1Et5lrpZQ!WeRTHZeWVTNh5aHlh95mHTvBdFh2lfzrv_87jJ_iHKhMqH3uRoDJ784B0t6PtGhbyk1pXZS6VdI14mrZ7V5s6-n7$>\n>> <mime-attachment.ics>\n>> <invite.ics>\n>>\n>>",
+          "isResponse": false
+        },
+        {
+          "id": "199ca8f9aa2f836e",
+          "from": "Karthik Sreedhar <ks4190@columbia.edu>",
+          "to": [
+            "Lydia Chilton <chilton@cs.columbia.edu>"
+          ],
+          "date": "Thu, 9 Oct 2025 16:00:22 -0400",
+          "subject": "Re: Canceled event: Karthik Riya lydia @ Thu Oct 9, 2025 11:45am - 12:45pm (EDT) (Karthik Sreedhar)",
+          "body": "Sounds good, we can also do tomorrow (or another time) if it’s inconvenient!",
+          "isResponse": true
+        }
+      ]
+    },
+    {
+      "id": "thread-1998635178deba21",
+      "subject": "Re: syllabus, and something we will be looking at during our first session",
+      "from": "Karthik Sreedhar <ks4190@columbia.edu>",
+      "originalFrom": "\"Matthew J. Connelly\" <mjc96@columbia.edu>",
+      "date": "Fri, 10 Oct 2025 08:36:40 -0400",
+      "body": "Hi,\nI’m incredibly sorry, running a little bit late :(\nThanks,\nKarthik",
+      "originalBody": "Folks:\n\nThis morning I'll be referring to the syllabus from my own section of CC.\nPlease see attached.\n\nAlso, we will look at some examples of CC midterm questions. Here's one\nbelow.\n\nBest\n\nMatt\n\nIdentify the following text -- where it comes from and the significance of\nthe passage within its argumentative context. Your answer should consist of\none shortish paragraph (equivalent to no more than one side of one page in\nthe blue book). Identify the passage by number. (13 pts.; 3 for\nidentification, 10 for significance.)\n\n“Every art and every inquiry, and similarly every action and pursuit, is\nthought to aim at some good; and for this reason the good has rightly been\ndeclared to be that at which all things aim. But a certain difference is\nfound among ends; some are activities, others are products apart from the\nactivities that produce them. Where there are ends apart from the actions,\nit is the nature of the products to be better than the activities.”\n\n~~~~~~~~~~~~~~~~~~~~~~~~\n\nMatthew Connelly\n\nProfessor of History\n\nVice Dean for AI Initiatives\n\n403 Fayerweather Hall\n\nDepartment of History\n\nMail Code 2508\n\n1180 Amsterdam Avenue\n\nColumbia University\n\nNew York, NY 10027\n\n(212) 854-4563\n\nhttps://urldefense.com/v3/__http://www.matthewconnelly.net__;!!BDUfV1Et5lrpZQ!XPQ0KYuZij9Y0NTE5ExdagJ-5CeTNTI2VDqFktTsUOSB5jS8T4HEFxXMmOcI5YmOarr_2AYNfVlwXVxsgqfAkMs$ \n\nOn Fri, Sep 26, 2025 at 2:20 PM Matthew J. Connelly <mjc96@columbia.edu>\nwrote:\n\n> Hi Everyone:\n>\n> Looking forward to seeing you shortly. Here is a link\n> <https://urldefense.com/v3/__https://docs.google.com/document/d/1hzAI2EV3tGuHOuJ3m87tm9gMnWAGmFq6/edit?usp=sharing&ouid=101016177546089125853&rtpof=true&sd=true__;!!BDUfV1Et5lrpZQ!XPQ0KYuZij9Y0NTE5ExdagJ-5CeTNTI2VDqFktTsUOSB5jS8T4HEFxXMmOcI5YmOarr_2AYNfVlwXVxsq9GMQlw$ >\n> to the updated version of the syllabus. Please look it over to see the\n> schedule for the day.\n>\n> Best\n> Matt\n>\n> ~~~~~~~~~~~~~~~~~~~~~~~~\n>\n> Matthew Connelly\n>\n>\n> Professor of History\n>\n> Vice Dean for AI Initiatives\n>\n>\n>\n>\n> 403 Fayerweather Hall\n>\n> Department of History\n>\n> Mail Code 2508\n>\n> 1180 Amsterdam Avenue\n>\n> Columbia University\n>\n> New York, NY 10027\n>\n>\n>\n> (212) 854-4563\n>\n> https://urldefense.com/v3/__http://www.matthewconnelly.net__;!!BDUfV1Et5lrpZQ!XPQ0KYuZij9Y0NTE5ExdagJ-5CeTNTI2VDqFktTsUOSB5jS8T4HEFxXMmOcI5YmOarr_2AYNfVlwXVxsgqfAkMs$ \n>\n>\n> On Fri, Sep 26, 2025 at 2:12 PM Lydia Chilton <chilton@cs.columbia.edu>\n> wrote:\n>\n>> I meant 9:30. Oops!\n>>\n>> On Fri, Sep 26, 2025 at 9:04 AM Lydia Chilton <chilton@cs.columbia.edu>\n>> wrote:\n>>\n>>> enter main central entrance of Uris (south facing), take first left, go\n>>> all the way ay to the end of the hallway, turn right, go all the way inside\n>>> and the class will be the corner office\n>>>\n>>",
+      "responseId": "199ce1fbe0e4dcbc",
+      "messages": [
+        {
+          "id": "1998635178deba21",
+          "from": "\"Matthew J. Connelly\" <mjc96@columbia.edu>",
+          "to": [
+            "Lydia Chilton <chilton@cs.columbia.edu>"
+          ],
+          "date": "Fri, 26 Sep 2025 14:27:12 +0100",
+          "subject": "syllabus, and something we will be looking at during our first session",
+          "body": "Folks:\n\nThis morning I'll be referring to the syllabus from my own section of CC.\nPlease see attached.\n\nAlso, we will look at some examples of CC midterm questions. Here's one\nbelow.\n\nBest\n\nMatt\n\nIdentify the following text -- where it comes from and the significance of\nthe passage within its argumentative context. Your answer should consist of\none shortish paragraph (equivalent to no more than one side of one page in\nthe blue book). Identify the passage by number. (13 pts.; 3 for\nidentification, 10 for significance.)\n\n“Every art and every inquiry, and similarly every action and pursuit, is\nthought to aim at some good; and for this reason the good has rightly been\ndeclared to be that at which all things aim. But a certain difference is\nfound among ends; some are activities, others are products apart from the\nactivities that produce them. Where there are ends apart from the actions,\nit is the nature of the products to be better than the activities.”\n\n~~~~~~~~~~~~~~~~~~~~~~~~\n\nMatthew Connelly\n\nProfessor of History\n\nVice Dean for AI Initiatives\n\n403 Fayerweather Hall\n\nDepartment of History\n\nMail Code 2508\n\n1180 Amsterdam Avenue\n\nColumbia University\n\nNew York, NY 10027\n\n(212) 854-4563\n\nhttps://urldefense.com/v3/__http://www.matthewconnelly.net__;!!BDUfV1Et5lrpZQ!XPQ0KYuZij9Y0NTE5ExdagJ-5CeTNTI2VDqFktTsUOSB5jS8T4HEFxXMmOcI5YmOarr_2AYNfVlwXVxsgqfAkMs$ \n\nOn Fri, Sep 26, 2025 at 2:20 PM Matthew J. Connelly <mjc96@columbia.edu>\nwrote:\n\n> Hi Everyone:\n>\n> Looking forward to seeing you shortly. Here is a link\n> <https://urldefense.com/v3/__https://docs.google.com/document/d/1hzAI2EV3tGuHOuJ3m87tm9gMnWAGmFq6/edit?usp=sharing&ouid=101016177546089125853&rtpof=true&sd=true__;!!BDUfV1Et5lrpZQ!XPQ0KYuZij9Y0NTE5ExdagJ-5CeTNTI2VDqFktTsUOSB5jS8T4HEFxXMmOcI5YmOarr_2AYNfVlwXVxsq9GMQlw$ >\n> to the updated version of the syllabus. Please look it over to see the\n> schedule for the day.\n>\n> Best\n> Matt\n>\n> ~~~~~~~~~~~~~~~~~~~~~~~~\n>\n> Matthew Connelly\n>\n>\n> Professor of History\n>\n> Vice Dean for AI Initiatives\n>\n>\n>\n>\n> 403 Fayerweather Hall\n>\n> Department of History\n>\n> Mail Code 2508\n>\n> 1180 Amsterdam Avenue\n>\n> Columbia University\n>\n> New York, NY 10027\n>\n>\n>\n> (212) 854-4563\n>\n> https://urldefense.com/v3/__http://www.matthewconnelly.net__;!!BDUfV1Et5lrpZQ!XPQ0KYuZij9Y0NTE5ExdagJ-5CeTNTI2VDqFktTsUOSB5jS8T4HEFxXMmOcI5YmOarr_2AYNfVlwXVxsgqfAkMs$ \n>\n>\n> On Fri, Sep 26, 2025 at 2:12 PM Lydia Chilton <chilton@cs.columbia.edu>\n> wrote:\n>\n>> I meant 9:30. Oops!\n>>\n>> On Fri, Sep 26, 2025 at 9:04 AM Lydia Chilton <chilton@cs.columbia.edu>\n>> wrote:\n>>\n>>> enter main central entrance of Uris (south facing), take first left, go\n>>> all the way ay to the end of the hallway, turn right, go all the way inside\n>>> and the class will be the corner office\n>>>\n>>",
+          "isResponse": false
+        },
+        {
+          "id": "199cdf01a405c7f4",
+          "from": "\"Matthew J. Connelly\" <mjc96@columbia.edu>",
+          "to": [
+            "Lydia Chilton <chilton@cs.columbia.edu>"
+          ],
+          "date": "Fri, 10 Oct 2025 12:44:33 +0100",
+          "subject": "Re: syllabus, and something we will be looking at during our first session",
+          "body": "Dear Friends:\n\nLydia and I are looking forward to seeing you in the Studio this morning.\nPlease note that, based on our experience last time, we decided to reverse\nthe topic we will be exploring today. Instead of text and context, we are\ngoing to focus on \"Finding Connections.\" I've pasted the relevant part of\nthe syllabus below.\n\nBest\n\nMatt\n\nSession 3: Finding Connections (early- to mid-November 2025)\n\nMaking meaningful connections between texts is one of the most powerful\nways to deepen understanding and strengthen memory. Drawing links—across\nworks, authors, disciplines, and traditions—can help us grasp abstract\nideas more concretely, see recurring patterns more clearly, and appreciate\nnuance more fully. But our brains often miss these opportunities. Sometimes\nwe forget what we've read, or focus too narrowly. Sometimes connections\nonly emerge after repeated encounters or guided reflection.\n\nIn this session, students will experiment with using AI to surface\nconnections between core texts—primarily from Contemporary Civilization,\nbut also from Literature Humanities, Art Humanities, and Music Humanities.\nThey will try prompting AI to relate different texts by theme (e.g.,\njustice), by intellectual lineage (e.g., Plato and Augustine), by\nrhetorical style (e.g., prophetic, dialogic, polemical), or by formal or\naesthetic strategies.\n\nFaculty will support students in critically evaluating AI-generated\nconnections: Are they substantive or superficial? Surprising or strained?\nWhat interpretive assumptions are embedded in the link? Students will then\npractice refining their own prompts to surface more meaningful insights and\nreflect on how the process enhances or limits their own capacity for\nsynthesis. Ultimately, this session asks: What does it mean to read in\nconversation—not just with a single author, but with a tradition? And how\ncan AI, used wisely, help us become more attentive and imaginative readers?\n\n~~~~~~~~~~~~~~~~~~~~~~~~\n\nMatthew Connelly\n\nProfessor of History\n\nVice Dean for AI Initiatives\n\n403 Fayerweather Hall\n\nDepartment of History\n\nMail Code 2508\n\n1180 Amsterdam Avenue\n\nColumbia University\n\nNew York, NY 10027\n\n(212) 854-4563\n\nhttps://urldefense.com/v3/__http://www.matthewconnelly.net__;!!BDUfV1Et5lrpZQ!UCRPvngC7aPyMd5z626CkBSDv2a-a7zyQ9hf7_3NOiAdcqg7uP-xLBVwdv6dcQAsuJI7TTgbWQjOWihiYTR1qb0$ \n\nOn Fri, Sep 26, 2025 at 2:27 PM Matthew J. Connelly <mjc96@columbia.edu>\nwrote:\n\n> Folks:\n>\n> This morning I'll be referring to the syllabus from my own section of CC.\n> Please see attached.\n>\n> Also, we will look at some examples of CC midterm questions. Here's one\n> below.\n>\n> Best\n>\n> Matt\n>\n> Identify the following text -- where it comes from and the significance of\n> the passage within its argumentative context. Your answer should consist of\n> one shortish paragraph (equivalent to no more than one side of one page in\n> the blue book). Identify the passage by number. (13 pts.; 3 for\n> identification, 10 for significance.)\n>\n> “Every art and every inquiry, and similarly every action and pursuit, is\n> thought to aim at some good; and for this reason the good has rightly been\n> declared to be that at which all things aim. But a certain difference is\n> found among ends; some are activities, others are products apart from the\n> activities that produce them. Where there are ends apart from the actions,\n> it is the nature of the products to be better than the activities.”\n>\n> ~~~~~~~~~~~~~~~~~~~~~~~~\n>\n> Matthew Connelly\n>\n>\n> Professor of History\n>\n> Vice Dean for AI Initiatives\n>\n>\n>\n>\n> 403 Fayerweather Hall\n>\n> Department of History\n>\n> Mail Code 2508\n>\n> 1180 Amsterdam Avenue\n>\n> Columbia University\n>\n> New York, NY 10027\n>\n>\n>\n> (212) 854-4563\n>\n> https://urldefense.com/v3/__http://www.matthewconnelly.net__;!!BDUfV1Et5lrpZQ!UCRPvngC7aPyMd5z626CkBSDv2a-a7zyQ9hf7_3NOiAdcqg7uP-xLBVwdv6dcQAsuJI7TTgbWQjOWihiYTR1qb0$ \n>\n>\n> On Fri, Sep 26, 2025 at 2:20 PM Matthew J. Connelly <mjc96@columbia.edu>\n> wrote:\n>\n>> Hi Everyone:\n>>\n>> Looking forward to seeing you shortly. Here is a link\n>> <https://urldefense.com/v3/__https://docs.google.com/document/d/1hzAI2EV3tGuHOuJ3m87tm9gMnWAGmFq6/edit?usp=sharing&ouid=101016177546089125853&rtpof=true&sd=true__;!!BDUfV1Et5lrpZQ!UCRPvngC7aPyMd5z626CkBSDv2a-a7zyQ9hf7_3NOiAdcqg7uP-xLBVwdv6dcQAsuJI7TTgbWQjOWihic8vuxvs$ >\n>> to the updated version of the syllabus. Please look it over to see the\n>> schedule for the day.\n>>\n>> Best\n>> Matt\n>>\n>> ~~~~~~~~~~~~~~~~~~~~~~~~\n>>\n>> Matthew Connelly\n>>\n>>\n>> Professor of History\n>>\n>> Vice Dean for AI Initiatives\n>>\n>>\n>>\n>>\n>> 403 Fayerweather Hall\n>>\n>> Department of History\n>>\n>> Mail Code 2508\n>>\n>> 1180 Amsterdam Avenue\n>>\n>> Columbia University\n>>\n>> New York, NY 10027\n>>\n>>\n>>\n>> (212) 854-4563\n>>\n>> https://urldefense.com/v3/__http://www.matthewconnelly.net__;!!BDUfV1Et5lrpZQ!UCRPvngC7aPyMd5z626CkBSDv2a-a7zyQ9hf7_3NOiAdcqg7uP-xLBVwdv6dcQAsuJI7TTgbWQjOWihiYTR1qb0$ \n>>\n>>\n>> On Fri, Sep 26, 2025 at 2:12 PM Lydia Chilton <chilton@cs.columbia.edu>\n>> wrote:\n>>\n>>> I meant 9:30. Oops!\n>>>\n>>> On Fri, Sep 26, 2025 at 9:04 AM Lydia Chilton <chilton@cs.columbia.edu>\n>>> wrote:\n>>>\n>>>> enter main central entrance of Uris (south facing), take first left, go\n>>>> all the way ay to the end of the hallway, turn right, go all the way inside\n>>>> and the class will be the corner office\n>>>>\n>>>",
+          "isResponse": false
+        },
+        {
+          "id": "199ce1fbe0e4dcbc",
+          "from": "Karthik Sreedhar <ks4190@columbia.edu>",
+          "to": [
+            "\"Matthew J. Connelly\" <mjc96@columbia.edu>",
+            "\"Lydia B. Chilton\" <lc3251@columbia.edu>"
+          ],
+          "date": "Fri, 10 Oct 2025 08:36:40 -0400",
+          "subject": "Re: syllabus, and something we will be looking at during our first session",
+          "body": "Hi,\nI’m incredibly sorry, running a little bit late :(\nThanks,\nKarthik",
+          "isResponse": true
+        }
+      ]
     }
   ]
 }
