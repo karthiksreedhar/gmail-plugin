@@ -6326,6 +6326,128 @@ async function openEmailCategoriesEditorFromPopup() {
     }
 }
 
+/* Sort all unreplied emails using keyword matching and open the Unreplied Email Categories editor.
+   This mirrors the "Load Priority Emails → Edit Email Categories" experience, but scopes to unreplied-emails only. */
+async function sortUnrepliedAndOpenEditor() {
+    try {
+        // Ensure unreplied emails and current categories order are loaded
+        try { await loadUnrepliedEmails(); } catch (_) {}
+        try { await loadCurrentCategories(); } catch (_) {}
+
+        const list = Array.isArray(unrepliedEmails) ? unrepliedEmails.slice() : [];
+        if (!list.length) {
+            showErrorPopup('No unreplied emails found to sort.', 'Nothing to Sort');
+            return;
+        }
+
+        // Load keyword guidelines (category names/keywords). If absent, derive tokens from saved categories.
+        let guidelines = [];
+        try {
+            const resp = await fetch('/api/category-guidelines');
+            const data = await resp.json();
+            guidelines = Array.isArray(data.categories) ? data.categories : [];
+        } catch (_) {
+            guidelines = [];
+        }
+
+        // Build ordered category list
+        const ordered =
+            (Array.isArray(currentCategoriesOrder) && currentCategoriesOrder.length)
+                ? currentCategoriesOrder.slice()
+                : Array.from(new Set(list.map(e => e && e.category).filter(Boolean)));
+
+        // Build category -> tokens rows
+        const rows = [];
+        if (guidelines.length) {
+            guidelines.forEach(g => {
+                const raw = String(g.name || '').trim();
+                if (!raw) return;
+                let tokens = raw.split(',').map(s => String(s || '').trim()).filter(Boolean);
+                // If single label, augment with seed tokens for better coverage
+                if (tokens.length === 1) {
+                    const seeds = getCategorySeedTokens(tokens[0]) || [];
+                    if (Array.isArray(seeds) && seeds.length) tokens = seeds;
+                }
+                const mappedName = mapToCurrentCategory(tokens[0] || raw);
+                rows.push({ name: mappedName, tokens });
+            });
+        } else {
+            // Derive tokens from category names using known seeds
+            ordered.forEach(name => {
+                const seeds = getCategorySeedTokens(name) || [];
+                const tokens = (Array.isArray(seeds) && seeds.length) ? seeds : [name];
+                rows.push({ name, tokens });
+            });
+        }
+
+        // Deduplicate rows by name (case-insensitive)
+        const seen = new Set();
+        const catRows = [];
+        for (const r of rows) {
+            const key = String(r.name || '').toLowerCase();
+            if (key && !seen.has(key)) {
+                seen.add(key);
+                catRows.push(r);
+            }
+        }
+
+        // Build whole-word regex per category
+        const makeWordRegex = (tokens) => {
+            const parts = (tokens || [])
+                .map(t => String(t || '').trim())
+                .filter(Boolean)
+                .map(t => '\\b' + escapeRegExp(t) + '\\b'); // defined earlier
+            if (!parts.length) return null;
+            return new RegExp('(?:' + parts.join('|') + ')', 'i');
+        };
+        const catMatchers = catRows.map(r => ({ name: r.name, re: makeWordRegex(r.tokens || []) }));
+
+        // Classify each unreplied email based on subject/body keyword hits; fallback to existing mapping when no hit
+        list.forEach(e => {
+            const subj = String(e.subject || '');
+            const body = String(e.body || e.snippet || '');
+            const blob = subj + ' ' + body;
+            let assigned = '';
+            for (const cm of catMatchers) {
+                if (cm.re && cm.re.test(blob)) {
+                    assigned = cm.name;
+                    break;
+                }
+            }
+            e._cat = assigned ? mapToCurrentCategory(assigned) : mapToCurrentCategory(e.category || '');
+            e.__isNew = false; // not highlighting; all are persisted unreplied
+        });
+
+        // Build groups strictly from ordered categories
+        const order =
+            (Array.isArray(currentCategoriesOrder) && currentCategoriesOrder.length)
+                ? currentCategoriesOrder.slice()
+                : Array.from(new Set(list.map(e => e && e._cat).filter(Boolean)));
+        unrepliedOrder = order;
+
+        const idxBy = new Map(order.map((n, i) => [String(n || '').toLowerCase(), i]));
+        const groups = order.map(n => ({ name: n, emails: [] }));
+        list.forEach(e => {
+            const key = String(e._cat || '').toLowerCase();
+            const gi = idxBy.has(key) ? idxBy.get(key) : -1;
+            if (gi >= 0) groups[gi].emails.push(e);
+        });
+
+        // Set editor state without merging in any newly fetched inbox items
+        unrepliedAllPool = list;
+        persistedUnrepliedIds = new Set(list.map(e => e && e.id).filter(Boolean));
+        unrepliedWorkingGroups = groups;
+        currentUnrepliedSlideIndex = 0;
+
+        const modal = ensureUnrepliedEmailCategoriesModal();
+        renderUnrepliedEmailCarousel();
+        modal.style.display = 'block';
+    } catch (e) {
+        console.error('sortUnrepliedAndOpenEditor failed:', e);
+        showErrorPopup('Failed to sort unreplied emails. Please try again.', 'Open Failed');
+    }
+}
+
 function renderUnrepliedEmailCarousel() {
     try {
         const carousel = document.getElementById('unrepliedCarousel');
@@ -10262,6 +10384,7 @@ let selectedOtherThreadIds = new Set();
                             <button class="select-email-btn" onclick="addNewCategory()">+ Add Category</button>
                             <button class="select-email-btn" onclick="promptRefreshCategoriesMode()">🔄 Refresh Categories</button>
                             <button class="select-email-btn" onclick="openCarouselEditing()">Carousel Editing</button>
+                            <button class="select-email-btn" onclick="sortUnrepliedAndOpenEditor()" title="Automatically group all unreplied emails by keywords for quick review" style="background:#8b5cf6;">Sort Unreplied</button>
                             <button class="select-email-btn" onclick="showSummarizeCategoriesModal()" title="Generate or edit summaries for one or more categories" style="background:#17a2b8;">🧠 Summarize Categories</button>
                             <span style="color:#666; font-size:12px;">Drag emails between categories. Click “Approve & Save” to apply changes.</span>
                         </div>
@@ -11705,7 +11828,55 @@ function escapeHtml(s) {
         .replace(/'/g, '&#39;');
 }
 function escapeRegExp(s) {
-    return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\\\$&');
+}
+
+/* Global helper: seed tokens for common category names to improve keyword matching */
+function getCategorySeedTokens(name) {
+    const n = String(name || '').toLowerCase().trim();
+    // Normalize common variants
+    const norm = n.replace(/&/g, 'and').replace(/\s+/g, ' ');
+    const seeds = {
+        'teaching and student support': [
+            'ta', 'teaching assistant', 'assignment', 'homework', 'hw', 'grading', 'grade',
+            'extension', 'late pass', 'resubmit', 'midterm', 'final', 'exam', 'quiz',
+            'office hours', 'syllabus'
+        ],
+        'research and lab work': [
+            'research', 'lab', 'study', 'paper', 'irb', 'pilot', 'dataset', 'experiment',
+            'user study', 'analysis', 'annotation', 'protocol', 'subject recruitment'
+        ],
+        'conferences': [
+            'conference', 'submission', 'camera ready', 'taps', 'review', 'acm', 'ieee',
+            'pcs', 'cfp', 'deadline', 'workshop', 'proceedings'
+        ],
+        'university administration': [
+            'department', 'program', 'phd', 'seas', 'clearance', 'registration', 'university',
+            'admin', 'policy', 'advising', 'course registration', 'graduation', 'cs@cu'
+        ],
+        'financial and reimbursements': [
+            'reimbursement', 'invoice', 'receipt', 'payment', 'refund', 'expense',
+            'travel grant', 'scholarship', 'stipend', 'honorarium'
+        ],
+        'networking': [
+            'opportunity', 'role', 'position', 'recruit', 'recruiter', 'connect',
+            'coffee chat', 'network', 'job', 'career', 'opening', 'hiring', 'linkedin'
+        ],
+        // Often empty by design; leave as [] to avoid over-matching
+        'personal and life management': []
+    };
+    // Special cases the app recognizes elsewhere
+    if (norm === 'lydia chilton') {
+        return ['lydia', 'chilton', 'lc3251@columbia.edu'];
+    }
+    if (norm === 'apartment') {
+        return [
+            'apartment','lease','landlord','rent','rental','renewal','building','management',
+            'tenant','tenancy','super','maintenance','repair','repairs','utilities','doorman',
+            'roommate','sublease','move-in','move out','key pickup','broker','property manager'
+        ];
+    }
+    return seeds[norm] || [];
 }
 
         function renderSeeCategoryNotesLists() {
