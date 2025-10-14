@@ -7353,6 +7353,69 @@ function renderTodayEmailsList(authNeeded) {
     }).join('');
 
     host.innerHTML = emailsHTML;
+    // Fallback: if rendered child count doesn't match expected, rebuild using DOM nodes to avoid any HTML parsing issues
+    try {
+        const expected = sorted.length;
+        const actual = host.children ? host.children.length : 0;
+        if (actual !== expected) {
+            host.innerHTML = '';
+            sorted.forEach((e, i) => {
+                const wrapper = document.createElement('div');
+                wrapper.style.cssText = 'display:block;width:100%;margin-bottom:8px;clear:both;';
+
+                const label = document.createElement('label');
+                label.style.cssText = 'display:block;width:100%;box-sizing:border-box;border:1px solid #e9ecef;border-radius:6px;padding:10px;background:#FFF9CC;cursor:pointer;';
+
+                const table = document.createElement('table');
+                table.style.cssText = 'width:100%;border-collapse:collapse;';
+                const tr = document.createElement('tr');
+
+                const tdLeft = document.createElement('td');
+                tdLeft.style.cssText = 'width:30px;vertical-align:top;padding-right:10px;';
+                const cb = document.createElement('input');
+                cb.type = 'checkbox';
+                cb.id = `today-email-${i}`;
+                cb.addEventListener('change', (ev) => toggleTodayEmail(i, ev.target.checked));
+                tdLeft.appendChild(cb);
+
+                const tdRight = document.createElement('td');
+                tdRight.style.cssText = 'vertical-align:top;';
+
+                const subjDiv = document.createElement('div');
+                subjDiv.style.cssText = 'font-weight:600;color:#333;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
+                subjDiv.textContent = e.subject || 'No Subject';
+
+                const metaDiv = document.createElement('div');
+                metaDiv.style.cssText = 'font-size:12px;color:#666;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:2px;';
+                metaDiv.textContent = `${e.from || 'Unknown Sender'} • ${formatDate(e.date || '')}`;
+
+                const prevDiv = document.createElement('div');
+                prevDiv.style.cssText = 'font-size:12px;color:#777;margin-top:4px;line-height:1.4;';
+                const previewText = String(e.body || '').replace(/\s+/g, ' ').trim();
+                prevDiv.textContent = previewText ? (previewText.slice(0, 160) + (previewText.length > 160 ? '...' : '')) : '';
+
+                const pill = document.createElement('div');
+                pill.className = `email-category category-${(e._cat || 'Personal & Life Management').toLowerCase().replace(/\s+/g, '-')}`;
+                pill.style.cssText = 'display:inline-block;padding:4px 8px;border-radius:12px;font-size:12px;font-weight:500;margin-top:6px;';
+                const colors = getCategoryColors(e._cat || 'Personal & Life Management');
+                pill.style.background = colors.bg;
+                pill.style.color = colors.fg;
+                pill.textContent = e._cat || 'Personal & Life Management';
+
+                tdRight.appendChild(subjDiv);
+                tdRight.appendChild(metaDiv);
+                tdRight.appendChild(prevDiv);
+                tdRight.appendChild(pill);
+
+                tr.appendChild(tdLeft);
+                tr.appendChild(tdRight);
+                table.appendChild(tr);
+                label.appendChild(table);
+                wrapper.appendChild(label);
+                host.appendChild(wrapper);
+            });
+        }
+    } catch (_) {}
 }
 
 function toggleTodayThread(i, checked) {
