@@ -8985,8 +8985,15 @@ let selectedOtherThreadIds = new Set();
                     : []; // Fallback handled below
                 const count = threads.length;
 
-                const itemsHtml = threads.length
-                    ? threads.map(t => threadToCollapsibleHTML(t, group.name)).join('')
+                // New threads (flagged with __isNew or isNew) should appear at the top of each category
+                const renderThreads = threads.slice().sort((a, b) => {
+                    const aNew = !!(a && (a.__isNew || a.isNew));
+                    const bNew = !!(b && (b.__isNew || b.isNew));
+                    return aNew === bNew ? 0 : (aNew ? -1 : 1);
+                });
+
+                const itemsHtml = renderThreads.length
+                    ? renderThreads.map(t => threadToCollapsibleHTML(t, group.name)).join('')
                     : `<div class="no-emails" style="padding: 16px;">No threads matched this keyword.</div>`;
 
                 slide.innerHTML = `
