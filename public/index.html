@@ -6245,8 +6245,13 @@ async function openThreadCategoryEditor() {
         // Build groups strictly from the saved category list and include ALL previous threads;
         // new threads (from Load Priority) are included and highlighted in yellow.
         const order = Array.isArray(currentCategoriesOrder) ? currentCategoriesOrder.slice() : [];
-        const indexByName = new Map(order.map((n, i) => [String(n || '').toLowerCase(), i]));
-        const groups = order.map(name => ({ name, threads: [] }));
+        // Exclude "Other" from the explicit category list to avoid duplicate Other slides
+        const orderedNoOther = order.filter(n => {
+            const lc = String(n || '').trim().toLowerCase();
+            return lc !== 'other' && lc !== 'other threads';
+        });
+        const indexByName = new Map(orderedNoOther.map((n, i) => [String(n || '').toLowerCase(), i]));
+        const groups = orderedNoOther.map(name => ({ name, threads: [] }));
 
         const others = [];
         for (const t of fullPool) {
@@ -8825,6 +8830,15 @@ let selectedOtherThreadIds = new Set();
             const counter = document.getElementById('keywordCarouselCounter');
             if (!carousel || !info || !counter) return;
 
+            // Deduplicate any accidental multiple "Other" groups (keep the first)
+            try {
+                const firstOther = Array.isArray(window.keywordResults) ? window.keywordResults.findIndex(g => g && g.isOther) : -1;
+                if (firstOther !== -1 && Array.isArray(window.keywordResults)) {
+                    window.keywordResults = window.keywordResults.filter((g, i) => !(g && g.isOther && i !== firstOther));
+                    keywordResults = window.keywordResults;
+                }
+            } catch (_) {}
+
             // Enforce "Other" as the last page before rendering
             ensureOtherLastOrder();
 
@@ -9000,7 +9014,7 @@ let selectedOtherThreadIds = new Set();
                     <div class="thread-preview">
                         <div class="thread-subject">
                             ${group.isOther 
-                                ? ('Other Threads (no keyword match) — ' + count + ' thread' + (count === 1 ? '' : 's'))
+                                ? ((window.__threadEditMode ? 'Other' : 'Other Threads (no keyword match)') + ' — ' + count + ' thread' + (count === 1 ? '' : 's'))
                                 : ('Keyword: ' + escapeHtml(group.name || '') + ' — ' + count + ' thread' + (count === 1 ? '' : 's'))}
                         </div>
                         ${group.isOther ? `
@@ -9027,7 +9041,7 @@ let selectedOtherThreadIds = new Set();
                         </div>
                     </div>
                     `}
-                    ${group.isOther ? `
+                    ${(group.isOther && !window.__threadEditMode) ? `
                         <div style="margin-bottom:12px; padding:14px; border: 2px dashed #17a2b8; border-radius:8px; background:#f0fbff;">
                             <button class="carousel-nav-btn" style="background:#17a2b8; font-size:16px; padding:10px 14px;" onclick="showAddKeywordsModal(${index})">➕ Add keywords to refine “Other”</button>
                             <div style="margin-top:6px; color:#0c5460; font-size:12px;">Add one or more keywords to break down the “Other” threads into new categories.</div>
