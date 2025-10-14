@@ -8830,11 +8830,23 @@ let selectedOtherThreadIds = new Set();
             const counter = document.getElementById('keywordCarouselCounter');
             if (!carousel || !info || !counter) return;
 
-            // Deduplicate any accidental multiple "Other" groups (keep the first)
+            // Normalize and dedupe any "Other" groups (by name or flag); keep a single unified Other
             try {
-                const firstOther = Array.isArray(window.keywordResults) ? window.keywordResults.findIndex(g => g && g.isOther) : -1;
-                if (firstOther !== -1 && Array.isArray(window.keywordResults)) {
-                    window.keywordResults = window.keywordResults.filter((g, i) => !(g && g.isOther && i !== firstOther));
+                if (Array.isArray(window.keywordResults)) {
+                    // Mark groups named "Other" or "Other Threads" as isOther
+                    window.keywordResults = window.keywordResults.map(g => {
+                        if (!g) return g;
+                        const nm = String(g.name || '').trim().toLowerCase();
+                        if (nm === 'other' || nm === 'other threads' || g.isOther) {
+                            return { ...g, isOther: true };
+                        }
+                        return g;
+                    });
+                    // Keep only the first isOther group
+                    const firstOther = window.keywordResults.findIndex(g => g && g.isOther);
+                    if (firstOther !== -1) {
+                        window.keywordResults = window.keywordResults.filter((g, i) => !(g && g.isOther && i !== firstOther));
+                    }
                     keywordResults = window.keywordResults;
                 }
             } catch (_) {}
@@ -12127,9 +12139,44 @@ function saveKeywordGrouping() {
                 }
             }
 
-            // Persist via /api/save-categories (only assignments)
+            // Persist grouping:
+            // 1) Ensure any threads not yet in DB are added (so their response IDs exist in response-emails.json)
+            // 2) Save category assignments
             (async () => {
                 try {
+                    // Step 1: Add missing threads (those whose latest response id is not in allEmails yet)
+                    const currentIds = new Set((allEmails || []).map(e => e && e.id).filter(Boolean));
+                    const threadsToAddMap = new Map();
+                    for (const g of groups) {
+                        if (!g || !Array.isArray(g.threads)) continue;
+                        for (const t of g.threads) {
+                            const msg = Array.isArray(t?.messages)
+                                ? t.messages.filter(m => m && m.isResponse).sort((a, b) => new Date(b.date) - new Date(a.date))[0]
+                                : null;
+                            const respId = msg && msg.id;
+                            if (respId && !currentIds.has(respId) && t && t.id) {
+                                // Use the full thread object from the index if available to guarantee shape
+                                const full = (window.threadById instanceof Map) ? window.threadById.get(t.id) : null;
+                                threadsToAddMap.set(t.id, full || t);
+                            }
+                        }
+                    }
+                    const threadsToAdd = Array.from(threadsToAddMap.values());
+                    if (threadsToAdd.length) {
+                        try {
+                            const addResp = await fetch('/api/add-email-threads', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ threads: threadsToAdd })
+                            });
+                            // consume body even if not ok to avoid unhandled rejection
+                            await addResp.json().catch(() => ({}));
+                        } catch (addErr) {
+                            console.warn('Adding missing threads failed; proceeding to save categories anyway:', addErr);
+                        }
+                    }
+
+                    // Step 2: Save category assignments
                     const resp = await fetch('/api/save-categories', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
@@ -12140,14 +12187,8 @@ function saveKeywordGrouping() {
                         throw new Error(data.error || 'Failed to save categories');
                     }
 
-                    // Update in-memory allEmails with new categories
-                    const ids = new Set(Object.keys(assignments));
-                    allEmails = (allEmails || []).map(e => {
-                        if (e && ids.has(e.id)) {
-                            return { ...e, category: assignments[e.id] };
-                        }
-                        return e;
-                    });
+                    // Reload authoritative RHS data so both the popup and the Categories editor reflect the changes
+                    try { await loadEmails(); } catch (_) {}
 
                     // Refresh saved categories order and re-render popup lists
                     try { await loadCurrentCategories(); } catch (_) {}
@@ -12158,7 +12199,7 @@ function saveKeywordGrouping() {
                     try { closeKeywordSearchResultsModal(); } catch (_) {}
                     window.__threadEditMode = false;
 
-                    showSuccessPopup('Thread categories saved to disk and popup updated.', 'Saved');
+                    showSuccessPopup('Thread(s) persisted and categories saved. Popup updated.', 'Saved');
                 } catch (e) {
                     console.error('Thread category save failed:', e);
                     showErrorPopup('Failed to save thread categories. Please try again.', 'Save Failed');
