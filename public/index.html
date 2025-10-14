@@ -6448,6 +6448,85 @@ async function sortUnrepliedAndOpenEditor() {
     }
 }
 
+// Prompt for Sort Unreplied: present See Current vs Refresh paths
+function showSortUnrepliedPrompt() {
+    try {
+        showCustomPopup({
+            title: 'Sort Unreplied',
+            message: 'Choose whether to view the current grouping as-is, or refresh with a keyword-based re-sort.',
+            icon: 'warning',
+            // Primary = Refresh (current behavior), Secondary = See Current (new read-only of current mapping)
+            primaryText: 'Refresh',
+            secondaryText: 'See Current',
+            onPrimary: () => { try { sortUnrepliedAndOpenEditor(); } catch (e) { console.error(e); } },
+            onSecondary: () => { try { openUnrepliedEditorCurrent(); } catch (e) { console.error(e); } },
+            type: 'confirm'
+        });
+    } catch (e) {
+        console.error('showSortUnrepliedPrompt failed:', e);
+        // Fallback to existing behavior if popup fails
+        try { sortUnrepliedAndOpenEditor(); } catch (_) {}
+    }
+}
+
+// Open the Unreplied Email Categories editor using current stored categories (no reclassification)
+async function openUnrepliedEditorCurrent() {
+    try {
+        // Load current unreplied set and authoritative category order
+        try { await loadUnrepliedEmails(); } catch (_) {}
+        try { await loadCurrentCategories(); } catch (_) {}
+
+        const list = Array.isArray(unrepliedEmails) ? unrepliedEmails.slice() : [];
+        if (!list.length) {
+            showErrorPopup('No unreplied emails found to edit.', 'Nothing to Edit');
+            return;
+        }
+
+        // Build the category order: use system-wide order if available; else derive from existing email categories
+        const order = (Array.isArray(currentCategoriesOrder) && currentCategoriesOrder.length)
+            ? currentCategoriesOrder.slice()
+            : Array.from(new Set(list.map(e => e && e.category).filter(Boolean)));
+
+        // Prepare grouping buckets
+        const indexBy = new Map(order.map((n, i) => [String(n || '').toLowerCase(), i]));
+        const groups = order.map(n => ({ name: n, emails: [] }));
+        const others = [];
+
+        // Assign each email to its current category (mapped to authoritative list), no keyword refresh
+        for (const e of list) {
+            const mapped = mapToCurrentCategory(e.category || '');
+            e._cat = mapped;
+            const key = String(mapped || '').toLowerCase();
+            const gi = indexBy.has(key) ? indexBy.get(key) : -1;
+            if (gi >= 0) groups[gi].emails.push(e);
+            else others.push(e);
+        }
+
+        if (others.length) {
+            groups.push({ name: 'Other', emails: others, isOther: true });
+        }
+
+        // Sort each bucket by date (newest first) to keep the editor consistent
+        const sortEmails = (arr) => {
+            arr.sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
+        };
+        groups.forEach(g => sortEmails(g.emails));
+
+        // Seed editor state and launch modal
+        unrepliedAllPool = list;
+        persistedUnrepliedIds = new Set(list.map(e => e && e.id).filter(Boolean));
+        unrepliedWorkingGroups = groups;
+        currentUnrepliedSlideIndex = 0;
+
+        const modal = ensureUnrepliedEmailCategoriesModal();
+        renderUnrepliedEmailCarousel();
+        modal.style.display = 'block';
+    } catch (e) {
+        console.error('openUnrepliedEditorCurrent failed:', e);
+        showErrorPopup('Failed to open current unreplied categories editor.', 'Open Failed');
+    }
+}
+
 function renderUnrepliedEmailCarousel() {
     try {
         const carousel = document.getElementById('unrepliedCarousel');
@@ -10384,7 +10463,7 @@ let selectedOtherThreadIds = new Set();
                             <button class="select-email-btn" onclick="addNewCategory()">+ Add Category</button>
                             <button class="select-email-btn" onclick="promptRefreshCategoriesMode()">🔄 Refresh Categories</button>
                             <button class="select-email-btn" onclick="openCarouselEditing()">Carousel Editing</button>
-                            <button class="select-email-btn" onclick="sortUnrepliedAndOpenEditor()" title="Automatically group all unreplied emails by keywords for quick review" style="background:#8b5cf6;">Sort Unreplied</button>
+                            <button class="select-email-btn" onclick="showSortUnrepliedPrompt()" title="Choose to view current grouping or refresh with keyword sort" style="background:#8b5cf6;">Sort Unreplied</button>
                             <button class="select-email-btn" onclick="showSummarizeCategoriesModal()" title="Generate or edit summaries for one or more categories" style="background:#17a2b8;">🧠 Summarize Categories</button>
                             <span style="color:#666; font-size:12px;">Drag emails between categories. Click “Approve & Save” to apply changes.</span>
                         </div>
