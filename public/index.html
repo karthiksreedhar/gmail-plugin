@@ -3430,6 +3430,54 @@ function getCategoryBadgeStyle(category) {
             }
         }
 
+/* Map a raw category name to the closest entry in the currentCategoriesOrder.
+   Mirrors server-side matchToCurrentCategory behavior (case-insensitive exact, normalized key, token overlap). */
+function normalizeKeyClient(s) {
+    return String(s || '')
+        .toLowerCase()
+        .replace(/&/g, ' and ')
+        .replace(/[^a-z0-9\s]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+function mapToCurrentCategory(name) {
+    const input = String(name || '').trim();
+    const ordered = Array.isArray(currentCategoriesOrder) ? currentCategoriesOrder : [];
+    if (!ordered.length) return input || 'Other';
+
+    // 1) Case-insensitive exact
+    const lower = input.toLowerCase();
+    const exact = ordered.find(c => String(c || '').toLowerCase() === lower);
+    if (exact) return exact;
+
+    // 2) Normalized-key equality
+    const key = normalizeKeyClient(input);
+    const normalizedMap = new Map();
+    ordered.forEach(c => normalizedMap.set(normalizeKeyClient(c), c));
+    if (normalizedMap.has(key)) return normalizedMap.get(key);
+
+    // 3) Token overlap heuristic
+    const tokens = new Set(key.split(' ').filter(Boolean));
+    let best = null;
+    let bestScore = -1;
+    for (const c of ordered) {
+        const ck = normalizeKeyClient(c);
+        const ctokens = new Set(ck.split(' ').filter(Boolean));
+        let overlap = 0;
+        tokens.forEach(t => { if (ctokens.has(t)) overlap++; });
+        if (overlap > bestScore) {
+            bestScore = overlap;
+            best = c;
+        }
+    }
+    if (best && bestScore > 0) return best;
+
+    // 4) Fallbacks
+    const fallback = ordered.find(c => String(c).toLowerCase() === 'personal & life management');
+    if (fallback) return fallback;
+    return ordered[0] || (input || 'Other');
+}
+
         async function updateInboxCategories() {
             const btn = document.getElementById('updateInboxCategoriesBtn');
             const originalText = btn ? btn.textContent : null;
@@ -6031,10 +6079,12 @@ function ensureLoadTodayModal() {
                 <button class="close" onclick="closeLoadTodayModal()">&times;</button>
             </div>
         <div style="padding: 20px; display:flex; flex-direction:column; gap:16px; flex:1 1 auto; min-height:0;">
-                <div class="load-today-controls" style="display:flex; gap:12px; justify-content:flex-end; margin-bottom:0; flex-wrap:wrap; position:sticky; top:0; z-index:1001; padding:12px 16px; background:#fff; border-bottom:2px solid #e9ecef; box-shadow:0 2px 8px rgba(0,0,0,0.1); flex-shrink:0;">
+                    <div class="load-today-controls" style="display:flex; gap:12px; justify-content:flex-end; margin-bottom:0; flex-wrap:wrap; position:sticky; top:0; z-index:1001; padding:12px 16px; background:#fff; border-bottom:2px solid #e9ecef; box-shadow:0 2px 8px rgba(0,0,0,0.1); flex-shrink:0;">
                     <button class="carousel-nav-btn" style="background:#667eea; margin:0;" onclick="refreshLoadToday()">🔄 Refresh</button>
                     <button class="carousel-nav-btn" id="loadTodaySelectAllThreadsBtn" style="background:#28a745; margin:0;" onclick="selectAllTodayThreads()">Select All Threads</button>
                     <button class="carousel-nav-btn" id="loadTodaySelectAllEmailsBtn" style="background:#28a745; margin:0;" onclick="selectAllTodayEmails()">Select All Emails</button>
+                    <button class="carousel-nav-btn" style="background:#ff9800; margin:0;" onclick="openEmailCategoriesEditorFromPopup()">Edit Email Categories</button>
+                    <button class="carousel-nav-btn" style="background:#6f42c1; margin:0;" onclick="openThreadCategoryEditor()">Edit Thread Categories</button>
                     <button class="carousel-nav-btn" style="background:#17a2b8; margin:0;" onclick="addAllToday()">Add All</button>
                 </div>
                 <div style="display:grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap:16px; flex:1 1 auto; min-height:0; min-width:0; width:100%; overflow:hidden;">
@@ -6122,6 +6172,109 @@ function closeLoadTodayModal() {
     if (modal) modal.style.display = 'none';
 }
 
+/* Open existing email-based categories editor from the popup */
+function openEmailCategoriesEditorFromPopup() {
+    // Temporarily disabled per request: do nothing when clicked
+    return;
+}
+
+/* Derive a category for a thread using latest response -> response-emails mapping, then subject match; else "Other" */
+function deriveThreadCategory(t) {
+    try {
+        const msgs = Array.isArray(t.messages) ? t.messages : [];
+        const latestResp = [...msgs].reverse().find(m => m && m.isResponse && m.id);
+        if (latestResp && latestResp.id && Array.isArray(allEmails)) {
+            const matchById = allEmails.find(e => e && e.id === latestResp.id);
+            if (matchById && matchById.category) return mapToCurrentCategory(matchById.category);
+        }
+        if (Array.isArray(allEmails)) {
+            const matchBySubject = allEmails.find(e => e && e.subject === (t.subject || ''));
+            if (matchBySubject && matchBySubject.category) return mapToCurrentCategory(matchBySubject.category);
+        }
+    } catch (_) {}
+    return mapToCurrentCategory('Other');
+}
+
+/* Thread-based category editor seeded only with the newly loaded threads in the popup */
+async function openThreadCategoryEditor() {
+    try {
+        // Ensure email list is loaded for deriveThreadCategory() lookups
+        if (!Array.isArray(allEmails) || allEmails.length === 0) {
+            try { await loadEmails(); } catch (_) {}
+        }
+        // Ensure current categories are loaded for ordering/mapping
+        try { await loadCurrentCategories(); } catch (_) {}
+
+        // Fetch all saved threads from the DB via keyword search API (it always returns allThreads)
+        let dbThreads = [];
+        try {
+            const resp = await fetch('/api/search-by-keywords', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    keywords: ['snapshot'], // arbitrary token; we only need allThreads from the response
+                    options: { groupBy: 'thread', fields: ['subject', 'body'] }
+                })
+            });
+            const data = await resp.json().catch(() => ({}));
+            dbThreads = Array.isArray(data.allThreads) ? data.allThreads : [];
+        } catch (e) {
+            console.warn('Unable to fetch DB threads; falling back to in-popup pool only:', e);
+            dbThreads = [];
+        }
+
+        // Merge DB threads with the newly loaded ones in this popup; mark new ones for highlighting
+        const poolMap = new Map();
+        (dbThreads || []).forEach(t => { if (t && t.id) poolMap.set(t.id, { ...t }); });
+        const todays = Array.isArray(todayThreads) ? todayThreads : [];
+        todays.forEach(t => {
+            if (!t || !t.id) return;
+            const merged = poolMap.has(t.id) ? { ...poolMap.get(t.id), __isNew: true } : { ...t, __isNew: true };
+            poolMap.set(t.id, merged);
+        });
+        const fullPool = Array.from(poolMap.values());
+        if (!fullPool.length) {
+            showErrorPopup('No threads available to edit. Load threads first.', 'Nothing to Edit');
+            return;
+        }
+
+        // Build keywordAllThreads and a fast id index
+        window.keywordAllThreads = fullPool.slice();
+        window.threadById = new Map(fullPool.map(t => [t.id, t]));
+
+        // Build groups strictly from the saved category list and include ALL previous threads;
+        // new threads (from Load Priority) are included and highlighted in yellow.
+        const order = Array.isArray(currentCategoriesOrder) ? currentCategoriesOrder.slice() : [];
+        const indexByName = new Map(order.map((n, i) => [String(n || '').toLowerCase(), i]));
+        const groups = order.map(name => ({ name, threads: [] }));
+
+        const others = [];
+        for (const t of fullPool) {
+            const mapped = mapToCurrentCategory(deriveThreadCategory(t));
+            const idx = indexByName.has(String(mapped || '').toLowerCase()) ? indexByName.get(String(mapped).toLowerCase()) : -1;
+            if (idx >= 0) {
+                groups[idx].threads.push(t);
+            } else {
+                others.push(t);
+            }
+        }
+        // Single unified "Other" bucket at the end
+        groups.push({ name: 'Other', threads: others, isOther: true });
+
+        // Persist working state and render the carousel
+        window.__threadEditMode = true;
+        window.keywordWorkingGroups = JSON.parse(JSON.stringify(groups));
+        const modal = ensureKeywordSearchResultsModal();
+        keywordResults = JSON.parse(JSON.stringify(groups));
+        currentKeywordSlideIndex = 0;
+        populateKeywordSearchResultsCarousel();
+        modal.style.display = 'block';
+    } catch (e) {
+        console.error('openThreadCategoryEditor failed:', e);
+        showErrorPopup('Failed to open thread category editor.', 'Open Failed');
+    }
+}
+
 /* Programmatic guard to enforce single-column vertical stacking after content is rendered */
 function enforceLoadTodayVertical(node) {
     try {
@@ -6203,6 +6356,9 @@ async function loadTodayData() {
             todayEmails = [];
         }
 
+        // Ensure we have the most recently saved category ordering before rendering/sorting
+        try { await loadCurrentCategories(); } catch (_) {}
+
         renderTodayThreadsList();
         renderTodayEmailsList(authNeeded);
         /* Enforce vertical stacking post-render as a final guard */
@@ -6229,8 +6385,33 @@ function renderTodayThreadsList() {
         return;
     }
 
-    // Build identical cards to the "Today’s Inbox Emails" list, including category badges
-    host.innerHTML = todayThreads.map((t, i) => {
+    // Sort by most recently saved categories order, then newest within category
+    const orderList = Array.isArray(currentCategoriesOrder) ? currentCategoriesOrder : [];
+    const catIndex = (name) => {
+        const n = String(name || '').toLowerCase();
+        const idx = orderList.findIndex(c => String(c || '').toLowerCase() === n);
+        return idx === -1 ? Number.MAX_SAFE_INTEGER : idx;
+    };
+    const latestDate = (t) => {
+        try {
+            const msgs = Array.isArray(t.messages) ? t.messages : [];
+            if (!msgs.length) return 0;
+            const d = Math.max(...msgs.map(m => new Date(m.date || 0).getTime() || 0));
+            return isFinite(d) ? d : 0;
+        } catch { return 0; }
+    };
+
+    const sorted = todayThreads.slice().sort((a, b) => {
+        const ca = deriveThreadCategory(a);
+        const cb = deriveThreadCategory(b);
+        const ai = catIndex(ca);
+        const bi = catIndex(cb);
+        if (ai !== bi) return ai - bi;
+        return latestDate(b) - latestDate(a);
+    });
+
+    // Build cards; highlight newly loaded items
+    host.innerHTML = sorted.map((t, i) => {
         const subjRaw = t.subject || 'No Subject';
         const subj = escapeHtml(subjRaw);
         const msgs = Array.isArray(t.messages) ? t.messages : [];
@@ -6242,32 +6423,14 @@ function renderTodayThreadsList() {
         const previewText = rawLastBody.replace(/\s+/g, ' ').trim();
         const preview = escapeHtml(previewText ? previewText.slice(0, 160) + (previewText.length > 160 ? '...' : '') : '');
 
-        // Derive a category for the thread:
-        // 1) Prefer the latest response message's id matched to an existing response email in allEmails
-        // 2) Fallback to matching by exact subject in allEmails
-        // 3) Fallback to a safe default
-        let catName = '';
-        try {
-            const latestResp = [...msgs].reverse().find(m => m && m.isResponse && m.id);
-            if (!catName && latestResp && latestResp.id && Array.isArray(allEmails)) {
-                const matchById = allEmails.find(e => e && e.id === latestResp.id);
-                if (matchById && matchById.category) catName = matchById.category;
-            }
-            if (!catName && Array.isArray(allEmails)) {
-                const matchBySubject = allEmails.find(e => e && e.subject === subjRaw && e.category);
-                if (matchBySubject && matchBySubject.category) catName = matchBySubject.category;
-            }
-        } catch (_) {}
-        if (!catName) catName = 'Personal & Life Management';
-
+        const catName = deriveThreadCategory(t);
         const categoryClass = `category-${catName.toLowerCase().replace(/\s+/g, '-')}`;
         const catStyle = getCategoryBadgeStyle(catName);
         const catDisplay = escapeHtml(catName);
 
-        // Mirror the exact structure used in renderTodayEmailsList for visual parity
         return `
             <div style="display: block !important; width: 100% !important; margin-bottom: 8px; clear: both;">
-                <label style="display: block !important; width: 100% !important; box-sizing: border-box; border: 1px solid #e9ecef; border-radius: 6px; padding: 10px; background: #fafafa; cursor: pointer;">
+                <label style="display: block !important; width: 100% !important; box-sizing: border-box; border: 1px solid #e9ecef; border-radius: 6px; padding: 10px; background: #FFF9CC; cursor: pointer;">
                     <table style="width: 100%; border-collapse: collapse;">
                         <tr>
                             <td style="width: 30px; vertical-align: top; padding-right: 10px;">
@@ -6289,66 +6452,86 @@ function renderTodayThreadsList() {
     }).join('');
 }
 
-        function renderTodayEmailsList(authNeeded) {
-            const host = document.getElementById('todayEmailsList');
-            const count = document.getElementById('todayEmailsCount');
-            if (!host) return;
+function renderTodayEmailsList(authNeeded) {
+    const host = document.getElementById('todayEmailsList');
+    const count = document.getElementById('todayEmailsCount');
+    if (!host) return;
 
-            if (authNeeded) {
-                if (count) count.textContent = '0';
-                host.innerHTML = `
-                    <div class="error" style="text-align:center;">
-                        Gmail authentication required to fetch today's inbox emails.<br>
-                        <button class="select-email-btn" style="margin-top:8px;" onclick="startAuthentication()">Authenticate</button>
-                    </div>
-                `;
-                return;
-            }
+    if (authNeeded) {
+        if (count) count.textContent = '0';
+        host.innerHTML = `
+            <div class="error" style="text-align:center;">
+                Gmail authentication required to fetch today's inbox emails.<br>
+                <button class="select-email-btn" style="margin-top:8px;" onclick="startAuthentication()">Authenticate</button>
+            </div>
+        `;
+        return;
+    }
 
-            if (count) count.textContent = String(todayEmails.length || 0);
+    if (count) count.textContent = String(todayEmails.length || 0);
 
-            if (!todayEmails.length) {
-                host.innerHTML = '<div class="no-emails">No inbox emails found for today.</div>';
-                return;
-            }
-            
-            // Clear the container completely and build HTML string for guaranteed vertical rendering
-            const emailsHTML = todayEmails.map((e, i) => {
-                const subj = escapeHtml(e.subject || 'No Subject');
-                const from = escapeHtml(e.from || 'Unknown Sender');
-                const date = e.date || '';
-                const rawBody = typeof e.body === 'string' ? e.body : '';
-                const previewText = rawBody.replace(/\s+/g, ' ').trim();
-                const preview = previewText ? previewText.slice(0, 160) + (previewText.length > 160 ? '...' : '') : '';
-                const safePreview = escapeHtml(preview);
-                const catStyle = getCategoryBadgeStyle(e.category || 'Personal & Life Management');
-                const categoryClass = `category-${(e.category || 'Personal & Life Management').toLowerCase().replace(/\s+/g, '-')}`;
-                
-                return `
-                    <div style="display: block !important; width: 100% !important; margin-bottom: 8px; clear: both;">
-                        <label style="display: block !important; width: 100% !important; box-sizing: border-box; border: 1px solid #e9ecef; border-radius: 6px; padding: 10px; background: #fafafa; cursor: pointer;">
-                            <table style="width: 100%; border-collapse: collapse;">
-                                <tr>
-                                    <td style="width: 30px; vertical-align: top; padding-right: 10px;">
-                                        <input type="checkbox" id="today-email-${i}" onchange="toggleTodayEmail(${i}, this.checked)">
-                                    </td>
-                                    <td style="vertical-align: top;">
-                                        <div style="font-weight:600; color:#333; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${subj}</div>
-                                        <div style="font-size:12px; color:#666; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; margin-top: 2px;">${from} • ${formatDate(date)}</div>
-                                        <div style="font-size:12px; color:#777; margin-top:4px; line-height:1.4;">${safePreview}</div>
-                                        <div class="email-category ${categoryClass}" style="display:inline-block; padding:4px 8px; border-radius:12px; font-size:12px; font-weight:500; margin-top:6px; ${catStyle}">
-                                            ${e.category || 'Personal & Life Management'}
-                                        </div>
-                                    </td>
-                                </tr>
-                            </table>
-                        </label>
-                    </div>
-                `;
-            }).join('');
-            
-            host.innerHTML = emailsHTML;
-        }
+    if (!todayEmails.length) {
+        host.innerHTML = '<div class="no-emails">No inbox emails found for today.</div>';
+        return;
+    }
+
+    // Sort by most recently saved categories order, then newest within category
+    const orderList = Array.isArray(currentCategoriesOrder) ? currentCategoriesOrder : [];
+    const catIndex = (name) => {
+        const n = String(name || '').toLowerCase();
+        const idx = orderList.findIndex(c => String(c || '').toLowerCase() === n);
+        return idx === -1 ? Number.MAX_SAFE_INTEGER : idx;
+    };
+    // Pre-map categories to most recently saved order for consistent sorting and display
+    const augmented = todayEmails.slice().map(e => {
+        const mapped = mapToCurrentCategory(e.category || '');
+        return { ...e, _cat: mapped };
+    });
+
+    const sorted = augmented.sort((a, b) => {
+        const ai = catIndex(a._cat || '');
+        const bi = catIndex(b._cat || '');
+        if (ai !== bi) return ai - bi;
+        return new Date(b.date || 0) - new Date(a.date || 0);
+    });
+
+    // Build HTML; highlight newly loaded items
+    const emailsHTML = sorted.map((e, i) => {
+        const subj = escapeHtml(e.subject || 'No Subject');
+        const from = escapeHtml(e.from || 'Unknown Sender');
+        const date = e.date || '';
+        const rawBody = typeof e.body === 'string' ? e.body : '';
+        const previewText = rawBody.replace(/\s+/g, ' ').trim();
+        const preview = previewText ? previewText.slice(0, 160) + (previewText.length > 160 ? '...' : '') : '';
+        const safePreview = escapeHtml(preview);
+        const catStyle = getCategoryBadgeStyle(e._cat || 'Personal & Life Management');
+        const categoryClass = `category-${(e._cat || 'Personal & Life Management').toLowerCase().replace(/\s+/g, '-')}`;
+
+        return `
+            <div style="display: block !important; width: 100% !important; margin-bottom: 8px; clear: both;">
+                <label style="display: block !important; width: 100% !important; box-sizing: border-box; border: 1px solid #e9ecef; border-radius: 6px; padding: 10px; background: #FFF9CC; cursor: pointer;">
+                    <table style="width: 100%; border-collapse: collapse;">
+                        <tr>
+                            <td style="width: 30px; vertical-align: top; padding-right: 10px;">
+                                <input type="checkbox" id="today-email-${i}" onchange="toggleTodayEmail(${i}, this.checked)">
+                            </td>
+                            <td style="vertical-align: top;">
+                                <div style="font-weight:600; color:#333; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${subj}</div>
+                                <div style="font-size:12px; color:#666; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; margin-top: 2px;">${from} • ${formatDate(date)}</div>
+                                <div style="font-size:12px; color:#777; margin-top:4px; line-height:1.4;">${safePreview}</div>
+                                <div class="email-category ${categoryClass}" style="display:inline-block; padding:4px 8px; border-radius:12px; font-size:12px; font-weight:500; margin-top:6px; ${catStyle}">
+                                    ${e._cat || 'Personal & Life Management'}
+                                </div>
+                            </td>
+                        </tr>
+                    </table>
+                </label>
+            </div>
+        `;
+    }).join('');
+
+    host.innerHTML = emailsHTML;
+}
 
 function toggleTodayThread(i, checked) {
     if (checked) selectedTodayThreads.add(i);
@@ -8670,6 +8853,8 @@ let selectedOtherThreadIds = new Set();
             const threadToCollapsibleHTML = (thread, currentGroupName) => {
                 const subject = escapeHtml(thread.subject || 'No Subject');
                 const msgs = Array.isArray(thread.messages) ? thread.messages : [];
+                const isNew = !!(thread && (thread.__isNew || thread.isNew));
+                const summaryBg = isNew ? '#FFF9CC' : '#f8f9fa';
                 // Indicate duplicate membership across keyword groups (excluding "Other" and the current group by name)
                 let alsoIn = [];
                 try {
@@ -8750,7 +8935,7 @@ let selectedOtherThreadIds = new Set();
                 const safeId = String(thread.id || '').replace(/'/g, "\\'");
                 return `
                     <details class="keyword-thread-collapsible" style="margin-bottom: 10px;">
-                        <summary style="cursor: pointer; font-size: 14px; padding: 8px 12px; background:#f8f9fa; border:1px solid #e9ecef; border-radius:6px; display:flex; justify-content:space-between; align-items:center;">
+                        <summary style="cursor: pointer; font-size: 14px; padding: 8px 12px; background:${summaryBg}; border:1px solid #e9ecef; border-radius:6px; display:flex; justify-content:space-between; align-items:center;">
                             <span>
                                 <strong>${subject}</strong>
                                 <span class="thread-meta" style="color:#666; font-weight:400;"> (${msgs.length} message${msgs.length === 1 ? '' : 's'})</span>
@@ -11901,61 +12086,105 @@ function fieldContains(hay, needle) {
             }
         }
 
-        function saveKeywordGrouping() {
-            try {
-                // Build category buckets from working groups (INCLUDE Other so it appears in the editor)
-                const buckets = [];
-                const groupList = getWorkingGroupsRef();
-                for (const g of groupList) {
-                    if (!g) continue;
-                    const emails = [];
-                    const seen = new Set();
-                    for (const t of (g.threads || [])) {
-                        // Map thread -> response email by latest response message id
-                        const msg = Array.isArray(t.messages)
-                            ? t.messages.filter(m => m && m.isResponse).sort((a,b)=> new Date(b.date)-new Date(a.date))[0]
-                            : null;
-                        const respId = msg && msg.id;
-                        if (!respId || seen.has(respId)) continue;
-                        const e = (allEmails || []).find(x => x && x.id === respId);
-                        if (!e) continue; // only include existing response emails
-                        seen.add(respId);
-                        emails.push({
-                            id: e.id,
-                            subject: e.subject || 'No Subject',
-                            from: e.originalFrom || e.from || 'Unknown Sender',
-                            date: e.date || new Date().toISOString(),
-                            snippet: e.snippet || (e.body ? String(e.body).slice(0, 120) + (e.body.length > 120 ? '...' : '') : 'No content available')
-                        });
-                    }
+function saveKeywordGrouping() {
+    try {
+        const groups = getWorkingGroupsRef();
 
-                    // Name buckets; ensure "Other" shows even if empty
-                    const bucketName = g.isOther ? 'Other' : (g.name || 'Unnamed');
-                    const bucket = { name: bucketName, originalName: bucketName, emails };
-
-                    if (g.isOther) {
-                        // Always include "Other" bucket
-                        buckets.push(bucket);
-                    } else {
-                        // Only include non-empty keyword buckets to avoid clutter
-                        if (emails.length) buckets.push(bucket);
-                    }
+        // If we are in thread edit mode (popup-scoped), persist assignments to disk and return to popup
+        if (window.__threadEditMode) {
+            // Build assignments { responseEmailId: categoryName } from non-Other groups
+            const assignments = {};
+            for (const g of groups) {
+                if (!g || g.isOther) continue;
+                const catName = g.name || '';
+                for (const t of (g.threads || [])) {
+                    const msg = Array.isArray(t.messages)
+                        ? t.messages.filter(m => m && m.isResponse).sort((a,b)=> new Date(b.date)-new Date(a.date))[0]
+                        : null;
+                    const respId = msg && msg.id;
+                    if (respId) assignments[respId] = catName;
                 }
-
-                if (!buckets.length) {
-                    // If only "Other" exists and is empty, still show it so user sees the bucket
-                    buckets.push({ name: 'Other', originalName: 'Other', emails: [] });
-                }
-
-                // Open Categories editor with pre-populated buckets (now includes "Other")
-                startCategoriesEditorWithBuckets(buckets);
-                // Close the Keyword Search results carousel per UX request
-                try { closeKeywordSearchResultsModal(); } catch (_) {}
-            } catch (e) {
-                console.error('saveKeywordGrouping failed:', e);
-                showErrorPopup('Failed to prepare grouping for save. Please try again.', 'Save Failed');
             }
+
+            // Persist via /api/save-categories (only assignments)
+            (async () => {
+                try {
+                    const resp = await fetch('/api/save-categories', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ assignments })
+                    });
+                    const data = await resp.json();
+                    if (!resp.ok || !data.success) {
+                        throw new Error(data.error || 'Failed to save categories');
+                    }
+
+                    // Update in-memory allEmails with new categories
+                    const ids = new Set(Object.keys(assignments));
+                    allEmails = (allEmails || []).map(e => {
+                        if (e && ids.has(e.id)) {
+                            return { ...e, category: assignments[e.id] };
+                        }
+                        return e;
+                    });
+
+                    // Refresh saved categories order and re-render popup lists
+                    try { await loadCurrentCategories(); } catch (_) {}
+                    renderTodayThreadsList();
+                    renderTodayEmailsList(false);
+
+                    // Close the thread grouping modal and clear mode
+                    try { closeKeywordSearchResultsModal(); } catch (_) {}
+                    window.__threadEditMode = false;
+
+                    showSuccessPopup('Thread categories saved to disk and popup updated.', 'Saved');
+                } catch (e) {
+                    console.error('Thread category save failed:', e);
+                    showErrorPopup('Failed to save thread categories. Please try again.', 'Save Failed');
+                }
+            })();
+
+            return;
         }
+
+        // Default behavior: open Categories editor with buckets (include Other), then save via Approve & Save there
+        const buckets = [];
+        for (const g of groups) {
+            if (!g) continue;
+            const emails = [];
+            const seen = new Set();
+            for (const t of (g.threads || [])) {
+                const msg = Array.isArray(t.messages)
+                    ? t.messages.filter(m => m && m.isResponse).sort((a,b)=> new Date(b.date)-new Date(a.date))[0]
+                    : null;
+                const respId = msg && msg.id;
+                if (!respId || seen.has(respId)) continue;
+                const e = (allEmails || []).find(x => x && x.id === respId);
+                if (!e) continue;
+                seen.add(respId);
+                emails.push({
+                    id: e.id,
+                    subject: e.subject || 'No Subject',
+                    from: e.originalFrom || e.from || 'Unknown Sender',
+                    date: e.date || new Date().toISOString(),
+                    snippet: e.snippet || (e.body ? String(e.body).slice(0, 120) + (e.body.length > 120 ? '...' : '') : 'No content available')
+                });
+            }
+            const bucketName = g.isOther ? 'Other' : (g.name || 'Unnamed');
+            const bucket = { name: bucketName, originalName: bucketName, emails };
+            if (g.isOther) buckets.push(bucket);
+            else if (emails.length) buckets.push(bucket);
+        }
+        if (!buckets.length) {
+            buckets.push({ name: 'Other', originalName: 'Other', emails: [] });
+        }
+        startCategoriesEditorWithBuckets(buckets);
+        try { closeKeywordSearchResultsModal(); } catch (_) {}
+    } catch (e) {
+        console.error('saveKeywordGrouping failed:', e);
+        showErrorPopup('Failed to prepare grouping for save. Please try again.', 'Save Failed');
+    }
+}
 
         function startCategoriesEditorWithBuckets(buckets) {
             try {
