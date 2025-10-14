@@ -8749,46 +8749,125 @@ function rejectCurrentEmail() {
         // Open Keyword Results carousel using saved keywords or current categories (no regeneration)
         async function openCarouselEditing() {
             try {
-                // 1) Try saved Category Guidelines as keywords
-                let haveRows = false;
+                // Goal: Mirror the exact groupings shown in "Edit Categories & Notes"
+                // Build carousel groups directly from categoriesState (source of truth),
+                // mapping each email to its thread if available.
+
+                // 1) Ensure categoriesState exists (if user didn't open Categories editor yet)
+                if (!Array.isArray(categoriesState) || categoriesState.length === 0) {
+                    // Derive categories from current RHS email list as fallback
+                    categoriesState = groupEmailsIntoCategories(allEmails);
+                    // Seed assignments map
+                    categoryAssignments = {};
+                    categoriesState.forEach(cat => {
+                        (cat.emails || []).forEach(e => {
+                            if (e && e.id) categoryAssignments[e.id] = cat.name;
+                        });
+                    });
+                }
+
+                // 2) Load all saved threads from DB once (keyword API returns allThreads snapshot)
+                let allThreads = [];
                 try {
-                    const resp = await fetch('/api/category-guidelines');
-                    const data = await resp.json();
-                    const cats = Array.isArray(data.categories) ? data.categories : [];
-                    if (cats.length) {
-                        keywordGuidelines = cats;
-                        haveRows = true;
-                    }
-                } catch (_) {}
-
-                // 2) Fallback to current categories ordering
-                if (!haveRows) {
-                    try {
-                        await loadCurrentCategories();
-                    } catch (_) {}
-                    const names = Array.isArray(currentCategoriesOrder) ? currentCategoriesOrder.filter(Boolean) : [];
-                    if (names.length) {
-                        keywordGuidelines = names.map(name => ({ name, notes: '' }));
-                        haveRows = true;
-                    }
+                    const resp = await fetch('/api/search-by-keywords', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            keywords: ['snapshot'], // arbitrary token; we only need allThreads
+                            options: { groupBy: 'thread', fields: ['subject', 'body'] }
+                        })
+                    });
+                    const data = await resp.json().catch(() => ({}));
+                    allThreads = Array.isArray(data.allThreads) ? data.allThreads : [];
+                } catch (e) {
+                    console.warn('Unable to fetch DB threads for Carousel; will synthesize from emails only:', e);
+                    allThreads = [];
                 }
 
-                // 3) Final fallback: derive from emails already loaded
-                if (!haveRows) {
-                    const names = Array.from(new Set((allEmails || []).map(e => e && e.category).filter(Boolean)));
-                    if (names.length) {
-                        keywordGuidelines = names.map(name => ({ name, notes: '' }));
-                        haveRows = true;
+                // 3) Build quick lookups
+                // Map from response message id -> thread
+                const msgIdToThread = new Map();
+                (allThreads || []).forEach(t => {
+                    const msgs = Array.isArray(t.messages) ? t.messages : [];
+                    msgs.forEach(m => {
+                        if (m && m.id) msgIdToThread.set(m.id, t);
+                    });
+                });
+
+                // Map from response email id -> full email (with body) from RHS list
+                const idToEmail = new Map((allEmails || []).map(e => [e && e.id, e]).filter(([k]) => !!k));
+
+                // 4) Construct groups exactly from categoriesState
+                const builtGroups = [];
+                const combinedThreadsMap = new Map(); // id -> thread for keywordAllThreads
+                // Preload DB threads into combined map
+                (allThreads || []).forEach(t => { if (t && t.id) combinedThreadsMap.set(t.id, t); });
+
+                for (const cat of (categoriesState || [])) {
+                    const threads = [];
+                    const seenThreadIds = new Set();
+
+                    for (const e of (cat.emails || [])) {
+                        if (!e || !e.id) continue;
+
+                        // Try to map to a real thread via latest response id
+                        let thread = msgIdToThread.get(e.id);
+
+                        // If not found, synthesize a minimal single-message thread from RHS email
+                        if (!thread) {
+                            const rhs = idToEmail.get(e.id);
+                            const pseudoId = `pseudo-${e.id}`;
+                            const fromMe = window.currentUserDisplayName || displayNameFromEmail(document.getElementById('currentUser')?.textContent || '');
+                            thread = {
+                                id: pseudoId,
+                                subject: (rhs && rhs.subject) || e.subject || 'No Subject',
+                                messages: [
+                                    {
+                                        id: e.id,
+                                        from: fromMe,
+                                        to: [(rhs && rhs.originalFrom) || (rhs && rhs.from) || e.from || 'Unknown Recipient'],
+                                        date: (rhs && rhs.date) || e.date || new Date().toISOString(),
+                                        subject: (rhs && rhs.subject) || e.subject || 'No Subject',
+                                        body: (rhs && rhs.body) || e.snippet || '',
+                                        isResponse: true
+                                    }
+                                ]
+                            };
+                            // Add pseudo thread to combined map so facets/suggestions can reference it
+                            combinedThreadsMap.set(pseudoId, thread);
+                        }
+
+                        if (thread && thread.id && !seenThreadIds.has(thread.id)) {
+                            seenThreadIds.add(thread.id);
+                            threads.push(thread);
+                        }
                     }
+
+                    builtGroups.push({
+                        name: cat.name,
+                        threads
+                    });
                 }
 
-                if (!haveRows) {
-                    showErrorPopup('No saved keywords or categories available. Try Refresh Categories or add Category Guidelines.', 'Nothing to Load');
-                    return;
-                }
+                // Optional: include an "Other" bucket only if you want a placeholder (empty by default)
+                // This keeps the UI consistent without pulling in extra emails.
+                builtGroups.push({ name: 'Other Threads', threads: [], isOther: true });
 
-                // Build and open the keyword results carousel using current keywordGuidelines
-                await generateCategoriesFromKeywords();
+                // 5) Persist carousel state exactly to match Categories & Notes groupings
+                window.__threadEditMode = false; // normal carousel mode
+                window.keywordAllThreads = Array.from(combinedThreadsMap.values());
+                window.threadById = new Map(window.keywordAllThreads.map(t => [t.id, t]));
+                window.keywordWorkingGroups = builtGroups;
+                window.keywordResults = deepCopy(builtGroups);
+                currentKeywordSlideIndex = 0;
+
+                // Keep "Other" last
+                ensureOtherLastOrder();
+
+                // 6) Show the carousel
+                const modal = ensureKeywordSearchResultsModal();
+                populateKeywordSearchResultsCarousel();
+                modal.style.display = 'block';
             } catch (e) {
                 console.error('openCarouselEditing failed:', e);
                 showErrorPopup('Failed to open Carousel Editing. Please try again.', 'Open Failed');
@@ -9950,6 +10029,56 @@ let selectedOtherThreadIds = new Set();
 
         async function generateCategoriesFromKeywords() {
             try {
+                // Helper: provide seed tokens for well-known category names so keyword search can find matches.
+                // This bridges the gap between saved category names (like "Teaching & Student Support")
+                // and literal words that actually occur in subjects/bodies.
+                const getCategorySeedTokens = (name) => {
+                    const n = String(name || '').toLowerCase().trim();
+                    // Normalize common variants
+                    const norm = n.replace(/&/g, 'and').replace(/\s+/g, ' ');
+                    const seeds = {
+                        'teaching and student support': [
+                            'ta', 'teaching assistant', 'assignment', 'homework', 'hw', 'grading', 'grade',
+                            'extension', 'late pass', 'resubmit', 'midterm', 'final', 'exam', 'quiz',
+                            'office hours', 'syllabus'
+                        ],
+                        'research and lab work': [
+                            'research', 'lab', 'study', 'paper', 'irb', 'pilot', 'dataset', 'experiment',
+                            'user study', 'analysis', 'annotation', 'protocol', 'subject recruitment'
+                        ],
+                        'conferences': [
+                            'conference', 'submission', 'camera ready', 'taps', 'review', 'acm', 'ieee',
+                            'pcs', 'cfp', 'deadline', 'workshop', 'proceedings'
+                        ],
+                        'university administration': [
+                            'department', 'program', 'phd', 'seas', 'clearance', 'registration', 'university',
+                            'admin', 'policy', 'advising', 'course registration', 'graduation', 'cs@cu'
+                        ],
+                        'financial and reimbursements': [
+                            'reimbursement', 'invoice', 'receipt', 'payment', 'refund', 'expense',
+                            'travel grant', 'scholarship', 'stipend', 'honorarium'
+                        ],
+                        'networking': [
+                            'opportunity', 'role', 'position', 'recruit', 'recruiter', 'connect',
+                            'coffee chat', 'network', 'job', 'career', 'opening', 'hiring', 'linkedin'
+                        ],
+                        // Often empty by design; leave as [] to avoid over-matching
+                        'personal and life management': []
+                    };
+                    // Special cases the app already recognizes elsewhere
+                    if (norm === 'lydia chilton') {
+                        return ['lydia', 'chilton', 'lc3251@columbia.edu'];
+                    }
+                    if (norm === 'apartment') {
+                        return [
+                            'apartment','lease','landlord','rent','rental','renewal','building','management',
+                            'tenant','tenancy','super','maintenance','repair','repairs','utilities','doorman',
+                            'roommate','sublease','move-in','move out','key pickup','broker','property manager'
+                        ];
+                    }
+                    return seeds[norm] || [];
+                };
+
                 // Build rows: each row may contain multiple comma-separated keywords that should map to ONE category
                 // Example: "ta, grading, assignment" -> category label "ta" (first token), matching emails contain any of the tokens
                 const rowsRaw = Array.isArray(keywordGuidelines) ? keywordGuidelines : [];
@@ -9957,11 +10086,24 @@ let selectedOtherThreadIds = new Set();
                 for (const row of rowsRaw) {
                     const raw = String(row?.name || '').trim();
                     if (!raw) continue;
-                    const tokens = raw
+
+                    // Start with comma-separated tokens if provided by the user
+                    let tokens = raw
                         .split(',')
                         .map(s => String(s || '').trim())
                         .filter(Boolean);
+
+                    // If the row only has a single label (e.g., a saved category name),
+                    // augment it with seed tokens so the keyword search finds real matches.
+                    if (tokens.length === 1) {
+                        const seeds = getCategorySeedTokens(tokens[0]);
+                        if (Array.isArray(seeds) && seeds.length) {
+                            tokens = seeds;
+                        }
+                    }
+
                     if (!tokens.length) continue;
+
                     const label = tokens[0]; // Use the first token as the category name/label
                     rows.push({ label, tokens });
                 }

@@ -1604,13 +1604,163 @@ app.get('/api/unreplied-emails', async (req, res) => {
  * Input: none
  * Output: { success: true, updatedCount, total, categoriesUsed: [names], mode: 'ai' | 'rule-based-fallback' }
  */
+/**
+ * Keyword-based categorization for unreplied emails
+ * - Deterministic keyword search mapped to canonical buckets
+ * - Then mapped to the current category list via matchToCurrentCategory()
+ */
+function getKeywordCategoryMap() {
+  // Word-boundary matches; keep tokens lowercase
+  return {
+    'Teaching & Student Support': [
+      'assignment', 'homework', 'hw', 'extension', 'late pass', 'resubmit', 'grading', 'grade',
+      'ta', 'teaching assistant', 'midterm', 'final', 'exam', 'quiz', 'office hours', 'syllabus'
+    ],
+    'Research & Lab Work': [
+      'research', 'lab', 'study', 'paper', 'irb', 'pilot', 'dataset', 'experiment', 'user study',
+      'analysis', 'annotation', 'protocol', 'subject recruitment'
+    ],
+    'Conferences': [
+      'conference', 'submission', 'camera ready', 'taps', 'review', 'acm', 'ieee', 'pcs', 'cfp',
+      'deadline', 'workshop', 'proceedings'
+    ],
+    'University Administration': [
+      'department', 'program', 'phd', 'seas', 'clearance', 'registration', 'university',
+      'admin', 'policy', 'advising', 'course registration', 'graduation', 'cs@cu'
+    ],
+    'Financial & Reimbursements': [
+      'reimbursement', 'invoice', 'receipt', 'payment', 'refund', 'expense', 'travel grant',
+      'scholarship', 'stipend', 'honorarium'
+    ],
+    'Networking': [
+      'opportunity', 'role', 'position', 'recruit', 'recruiter', 'connect', 'coffee chat',
+      'network', 'job', 'career', 'opening', 'hiring', 'linkedin'
+    ],
+    'Personal & Life Management': [] // default fallback
+  };
+}
+
+/**
+ * Return best category by keyword score, then map to current category list.
+ */
+function keywordCategorizeUnreplied(subject, body, from) {
+  try {
+    const textSubj = String(subject || '').toLowerCase();
+    const textBody = String(body || '').toLowerCase();
+    const textFrom = String(from || '').toLowerCase();
+    const haySubj = textSubj;
+    const hayBody = textBody;
+    const hayFrom = textFrom;
+
+    const map = getKeywordCategoryMap();
+
+    // Build current categories list (authoritative)
+    let categoriesX = loadCategoriesList();
+    if (!Array.isArray(categoriesX) || !categoriesX.length) {
+      categoriesX = getCurrentCategoriesFromResponses();
+      if (!Array.isArray(categoriesX) || !categoriesX.length) {
+        categoriesX = CANONICAL_CATEGORIES.slice();
+      }
+    }
+
+    // If user is using custom buckets like "Apartment", "Lydia Chilton", and "Other",
+    // apply a targeted mapping and prefer "Other" as the default fallback.
+    try {
+      const namesLc = (categoriesX || []).map(c => String(c || '').toLowerCase());
+      const hasApartment = namesLc.includes('apartment');
+      const hasLydia = namesLc.includes('lydia chilton');
+      const hasOther = namesLc.includes('other');
+
+      if (hasApartment || hasLydia || hasOther) {
+        const s = `${textSubj} ${textBody} ${textFrom}`;
+        const fromLc = textFrom;
+
+        // Lydia Chilton detection by name or known address
+        if (hasLydia) {
+          const lydiaHit =
+            /lydia\s+chilton/i.test(s) ||
+            /lc3251@columbia\.edu/i.test(s) ||
+            /chilton/i.test(fromLc);
+          if (lydiaHit) {
+            return matchToCurrentCategory('Lydia Chilton', categoriesX) || 'Lydia Chilton';
+          }
+        }
+
+        // Apartment/lease related terms
+        if (hasApartment) {
+          const apartmentTokens = [
+            'apartment','lease','landlord','rent','rental','renewal','building','management',
+            'tenant','tenancy','super','maintenance','repair','repairs','utilities','doorman',
+            'roommate','sublease','move-in','move out','key pickup','broker','property manager'
+          ];
+          const hit = apartmentTokens.some(tok => {
+            const esc = tok.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            const re = new RegExp(`\\b${esc}\\b`, 'i');
+            return re.test(s);
+          });
+          if (hit) {
+            return matchToCurrentCategory('Apartment', categoriesX) || 'Apartment';
+          }
+        }
+
+        // Default to "Other" if available
+        if (hasOther) {
+          return 'Other';
+        }
+      }
+    } catch (_) {}
+
+    // Score by counts; subject hits weigh 2x
+    const scores = {};
+    Object.keys(map).forEach(c => { scores[c] = 0; });
+
+    const countHits = (needle, hay) => {
+      if (!needle || !hay) return 0;
+      // Word-boundary or literal fragment
+      const esc = needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const re = new RegExp(`\\b${esc}\\b`, 'g');
+      const re2 = new RegExp(esc, 'g'); // fragment fallback if not word chars
+      const m1 = hay.match(re);
+      if (m1 && m1.length) return m1.length;
+      const m2 = hay.match(re2);
+      return m2 ? m2.length : 0;
+    };
+
+    for (const [cat, keywords] of Object.entries(map)) {
+      for (const kw of keywords) {
+        // Subject weight 2, body weight 1, from header weight 1
+        const s = countHits(kw, haySubj) * 2 + countHits(kw, hayBody) + countHits(kw, hayFrom);
+        if (s) scores[cat] += s;
+      }
+    }
+
+    // Choose best non-zero score; else default to Personal & Life Management
+    let best = 'Personal & Life Management';
+    let bestScore = -1;
+    for (const [cat, sc] of Object.entries(scores)) {
+      if (sc > bestScore) {
+        bestScore = sc;
+        best = cat;
+      }
+    }
+    if (bestScore <= 0) {
+      best = 'Personal & Life Management';
+    }
+
+    // Map to current list X using fuzzy matching
+    const mapped = matchToCurrentCategory(best, categoriesX);
+    return mapped || best;
+  } catch {
+    return 'Personal & Life Management';
+  }
+}
+
 app.post('/api/unreplied-emails/reclassify', async (req, res) => {
   try {
     // Load current unreplied emails (Inbox data) and category list X
     const unreplied = loadUnrepliedEmails();
     let categoriesX = loadCategoriesList();
     if (!Array.isArray(categoriesX) || categoriesX.length === 0) {
-      // Fallbacks: derive from RHS responses, else canonical
       categoriesX = getCurrentCategoriesFromResponses();
       if (!Array.isArray(categoriesX) || categoriesX.length === 0) {
         categoriesX = CANONICAL_CATEGORIES.slice();
@@ -1618,125 +1768,15 @@ app.post('/api/unreplied-emails/reclassify', async (req, res) => {
     }
 
     if (!Array.isArray(unreplied) || unreplied.length === 0) {
-      return res.json({ success: true, updatedCount: 0, total: 0, categoriesUsed: categoriesX, mode: 'noop' });
+      return res.json({ success: true, updatedCount: 0, total: 0, categoriesUsed: categoriesX, mode: 'keyword' });
     }
 
-    // Prepare compact email list for model
-    const minimal = unreplied.map(e => ({
-      id: e.id,
-      subject: e.subject || 'No Subject',
-      from: e.from || 'Unknown Sender',
-      date: e.date || new Date().toISOString(),
-      snippet: e.snippet || (e.body ? String(e.body).slice(0, 160) + (e.body.length > 160 ? '...' : '') : 'No content available')
-    }));
-
-    // Helper to normalize to one of X exactly
-    const exactFromX = (name) => {
-      if (!name) return null;
-      const lower = String(name).toLowerCase();
-      const exact = categoriesX.find(c => String(c).toLowerCase() === lower);
-      if (exact) return exact;
-      // Try fuzzy to nearest in X
-      return matchToCurrentCategory(name, categoriesX);
-    };
-
-    const SYSTEM = `You are an expert triage assistant. You will classify a list of emails into one of the GIVEN categories EXACTLY as named.
-Rules:
-- For each email ID, choose exactly ONE category from the provided list.
-- Use the category names exactly as provided (case and spelling must match).
-- Do not invent new categories.
-- If unsure, choose the closest fit that helps triage.
-
-Output strictly valid JSON:
-{
-  "assignments": {
-    "<emailId>": "<CategoryFromList>",
-    ...
-  }
-}`;
-
-    const USER = `Categories (X): ${JSON.stringify(categoriesX, null, 2)}
-Emails (JSON): ${JSON.stringify({ emails: minimal }, null, 2)}
-Return ONLY the JSON object described above.`;
-
-    // Call OpenAI with structured JSON response
-    let raw = null;
-    let parsed = null;
-    let mode = 'ai';
-
-    try {
-      const completion = await openai.chat.completions.create({
-        model: "o3",
-        messages: [
-          { role: "system", content: SYSTEM },
-          { role: "user", content: USER }
-        ],
-        max_completion_tokens: 1200,
-        response_format: { type: "json_object" }
-      });
-      raw = completion.choices?.[0]?.message?.content || '';
-    } catch (e) {
-      console.warn('AI reclassify (o3) failed:', e?.message || e);
-      raw = '';
-    }
-
-    const extractJson = (text) => {
-      if (typeof text !== 'string') return null;
-      const t = text.trim();
-      try { return JSON.parse(t); } catch {}
-      const fence = t.match(/```(?:json)?\s*([\s\S]*?)```/i);
-      if (fence && fence[1]) { try { return JSON.parse(fence[1].trim()); } catch {} }
-      const first = t.indexOf('{'); const last = t.lastIndexOf('}');
-      if (first !== -1 && last !== -1 && last > first) {
-        try { return JSON.parse(t.slice(first, last + 1)); } catch {}
-      }
-      return null;
-    };
-
-    if (typeof raw === 'object' && raw) {
-      parsed = raw;
-    } else {
-      parsed = extractJson(raw);
-      if (!parsed || !parsed.assignments || typeof parsed.assignments !== 'object') {
-        try {
-          const retry = await openai.chat.completions.create({
-            model: "gpt-4o-mini",
-            messages: [
-              { role: "system", content: SYSTEM },
-              { role: "user", content: USER }
-            ],
-            max_completion_tokens: 1200,
-            response_format: { type: "json_object" }
-          });
-          const raw2 = retry.choices?.[0]?.message?.content || '';
-          parsed = extractJson(raw2);
-        } catch (retryErr) {
-          console.warn('AI reclassify retry failed:', retryErr?.message || retryErr);
-        }
-      }
-    }
-
-    // Build new list using AI assignments or fallback
-    const byId = new Map(unreplied.map(e => [e.id, e]));
-    let assignments = {};
-    if (parsed && parsed.assignments && typeof parsed.assignments === 'object') {
-      assignments = parsed.assignments;
-    } else {
-      mode = 'rule-based-fallback';
-      assignments = {};
-      for (const e of unreplied) {
-        const heuristic = categorizeEmail(e.subject || '', e.body || '', e.from || '');
-        const mapped = exactFromX(heuristic) || categoriesX[0];
-        assignments[e.id] = mapped;
-      }
-    }
-
-    // Apply assignments (validated to X) and persist
+    // Apply keyword categorization and persist
     let updatedCount = 0;
-    const updated = unreplied.map(e => {
-      const rawCat = assignments[e.id];
-      const mapped = exactFromX(rawCat) || e.category || categoriesX[0];
-      if (mapped !== e.category) {
+    const updated = (unreplied || []).map(e => {
+      const wanted = keywordCategorizeUnreplied(e.subject || '', e.body || '', e.from || '');
+      const mapped = matchToCurrentCategory(wanted, categoriesX) || wanted;
+      if (mapped && mapped !== e.category) {
         updatedCount++;
         return { ...e, category: mapped };
       }
@@ -1754,7 +1794,7 @@ Return ONLY the JSON object described above.`;
       updatedCount,
       total: updated.length,
       categoriesUsed: categoriesX,
-      mode
+      mode: 'keyword'
     });
   } catch (error) {
     console.error('Error reclassifying unreplied emails:', error);
@@ -2677,7 +2717,7 @@ app.post('/api/fetch-more-emails', async (req, res) => {
                 date: emailData.date,
                 body: emailData.body,
                 snippet: emailData.snippet || (emailData.body ? emailData.body.substring(0, 100) + (emailData.body.length > 100 ? '...' : '') : 'No content available'),
-                category: categorizeEmail(emailData.subject || '', emailData.body || '', emailData.from || ''),
+                category: keywordCategorizeUnreplied(emailData.subject || '', emailData.body || '', emailData.from || ''),
                 source: 'gmail-api',
                 webUrl: emailData.webUrl || ''
               };
@@ -2769,7 +2809,7 @@ app.post('/api/fetch-more-emails', async (req, res) => {
                 date: emailData.date,
                 body: emailData.body,
                 snippet: emailData.snippet || (emailData.body ? emailData.body.substring(0, 100) + (emailData.body.length > 100 ? '...' : '') : 'No content available'),
-                category: categorizeEmail(emailData.subject, emailData.body, emailData.from),
+                category: keywordCategorizeUnreplied(emailData.subject || '', emailData.body || '', emailData.from || ''),
                 source: 'gmail-api',
                 webUrl: emailData.webUrl || ''
               };
@@ -2913,16 +2953,16 @@ app.post('/api/load-more-emails', async (req, res) => {
       
       if (mcpData.emails && mcpData.emails.length > 0) {
         // Process and categorize the emails
-        const processedEmails = mcpData.emails.map(email => ({
-          id: email.id || `inbox-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-          subject: email.subject || 'No Subject',
-          from: email.from || 'Unknown Sender',
-          date: email.date || new Date().toISOString(),
-          body: email.body || email.snippet || 'No content available',
-          snippet: email.snippet || (email.body ? email.body.substring(0, 100) + '...' : 'No content available'),
-          category: categorizeEmail(email.subject || '', email.body || email.snippet || '', email.from || ''),
-          source: 'inbox'
-        }));
+          const processedEmails = mcpData.emails.map(email => ({
+            id: email.id || `inbox-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+            subject: email.subject || 'No Subject',
+            from: email.from || 'Unknown Sender',
+            date: email.date || new Date().toISOString(),
+            body: email.body || email.snippet || 'No content available',
+            snippet: email.snippet || (email.body ? email.body.substring(0, 100) + '...' : 'No content available'),
+            category: keywordCategorizeUnreplied(email.subject || '', email.body || email.snippet || '', email.from || ''),
+            source: 'inbox'
+          }));
 
         // Load existing unreplied emails
         const paths = getCurrentUserPaths();
@@ -2979,16 +3019,16 @@ app.post('/api/load-more-emails', async (req, res) => {
       const simulatedEmails = [];
       
       for (let i = 1; i <= emailCount; i++) {
-        const email = {
-          id: `simulated-inbox-${Date.now()}-${i}`,
-          subject: `Simulated Inbox Email ${i}`,
-          from: `sender${i}@example.com`,
-          date: new Date(Date.now() - (i * 3600000)).toISOString(), // Each email 1 hour apart
-          body: `This is a simulated inbox email ${i}. MCP Gmail integration failed, so this is sample data for testing the load more emails feature.`,
-          snippet: `This is a simulated inbox email ${i}. MCP Gmail integration failed...`,
-          category: categorizeEmail(`Simulated Inbox Email ${i}`, `This is a simulated inbox email ${i}`, `sender${i}@example.com`),
-          source: 'inbox-simulated'
-        };
+          const email = {
+            id: `simulated-inbox-${Date.now()}-${i}`,
+            subject: `Simulated Inbox Email ${i}`,
+            from: `sender${i}@example.com`,
+            date: new Date(Date.now() - (i * 3600000)).toISOString(), // Each email 1 hour apart
+            body: `This is a simulated inbox email ${i}. MCP Gmail integration failed, so this is sample data for testing the load more emails feature.`,
+            snippet: `This is a simulated inbox email ${i}. MCP Gmail integration failed...`,
+            category: keywordCategorizeUnreplied(`Simulated Inbox Email ${i}`, `This is a simulated inbox email ${i}`, `sender${i}@example.com`),
+            source: 'inbox-simulated'
+          };
         
         simulatedEmails.push(email);
       }
@@ -3059,16 +3099,16 @@ app.post('/api/add-approved-email', async (req, res) => {
     }
 
     // Process and categorize the email
-    const processedEmail = {
-      id: email.id,
-      subject: email.subject || 'No Subject',
-      from: email.from || 'Unknown Sender',
-      date: email.date || new Date().toISOString(),
-      body: email.body || 'No content available',
-      snippet: email.snippet || (email.body ? email.body.substring(0, 100) + (email.body.length > 100 ? '...' : '') : 'No content available'),
-      category: email.category || categorizeEmail(email.subject || '', email.body || '', email.from || ''),
-      source: 'approved-fetch'
-    };
+      const processedEmail = {
+        id: email.id,
+        subject: email.subject || 'No Subject',
+        from: email.from || 'Unknown Sender',
+        date: email.date || new Date().toISOString(),
+        body: email.body || 'No content available',
+        snippet: email.snippet || (email.body ? email.body.substring(0, 100) + (email.body.length > 100 ? '...' : '') : 'No content available'),
+        category: email.category || keywordCategorizeUnreplied(email.subject || '', email.body || '', email.from || ''),
+        source: 'approved-fetch'
+      };
 
     // Add to unreplied emails
     const allUnrepliedEmails = [...existingUnrepliedEmails, processedEmail];
