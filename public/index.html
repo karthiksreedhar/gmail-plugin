@@ -8150,6 +8150,55 @@ function rejectCurrentEmail() {
         }
 
         // AI-generated categories using backend OpenAI endpoint with robust prompt & fallbacks
+        // Open Keyword Results carousel using saved keywords or current categories (no regeneration)
+        async function openCarouselEditing() {
+            try {
+                // 1) Try saved Category Guidelines as keywords
+                let haveRows = false;
+                try {
+                    const resp = await fetch('/api/category-guidelines');
+                    const data = await resp.json();
+                    const cats = Array.isArray(data.categories) ? data.categories : [];
+                    if (cats.length) {
+                        keywordGuidelines = cats;
+                        haveRows = true;
+                    }
+                } catch (_) {}
+
+                // 2) Fallback to current categories ordering
+                if (!haveRows) {
+                    try {
+                        await loadCurrentCategories();
+                    } catch (_) {}
+                    const names = Array.isArray(currentCategoriesOrder) ? currentCategoriesOrder.filter(Boolean) : [];
+                    if (names.length) {
+                        keywordGuidelines = names.map(name => ({ name, notes: '' }));
+                        haveRows = true;
+                    }
+                }
+
+                // 3) Final fallback: derive from emails already loaded
+                if (!haveRows) {
+                    const names = Array.from(new Set((allEmails || []).map(e => e && e.category).filter(Boolean)));
+                    if (names.length) {
+                        keywordGuidelines = names.map(name => ({ name, notes: '' }));
+                        haveRows = true;
+                    }
+                }
+
+                if (!haveRows) {
+                    showErrorPopup('No saved keywords or categories available. Try Refresh Categories or add Category Guidelines.', 'Nothing to Load');
+                    return;
+                }
+
+                // Build and open the keyword results carousel using current keywordGuidelines
+                await generateCategoriesFromKeywords();
+            } catch (e) {
+                console.error('openCarouselEditing failed:', e);
+                showErrorPopup('Failed to open Carousel Editing. Please try again.', 'Open Failed');
+            }
+        }
+
         async function refreshCategoriesInModalAI() {
             try {
                 showLoadingOverlay('Generating Categories', 'Asking AI to group your emails...', true);
@@ -9444,6 +9493,7 @@ let selectedOtherThreadIds = new Set();
                         <div style="display: flex; gap: 12px; align-items: center; flex-wrap: wrap;">
                             <button class="select-email-btn" onclick="addNewCategory()">+ Add Category</button>
                             <button class="select-email-btn" onclick="promptRefreshCategoriesMode()">🔄 Refresh Categories</button>
+                            <button class="select-email-btn" onclick="openCarouselEditing()">Carousel Editing</button>
                             <button class="select-email-btn" onclick="showSummarizeCategoriesModal()" title="Generate or edit summaries for one or more categories" style="background:#17a2b8;">🧠 Summarize Categories</button>
                             <span style="color:#666; font-size:12px;">Drag emails between categories. Click “Approve & Save” to apply changes.</span>
                         </div>
