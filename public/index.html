@@ -6173,9 +6173,417 @@ function closeLoadTodayModal() {
 }
 
 /* Open existing email-based categories editor from the popup */
-function openEmailCategoriesEditorFromPopup() {
-    // Temporarily disabled per request: do nothing when clicked
-    return;
+/* Unreplied Email Categories (Carousel) */
+let unrepliedWorkingGroups = [];
+let currentUnrepliedSlideIndex = 0;
+let persistedUnrepliedIds = new Set();
+let unrepliedAllPool = [];
+let unrepliedOrder = [];
+
+function ensureUnrepliedEmailCategoriesModal() {
+    let modal = document.getElementById('unrepliedEmailCategoriesModal');
+    if (modal) return modal;
+    modal = document.createElement('div');
+    modal.id = 'unrepliedEmailCategoriesModal';
+    modal.className = 'modal';
+    modal.innerHTML = `
+        <div class="modal-content thread-carousel-modal">
+            <div class="modal-header">
+                <h2 class="modal-title">Edit Email Categories (Unreplied)</h2>
+                <button class="close" onclick="closeUnrepliedEmailCategoriesModal()">&times;</button>
+            </div>
+            <div class="thread-carousel-container">
+                <div class="carousel-header">
+                    <div class="carousel-info" id="unrepliedCarouselInfo">Loading emails...</div>
+                    <div class="carousel-controls">
+                        <button class="carousel-nav-btn" id="unrepliedPrevBtn" onclick="previousUnrepliedSlide()" disabled>← Previous</button>
+                        <span class="carousel-counter" id="unrepliedCarouselCounter">1 / 1</span>
+                        <button class="carousel-nav-btn" id="unrepliedNextBtn" onclick="nextUnrepliedSlide()" disabled>Next →</button>
+                    </div>
+                </div>
+                <div class="thread-carousel" id="unrepliedCarousel">
+                    <div class="loading">Preparing editor...</div>
+                </div>
+                <div class="carousel-actions">
+                    <button class="carousel-btn carousel-btn-cancel" onclick="closeUnrepliedEmailCategoriesModal()">Cancel</button>
+                    <button class="carousel-btn carousel-btn-add" onclick="saveUnrepliedEmailGrouping()">Save Grouping</button>
+                </div>
+            </div>
+        </div>
+    `;
+    modal.addEventListener('click', (ev) => { if (ev.target === modal) closeUnrepliedEmailCategoriesModal(); });
+    document.body.appendChild(modal);
+    return modal;
+}
+
+function closeUnrepliedEmailCategoriesModal() {
+    const modal = document.getElementById('unrepliedEmailCategoriesModal');
+    if (modal) modal.style.display = 'none';
+}
+
+/* Open the unreplied-email-only carousel from Load Priority Emails */
+async function openEmailCategoriesEditorFromPopup() {
+    try {
+        // Ensure current categories ordering is available
+        try { await loadCurrentCategories(); } catch (_) {}
+        const canonical = [
+            'Teaching & Student Support',
+            'Research & Lab Work',
+            'University Administration',
+            'Financial & Reimbursements',
+            'Conferences',
+            'Networking',
+            'Personal & Life Management'
+        ];
+        unrepliedOrder = Array.isArray(currentCategoriesOrder) && currentCategoriesOrder.length
+            ? currentCategoriesOrder.slice()
+            : canonical.slice();
+
+        // Load persisted unreplied emails
+        let persisted = [];
+        try {
+            const resp = await fetch('/api/unreplied-emails');
+            const data = await resp.json();
+            persisted = Array.isArray(data.emails) ? data.emails : [];
+        } catch (e) {
+            persisted = [];
+        }
+        persistedUnrepliedIds = new Set((persisted || []).map(e => e && e.id).filter(Boolean));
+
+        // Build union pool = persisted unreplied + newly loaded today emails (priority or today)
+        const poolMap = new Map();
+        (persisted || []).forEach(e => {
+            if (e && e.id) poolMap.set(e.id, { ...e, __isNew: false, _cat: e.category || '' });
+        });
+        (todayEmails || []).forEach(e => {
+            if (!e || !e.id) return;
+            const isNew = !persistedUnrepliedIds.has(e.id);
+            if (!poolMap.has(e.id)) {
+                // normalize fields and mark new
+                poolMap.set(e.id, { ...e, __isNew: !!isNew, _cat: e.category || '' });
+            } else {
+                // keep persisted record; but if persisted lacks snippet/webUrl, prefer richer fields
+                const base = poolMap.get(e.id);
+                const merged = {
+                    ...base,
+                    snippet: base.snippet || e.snippet || '',
+                    webUrl: base.webUrl || e.webUrl || '',
+                    __isNew: base.__isNew || !!isNew
+                };
+                poolMap.set(e.id, merged);
+            }
+        });
+        unrepliedAllPool = Array.from(poolMap.values());
+
+        // Group by mapped category into slides
+        const idxByName = new Map(unrepliedOrder.map((n, i) => [String(n || '').toLowerCase(), i]));
+        const groups = unrepliedOrder.map(n => ({ name: n, emails: [] }));
+        const others = [];
+
+        // Helper: push into group with sorting later
+        const pushEmail = (catName, email) => {
+            const key = String(catName || '').toLowerCase();
+            const gi = idxByName.has(key) ? idxByName.get(key) : -1;
+            if (gi >= 0) {
+                groups[gi].emails.push(email);
+            } else {
+                others.push(email);
+            }
+        };
+
+        // Map each email to the closest current category
+        for (const e of unrepliedAllPool) {
+            const mapped = mapToCurrentCategory(e._cat || e.category || '');
+            e._cat = mapped || (unrepliedOrder[0] || 'Personal & Life Management');
+            pushEmail(e._cat, e);
+        }
+
+        // Sort each bucket: newly loaded (yellow) first, then by date desc
+        const sortEmails = (arr) => {
+            arr.sort((a, b) => {
+                const anew = a.__isNew ? 1 : 0;
+                const bnew = b.__isNew ? 1 : 0;
+                if (bnew !== anew) return bnew - anew;
+                return new Date(b.date || 0) - new Date(a.date || 0);
+            });
+        };
+        groups.forEach(g => sortEmails(g.emails));
+        if (others.length) {
+            sortEmails(others);
+            groups.push({ name: 'Other', emails: others, isOther: true });
+        }
+
+        unrepliedWorkingGroups = groups;
+        currentUnrepliedSlideIndex = 0;
+
+        // Show modal and render
+        const modal = ensureUnrepliedEmailCategoriesModal();
+        renderUnrepliedEmailCarousel();
+        modal.style.display = 'block';
+    } catch (e) {
+        console.error('openEmailCategoriesEditorFromPopup failed:', e);
+        showErrorPopup('Failed to open Email Categories editor.', 'Open Failed');
+    }
+}
+
+function renderUnrepliedEmailCarousel() {
+    try {
+        const carousel = document.getElementById('unrepliedCarousel');
+        const info = document.getElementById('unrepliedCarouselInfo');
+        const counter = document.getElementById('unrepliedCarouselCounter');
+        if (!carousel || !info || !counter) return;
+
+        const groups = Array.isArray(unrepliedWorkingGroups) ? unrepliedWorkingGroups : [];
+        if (!groups.length) {
+            carousel.innerHTML = '<div class="no-emails">No unreplied emails to edit.</div>';
+            info.textContent = 'No categories';
+            counter.textContent = '0 / 0';
+            document.getElementById('unrepliedPrevBtn').disabled = true;
+            document.getElementById('unrepliedNextBtn').disabled = true;
+            return;
+        }
+
+        const totalEmails = groups.reduce((acc, g) => acc + (Array.isArray(g.emails) ? g.emails.length : 0), 0);
+        info.textContent = `Found ${groups.length} categor${groups.length === 1 ? 'y' : 'ies'} • ${totalEmails} email${totalEmails === 1 ? '' : 's'}`;
+        counter.textContent = `${Math.min(currentUnrepliedSlideIndex + 1, groups.length)} / ${groups.length}`;
+
+        carousel.innerHTML = '';
+        groups.forEach((group, idx) => {
+            const slide = document.createElement('div');
+            slide.className = `thread-slide ${idx === currentUnrepliedSlideIndex ? 'active' : ''}`;
+            const count = (group.emails || []).length;
+            const header = group.isOther
+                ? `Other — ${count} email${count === 1 ? '' : 's'}`
+                : `${escapeHtml(group.name || '')} — ${count} email${count === 1 ? '' : 's'}`;
+
+            const emailsHtml = (group.emails || []).map(e => {
+                const subj = escapeHtml(e.subject || 'No Subject');
+                const from = escapeHtml(e.from || 'Unknown Sender');
+                const date = e.date || '';
+                const rawBody = typeof e.body === 'string' ? e.body : (e.snippet || '');
+                const previewText = String(rawBody || '').replace(/\s+/g, ' ').trim();
+                const preview = escapeHtml(previewText ? previewText.slice(0, 160) + (previewText.length > 160 ? '...' : '') : '');
+                const catStyle = getCategoryBadgeStyle(e._cat || 'Personal & Life Management');
+                const categoryClass = `category-${(e._cat || 'Personal & Life Management').toLowerCase().replace(/\s+/g, '-')}`;
+                const highlightStyle = e.__isNew ? 'background:#FFF9CC;' : 'background:#fff;';
+
+                const selectId = `unrep-cat-select-${idx}-${e.id}`;
+                const options = unrepliedOrder.map(n => `<option value="${String(n).replace(/"/g, '"')}" ${String(n).toLowerCase() === String(e._cat || '').toLowerCase() ? 'selected' : ''}>${n}</option>`).join('');
+
+                return `
+                    <div style="display: block; width: 100%; margin-bottom: 8px;">
+                        <div style="border:1px solid #e9ecef; border-radius:6px; padding:10px; ${highlightStyle}">
+                            <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; margin-bottom:6px;">
+                                <div style="font-weight:600; color:#333; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${subj}</div>
+                                <div class="email-category ${categoryClass}" style="display:inline-block; padding:4px 8px; border-radius:12px; font-size:12px; font-weight:500; ${catStyle}">
+                                    ${escapeHtml(e._cat || '')}
+                                </div>
+                            </div>
+                            <div style="font-size:12px; color:#666; margin-bottom:6px;">${from} • ${formatDate(date)}</div>
+                            <div style="font-size:12px; color:#777; line-height:1.4; margin-bottom:8px;">${preview}</div>
+                            <div style="display:flex; align-items:center; gap:8px;">
+                                <label for="${selectId}" style="font-size:12px; color:#333;">Move to:</label>
+                                <select id="${selectId}" style="padding:6px 8px; border:1px solid #ddd; border-radius:6px; font-size:12px;"
+                                    onchange="onChangeUnrepliedEmailCategory('${String(e.id).replace(/'/g, "\\'")}', this.value)">
+                                    ${options}
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+
+            slide.innerHTML = `
+                <div class="thread-preview">
+                    <div class="thread-subject">${header}</div>
+                    <div class="thread-messages">
+                        ${emailsHtml || '<div class="no-emails" style="padding:12px;">No emails in this category.</div>'}
+                    </div>
+                </div>
+            `;
+            carousel.appendChild(slide);
+        });
+
+        updateUnrepliedCarouselNavigation();
+    } catch (e) {
+        console.error('renderUnrepliedEmailCarousel failed:', e);
+    }
+}
+
+function previousUnrepliedSlide() {
+    if (currentUnrepliedSlideIndex > 0) {
+        currentUnrepliedSlideIndex--;
+        updateUnrepliedCarouselDisplay();
+    }
+}
+function nextUnrepliedSlide() {
+    if (currentUnrepliedSlideIndex < unrepliedWorkingGroups.length - 1) {
+        currentUnrepliedSlideIndex++;
+        updateUnrepliedCarouselDisplay();
+    }
+}
+function updateUnrepliedCarouselDisplay() {
+    const slides = document.querySelectorAll('#unrepliedCarousel .thread-slide');
+    slides.forEach((slide, index) => {
+        slide.classList.toggle('active', index === currentUnrepliedSlideIndex);
+    });
+    const counter = document.getElementById('unrepliedCarouselCounter');
+    if (counter) counter.textContent = `${currentUnrepliedSlideIndex + 1} / ${unrepliedWorkingGroups.length}`;
+    updateUnrepliedCarouselNavigation();
+}
+function updateUnrepliedCarouselNavigation() {
+    const prevBtn = document.getElementById('unrepliedPrevBtn');
+    const nextBtn = document.getElementById('unrepliedNextBtn');
+    if (prevBtn) prevBtn.disabled = currentUnrepliedSlideIndex === 0;
+    if (nextBtn) nextBtn.disabled = currentUnrepliedSlideIndex === unrepliedWorkingGroups.length - 1;
+}
+
+/* Move an email to a different category bucket and re-render */
+function onChangeUnrepliedEmailCategory(emailId, newCategory) {
+    try {
+        const groups = Array.isArray(unrepliedWorkingGroups) ? unrepliedWorkingGroups : [];
+        if (!groups.length) return;
+        let found = null;
+        let srcIdx = -1, srcPos = -1;
+
+        for (let gi = 0; gi < groups.length; gi++) {
+            const arr = Array.isArray(groups[gi].emails) ? groups[gi].emails : [];
+            const pos = arr.findIndex(e => e && e.id === emailId);
+            if (pos !== -1) {
+                found = arr[pos];
+                srcIdx = gi;
+                srcPos = pos;
+                break;
+            }
+        }
+        if (!found) return;
+
+        // Remove from source
+        groups[srcIdx].emails.splice(srcPos, 1);
+        // Update category
+        found._cat = newCategory;
+
+        // Find target group index (case-insensitive), create "Other" if not found
+        const targetNameLc = String(newCategory || '').toLowerCase();
+        let tgtIdx = groups.findIndex(g => !g.isOther && String(g.name || '').toLowerCase() === targetNameLc);
+        if (tgtIdx === -1) {
+            // Insert before Other (or at end if no Other)
+            const otherIdx = groups.findIndex(g => g && g.isOther);
+            const insertIdx = otherIdx === -1 ? groups.length : otherIdx;
+            groups.splice(insertIdx, 0, { name: newCategory, emails: [] });
+            tgtIdx = insertIdx;
+        }
+
+        // Add to target
+        groups[tgtIdx].emails.push(found);
+        // Re-sort both involved groups
+        const sortEmails = (arr) => {
+            arr.sort((a, b) => {
+                const anew = a.__isNew ? 1 : 0;
+                const bnew = b.__isNew ? 1 : 0;
+                if (bnew !== anew) return bnew - anew;
+                return new Date(b.date || 0) - new Date(a.date || 0);
+            });
+        };
+        sortEmails(groups[srcIdx].emails);
+        sortEmails(groups[tgtIdx].emails);
+
+        unrepliedWorkingGroups = groups;
+        // Keep the current slide visible and refresh
+        renderUnrepliedEmailCarousel();
+    } catch (e) {
+        console.error('onChangeUnrepliedEmailCategory failed:', e);
+        showErrorPopup('Failed to move email to the selected category.', 'Move Failed');
+    }
+}
+
+/* Persist newly loaded emails and save category assignments for unreplied emails only */
+async function saveUnrepliedEmailGrouping() {
+    try {
+        const groups = Array.isArray(unrepliedWorkingGroups) ? unrepliedWorkingGroups : [];
+        if (!groups.length) {
+            closeUnrepliedEmailCategoriesModal();
+            return;
+        }
+
+        // 1) Ensure newly loaded emails are persisted into unreplied-emails.json
+        const pool = Array.isArray(unrepliedAllPool) ? unrepliedAllPool : [];
+        const newOnes = pool.filter(e => e && e.id && !persistedUnrepliedIds.has(e.id));
+
+        if (newOnes.length) {
+            showLoadingOverlay('Saving Emails', `Persisting ${newOnes.length} new email${newOnes.length === 1 ? '' : 's'}...`, false);
+            for (let i = 0; i < newOnes.length; i++) {
+                const e = newOnes[i];
+                updateLoadingOverlayMessage('Saving Emails', `Saving ${i + 1} of ${newOnes.length}...`);
+                try {
+                    await fetch('/api/add-approved-email', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ email: {
+                            id: e.id,
+                            subject: e.subject || 'No Subject',
+                            from: e.from || 'Unknown Sender',
+                            date: e.date || new Date().toISOString(),
+                            body: e.body || e.snippet || '',
+                            snippet: e.snippet || (e.body ? String(e.body).slice(0, 100) + (e.body.length > 100 ? '...' : '') : ''),
+                            category: e._cat || e.category || '',
+                            webUrl: e.webUrl || ''
+                        }})
+                    });
+                    persistedUnrepliedIds.add(e.id);
+                } catch (saveErr) {
+                    console.warn('Failed to persist new email:', e.id, saveErr);
+                }
+            }
+            hideLoadingOverlay();
+        }
+
+        // 2) Build assignments from grouping (exclude "Other")
+        const assignments = {};
+        for (const g of groups) {
+            if (!g || g.isOther) continue;
+            for (const e of (g.emails || [])) {
+                if (e && e.id) assignments[e.id] = g.name;
+            }
+        }
+
+        // 3) Save category assignments for unreplied emails only
+        showLoadingOverlay('Saving Categories', 'Updating categories for unreplied emails...', false);
+        const resp = await fetch('/api/unreplied/save-categories', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ assignments })
+        });
+        const data = await resp.json().catch(() => ({}));
+        hideLoadingOverlay();
+        if (!resp.ok || !data.success) {
+            throw new Error(data.error || 'Failed to save categories for unreplied emails');
+        }
+
+        // 4) Refresh in-memory inbox lists used by Generate Response and Load Priority
+        try { await loadUnrepliedEmails(); } catch (_) {}
+
+        // Update the currently loaded Today Inbox list’s category pill for affected items
+        try {
+            const ids = Object.keys(assignments);
+            if (ids.length && Array.isArray(todayEmails)) {
+                const byId = new Map(todayEmails.map(e => [e && e.id, e]));
+                ids.forEach(id => {
+                    const item = byId.get(id);
+                    if (item) item._cat = assignments[id];
+                });
+                renderTodayEmailsList(false);
+            }
+        } catch (_) {}
+
+        // Close modal
+        closeUnrepliedEmailCategoriesModal();
+        showSuccessPopup(`Saved categories for ${data.updatedCount || 0} email${(data.updatedCount || 0) === 1 ? '' : 's'}.`, 'Categories Saved');
+    } catch (e) {
+        console.error('saveUnrepliedEmailGrouping failed:', e);
+        try { hideLoadingOverlay(); } catch (_){}
+        showErrorPopup('Failed to save email categories. Please try again.', 'Save Failed');
+    }
 }
 
 /* Derive a category for a thread using latest response -> response-emails mapping, then subject match; else "Other" */

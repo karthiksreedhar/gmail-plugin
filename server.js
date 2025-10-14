@@ -4112,6 +4112,66 @@ app.post('/api/save-categories', (req, res) => {
 });
 
 /**
+ * Unreplied Emails: Save category assignments
+ * - POST /api/unreplied/save-categories
+ * Input: { assignments: { [emailId]: categoryName }, categories?: [{ name, emails: [{id}] }]}
+ * Updates only unreplied-emails.json, does not touch response-emails.json.
+ */
+app.post('/api/unreplied/save-categories', (req, res) => {
+  try {
+    const { assignments, categories } = req.body || {};
+
+    // Build a mapping { emailId: categoryName }
+    const map = assignments && typeof assignments === 'object' ? { ...assignments } : {};
+    if (!Object.keys(map).length && Array.isArray(categories)) {
+      categories.forEach(cat => {
+        const cname = cat.name;
+        (cat.emails || []).forEach(e => {
+          if (e && e.id) map[e.id] = cname;
+        });
+      });
+    }
+
+    if (!Object.keys(map).length) {
+      return res.status(400).json({ success: false, error: 'No category assignments provided' });
+    }
+
+    const paths = getCurrentUserPaths();
+    const existingUnreplied = loadUnrepliedEmails();
+    let updatedCount = 0;
+
+    const updatedUnreplied = (existingUnreplied || []).map(e => {
+      const newCat = map[e.id];
+      if (newCat && newCat !== e.category) {
+        updatedCount++;
+        return { ...e, category: newCat };
+      }
+      return e;
+    });
+
+    // Ensure user data dir exists
+    if (!fs.existsSync(paths.USER_DATA_DIR)) {
+      fs.mkdirSync(paths.USER_DATA_DIR, { recursive: true });
+    }
+
+    // Persist only unreplied emails
+    fs.writeFileSync(
+      paths.UNREPLIED_EMAILS_PATH,
+      JSON.stringify({ emails: updatedUnreplied }, null, 2)
+    );
+
+    return res.json({
+      success: true,
+      updatedCount,
+      totalUnreplied: updatedUnreplied.length
+    });
+  } catch (error) {
+    console.error('Error saving unreplied email categories:', error);
+    return res.status(500).json({ success: false, error: 'Failed to save unreplied categories' });
+  }
+});
+
+/**
  * Category Guidelines endpoints
  * - GET /api/category-guidelines  -> returns saved guidelines for current user
  * - POST /api/category-guidelines -> saves guidelines (array of {name, notes})
