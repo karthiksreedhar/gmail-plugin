@@ -2413,7 +2413,7 @@
                 <button class="load-scenario-btn" onclick="showCleanThreadsModal()" title="Scan and clean quoted replies across all threads" style="background:#8b4513;">Clean Threads</button>
             </div>
             <div style="flex:1; display:flex; justify-content:center;">
-                <button class="refresh-btn" onclick="showLoadPriorityModal()" title="Load important emails and threads from last 3 days">⭐ Load Priority Emails</button>
+                <button class="refresh-btn" onclick="showLoadPriorityPrompt()" title="Load important emails and threads from last 3 days">⭐ Load Priority Emails</button>
             </div>
             <div class="header-buttons">
                 <button class="refresh-btn" onclick="showLoadTodayModal()">📅 Load Today</button>
@@ -6140,6 +6140,186 @@ function showLoadTodayModal() {
     loadTodayData();
 }
 
+function showLoadPriorityPrompt() {
+    try {
+        showCustomPopup({
+            title: 'Load Priority Emails',
+            message: 'Choose categorization method for newly loaded threads and inbox emails.',
+            icon: 'warning',
+            primaryText: 'AI-Enhanced Categorization',
+            secondaryText: 'Default Categorization',
+            onPrimary: () => { try { window.__priorityCategorizationMode = 'ai'; showLoadPriorityModal(); } catch(e) { console.error(e); } },
+            onSecondary: () => { try { window.__priorityCategorizationMode = 'default'; showLoadPriorityModal(); } catch(e) { console.error(e); } },
+            type: 'confirm'
+        });
+    } catch (e) {
+        console.error('showLoadPriorityPrompt failed:', e);
+        try { window.__priorityCategorizationMode = 'default'; showLoadPriorityModal(); } catch(_) {}
+    }
+}
+
+// Helpers for AI-enhanced categorization
+function buildCategoryTokenMatchers() {
+    try {
+        const list = Array.isArray(currentCategoriesOrder) ? currentCategoriesOrder.slice() : [];
+        const out = [];
+        const seen = new Set();
+        for (const name of list) {
+            const key = String(name || '').toLowerCase();
+            if (!key || seen.has(key)) continue;
+            seen.add(key);
+            let tokens = getCategorySeedTokens(name) || [];
+            if (!Array.isArray(tokens) || tokens.length === 0) {
+                tokens = [name];
+            }
+            const parts = tokens
+                .map(t => String(t || '').trim())
+                .filter(Boolean)
+                .map(t => '\\b' + escapeRegExp(t) + '\\b');
+            const re = parts.length ? new RegExp('(?:' + parts.join('|') + ')', 'i') : null;
+            out.push({ name, re });
+        }
+        return out;
+    } catch (e) {
+        console.error('buildCategoryTokenMatchers failed:', e);
+        return [];
+    }
+}
+
+function keywordAssignEmailCategory(email) {
+    try {
+        const text = [email.subject || '', email.body || ''].join(' ');
+        const matchers = buildCategoryTokenMatchers();
+        for (const m of matchers) {
+            if (m.re && m.re.test(text)) {
+                return mapToCurrentCategory(m.name);
+            }
+        }
+        return 'Other';
+    } catch (_) {
+        return 'Other';
+    }
+}
+
+function keywordAssignThreadCategory(thread) {
+    try {
+        const msgs = Array.isArray(thread.messages) ? thread.messages : [];
+        const bodies = msgs.slice(-6).map(m => String(m.subject || '') + ' ' + String(m.body || '')).join(' ');
+        const text = (thread.subject || '') + ' ' + bodies;
+        const matchers = buildCategoryTokenMatchers();
+        for (const m of matchers) {
+            if (m.re && m.re.test(text)) {
+                return mapToCurrentCategory(m.name);
+            }
+        }
+        return 'Other';
+    } catch (_) {
+        return 'Other';
+    }
+}
+
+async function validateEmailsWithAI(emails) {
+    // Verify assigned categories using category-summary-qa; move to Other when not a fit
+    try {
+        const MAX_VALIDATE = Math.min(50, emails.length);
+        const targets = emails.slice(0, MAX_VALIDATE).filter(e => e && e._cat && String(e._cat).toLowerCase() !== 'other');
+        const concurrency = 4;
+        let i = 0;
+        async function worker() {
+            while (i < targets.length) {
+                const idx = i++;
+                const e = targets[idx];
+                try {
+                    const q = `Does the following email belong in the "${e._cat}" category? Answer with only YES or NO.\n\nSubject: ${e.subject || ''}\n\nBody:\n${e.body || e.snippet || ''}`;
+                    const resp = await fetch('/api/category-summary-qa', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ category: e._cat, question: q, history: [] })
+                    });
+                    const data = await resp.json().catch(() => ({}));
+                    const ans = String((data && data.answer) || '').trim().toLowerCase();
+                    if (!ans || !(ans.startsWith('y'))) {
+                        e._cat = 'Other';
+                    }
+                } catch (err) {
+                    console.warn('AI validate failed; keeping assignment for now:', err);
+                }
+            }
+        }
+        const workers = Array.from({ length: concurrency }, () => worker());
+        await Promise.all(workers);
+    } catch (e) {
+        console.error('validateEmailsWithAI failed:', e);
+    }
+}
+
+async function runPriorityAICategorization() {
+    try {
+        // Seed initial categories via keywords (used for threads and as fallback for emails)
+        if (Array.isArray(todayEmails)) {
+            for (const e of todayEmails) {
+                try { e._cat = keywordAssignEmailCategory(e); } catch (_) {}
+            }
+        }
+        if (Array.isArray(todayThreads)) {
+            for (const t of todayThreads) {
+                try { t._cat = keywordAssignThreadCategory(t); } catch (_) {}
+            }
+        }
+
+        // Build payload for server-side AI enhanced categorization (emails only)
+        const emailsPayload = (Array.isArray(todayEmails) ? todayEmails : [])
+            .filter(e => e && e.id)
+            .map(e => ({
+                id: e.id,
+                subject: e.subject || '',
+                body: typeof e.body === 'string' ? e.body : (e.snippet || ''),
+                snippet: e.snippet || '',
+                from: e.from || '',
+                // Send our current best guess as baseline; server will verify/adjust
+                category: e._cat || mapToCurrentCategory(e.category || '')
+            }));
+
+        // Ensure current categories list is available
+        const catList = Array.isArray(currentCategoriesOrder) ? currentCategoriesOrder.slice() : [];
+
+        // Call backend endpoint to verify and improve assignments
+        let data = null;
+        try {
+            const resp = await fetch('/api/ai-enhanced-categorize', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ emails: emailsPayload, categories: catList })
+            });
+            data = await resp.json().catch(() => ({}));
+            if (!resp.ok || !data || data.success !== true || !data.assignments) {
+                throw new Error((data && data.error) || 'Non-OK response');
+            }
+        } catch (serverErr) {
+            console.warn('AI-enhanced server categorization failed; falling back to client validator:', serverErr);
+            // Fallback to client-side simple validator if server is unavailable
+            await validateEmailsWithAI(Array.isArray(todayEmails) ? todayEmails : []);
+            return;
+        }
+
+        // Apply server assignments to todayEmails
+        const assignments = data.assignments || {};
+        if (assignments && typeof assignments === 'object') {
+            const byId = new Map((todayEmails || []).map(e => [e && e.id, e]));
+            Object.keys(assignments).forEach(id => {
+                const email = byId.get(id);
+                if (email) {
+                    email._cat = assignments[id];
+                }
+            });
+        }
+
+        // Threads remain keyword-assigned for this pass; deriveThreadCategory will prefer t._cat in AI mode
+    } catch (e) {
+        console.error('runPriorityAICategorization failed:', e);
+    }
+}
+
 function showLoadPriorityModal() {
     try { window.__loadDateFilter = 'priority3d'; } catch (_) {}
     const modal = ensureLoadTodayModal();
@@ -6790,6 +6970,9 @@ async function saveUnrepliedEmailGrouping() {
 /* Derive a category for a thread using latest response -> response-emails mapping, then subject match; else "Other" */
 function deriveThreadCategory(t) {
     try {
+        if (window.__priorityCategorizationMode === 'ai' && t && t._cat) {
+            return mapToCurrentCategory(t._cat);
+        }
         const msgs = Array.isArray(t.messages) ? t.messages : [];
         const latestResp = [...msgs].reverse().find(m => m && m.isResponse && m.id);
         if (latestResp && latestResp.id && Array.isArray(allEmails)) {
@@ -6973,6 +7156,29 @@ async function loadTodayData() {
         // Ensure we have the most recently saved category ordering before rendering/sorting
         try { await loadCurrentCategories(); } catch (_) {}
 
+        // If AI-Enhanced mode selected, run enhanced categorization before rendering
+        try { if (window.__priorityCategorizationMode === 'ai') { await runPriorityAICategorization(); } } catch (_) {}
+
+        console.log(
+            '[LoadToday] threads loaded:',
+            Array.isArray(todayThreads) ? todayThreads.length : -1,
+            'emails loaded:',
+            Array.isArray(todayEmails) ? todayEmails.length : -1,
+            'mode:',
+            window.__priorityCategorizationMode || 'default'
+        );
+        if (window.__priorityCategorizationMode === 'ai') {
+            try {
+                const catCount = (Array.isArray(todayEmails) ? todayEmails : []).reduce((acc, e) => {
+                    const c = (e && (e._cat || e.category)) ? String(e._cat || e.category) : 'Other';
+                    acc[c] = (acc[c] || 0) + 1;
+                    return acc;
+                }, {});
+                console.log('[LoadToday][AI] email category counts:', catCount);
+            } catch (err) {
+                console.warn('[LoadToday][AI] failed to compute category counts:', err);
+            }
+        }
         renderTodayThreadsList();
         renderTodayEmailsList(authNeeded);
         /* Enforce vertical stacking post-render as a final guard */
@@ -7098,8 +7304,10 @@ function renderTodayEmailsList(authNeeded) {
     };
     // Pre-map categories to most recently saved order for consistent sorting and display
     const augmented = todayEmails.slice().map(e => {
-        const mapped = mapToCurrentCategory(e.category || '');
-        return { ...e, _cat: mapped };
+        const chosen = (window.__priorityCategorizationMode === 'ai' && e._cat)
+            ? e._cat
+            : mapToCurrentCategory(e.category || '');
+        return { ...e, _cat: chosen };
     });
 
     const sorted = augmented.sort((a, b) => {
@@ -9638,8 +9846,10 @@ let selectedOtherThreadIds = new Set();
                 // Determine whether the current group is the "Other" bucket by name
                 const isOtherGroup = (() => {
                     try {
-                        const groups = getWorkingGroupsRef();
                         const currentNameLc = String(currentGroupName || '').toLowerCase();
+                        // Treat name-based "Other" as Other even if working-group flag is missing
+                        if (currentNameLc === 'other' || currentNameLc === 'other threads') return true;
+                        const groups = getWorkingGroupsRef();
                         const g = (groups || []).find(gg => String(gg?.name || '').toLowerCase() === currentNameLc);
                         return !!(g && g.isOther);
                     } catch (_) {

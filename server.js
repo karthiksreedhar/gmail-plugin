@@ -5855,6 +5855,233 @@ app.post('/api/clean-all-threads', async (req, res) => {
   }
 });
 
+/**
+ * AI-Enhanced Categorization for Load Priority
+ * POST /api/ai-enhanced-categorize
+ * Input: { emails: [{ id, subject, body, snippet?, from, category? }], categories?: string[] }
+ * Output: {
+ *   success: true,
+ *   assignments: { [emailId]: categoryName },
+ *   verifiedCount,
+ *   movedToOther,
+ *   reassignedFromOther,
+ *   categoriesUsed: string[],
+ *   mode: 'ai'
+ * }
+ *
+ * Behavior:
+ * - Establish baseline category per email (client-provided category or server keyword fallback)
+ * - Verify non-Other baseline assignments with a strict YES/NO validator using category summaries and examples
+ * - Reassign "Other" emails by asking the model to pick the single best category (or "Other") among current categories
+ * - Does NOT persist; front-end uses returned assignments to display two columns with category pills
+ */
+app.post('/api/ai-enhanced-categorize', async (req, res) => {
+  try {
+    const inputEmails = Array.isArray(req.body?.emails) ? req.body.emails : [];
+    const __reqId = Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7);
+
+    let categoriesX = Array.isArray(req.body?.categories) && req.body.categories.length
+      ? req.body.categories
+      : loadCategoriesList();
+
+    if (!Array.isArray(categoriesX) || !categoriesX.length) {
+      categoriesX = getCurrentCategoriesFromResponses();
+      if (!Array.isArray(categoriesX) || !categoriesX.length) {
+        categoriesX = CANONICAL_CATEGORIES.slice();
+      }
+    }
+    console.log(`[AI-Enhanced ${__reqId}] START categorize: emails=${inputEmails.length}, categories=${categoriesX.length}`);
+
+    // Load context for prompts
+    const summariesMap = loadCategorySummaries() || {};
+    const responses = loadResponseEmails() || [];
+
+    // Build compact examples per category (for validator + chooser prompts)
+    const examplesByCat = {};
+    const EXAMPLES_PER_CAT = 12;
+    for (const name of categoriesX) {
+      const items = (responses || [])
+        .filter(e => String(e.category || '').toLowerCase() === String(name || '').toLowerCase())
+        .slice(0, EXAMPLES_PER_CAT)
+        .map(e => ({
+          subject: e.subject || 'No Subject',
+          from: e.originalFrom || e.from || 'Unknown Sender',
+          snippet: e.snippet || (e.body ? String(e.body).slice(0, 160) + (e.body.length > 160 ? '...' : '') : '')
+        }));
+      examplesByCat[name] = items;
+    }
+
+    // Establish baseline categories for current batch (prefer provided category; fallback to keyword mapping)
+    const baseline = inputEmails.map(e => {
+      const provided = e && e.category ? String(e.category) : '';
+      const kw = keywordCategorizeUnreplied(e?.subject || '', e?.body || e?.snippet || '', e?.from || '');
+      const initial = provided ? matchToCurrentCategory(provided, categoriesX) : matchToCurrentCategory(kw, categoriesX);
+      return {
+        id: String(e?.id || ''),
+        subject: String(e?.subject || ''),
+        body: String(e?.body || e?.snippet || ''),
+        from: String(e?.from || ''),
+        baseline: initial || 'Other'
+      };
+    }).filter(b => b.id);
+    console.log(`[AI-Enhanced ${__reqId}] Baseline prepared: ${baseline.length} emails (from ${inputEmails.length} input)`);
+
+    const assignments = {};
+    let verifiedCount = 0;
+    let movedToOther = 0;
+    let reassignedFromOther = 0;
+
+    // 1) Verify non-Other baseline emails with a strict YES/NO prompt
+    for (const item of baseline) {
+      const cat = item.baseline || 'Other';
+      if (String(cat).toLowerCase() === 'other') continue;
+
+      const summary = summariesMap[cat] || '';
+      const examples = examplesByCat[cat] || [];
+
+      // If we have no definition and no examples for this category, do not overcorrect.
+      // Keep the baseline assignment to avoid collapsing everything into "Other".
+      if (!summary && (!Array.isArray(examples) || examples.length === 0)) {
+        assignments[item.id] = cat;
+        verifiedCount++;
+        continue;
+      }
+
+      const SYSTEM = 'You are a strict validator for category membership in an email triage system. Answer with only YES or NO.';
+      const USER = `CATEGORY: ${cat}
+DEFINITION:
+${summary || '(no definition provided)'}
+
+EXAMPLES (${examples.length}):
+${examples.map((ex, i) => `${i + 1}) ${ex.subject} — from ${ex.from}\n${ex.snippet}`).join('\n\n')}
+
+EMAIL TO CHECK:
+Subject: ${item.subject}
+From: ${item.from}
+Body:
+${item.body}
+
+Does this email belong in the "${cat}" category? Answer with only YES or NO.`;
+
+      let ans = 'YES';
+      try {
+        const completion = await openai.chat.completions.create({
+          model: "o3",
+          messages: [
+            { role: "system", content: SYSTEM },
+            { role: "user", content: USER }
+          ],
+          max_completion_tokens: 6
+        });
+        const txt = (completion.choices?.[0]?.message?.content || '').trim().toLowerCase();
+        ans = txt.startsWith('y') ? 'YES' : 'NO';
+      } catch {
+        // If validator fails, keep baseline to avoid overcorrection
+        ans = 'YES';
+      }
+
+      if (ans === 'YES') {
+        assignments[item.id] = cat;
+        verifiedCount++;
+      } else {
+        assignments[item.id] = 'Other';
+        movedToOther++;
+      }
+    }
+
+    // 2) Reassign emails currently in "Other" (includes baseline Other AND those moved to Other by the validator)
+    const toReassign = baseline.filter(b => {
+      const current = assignments[b.id] || b.baseline || 'Other';
+      return String(current).toLowerCase() === 'other';
+    });
+    console.log(`[AI-Enhanced ${__reqId}] Reassign candidates: ${toReassign.length}`);
+
+    for (const item of toReassign) {
+      // Build chooser context: name, summary, and a few examples for each category
+      const chooserContext = categoriesX.map(name => ({
+        name,
+        summary: summariesMap[name] || '',
+        examples: (examplesByCat[name] || []).slice(0, 5)
+      }));
+
+      const SYSTEM2 = `You choose the single best category for an email from a provided list of categories.
+Rules:
+- Return strictly valid JSON: {"category":"<one of the provided names or Other>"}.
+- Use the category definitions and examples.
+- If none fit reasonably, return "Other".`;
+      const USER2 = `CATEGORIES (with brief definitions and examples):
+${JSON.stringify(chooserContext, null, 2)}
+
+EMAIL:
+Subject: ${item.subject}
+From: ${item.from}
+Body:
+${item.body}
+
+Return only JSON: {"category":"<name>"} where <name> is one of: ${categoriesX.join(', ')}, or "Other".`;
+
+      try {
+        const completion2 = await openai.chat.completions.create({
+          model: "o3",
+          messages: [
+            { role: "system", content: SYSTEM2 },
+            { role: "user", content: USER2 }
+          ],
+          max_completion_tokens: 60,
+          response_format: { type: "json_object" }
+        });
+        const content = completion2.choices?.[0]?.message?.content || '';
+        let parsed = null;
+        try { parsed = JSON.parse(content); } catch {
+          const m = content.match(/\{[\s\S]*\}/);
+          if (m) { try { parsed = JSON.parse(m[0]); } catch {} }
+        }
+        const rawCat = parsed && typeof parsed.category === 'string' ? parsed.category : 'Other';
+        let mapped = matchToCurrentCategory(rawCat, categoriesX) || 'Other';
+        // Fallback: if the chooser returned "Other" or an unrecognized label, use keyword mapping as tie-breaker
+        if (mapped === 'Other') {
+          const kw = keywordCategorizeUnreplied(item.subject || '', item.body || '', item.from || '');
+          mapped = matchToCurrentCategory(kw, categoriesX) || 'Other';
+        }
+        assignments[item.id] = mapped;
+        if (mapped !== 'Other') reassignedFromOther++;
+      } catch {
+        // Robust fallback if chooser fails entirely: apply keyword mapping to avoid bucket collapse
+        const kw = keywordCategorizeUnreplied(item.subject || '', item.body || '', item.from || '');
+        const mapped = matchToCurrentCategory(kw, categoriesX) || 'Other';
+        assignments[item.id] = mapped;
+        if (mapped !== 'Other') reassignedFromOther++;
+      }
+    }
+
+    // 3) Fill any emails not covered above with their baseline mapping
+    for (const b of baseline) {
+      if (!assignments[b.id]) {
+        assignments[b.id] = matchToCurrentCategory(b.baseline || 'Other', categoriesX) || 'Other';
+      }
+    }
+
+    console.log(
+      `[AI-Enhanced ${__reqId}] DONE categorize: ` +
+      `assignments=${Object.keys(assignments).length}, ` +
+      `verified=${verifiedCount}, movedToOther=${movedToOther}, reassignedFromOther=${reassignedFromOther}, ` +
+      `categories=${categoriesX.length}`
+    );
+    return res.json({
+      success: true,
+      assignments,
+      verifiedCount,
+      movedToOther,
+      reassignedFromOther,
+      categoriesUsed: categoriesX,
+      mode: 'ai'
+    });
+  } catch (err) {
+    console.error('ai-enhanced-categorize failed:', err);
+    return res.status(500).json({ success: false, error: 'Failed to run AI-enhanced categorization' });
+  }
+});
+
 // Serve the main HTML file
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
