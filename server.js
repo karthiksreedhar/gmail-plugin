@@ -573,6 +573,38 @@ function saveHiddenThreads(hidden) {
 }
 
 /**
+ * Hidden Inbox helpers (for MCP/inbox items to be skipped in future loads)
+ * Stored per-user at: data/{email}/hidden-inbox.json
+ * Shape: { hiddenMessages: [{ id, subject, date }] }
+ */
+function loadHiddenInbox() {
+  try {
+    const paths = getCurrentUserPaths();
+    const p = path.join(paths.USER_DATA_DIR, 'hidden-inbox.json');
+    if (fs.existsSync(p)) {
+      const data = JSON.parse(fs.readFileSync(p, 'utf8'));
+      return Array.isArray(data.hiddenMessages) ? data.hiddenMessages : [];
+    }
+  } catch (e) {
+    console.warn('Failed to load hidden-inbox.json:', e?.message || e);
+  }
+  return [];
+}
+
+function saveHiddenInbox(hiddenMessages) {
+  try {
+    const paths = getCurrentUserPaths();
+    if (!fs.existsSync(paths.USER_DATA_DIR)) {
+      fs.mkdirSync(paths.USER_DATA_DIR, { recursive: true });
+    }
+    const p = path.join(paths.USER_DATA_DIR, 'hidden-inbox.json');
+    fs.writeFileSync(p, JSON.stringify({ hiddenMessages: hiddenMessages || [] }, null, 2));
+  } catch (e) {
+    console.error('Failed to save hidden-inbox.json:', e?.message || e);
+  }
+}
+
+/**
  * Category Guidelines persistence helpers
  * Stored per-user at: data/{email}/category-guidelines.json
  * Shape:
@@ -2919,6 +2951,247 @@ app.post('/api/fetch-more-emails', async (req, res) => {
 });
 
 // API endpoint to load more emails from inbox using MCP
+app.post('/api/hidden-inbox/add', (req, res) => {
+  try {
+    const { id, subject, date } = req.body || {};
+    if (!id && !subject) {
+      return res.status(400).json({ success: false, error: 'id or subject is required' });
+    }
+    const list = loadHiddenInbox();
+    const norm = (s) => String(s || '').toLowerCase().replace(/^re:\s*/i, '').trim();
+    const exists = list.some(h => (id && h.id === id) || (subject && norm(h.subject) === norm(subject)));
+    if (!exists) {
+      list.push({ id: id || '', subject: subject || '', date: date || new Date().toISOString() });
+      saveHiddenInbox(list);
+    }
+    return res.json({ success: true, totalHidden: list.length });
+  } catch (e) {
+    console.error('Error adding hidden inbox item:', e);
+    return res.status(500).json({ success: false, error: 'Failed to hide inbox item' });
+  }
+});
+
+/**
+ * Seed Categories: list 50 most recent important inbox items via MCP
+ * GET /api/seed-categories/list
+ * Returns: { success, items: [{ id, subject, from, date, tags: { unreplied, thread }, category: 'Other' }] }
+ */
+app.get('/api/seed-categories/list', async (req, res) => {
+  try {
+    console.log('[SeedCategories] Starting Gmail fetch for important inbox...');
+    // Fetch more than needed to allow dedup by subject
+    const TARGET = 50;
+    const LIMIT = 120;
+
+    // Ensure Gmail API is ready
+    if (!gmail) {
+      console.warn('[SeedCategories] Gmail API not initialized; attempting initialize...');
+      try {
+        await initializeGmailAPI();
+      } catch (e) {
+        // continue; we will check gmail below
+      }
+    }
+
+    if (!gmail) {
+      console.error('[SeedCategories] Gmail API unavailable');
+      return res.status(500).json({ success: false, error: 'Gmail not authenticated' });
+    }
+
+    // Search Gmail for important inbox messages
+    console.log('[SeedCategories] Fetching important messages via Gmail API...');
+    const msgRefs = await searchGmailEmails('in:inbox is:important', LIMIT);
+    console.log(`[SeedCategories] Gmail returned ${msgRefs.length} message refs`);
+
+    // Expand refs into lightweight email objects with progress logs
+    let emails = [];
+    let processed = 0;
+    for (const m of msgRefs) {
+      try {
+        const em = await getGmailEmail(m.id);
+        // Basic record used downstream for subject-based grouping
+        emails.push({
+          id: em.id,
+          subject: em.subject || 'No Subject',
+          from: em.from || 'Unknown Sender',
+          date: em.date || new Date().toISOString(),
+          snippet: em.snippet || '',
+          body: em.body || ''
+        });
+        processed++;
+        if (processed % 10 === 0 || processed === msgRefs.length) {
+          console.log(`[SeedCategories] Processed ${processed}/${msgRefs.length}`);
+        }
+      } catch (e) {
+        console.warn('[SeedCategories] Failed to load message', m.id, e?.message || e);
+      }
+    }
+    console.log(`[SeedCategories] Gathered ${emails.length} messages from Gmail`);
+
+    // Build reference sets for tags and duplicates
+    const responses = loadResponseEmails();
+    const threads = loadEmailThreads();
+    const respBySubj = new Set((responses || []).map(e => String(e.subject || '').toLowerCase().replace(/^re:\s*/i, '').trim()));
+    const threadBySubj = new Set((threads || []).map(t => String(t.subject || '').toLowerCase().replace(/^re:\s*/i, '').trim()));
+
+    const meA = (SENDING_EMAIL || CURRENT_USER_EMAIL || '').toLowerCase();
+    const meB = (CURRENT_USER_EMAIL || '').toLowerCase();
+    const norm = (s) => String(s || '').toLowerCase().replace(/^re:\s*/i, '').trim();
+
+    // Hidden inbox filters
+    const hidden = loadHiddenInbox();
+    const hiddenIds = new Set(hidden.map(h => h.id).filter(Boolean));
+    const hiddenNormSubjects = new Set(hidden.map(h => norm(h.subject)));
+
+    // Group by normalized subject; merge tags
+    const bySubject = new Map();
+    processed = 0;
+    for (const e of emails) {
+      processed++;
+      const id = e.id || `inbox-${Date.now()}-${processed}`;
+      const subject = e.subject || 'No Subject';
+      const from = e.from || 'Unknown Sender';
+      const date = e.date || new Date().toISOString();
+
+      if (hiddenIds.has(id) || hiddenNormSubjects.has(norm(subject))) {
+        console.log(`[SeedCategories] Skipping hidden: ${subject}`);
+        continue;
+      }
+
+      const key = norm(subject);
+      // unreplied = sender is not me (simple signal)
+      const unreplied = !String(from || '').toLowerCase().includes(meA) && !String(from || '').toLowerCase().includes(meB);
+      // thread tag if we already have a saved thread/response with same normalized subject
+      const thread = threadBySubj.has(key) || respBySubj.has(key);
+
+      if (!bySubject.has(key)) {
+        bySubject.set(key, {
+          id,
+          subject,
+          from,
+          date,
+          tags: { unreplied: !!unreplied, thread: !!thread },
+          category: 'Other'
+        });
+      } else {
+        const entry = bySubject.get(key);
+        // keep latest by date for display
+        if (new Date(date) > new Date(entry.date)) {
+          entry.id = id;
+          entry.from = from;
+          entry.date = date;
+        }
+        entry.tags.unreplied = entry.tags.unreplied || unreplied;
+        entry.tags.thread = entry.tags.thread || thread;
+      }
+
+      if (processed % 10 === 0 || processed === emails.length) {
+        console.log(`[SeedCategories] Grouped ${processed}/${emails.length}: ${subject}`);
+      }
+    }
+
+    // Sort by date desc and take first 50 (unified list: one row per subject with tags)
+    const items = Array.from(bySubject.values())
+      .sort((a, b) => new Date(b.date) - new Date(a.date))
+      .slice(0, TARGET);
+
+    console.log(`[SeedCategories] Returning ${items.length} items`);
+    return res.json({ success: true, items });
+  } catch (e) {
+    console.error('[SeedCategories] Failed:', e);
+    return res.status(500).json({ success: false, error: 'Failed to fetch seed list' });
+  }
+});
+
+/**
+ * Add a new category name (append to categories.json)
+ * POST /api/categories/add { name }
+ */
+app.post('/api/categories/add', (req, res) => {
+  try {
+    const { name } = req.body || {};
+    const n = String(name || '').trim();
+    if (!n) return res.status(400).json({ success: false, error: 'name is required' });
+    const current = loadCategoriesList();
+    const exists = current.some(c => String(c).toLowerCase() === n.toLowerCase());
+    const next = exists ? current : [...current, n];
+    saveCategoriesList(next);
+    return res.json({ success: true, categories: next });
+  } catch (e) {
+    console.error('Error adding category:', e);
+    return res.status(500).json({ success: false, error: 'Failed to add category' });
+  }
+});
+
+/**
+ * Seed Categories: Add all items with categories to DB
+ * POST /api/seed-categories/add-all
+ * Input: { items: [{ id, subject, from, date, category, tags: { unreplied, thread } }] }
+ * Behavior: Persist to unreplied-emails.json with given category and tags; update categories list with any new names.
+ */
+app.post('/api/seed-categories/add-all', (req, res) => {
+  try {
+    const { items } = req.body || {};
+    if (!Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({ success: false, error: 'items array is required' });
+    }
+
+    // Update categories list with any new names
+    const cats = loadCategoriesList();
+    const seen = new Set(cats.map(c => String(c).toLowerCase()));
+    const toAdd = [];
+    items.forEach(it => {
+      const c = String(it?.category || '').trim();
+      if (c && !seen.has(c.toLowerCase())) {
+        seen.add(c.toLowerCase());
+        toAdd.push(c);
+      }
+    });
+    if (toAdd.length) {
+      saveCategoriesList([...cats, ...toAdd]);
+    }
+
+    // Merge into unreplied-emails.json (this captures both unreplied/thread distinction for now)
+    const unreplied = loadUnrepliedEmails();
+    const existingById = new Set(unreplied.map(e => e.id));
+    let added = 0;
+
+    items.forEach(it => {
+      if (!it || (!it.id && !it.subject)) return;
+      if (existingById.has(it.id)) return;
+      const rec = {
+        id: it.id || `seed-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        subject: it.subject || 'No Subject',
+        from: it.from || 'Unknown Sender',
+        date: it.date || new Date().toISOString(),
+        body: it.body || it.snippet || '',
+        snippet: it.snippet || (it.body ? String(it.body).slice(0, 100) + (String(it.body).length > 100 ? '...' : '') : ''),
+        category: String(it.category || 'Other'),
+        tags: {
+          unreplied: !!(it.tags && it.tags.unreplied),
+          thread: !!(it.tags && it.tags.thread)
+        },
+        source: 'seed-categories'
+      };
+      unreplied.push(rec);
+      existingById.add(rec.id);
+      added++;
+      console.log(`[SeedCategories] Added: ${rec.subject} (${rec.category})`);
+    });
+
+    const paths = getCurrentUserPaths();
+    if (!fs.existsSync(paths.USER_DATA_DIR)) {
+      fs.mkdirSync(paths.USER_DATA_DIR, { recursive: true });
+    }
+    fs.writeFileSync(paths.UNREPLIED_EMAILS_PATH, JSON.stringify({ emails: unreplied }, null, 2));
+
+    return res.json({ success: true, added, totalUnreplied: unreplied.length });
+  } catch (e) {
+    console.error('seed-categories/add-all failed:', e);
+    return res.status(500).json({ success: false, error: 'Failed to add items' });
+  }
+});
+
 app.post('/api/load-more-emails', async (req, res) => {
   try {
     const { emailCount } = req.body;
@@ -3066,6 +3339,54 @@ app.post('/api/load-more-emails', async (req, res) => {
 });
 
 // API endpoint to add approved email to the database
+/**
+ * MCP fetch: return emails from inbox without persisting (used by Load More preview)
+ * POST /api/mcp-fetch-emails
+ * Input: { query?: string, maxResults?: number }
+ * Output: { success: true, emails: [{ id, subject, from, date, body, snippet, category, source: 'mcp' }] }
+ */
+app.post('/api/mcp-fetch-emails', async (req, res) => {
+  try {
+    const { query, maxResults } = req.body || {};
+    const q = String(query || 'in:inbox').trim();
+    const limit = Math.max(1, Math.min(200, Number(maxResults) || 10));
+
+    console.log(`[MCP] Searching inbox via MCP: query="${q}", maxResults=${limit}`);
+
+    const mcpResponse = await fetch('http://localhost:3001/mcp/search_emails', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query: q, maxResults: limit })
+    });
+
+    if (!mcpResponse.ok) {
+      throw new Error(`MCP request failed: ${mcpResponse.status}`);
+    }
+
+    const mcpData = await mcpResponse.json().catch(() => ({}));
+    const raw = Array.isArray(mcpData.emails) ? mcpData.emails : [];
+
+    // Map and enrich without persisting
+    const processedEmails = raw.map(email => ({
+      id: email.id || `mcp-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+      subject: email.subject || 'No Subject',
+      from: email.from || 'Unknown Sender',
+      date: email.date || new Date().toISOString(),
+      body: email.body || email.snippet || 'No content available',
+      snippet: email.snippet || (email.body ? String(email.body).slice(0, 100) + (String(email.body).length > 100 ? '...' : '') : 'No content available'),
+      // Provide a lightweight baseline category for client UI; final assignment will be AI-verified on the client flow
+      category: keywordCategorizeUnreplied(email.subject || '', email.body || email.snippet || '', email.from || ''),
+      source: 'mcp'
+    }));
+
+    console.log(`[MCP] Returned ${processedEmails.length} emails`);
+    return res.json({ success: true, emails: processedEmails });
+  } catch (e) {
+    console.error('MCP fetch failed:', e);
+    return res.status(500).json({ success: false, error: 'Failed to fetch emails via MCP' });
+  }
+});
+
 app.post('/api/add-approved-email', async (req, res) => {
   try {
     const { email } = req.body;
