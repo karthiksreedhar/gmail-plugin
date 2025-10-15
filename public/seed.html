@@ -1,0 +1,951 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Seed Categories</title>
+  <style>
+    :root{
+      --tan:#d2b48c;
+      --tan-darker:#c19a6b;
+      --bg:#ffffff;
+      --border:#e0e0e0;
+      --text:#202124;
+      --muted:#5f6368;
+      --pill-bg:#f1f3f4;
+      --accent:#4285f4;
+      --green:#28a745;
+      --red:#dc3545;
+      --violet:#6f42c1;
+      --shadow:0 1px 3px rgba(0,0,0,0.1);
+    }
+    *{box-sizing:border-box}
+    html,body{
+      margin:0;
+      padding:0;
+      height:100%;
+      background:var(--bg);
+      color:var(--text);
+      font-family: 'Google Sans','Roboto',Arial,sans-serif;
+    }
+    .header{
+      height:64px;
+      background: var(--tan);
+      border-bottom:1px solid var(--border);
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      padding:0 16px;
+      position:sticky;
+      top:0;
+      z-index:1000;
+      box-shadow: var(--shadow);
+    }
+    .hdr-left{
+      display:flex;
+      align-items:center;
+      gap:10px;
+    }
+    .hdr-left h1{
+      font-size:20px;
+      font-weight:600;
+      color:#000;
+      margin:0;
+    }
+    .hdr-right{
+      display:flex;
+      align-items:center;
+      gap:8px;
+    }
+    .btn{
+      padding:10px 14px;
+      border:none;
+      border-radius:6px;
+      font-weight:600;
+      font-size:14px;
+      cursor:pointer;
+      transition:opacity .15s ease;
+    }
+    .btn:disabled{opacity:.6;cursor:not-allowed}
+    .btn-primary{background:var(--green);color:#fff;}
+    .btn-secondary{background:#f8f9fa;color:#6c757d;border:1px solid #dee2e6;}
+    .btn-danger{background:var(--red);color:#fff;}
+    .btn:hover{opacity:.9}
+
+    .layout{
+      display:flex;
+      height:calc(100vh - 64px);
+      min-height:400px;
+    }
+    /* Split the page evenly left/right */
+    .pane-left{
+      flex:1 1 50%;
+      border-right:1px solid var(--border);
+      display:flex;
+      flex-direction:column;
+      overflow:hidden;
+      background:#f5f0e8;
+    }
+    .pane-right{
+      flex:1 1 50%;
+      min-width:0;
+      display:flex;
+      flex-direction:column;
+      overflow:hidden;
+    }
+
+    .left-top{
+      padding:10px 12px;
+      border-bottom:1px solid var(--border);
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+    }
+    .left-top .stat{
+      color:var(--muted);
+      font-size:13px;
+    }
+    .list{
+      overflow:auto;
+      padding:8px;
+      gap:8px;
+      display:flex;
+      flex-direction:column;
+      height:100%;
+    }
+    .item{
+      border:1px solid var(--border);
+      border-radius:8px;
+      background:#fff;
+      padding:10px;
+      cursor:pointer;
+      transition:background .12s ease, box-shadow .12s ease;
+      display:flex;
+      gap:10px;
+      align-items:flex-start;
+    }
+    .item:hover{background:#fafafa; box-shadow: var(--shadow);}
+    .item.active{outline:2px solid var(--tan-darker); outline-offset:-2px;}
+    .it-body{flex:1 1 auto; min-width:0;}
+    .it-row{
+      display:flex;
+      align-items:center;
+      gap:8px;
+      justify-content:space-between;
+    }
+    .it-subj{
+      font-weight:600;
+      font-size:14px;
+      color:#333;
+      overflow:hidden;
+      text-overflow:ellipsis;
+      white-space:nowrap;
+    }
+    .it-meta{
+      font-size:12px;
+      color:var(--muted);
+      margin-top:4px;
+      overflow:hidden;
+      text-overflow:ellipsis;
+      white-space:nowrap;
+    }
+    .it-actions{
+      display:flex;
+      align-items:center;
+      gap:6px;
+      flex-wrap:wrap;
+    }
+    .hide-btn{
+      background:#f1f3f4;
+      color:#444;
+      border:1px solid #ddd;
+      border-radius:6px;
+      padding:6px 10px;
+      cursor:pointer;
+      font-size:12px;
+    }
+
+    /* Inline category chips and input (used in list and detail) */
+    .chips{
+      display:flex;
+      align-items:center;
+      flex-wrap:wrap;
+      gap:6px;
+      margin-top:8px;
+    }
+    .chip{
+      display:inline-flex;
+      align-items:center;
+      gap:6px;
+      padding:6px 10px;
+      border-radius:999px;
+      border:1px solid #ddd;
+      background:#fafafa;
+      color:#333;
+      font-size:13px;
+      user-select:none;
+    }
+    .chip .x{
+      font-weight:700;
+      cursor:pointer;
+    }
+    .chip-input{
+      min-width:120px;
+      max-width:200px;
+      padding:6px 10px;
+      border-radius:999px;
+      border:1px dashed #bbb;
+      background:#fff;
+      color:#333;
+      font-size:13px;
+      outline:none;
+    }
+    .suggestions{
+      position:absolute;
+      z-index:1200;
+      background:#fff;
+      border:1px solid #e0e0e0;
+      border-radius:6px;
+      box-shadow:0 4px 12px rgba(0,0,0,0.15);
+      padding:6px;
+      display:none;
+      max-height:180px;
+      overflow:auto;
+    }
+    .suggestions .opt{
+      padding:6px 8px;
+      border-radius:4px;
+      cursor:pointer;
+      font-size:13px;
+    }
+    .suggestions .opt:hover{
+      background:#f1f3f4;
+    }
+
+    .right-top{
+      padding:10px 16px;
+      border-bottom:1px solid var(--border);
+      background:#fff;
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:12px;
+    }
+    .right-top .title{
+      font-weight:600;
+      color:#333;
+      overflow:hidden;
+      text-overflow:ellipsis;
+      white-space:nowrap;
+    }
+    .viewer{
+      flex:1 1 auto;
+      overflow:auto;
+      padding:14px;
+      background:#fff;
+    }
+    .message{
+      border:1px solid #eee;
+      border-left:4px solid #999;
+      border-radius:8px;
+      overflow:hidden;
+      margin-bottom:12px;
+      background:#fff;
+    }
+    .message.response{border-left-color: var(--tan-darker);}
+    .msg-h{
+      background:#f8f6f2;
+      padding:10px 12px;
+      border-bottom:1px solid #eee;
+      font-size:12px;
+      color:#444;
+    }
+    .msg-b{
+      padding:12px;
+      white-space:pre-wrap;
+      line-height:1.5;
+      color:#222;
+      font-size:14px;
+    }
+
+    .right-bottom{
+      display:none; /* removed bottom category bar per requirement */
+    }
+
+    .loading-overlay{
+      position:fixed; inset:0;
+      background: rgba(0,0,0,0.5);
+      display:none;
+      align-items:center;
+      justify-content:center;
+      z-index:2000;
+    }
+    .loading-card{
+      background:#fff; padding:18px 22px; border-radius:10px; min-width:260px; max-width:420px; text-align:center;
+      box-shadow:0 8px 24px rgba(0,0,0,0.25);
+    }
+    .spinner{
+      width:36px; height:36px; border:4px solid #f3f3f3; border-top:4px solid var(--accent); border-radius:50%;
+      margin: 0 auto 12px auto;
+      animation:spin 1s linear infinite;
+    }
+    .overlay-title{font-weight:700; color:#333; margin-bottom:6px;}
+    .overlay-msg{color:#666; font-size:13px;}
+    @keyframes spin {
+      0% {transform:rotate(0)} 100% {transform:rotate(360deg)}
+    }
+
+    .empty{
+      color:#666; font-style:italic; text-align:center; padding:24px;
+    }
+
+    /* Progress overlay for initial loading */
+    .progress-overlay{
+      position:fixed; inset:0;
+      background:rgba(0,0,0,0.4);
+      display:none;
+      align-items:center;
+      justify-content:center;
+      z-index:2500;
+    }
+    .progress-card{
+      background:#fff;
+      padding:20px 24px;
+      border-radius:10px;
+      min-width:300px;
+      max-width:480px;
+      box-shadow:0 8px 24px rgba(0,0,0,0.25);
+    }
+    .progress-title{
+      font-weight:700;
+      color:#333;
+      margin-bottom:8px;
+      text-align:center;
+    }
+    .progress-bar{
+      height:10px;
+      background:#ececec;
+      border-radius:999px;
+      overflow:hidden;
+    }
+    .progress-bar .fill{
+      height:100%;
+      width:0%;
+      background:var(--accent);
+      transition:width .2s ease;
+    }
+    .progress-text{
+      margin-top:8px;
+      color:#555;
+      font-size:13px;
+      text-align:center;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="hdr-left">
+      <h1>Seed Categories</h1>
+      <span id="countStat" class="stat"></span>
+    </div>
+    <div class="hdr-right">
+      <button id="cancelBtn" class="btn btn-secondary" title="Return to main page">Cancel</button>
+      <button id="addBtn" class="btn btn-primary" title="Add all listed items to database">Add to Database</button>
+    </div>
+  </div>
+
+  <div class="layout">
+    <aside class="pane-left">
+      <div class="left-top">
+        <div class="stat">Important (Top 50)</div>
+        <div id="leftStatus" class="stat"></div>
+      </div>
+      <div id="list" class="list">
+        <div class="empty">Loading important emails...</div>
+      </div>
+    </aside>
+
+    <section class="pane-right">
+      <div class="right-top" style="flex-wrap:wrap;">
+        <div style="flex:1 1 100%; display:flex; align-items:center; justify-content:space-between; gap:12px;">
+          <div id="detailTitle" class="title">Select an item</div>
+          <div id="detailTags" class="it-actions"><!-- removed unreplied/thread --></div>
+        </div>
+      </div>
+      <div id="viewer" class="viewer">
+        <div class="empty">Nothing selected.</div>
+      </div>
+      <div class="right-bottom"></div>
+    </section>
+  </div>
+
+  <div id="overlay" class="loading-overlay">
+    <div class="loading-card">
+      <div class="spinner"></div>
+      <div id="ovTitle" class="overlay-title">Loading</div>
+      <div id="ovMsg" class="overlay-msg">Please wait...</div>
+    </div>
+  </div>
+
+  <!-- Centered progress overlay for initial load -->
+  <div id="progressOverlay" class="progress-overlay">
+    <div class="progress-card">
+      <div class="progress-title">Loading important emails…</div>
+      <div class="progress-bar">
+        <div class="fill" id="progressFill" style="width:0%"></div>
+      </div>
+      <div class="progress-text" id="progressText">0 / 50</div>
+    </div>
+  </div>
+
+
+<script>
+  // State
+  let seedItems = []; // [{id, subject, from, date, snippet, body, tags:{unreplied,thread}, category:'Other'}]
+  let categories = []; // system categories
+  let selectedId = '';
+  // multi-category UI (persisting primary only for now)
+  const selectedCatsById = new Map(); // id -> array (ordered)
+  // cache of response emails for matching threads
+  let responseEmails = [];
+
+  // Utilities
+  function showOverlay(title, msg){
+    document.getElementById('ovTitle').textContent = title || 'Loading';
+    document.getElementById('ovMsg').textContent = msg || 'Please wait...';
+    document.getElementById('overlay').style.display = 'flex';
+  }
+  function hideOverlay(){
+    document.getElementById('overlay').style.display = 'none';
+  }
+
+  // Progress overlay utilities
+  let progTimer = null;
+  let progDisplayed = 0;
+  let progTotal = 50;
+
+  function setProgressDisplay(current){
+    progDisplayed = Math.max(0, Math.min(current || 0, progTotal));
+    const fill = document.getElementById('progressFill');
+    const txt = document.getElementById('progressText');
+    const pct = Math.round((progDisplayed / (progTotal || 1)) * 100);
+    if (fill) fill.style.width = pct + '%';
+    if (txt) txt.textContent = `${progDisplayed} / ${progTotal}`;
+  }
+
+  function startProgress(total = 50){
+    progTotal = total;
+    const ov = document.getElementById('progressOverlay');
+    if (ov) ov.style.display = 'flex';
+    setProgressDisplay(0);
+    if (progTimer) clearInterval(progTimer);
+    // Gentle auto-advance up to ~80% while waiting for network
+    progTimer = setInterval(() => {
+      const cap = Math.floor(progTotal * 0.8);
+      if (progDisplayed < cap) {
+        setProgressDisplay(progDisplayed + 1);
+      }
+    }, 80);
+  }
+
+  function updateProgress(current, total){
+    if (Number.isFinite(total) && total > 0) progTotal = total;
+    setProgressDisplay(current);
+  }
+
+  function finishProgress(){
+    if (progTimer) { clearInterval(progTimer); progTimer = null; }
+    // Snap to current display and hide shortly after for visual smoothness
+    setTimeout(() => {
+      const ov = document.getElementById('progressOverlay');
+      if (ov) ov.style.display = 'none';
+    }, 250);
+  }
+  function fmtDate(s){
+    const d = new Date(s || Date.now());
+    if (Number.isNaN(+d)) return '';
+    const now = new Date();
+    const diff = (now - d) / 86400000;
+    if (diff < 1) return 'Today';
+    if (diff < 2) return 'Yesterday';
+    if (diff < 7) return `${Math.floor(diff)} days ago`;
+    return d.toLocaleDateString('en-US', {month:'short', day:'numeric'});
+  }
+  function normalizeSubjectKey(s){
+    return String(s || '').toLowerCase().replace(/^re:\s*/i,'').trim();
+  }
+  function getPrimaryCat(id){
+    const arr = selectedCatsById.get(id) || [];
+    return arr.length ? arr[0] : '';
+  }
+  function ensureCatArray(id, def=''){
+    if (!selectedCatsById.has(id)) selectedCatsById.set(id, (def ? [def] : []));
+  }
+  function updateCount(){
+    const el = document.getElementById('countStat');
+    el.textContent = seedItems.length ? `(${seedItems.length})` : '';
+  }
+  function setCatOptionsDatalist(){
+    const dl = document.getElementById('catOptions');
+    if (!dl) return;
+    dl.innerHTML = (categories || []).map(c => `<option value="${escapeHtml(c)}"></option>`).join('');
+  }
+
+  async function loadInitial(){
+    try{
+      // load categories first
+      try{
+        const r = await fetch('/api/current-categories');
+        const d = await r.json();
+        categories = Array.isArray(d.categories) ? d.categories : [];
+      }catch(_){ categories = []; }
+      setCatOptionsDatalist();
+
+      // load response emails (for thread match best-effort)
+      try{
+        const r = await fetch('/api/response-emails');
+        const d = await r.json();
+        responseEmails = Array.isArray(d.emails) ? d.emails : [];
+      }catch(_){ responseEmails = []; }
+
+      // load seed list
+      document.getElementById('leftStatus').textContent = 'Loading...';
+      // Show centered progress overlay for the 50 target items
+      startProgress(50);
+      const r = await fetch('/api/seed-categories/list');
+      const d = await r.json();
+      if(!r.ok || !d.success){
+        document.getElementById('list').innerHTML = '<div class="empty">Failed to load important emails. Authenticate Gmail and retry.</div>';
+        document.getElementById('leftStatus').textContent = '';
+        finishProgress();
+        return;
+      }
+      seedItems = (Array.isArray(d.items) ? d.items : []).map(it => ({
+        ...it,
+        category: (typeof it.category === 'string' ? it.category : '')
+      }));
+      // initialize multi-cat map (no default category)
+      seedItems.forEach(it => ensureCatArray(it.id, ''));
+      renderList();
+      updateCount();
+      document.getElementById('leftStatus').textContent = seedItems.length ? `${seedItems.length} items` : '0 items';
+      // Update progress based on how many items we ended up with (towards 50)
+      updateProgress(Math.min(seedItems.length, 50), 50);
+
+      if (seedItems.length){
+        selectItem(seedItems[0].id);
+      }else{
+        renderDetailEmpty();
+      }
+      // Done with initial load
+      finishProgress();
+    }catch(e){
+      console.error('Seed load failed:', e);
+      document.getElementById('list').innerHTML = '<div class="empty">Failed to load important emails. Please try again.</div>';
+      document.getElementById('leftStatus').textContent = '';
+      finishProgress();
+    }
+  }
+
+  function renderList(){
+    const host = document.getElementById('list');
+    if (!seedItems.length){
+      host.innerHTML = '<div class="empty">No items found.</div>';
+      return;
+    }
+    host.innerHTML = '';
+    seedItems.forEach((it) => {
+      const div = document.createElement('div');
+      div.className = 'item' + (selectedId===it.id ? ' active':'');
+      div.onclick = (ev) => {
+        // ignore clicks inside chip input or suggestions
+        if (ev.target.classList && (ev.target.classList.contains('chip-input') || ev.target.closest('.suggestions'))) {
+          return;
+        }
+        selectItem(it.id);
+      };
+
+      // Build actions: Hide button
+      const actionsHtml = `
+        <div class="it-actions">
+          <button class="hide-btn" title="Hide this item">Hide</button>
+        </div>
+      `;
+
+      div.innerHTML = `
+        <div class="it-body">
+          <div class="it-row">
+            <div class="it-subj" title="${escapeHtml(it.subject||'No Subject')}">${escapeHtml(it.subject||'No Subject')}</div>
+            ${actionsHtml}
+          </div>
+          <div class="it-meta">${escapeHtml(it.from||'Unknown Sender')} • ${fmtDate(it.date)}</div>
+          <div class="chips" data-item="${it.id}"></div>
+        </div>
+      `;
+
+      // Hook hide
+      div.querySelector('.hide-btn').addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        trashItem(it);
+      });
+
+      // Render inline chips with input
+      const chipsHost = div.querySelector('.chips');
+      renderChipsEditorForItem(it.id, chipsHost);
+
+      host.appendChild(div);
+    });
+  }
+
+  async function trashItem(it){
+    try{
+      showOverlay('Hiding', 'Removing from the list and adding to hidden...');
+      await fetch('/api/hidden-inbox/add', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ id: it.id, subject: it.subject, date: it.date })
+      });
+      // remove locally
+      seedItems = seedItems.filter(x => x.id !== it.id);
+      selectedCatsById.delete(it.id);
+      if (selectedId === it.id) selectedId = '';
+      renderList();
+      updateCount();
+      if (seedItems.length){
+        selectItem(seedItems[0].id);
+      }else{
+        renderDetailEmpty();
+      }
+    }catch(e){
+      console.error('Hide failed', e);
+      alert('Failed to hide this item. Please try again.');
+    }finally{
+      hideOverlay();
+    }
+  }
+
+  function selectItem(id){
+    selectedId = id;
+    renderList();           // refresh left selection + chips
+    renderDetail();         // detail + chips editor
+  }
+
+  function renderDetailEmpty(){
+    document.getElementById('detailTitle').textContent = 'Select an item';
+    document.getElementById('detailTags').innerHTML = '';
+    document.getElementById('viewer').innerHTML = '<div class="empty">Nothing selected.</div>';
+  }
+
+  async function renderDetail(){
+    const it = seedItems.find(x => x.id === selectedId);
+    if (!it){
+      renderDetailEmpty();
+      return;
+    }
+    document.getElementById('detailTitle').textContent = it.subject || 'No Subject';
+    document.getElementById('detailTags').innerHTML = ''; // removed unreplied/thread tags
+
+    const viewer = document.getElementById('viewer');
+    viewer.innerHTML = '<div class="empty">Loading...</div>';
+
+    // Prefer full Gmail thread by this message id so each email renders in its own box
+    let rendered = false;
+    try {
+      if (it && it.id) {
+        const r = await fetch(`/api/gmail-thread-by-message/${encodeURIComponent(it.id)}`);
+        const d = await r.json();
+        if (r.ok && d && d.success && Array.isArray(d.messages) && d.messages.length) {
+          viewer.innerHTML = '';
+          d.messages.forEach(m => {
+            const card = document.createElement('div');
+            card.className = 'message' + (m.isResponse ? ' response' : '');
+            const header = document.createElement('div');
+            header.className = 'msg-h';
+            header.innerHTML = `<strong>${escapeHtml(m.from||'')}</strong> • ${new Date(m.date||Date.now()).toLocaleString()}<br/>To: ${escapeHtml(Array.isArray(m.to)? m.to.join(', '):(m.to||''))}`;
+            const body = document.createElement('div');
+            body.className = 'msg-b';
+            body.textContent = m.body || '';
+            card.appendChild(header);
+            card.appendChild(body);
+            viewer.appendChild(card);
+          });
+          rendered = true;
+        }
+      }
+      // Legacy fallback: match an existing saved response by normalized subject then fetch its thread
+      if (!rendered && responseEmails && responseEmails.length) {
+        const key = normalizeSubjectKey(it.subject);
+        const match = responseEmails.find(e => normalizeSubjectKey(e.subject) === key);
+        if (match && match.id){
+          const r2 = await fetch(`/api/email-thread/${encodeURIComponent(match.id)}`);
+          const d2 = await r2.json();
+          if (Array.isArray(d2.messages) && d2.messages.length){
+            viewer.innerHTML = '';
+            d2.messages.forEach(m => {
+              const card = document.createElement('div');
+              card.className = 'message' + (m.isResponse ? ' response' : '');
+              const header = document.createElement('div');
+              header.className = 'msg-h';
+              header.innerHTML = `<strong>${escapeHtml(m.from||'')}</strong> • ${new Date(m.date||Date.now()).toLocaleString()}<br/>To: ${escapeHtml(Array.isArray(m.to)? m.to.join(', '):(m.to||''))}`;
+              const body = document.createElement('div');
+              body.className = 'msg-b';
+              body.textContent = m.body || '';
+              card.appendChild(header);
+              card.appendChild(body);
+              viewer.appendChild(card);
+            });
+            rendered = true;
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('Thread fetch failed, fallback to single', e);
+    }
+
+    if (!rendered) {
+      // fallback: fetch full body from Gmail if available; otherwise use snippet/body
+      let text = (typeof it.body === 'string' && it.body.trim()) ? it.body : '';
+      if (!text && it.id) {
+        try {
+          const res = await fetch(`/api/gmail-message/${encodeURIComponent(it.id)}`);
+          const data = await res.json();
+          if (res.ok && data && data.success && data.email && data.email.body) {
+            text = data.email.body;
+          }
+        } catch (_e) {
+          // ignore and fall back
+        }
+      }
+      if (!text) text = it.snippet || 'No content available';
+
+      // Clean the body to remove quoted history like "On ... wrote:" using server-side cleaner
+      let cleanedText = text;
+      try {
+        const cleanRes = await fetch('/api/clean-text', {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ text })
+        });
+        const cleanData = await cleanRes.json();
+        if (cleanRes.ok && cleanData && cleanData.success && typeof cleanData.cleaned === 'string') {
+          cleanedText = cleanData.cleaned;
+        }
+      } catch (_e) {
+        // keep original fallback text
+      }
+
+      const card = document.createElement('div');
+      card.className = 'message';
+      const header = document.createElement('div');
+      header.className = 'msg-h';
+      header.innerHTML = `<strong>${escapeHtml(it.from||'')}</strong> • ${new Date(it.date||Date.now()).toLocaleString()}`;
+      const body = document.createElement('div');
+      body.className = 'msg-b';
+      body.textContent = cleanedText || '';
+      card.appendChild(header);
+      card.appendChild(body);
+      viewer.innerHTML = '';
+      viewer.appendChild(card);
+    }
+
+  }
+
+  // Inline chips editor (used in list rows and in detail)
+  function renderChipsEditorForItem(id, host){
+    host.innerHTML = '';
+    const arr = (selectedCatsById.get(id) || []).slice();
+    // render chips
+    arr.forEach(name => {
+      const chip = document.createElement('span');
+      chip.className = 'chip';
+      chip.innerHTML = `<span>${escapeHtml(name)}</span> <span class="x" title="Remove category">×</span>`;
+      chip.querySelector('.x').onclick = (ev) => {
+        ev.stopPropagation();
+        removeCategorySelection(id, name);
+        // re-render both locations referencing this item
+        refreshAllChipEditorsForItem(id);
+      };
+      host.appendChild(chip);
+    });
+
+    // input
+    const wrapper = document.createElement('div');
+    wrapper.style.position = 'relative';
+    const input = document.createElement('input');
+    input.className = 'chip-input';
+    input.setAttribute('placeholder', 'Add category…');
+    wrapper.appendChild(input);
+
+    const sugg = document.createElement('div');
+    sugg.className = 'suggestions';
+    wrapper.appendChild(sugg);
+
+    // show custom suggestions when typing (enhances datalist)
+    let lastFilter = '';
+    input.addEventListener('input', () => {
+      const v = (input.value || '').trim();
+      if (v === lastFilter) return;
+      lastFilter = v;
+      if (!v) { sugg.style.display = 'none'; sugg.innerHTML=''; return; }
+      const opts = (categories || []).filter(c => c.toLowerCase().includes(v.toLowerCase()) && !arr.some(a => a.toLowerCase() === c.toLowerCase())).slice(0, 8);
+      if (!opts.length) { sugg.style.display = 'none'; sugg.innerHTML=''; return; }
+      sugg.innerHTML = opts.map(o => `<div class="opt">${escapeHtml(o)}</div>`).join('');
+      positionSuggestionsUnder(input, sugg);
+      sugg.style.display = 'block';
+      Array.from(sugg.querySelectorAll('.opt')).forEach(el => {
+        el.onclick = (ev) => {
+          ev.stopPropagation();
+          commitCategory(id, el.textContent || '');
+        };
+      });
+    });
+
+    input.addEventListener('keydown', async (ev) => {
+      if (ev.key === 'Enter') {
+        ev.preventDefault();
+        const v = (input.value || '').trim();
+        if (!v) return;
+        commitCategory(id, v);
+      } else if (ev.key === 'Escape') {
+        sugg.style.display='none';
+      }
+    });
+
+    host.appendChild(wrapper);
+  }
+
+  function positionSuggestionsUnder(input, sugg){
+    try{
+      // Anchor to the input within its relatively positioned wrapper
+      const top = input.offsetTop + input.offsetHeight + 4; // directly under the input
+      const left = input.offsetLeft;
+      sugg.style.top = top + 'px';
+      sugg.style.left = left + 'px';
+      sugg.style.minWidth = input.offsetWidth + 'px';
+    }catch(_){}
+  }
+
+  async function commitCategory(id, name){
+    const n = (name || '').trim();
+    if (!n) return;
+    // if not already in system categories, create
+    const exists = (categories || []).some(c => c.toLowerCase() === n.toLowerCase());
+    if (!exists) {
+      try {
+        const res = await fetch('/api/categories/add', {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ name: n })
+        });
+        const data = await res.json();
+        if (res.ok && data && data.success){
+          categories = Array.isArray(data.categories) ? data.categories : categories;
+          setCatOptionsDatalist();
+        }
+      } catch (e) {
+        console.error('Failed to add category', e);
+      }
+    }
+    addCategorySelection(id, n);
+    refreshAllChipEditorsForItem(id);
+  }
+
+  function addCategorySelection(id, name){
+    const arr = selectedCatsById.get(id) || [];
+    if (!arr.some(c => c.toLowerCase() === name.toLowerCase())){
+      arr.push(name);
+      selectedCatsById.set(id, arr);
+    }
+  }
+  function removeCategorySelection(id, name){
+    const arr = selectedCatsById.get(id) || [];
+    const next = arr.filter(c => c.toLowerCase() !== name.toLowerCase());
+    selectedCatsById.set(id, next);
+  }
+  function refreshAllChipEditorsForItem(id){
+    // refresh list row chips
+    document.querySelectorAll(`.chips[data-item="${cssEscape(id)}"]`).forEach(node => {
+      renderChipsEditorForItem(id, node);
+    });
+    // refresh detail if it's the same item
+    if (selectedId === id) {
+      const host = document.getElementById('detailCats');
+      host.innerHTML = '';
+      const chips = document.createElement('div');
+      chips.className = 'chips';
+      chips.setAttribute('data-item', id);
+      host.appendChild(chips);
+      renderChipsEditorForItem(id, chips);
+    }
+  }
+
+  // CSS.escape polyfill
+  function cssEscape(s){
+    try { return CSS && CSS.escape ? CSS.escape(s) : String(s).replace(/"/g, '\\"'); } catch { return String(s).replace(/"/g, '\\"'); }
+  }
+
+  // Escape HTML util (safe minimal)
+  function escapeHtml(s){
+    return String(s||'')
+      .replace(/&/g,'&')
+      .replace(/</g,'<')
+      .replace(/>/g,'>')
+      .replace(/"/g,'"')
+      .replace(/'/g,'&#39;');
+  }
+
+  // Persist (primary-only for now)
+  async function addAllToDatabase(){
+    if (!seedItems.length){
+      alert('Nothing to add.');
+      return;
+    }
+    showOverlay('Adding to Database', 'Persisting items...');
+    try{
+      const items = seedItems.map(it => {
+        const primary = getPrimaryCat(it.id);
+        const rec = {
+          id: it.id,
+          subject: it.subject || 'No Subject',
+          from: it.from || 'Unknown Sender',
+          date: it.date || new Date().toISOString(),
+          snippet: it.snippet || (typeof it.body==='string' ? (it.body.slice(0,100) + (it.body.length>100?'...':'')) : ''),
+          body: it.body || it.snippet || '',
+          tags: {
+            // removed from UI, but still send if present
+            unreplied: !!(it.tags && it.tags.unreplied),
+            thread: !!(it.tags && it.tags.thread)
+          }
+        };
+        if (primary && String(primary).trim()) {
+          rec.category = primary.trim();
+        }
+        return rec;
+      });
+
+      const res = await fetch('/api/seed-categories/add-all', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ items })
+      });
+      const data = await res.json();
+      if (!res.ok || !data || data.success !== true){
+        throw new Error((data && data.error) || 'Add failed');
+      }
+      hideOverlay();
+      // Navigate back to home
+      window.location.href = '/';
+    }catch(e){
+      console.error('Add all failed:', e);
+      hideOverlay();
+      alert('Failed to add items. Please try again.');
+    }
+  }
+
+  // Wire header buttons
+  document.getElementById('cancelBtn').addEventListener('click', () => {
+    window.location.href = '/';
+  });
+  document.getElementById('addBtn').addEventListener('click', addAllToDatabase);
+
+  // Boot
+  document.addEventListener('DOMContentLoaded', loadInitial);
+</script>
+</body>
+</html>
