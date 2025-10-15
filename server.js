@@ -2234,6 +2234,99 @@ app.get('/oauth2callback', async (req, res) => {
   }
 });
 
+/**
+ * Fetch a single Gmail message by ID (used by Seed Categories viewer)
+ */
+app.get('/api/gmail-message/:id', async (req, res) => {
+  try {
+    if (!gmail) {
+      return res.status(401).json({ success: false, needsAuth: true, error: 'Gmail authentication required' });
+    }
+    const id = req.params.id;
+    if (!id) return res.status(400).json({ success: false, error: 'Message ID is required' });
+    const email = await getGmailEmail(id);
+    return res.json({ success: true, email });
+  } catch (e) {
+    console.error('Error fetching Gmail message:', e);
+    return res.status(500).json({ success: false, error: 'Failed to fetch Gmail message' });
+  }
+});
+
+/**
+ * Fetch full Gmail thread given any message ID (used by Seed page to render separate message boxes)
+ */
+app.get('/api/gmail-thread-by-message/:id', async (req, res) => {
+  try {
+    if (!gmail) {
+      return res.status(401).json({ success: false, needsAuth: true, error: 'Gmail authentication required' });
+    }
+    const msgId = req.params.id;
+    if (!msgId) {
+      return res.status(400).json({ success: false, error: 'Message ID is required' });
+    }
+
+    // Get the message to determine its threadId
+    const msgResp = await gmail.users.messages.get({
+      userId: 'me',
+      id: msgId,
+      format: 'metadata'
+    });
+    const threadId = msgResp?.data?.threadId;
+    if (!threadId) {
+      return res.status(404).json({ success: false, error: 'Thread not found for this message' });
+    }
+
+    // Fetch the entire thread
+    const threadResp = await gmail.users.threads.get({
+      userId: 'me',
+      id: threadId
+    });
+    const rawMessages = threadResp?.data?.messages || [];
+
+    // Identify "me" for response detection
+    const me1 = (SENDING_EMAIL || CURRENT_USER_EMAIL || '').toLowerCase();
+    const me2 = (CURRENT_USER_EMAIL || '').toLowerCase();
+
+    // Build normalized message objects
+    const out = [];
+    for (const m of rawMessages) {
+      try {
+        const data = await getGmailEmail(m.id);
+        const toArr = (data.to || '').split(',').map(e => e.trim()).filter(Boolean);
+        const lowerFrom = (data.from || '').toLowerCase();
+        const isResp = lowerFrom.includes(me1) || lowerFrom.includes(me2);
+        const cleanedBody = isResp ? await cleanResponseBody(data.body) : data.body;
+
+        out.push({
+          id: data.id,
+          from: data.from,
+          to: toArr.length ? toArr : [data.to || 'Unknown Recipient'],
+          date: data.date,
+          subject: data.subject,
+          body: cleanedBody,
+          isResponse: !!isResp
+        });
+      } catch (e) {
+        console.error('Error building gmail-thread-by-message entry:', e);
+      }
+    }
+
+    // Sort by date ascending for chronological display
+    out.sort((a, b) => new Date(a.date) - new Date(b.date));
+    const latest = out[out.length - 1];
+    const subjectForThread = latest?.subject || (rawMessages[0]?.payload?.headers?.find(h => h.name === 'Subject')?.value) || 'No Subject';
+
+    return res.json({
+      success: true,
+      thread: { id: `thread-${threadId}`, subject: subjectForThread },
+      messages: out
+    });
+  } catch (e) {
+    console.error('Error fetching Gmail thread by message:', e);
+    return res.status(500).json({ success: false, error: 'Failed to fetch Gmail thread' });
+  }
+});
+
 // API endpoint to load email threads using Gmail API
 app.post('/api/load-email-threads', async (req, res) => {
   try {
@@ -2981,7 +3074,7 @@ app.get('/api/seed-categories/list', async (req, res) => {
     console.log('[SeedCategories] Starting Gmail fetch for important inbox...');
     // Fetch more than needed to allow dedup by subject
     const TARGET = 50;
-    const LIMIT = 120;
+    const LIMIT = 50;
 
     // Ensure Gmail API is ready
     if (!gmail) {
@@ -3166,7 +3259,7 @@ app.post('/api/seed-categories/add-all', (req, res) => {
         date: it.date || new Date().toISOString(),
         body: it.body || it.snippet || '',
         snippet: it.snippet || (it.body ? String(it.body).slice(0, 100) + (String(it.body).length > 100 ? '...' : '') : ''),
-        category: String(it.category || 'Other'),
+        ...(typeof it.category === 'string' && it.category.trim() ? { category: it.category.trim() } : {}),
         tags: {
           unreplied: !!(it.tags && it.tags.unreplied),
           thread: !!(it.tags && it.tags.thread)
