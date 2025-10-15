@@ -2265,6 +2265,8 @@ app.post('/api/load-email-threads', async (req, res) => {
             todaysThreadIds.add(msg.threadId);
           }
         }
+        const totalCandidates = todaysThreadIds.size;
+        console.log(`[Load Priority] Candidate threads to scan: ${totalCandidates}`);
 
         // 3) For each thread, load full thread and include it if:
         //    - The thread contains at least one message dated today (inclusive of [start, before))
@@ -2285,6 +2287,7 @@ app.post('/api/load-email-threads', async (req, res) => {
 
             // Skip hidden threads
             if (HIDDEN_THREAD_IDS.has(`thread-${threadId}`)) {
+              console.log(`[Load Priority] Skipping hidden thread: thread-${threadId}`);
               processedThreadIds.add(threadId);
               continue;
             }
@@ -2296,6 +2299,7 @@ app.post('/api/load-email-threads', async (req, res) => {
 
             const threadMessages = threadResponse.data.messages || [];
             if (!threadMessages.length) {
+              console.log(`[Load Priority] Skipping empty thread: thread-${threadId}`);
               processedThreadIds.add(threadId);
               continue;
             }
@@ -2332,6 +2336,11 @@ app.post('/api/load-email-threads', async (req, res) => {
 
             // Only include threads with a new message today where the user has participated previously
             if (!hasNewToday || !hasParticipated) {
+              const reasons = [
+                !hasNewToday ? 'no new messages in window' : null,
+                !hasParticipated ? 'no user participation' : null
+              ].filter(Boolean).join('; ');
+              console.log(`[Load Priority] Skipping thread: thread-${threadId} — ${reasons}`);
               processedThreadIds.add(threadId);
               continue;
             }
@@ -2345,6 +2354,7 @@ app.post('/api/load-email-threads', async (req, res) => {
             // Skip if any response in this thread is hidden
             const hasHiddenResponse = allMsgs.some(m => m.isResponse && HIDDEN_RESPONSE_IDS.has(m.id));
             if (hasHiddenResponse) {
+              console.log(`[Load Priority] Skipping thread due to hidden response in thread: ${subjectForThread} (thread-${threadId})`);
               processedThreadIds.add(threadId);
               continue;
             }
@@ -2363,6 +2373,7 @@ app.post('/api/load-email-threads', async (req, res) => {
               (latest && added.messages.some(msg => msg.id === latest.id))
             );
             if (isDuplicateThread || isDuplicateResponse || isAlreadyAdded) {
+              console.log(`[Load Priority] Skipping duplicate thread: ${subjectForThread} (thread-${threadId})`);
               processedThreadIds.add(threadId);
               continue;
             }
@@ -2372,6 +2383,8 @@ app.post('/api/load-email-threads', async (req, res) => {
               subject: subjectForThread,
               messages: allMsgs
             });
+            const responsesCount = allMsgs.filter(m => m.isResponse).length;
+            console.log(`[Load Priority] [thread ${uniqueThreads.length}/${totalCandidates}] Added: ${subjectForThread} — messages: ${allMsgs.length}, responses: ${responsesCount}`);
 
             processedThreadIds.add(threadId);
           } catch (emailErr) {
@@ -2729,6 +2742,13 @@ app.post('/api/fetch-more-emails', async (req, res) => {
               };
 
               uniqueEmails.push(processedEmail);
+              console.log(`[Load Priority] [email ${uniqueEmails.length}/${emailMessages.length}] Added: ${processedEmail.subject} — from ${processedEmail.from} | category: ${processedEmail.category} | id: ${processedEmail.id}`);
+            } else {
+              if (isDuplicate) {
+                console.log(`[Load Priority] Skipped duplicate existing unreplied: ${emailData.subject} (${emailData.id})`);
+              } else if (isAlreadyAdded) {
+                console.log(`[Load Priority] Skipped duplicate in batch: ${emailData.subject} (${emailData.id})`);
+              }
             }
           } catch (emailError) {
             console.error('Error processing email:', emailError);
