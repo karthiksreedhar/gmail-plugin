@@ -2999,19 +2999,13 @@ app.post('/api/fetch-more-emails', async (req, res) => {
             const emailData = await getGmailEmail(message.id);
             
             // Check if this email already exists in database
-            const isDuplicate = existingUnrepliedEmails.some(existing => 
-              existing.id === emailData.id || 
-              (existing.subject === emailData.subject && 
-               existing.from === emailData.from &&
-               Math.abs(new Date(existing.date) - new Date(emailData.date)) < 86400000) // Within 24 hours
+            const isDuplicate = existingUnrepliedEmails.some(existing =>
+              existing && existing.id === emailData.id
             );
 
             // Also check if we already added this email in current batch
-            const isAlreadyAdded = uniqueEmails.some(added => 
-              added.id === emailData.id ||
-              (added.subject === emailData.subject && 
-               added.from === emailData.from &&
-               Math.abs(new Date(added.date) - new Date(emailData.date)) < 86400000)
+            const isAlreadyAdded = uniqueEmails.some(added =>
+              added && added.id === emailData.id
             );
 
             if (!isDuplicate && !isAlreadyAdded) {
@@ -3596,10 +3590,8 @@ app.post('/api/load-more-emails', async (req, res) => {
         const allUnrepliedEmails = [...existingUnrepliedEmails];
         
         processedEmails.forEach(newEmail => {
-          const isDuplicate = allUnrepliedEmails.some(existing => 
-            existing.subject === newEmail.subject && 
-            existing.from === newEmail.from &&
-            Math.abs(new Date(existing.date) - new Date(newEmail.date)) < 86400000 // Within 24 hours
+          const isDuplicate = allUnrepliedEmails.some(existing =>
+            existing && existing.id === newEmail.id
           );
           
           if (!isDuplicate) {
@@ -4023,7 +4015,7 @@ app.post('/api/add-email-threads', async (req, res) => {
 app.delete('/api/email-thread/:emailId', async (req, res) => {
   try {
     const emailId = req.params.emailId;
-    
+
     if (!emailId) {
       return res.status(400).json({
         success: false,
@@ -4036,10 +4028,11 @@ app.delete('/api/email-thread/:emailId', async (req, res) => {
     // Load existing data
     const existingResponseEmails = loadResponseEmails();
     const existingEmailThreads = loadEmailThreads();
+    const existingUnrepliedEmails = loadUnrepliedEmails() || [];
 
-    // Find the email to delete
+    // Find the email to delete from responses (source of truth for subject/originalFrom/date)
     const emailToDelete = existingResponseEmails.find(email => email.id === emailId);
-    
+
     if (!emailToDelete) {
       return res.status(404).json({
         success: false,
@@ -4047,59 +4040,121 @@ app.delete('/api/email-thread/:emailId', async (req, res) => {
       });
     }
 
-    // Remove from response emails
-    const updatedResponseEmails = existingResponseEmails.filter(email => email.id !== emailId);
-    
-    // Remove from email threads (by responseId when available; fallback heuristic for legacy entries)
-    const updatedEmailThreads = existingEmailThreads.filter(thread => {
-      if (thread.responseId === emailId) {
-        return false;
-      }
-      // Legacy fallback: match by subject (ignoring "Re:") + originalFrom + date proximity
-      const norm = s => (s || '').toLowerCase().replace(/^re:\s*/i, '').trim();
-      const subjMatch = norm(thread.subject) === norm(emailToDelete.subject);
-      const fromMatch = (thread.originalFrom || '').toLowerCase() === (emailToDelete.originalFrom || '').toLowerCase();
-      const tDate = new Date(thread.date);
-      const eDate = new Date(emailToDelete.date);
-      const dateDiffMs = Math.abs(tDate - eDate);
-      const dateClose = isFinite(dateDiffMs) && dateDiffMs <= 1000 * 60 * 60 * 24 * 14; // within 14 days
+    // Normalization helpers and context
+    const norm = s => (s || '').toLowerCase().replace(/^re:\s*/i, '').trim();
+    const deletedSubjectKey = norm(emailToDelete.subject);
+    const deletedFromLc = (emailToDelete.originalFrom || '').toLowerCase();
+    const deletedDate = new Date(emailToDelete.date || 0);
 
-      if (subjMatch && fromMatch && dateClose) {
-        return false;
+    // 1) Remove from response emails
+    const updatedResponseEmails = existingResponseEmails.filter(email => email.id !== emailId);
+
+    // 2) Remove from email threads:
+    //    - direct responseId match
+    //    - any message with id === deleted response id
+    //    - legacy heuristic: subject (ignoring "Re:"), originalFrom match and date proximity (±14 days)
+    const updatedEmailThreads = (existingEmailThreads || []).filter(thread => {
+      try {
+        // Drop if linked by responseId
+        if (thread && thread.responseId === emailId) return false;
+
+        // Drop if any message in the thread is the deleted response
+        if (Array.isArray(thread?.messages) && thread.messages.some(m => m && m.id === emailId)) {
+          return false;
+        }
+
+        // Legacy fallback heuristic when no explicit linkage
+        const subjMatch = norm(thread?.subject) === deletedSubjectKey;
+        const fromMatch = (thread?.originalFrom || '').toLowerCase() === deletedFromLc;
+
+        let dateClose = true;
+        if (thread?.date && emailToDelete?.date) {
+          const tDate = new Date(thread.date);
+          const diffMs = Math.abs(tDate - deletedDate);
+          dateClose = isFinite(diffMs) && diffMs <= 1000 * 60 * 60 * 24 * 14; // within 14 days
+        }
+
+        if (subjMatch && fromMatch && dateClose) {
+          return false;
+        }
+      } catch (_) {
+        // keep on error
       }
       return true;
+    });
+
+    // 3) Remove from unreplied emails:
+    //    - exact id match
+    //    - subject (ignoring "Re:") + originalFrom match with date proximity (±14 days)
+    const updatedUnrepliedEmails = (existingUnrepliedEmails || []).filter(u => {
+      try {
+        if (!u) return true;
+        // exact id
+        if (u.id === emailId) return false;
+
+        const subjMatch = norm(u.subject) === deletedSubjectKey;
+
+        const fromLc = (u.originalFrom || u.from || '').toLowerCase();
+        const fromMatch = fromLc === deletedFromLc;
+
+        let dateClose = true;
+        if (u.date && emailToDelete?.date) {
+          const uDate = new Date(u.date);
+          const diffMs = Math.abs(uDate - deletedDate);
+          dateClose = isFinite(diffMs) && diffMs <= 1000 * 60 * 60 * 24 * 14; // within 14 days
+        }
+
+        // Remove if subject+from matches and dates are reasonably close
+        if (subjMatch && fromMatch && dateClose) return false;
+
+        return true;
+      } catch (_) {
+        return true;
+      }
     });
 
     // Save updated data back to files
     try {
       const paths = getCurrentUserPaths();
-      
+
       // Ensure data directory exists
       if (!fs.existsSync(paths.USER_DATA_DIR)) {
         fs.mkdirSync(paths.USER_DATA_DIR, { recursive: true });
       }
 
       // Save updated response emails
-      fs.writeFileSync(paths.RESPONSE_EMAILS_PATH, JSON.stringify({
-        emails: updatedResponseEmails
-      }, null, 2));
+      fs.writeFileSync(
+        paths.RESPONSE_EMAILS_PATH,
+        JSON.stringify({ emails: updatedResponseEmails }, null, 2)
+      );
 
       // Save updated email threads
-      fs.writeFileSync(paths.EMAIL_THREADS_PATH, JSON.stringify({
-        threads: updatedEmailThreads
-      }, null, 2));
+      fs.writeFileSync(
+        paths.EMAIL_THREADS_PATH,
+        JSON.stringify({ threads: updatedEmailThreads }, null, 2)
+      );
 
-      console.log(`Successfully deleted email thread: ${emailToDelete.subject}`);
-      
+      // Save updated unreplied emails
+      fs.writeFileSync(
+        paths.UNREPLIED_EMAILS_PATH,
+        JSON.stringify({ emails: updatedUnrepliedEmails }, null, 2)
+      );
+
+      console.log(`Successfully deleted email across stores: ${emailToDelete.subject}`);
+
       res.json({
         success: true,
-        message: `Email thread "${emailToDelete.subject}" deleted successfully`,
+        message: `Email "${emailToDelete.subject}" deleted from responses, threads, and unreplied stores`,
         deletedEmail: {
           id: emailToDelete.id,
           subject: emailToDelete.subject
+        },
+        counts: {
+          responses: updatedResponseEmails.length,
+          threads: updatedEmailThreads.length,
+          unreplied: updatedUnrepliedEmails.length
         }
       });
-
     } catch (saveError) {
       console.error('Error saving updated data after deletion:', saveError);
       res.status(500).json({
@@ -4107,13 +4162,160 @@ app.delete('/api/email-thread/:emailId', async (req, res) => {
         error: 'Failed to save changes after deletion'
       });
     }
-
   } catch (error) {
     console.error('Error deleting email thread:', error);
     res.status(500).json({
       success: false,
       error: 'Failed to delete email thread: ' + error.message
     });
+  }
+});
+
+// One-time reconciliation to align datastore after earlier deletes lacking cascade
+// POST /api/reconcile-stores
+// body: { apply?: boolean (default true) }
+// - Removes unreplied emails that were hidden (hidden-inbox.json, hidden-threads.json)
+// - Removes orphaned threads whose responses no longer exist
+// - Removes unreplied emails that match orphaned threads by subject/from within ±14 days
+// - Deduplicates unreplied by id
+app.post('/api/reconcile-stores', (req, res) => {
+  try {
+    const apply = req.body && Object.prototype.hasOwnProperty.call(req.body, 'apply') ? !!req.body.apply : true;
+
+    const responses = loadResponseEmails() || [];
+    const threads = loadEmailThreads() || [];
+    const unreplied = loadUnrepliedEmails() || [];
+    const hiddenInbox = loadHiddenInbox() || [];
+    const hiddenThreads = loadHiddenThreads() || [];
+
+    const norm = (s) => String(s || '').toLowerCase().replace(/^re:\s*/i, '').trim();
+    const withinDays = (d1, d2, days = 14) => {
+      try {
+        const t1 = new Date(d1);
+        const t2 = new Date(d2);
+        const diff = Math.abs(t1 - t2);
+        return Number.isFinite(diff) && diff <= days * 24 * 60 * 60 * 1000;
+      } catch {
+        return false;
+      }
+    };
+
+    // Current response ids (what the main UI shows)
+    const responseIds = new Set((responses || []).map(r => r && r.id).filter(Boolean));
+
+    // Hidden signals
+    const hiddenInboxIds = new Set((hiddenInbox || []).map(h => h && h.id).filter(Boolean));
+    const hiddenInboxSubj = new Set((hiddenInbox || []).map(h => norm(h && h.subject)));
+    const hiddenThreadIds = new Set((hiddenThreads || []).map(h => h && h.id).filter(Boolean));
+    const hiddenRespIds = new Set([].concat(...(hiddenThreads || []).map(h => Array.isArray(h?.responseIds) ? h.responseIds : [])).filter(Boolean));
+    const hiddenOrigIds = new Set([].concat(...(hiddenThreads || []).map(h => Array.isArray(h?.originalIds) ? h.originalIds : [])).filter(Boolean));
+
+    // Detect orphaned threads: linked responseId missing OR response messages whose ids are all missing in responses
+    const orphanThreadIds = new Set();
+    const orphanDescriptors = []; // { subjectKey, fromLc, date }
+    for (const t of (threads || [])) {
+      if (!t) continue;
+      let orphan = false;
+      if (t.responseId && !responseIds.has(t.responseId)) {
+        orphan = true;
+      } else if (Array.isArray(t.messages) && t.messages.some(m => m && m.isResponse)) {
+        const responseMsgIds = t.messages.filter(m => m && m.isResponse).map(m => m.id).filter(Boolean);
+        if (responseMsgIds.length && responseMsgIds.every(id => !responseIds.has(id))) {
+          orphan = true;
+        }
+      }
+      if (orphan) {
+        orphanThreadIds.add(t.id);
+        orphanDescriptors.push({
+          subjectKey: norm(t.subject),
+          fromLc: String(t.originalFrom || '').toLowerCase(),
+          date: t.date || ''
+        });
+      }
+    }
+
+    // Build next unreplied by filtering out hidden + matching orphaned threads
+    let removedHiddenUnreplied = 0;
+    let removedByOrphanMatch = 0;
+    const nextUnreplied = [];
+    const seenUnrepliedIds = new Set();
+
+    for (const u of (unreplied || [])) {
+      if (!u) continue;
+      const id = u.id || '';
+      const keepById = id && !hiddenInboxIds.has(id) && !hiddenRespIds.has(id) && !hiddenOrigIds.has(id);
+      const keepBySubject = !hiddenInboxSubj.has(norm(u.subject));
+      let keep = keepById && keepBySubject;
+
+      if (!keep) {
+        removedHiddenUnreplied++;
+      } else {
+        // Orphan match: if an orphaned thread shares subject key + originalFrom (or from) within ±14 days, drop unreplied
+        const subjKey = norm(u.subject);
+        const fromLc = String(u.originalFrom || u.from || '').toLowerCase();
+        const date = u.date || '';
+        const matchesOrphan = orphanDescriptors.some(o =>
+          o.subjectKey === subjKey &&
+          (!!fromLc && o.fromLc === fromLc) &&
+          (date ? withinDays(o.date, date, 14) : true)
+        );
+        if (matchesOrphan) {
+          keep = false;
+          removedByOrphanMatch++;
+        }
+      }
+
+      if (keep) {
+        if (!seenUnrepliedIds.has(id)) {
+          seenUnrepliedIds.add(id);
+          nextUnreplied.push(u);
+        }
+        // else dedupe silently by id
+      }
+    }
+
+    // Filter threads: drop explicit hidden threads and orphaned threads
+    const nextThreads = (threads || []).filter(t => t && !hiddenThreadIds.has(t.id) && !orphanThreadIds.has(t.id));
+    const prunedThreadsCount = (threads || []).length - nextThreads.length;
+
+    const result = {
+      success: true,
+      apply,
+      stats: {
+        unrepliedBefore: (unreplied || []).length,
+        unrepliedAfter: nextUnreplied.length,
+        removedHiddenUnreplied,
+        removedByOrphanMatch,
+        threadsBefore: (threads || []).length,
+        threadsAfter: nextThreads.length,
+        prunedThreadsCount,
+        orphanThreadIds: Array.from(orphanThreadIds)
+      }
+    };
+
+    if (apply) {
+      const paths = getCurrentUserPaths();
+      if (!fs.existsSync(paths.USER_DATA_DIR)) {
+        fs.mkdirSync(paths.USER_DATA_DIR, { recursive: true });
+      }
+      try {
+        fs.writeFileSync(paths.UNREPLIED_EMAILS_PATH, JSON.stringify({ emails: nextUnreplied }, null, 2));
+      } catch (e) {
+        console.error('Failed saving unreplied after reconcile:', e);
+        return res.status(500).json({ success: false, error: 'Failed to save unreplied-emails.json' });
+      }
+      try {
+        fs.writeFileSync(paths.EMAIL_THREADS_PATH, JSON.stringify({ threads: nextThreads }, null, 2));
+      } catch (e) {
+        console.error('Failed saving threads after reconcile:', e);
+        return res.status(500).json({ success: false, error: 'Failed to save email-threads.json' });
+      }
+    }
+
+    return res.json(result);
+  } catch (e) {
+    console.error('Reconcile stores failed:', e);
+    return res.status(500).json({ success: false, error: 'Failed to reconcile stores' });
   }
 });
 
