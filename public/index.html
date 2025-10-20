@@ -2694,17 +2694,22 @@ window.__categoryChats = window.__categoryChats || {};
         function populateCategories(emails) {
             const categoryList = document.getElementById('categoryList');
 
-            // Determine authoritative category order: use /api/current-categories if available; fallback to categories present in emails
+            // Determine authoritative category order if available
             const ordered = Array.isArray(currentCategoriesOrder) && currentCategoriesOrder.length
                 ? currentCategoriesOrder.slice()
-                : Array.from(new Set((emails || []).map(e => e.category))).filter(Boolean);
+                : [];
 
-            // Build counts from emails
+            // Build counts from emails (primary + additional categories)
             const categoryCounts = {};
             (emails || []).forEach(e => {
-                const c = String(e.category || '').trim();
-                if (!c) return;
-                categoryCounts[c] = (categoryCounts[c] || 0) + 1;
+                const arr = Array.isArray(e?.categories) && e.categories.length
+                    ? e.categories
+                    : (e?.category ? [e.category] : []);
+                arr.forEach(c => {
+                    const name = String(c || '').trim();
+                    if (!name) return;
+                    categoryCounts[name] = (categoryCounts[name] || 0) + 1;
+                });
             });
 
             // Update "View All" count - show 0 if no emails
@@ -2713,22 +2718,18 @@ window.__categoryChats = window.__categoryChats || {};
             // Clear existing categories
             categoryList.innerHTML = '';
 
-            // If we have an authoritative list, render that (including zero-count categories).
-            // Otherwise, fallback to canonical defaults when there are no emails and no known order.
-            const listToRender = ordered.length
-                ? ordered
-                : (emails.length === 0
-                    ? [
-                        'Teaching & Student Support',
-                        'Research & Lab Work',
-                        'University Administration',
-                        'Financial & Reimbursements',
-                        'Conferences',
-                        'Networking',
-                        'Personal & Life Management'
-                      ]
-                    : []);
+            // Build fallback names from the data if no authoritative order
+            const fallbackNames = Array.from(new Set((emails || []).flatMap(e => {
+                const arr = Array.isArray(e?.categories) && e.categories.length
+                    ? e.categories
+                    : (e?.category ? [e.category] : []);
+                return arr;
+            }))).filter(Boolean);
 
+            // Only render categories with at least 1 email
+            const listToRender = (ordered.length ? ordered : fallbackNames).filter(name => (categoryCounts[name] || 0) > 0);
+
+            // If there are zero emails total, leave LHS empty (only "View All" remains)
             listToRender.forEach(category => {
                 const count = categoryCounts[category] || 0;
 
@@ -2749,33 +2750,6 @@ window.__categoryChats = window.__categoryChats || {};
                 categoryDiv.setAttribute('data-category', category);
                 categoryList.appendChild(categoryDiv);
             });
-
-            // If there was no authoritative list and emails exist, ensure we still render unique categories from emails
-            if (!ordered.length && emails.length > 0) {
-                const uniqueFromEmails = Array.from(new Set(emails.map(e => e.category))).filter(Boolean);
-                uniqueFromEmails.forEach(category => {
-                    // These may already be rendered; skip duplicates
-                    const exists = categoryList.querySelector(`[data-category="${category.replace(/"/g, '"')}"]`);
-                    if (exists) return;
-
-                    const categoryDiv = document.createElement('div');
-                    categoryDiv.className = 'category-item';
-                    categoryDiv.onclick = () => filterByCategory(category);
-
-                    const categoryIcon = getCategoryIcon(category);
-                    const catColors = getCategoryColors(category);
-
-                    categoryDiv.innerHTML = `
-                        <span class="category-color-dot" style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${catColors.bg};border:1px solid rgba(0,0,0,0.1);margin-right:8px;"></span>
-                        <span class="category-icon">${categoryIcon}</span>
-                        <span class="category-name">${category}</span>
-                        <span class="category-count">${categoryCounts[category] || 0}</span>
-                    `;
-
-                    categoryDiv.setAttribute('data-category', category);
-                    categoryList.appendChild(categoryDiv);
-                });
-            }
 
             // Populate people section
             populatePeople(emails);
@@ -2940,8 +2914,14 @@ function getCategoryBadgeStyle(category) {
                 displayEmails(allEmails);
                 updateDisplayStats(allEmails);
             } else {
-                const filteredEmails = allEmails.filter(email => email.category === category);
-                document.querySelector(`[data-category="${category}"]`).classList.add('active');
+                const filteredEmails = allEmails.filter(email => {
+                    const arr = Array.isArray(email?.categories) && email.categories.length
+                        ? email.categories
+                        : (email?.category ? [email.category] : []);
+                    return arr.some(c => String(c || '').toLowerCase() === String(category || '').toLowerCase());
+                });
+                const catEl = document.querySelector(`[data-category="${category}"]`);
+                if (catEl) catEl.classList.add('active');
                 document.getElementById('currentFilter').textContent = category;
                 displayEmails(filteredEmails);
                 updateDisplayStats(filteredEmails);
@@ -2962,8 +2942,14 @@ function getCategoryBadgeStyle(category) {
                 emailDiv.className = 'email-item';
                 emailDiv.onclick = () => openEmailThread(email.id, email.subject);
                 
-                const categoryClass = `category-${email.category.toLowerCase().replace(/\s+/g, '-')}`;
-                const catStyle = getCategoryBadgeStyle(email.category);
+                const catNames = Array.isArray(email?.categories) && email.categories.length
+                    ? email.categories
+                    : (email?.category ? [email.category] : []);
+                const pillsHtml = catNames.map(cat => {
+                    const cls = `category-${String(cat).toLowerCase().replace(/\s+/g, '-')}`;
+                    const style = getCategoryBadgeStyle(cat);
+                    return `<span class="email-category ${cls}" style="${style}">${cat}</span>`;
+                }).join(' ');
                 
                 // Get the original sender from email data
                 let originalSender = 'Unknown Sender';
@@ -2984,7 +2970,7 @@ function getCategoryBadgeStyle(category) {
                             <div class="email-date">${formatDate(email.date)}</div>
                         </div>
                         <div class="email-subject">${email.subject}</div>
-                        <div class="email-category ${categoryClass}" style="${catStyle}">${email.category}</div>
+                        <div class="email-categories">${pillsHtml}</div>
                     </div>
                     <div class="email-actions">
                         <button class="delete-thread-btn" onclick="deleteEmailThread('${email.id}', '${email.subject.replace(/'/g, "\\'")}', event)" title="Delete this thread">

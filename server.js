@@ -839,8 +839,16 @@ function getCurrentCategoriesFromResponses() {
     const responses = loadResponseEmails();
     const set = new Set();
     (responses || []).forEach(e => {
+      // primary category
       const name = String(e?.category || '').trim();
       if (name) set.add(name);
+      // additional categories array
+      if (Array.isArray(e?.categories)) {
+        e.categories.forEach(c => {
+          const cc = String(c || '').trim();
+          if (cc) set.add(cc);
+        });
+      }
     });
     return Array.from(set);
   } catch (e) {
@@ -1057,13 +1065,34 @@ app.get('/api/response-emails', async (req, res) => {
       }
 
       // Ensure all fields have proper values
+      // Compute primary and additional categories (multi-category support)
+      const primaryCategory = (email.category && String(email.category).trim())
+        || categorizeEmail(email.subject || '', email.body || '', email.from || '');
+      const additionalCats = Array.isArray(email.categories)
+        ? email.categories.map(c => String(c || '').trim()).filter(Boolean)
+        : [];
+      // Ensure primary is included and de-duplicate (case-insensitive)
+      const catsUniq = (() => {
+        const out = [];
+        const seen = new Set();
+        [...additionalCats, primaryCategory].forEach(c => {
+          const k = String(c || '').toLowerCase();
+          if (k && !seen.has(k)) {
+            seen.add(k);
+            out.push(c);
+          }
+        });
+        return out;
+      })();
+
       const validatedEmail = {
         id: email.id,
         subject: email.subject || 'No Subject',
         from: email.from || 'Unknown Sender',
         originalFrom: email.originalFrom || 'Unknown Sender',
         date: email.date || new Date().toISOString(),
-        category: email.category || categorizeEmail(email.subject, email.body, email.from),
+        category: primaryCategory,
+        categories: catsUniq,
         body: email.body || 'No content available',
         snippet: email.snippet || (email.body ? email.body.substring(0, 100) + (email.body.length > 100 ? '...' : '') : 'No content available')
       };
@@ -3234,16 +3263,20 @@ app.post('/api/seed-categories/add-all', (req, res) => {
       fs.mkdirSync(paths.USER_DATA_DIR, { recursive: true });
     }
 
-    // 1) Update authoritative categories list with any new names
+    // 1) Update authoritative categories list with any new names (primary + additional)
     const currentCats = loadCategoriesList();
     const seenCats = new Set(currentCats.map(c => String(c).toLowerCase()));
     const newCats = [];
     items.forEach(it => {
-      const c = String(it?.category || '').trim();
-      if (c && !seenCats.has(c.toLowerCase())) {
-        seenCats.add(c.toLowerCase());
-        newCats.push(c);
-      }
+      const primary = String(it?.category || '').trim();
+      const extras = Array.isArray(it?.categories) ? it.categories : [];
+      const all = [primary, ...extras.map(x => String(x || '').trim())];
+      all.forEach(c => {
+        if (c && !seenCats.has(c.toLowerCase())) {
+          seenCats.add(c.toLowerCase());
+          newCats.push(c);
+        }
+      });
     });
     if (newCats.length) {
       saveCategoriesList([...currentCats, ...newCats]);
@@ -3281,6 +3314,22 @@ app.post('/api/seed-categories/add-all', (req, res) => {
 
       // 2) Persist to unreplied-emails.json (as before) so inbox-oriented flows can use it
       if (!unrepliedById.has(id)) {
+        // Build categories array (primary + additional, dedup)
+        const rawCats = Array.isArray(it.categories) ? it.categories : [];
+        const cats = (() => {
+          const out = [];
+          const seen = new Set();
+          [...rawCats, category].forEach(n => {
+            const s = String(n || '').trim();
+            if (!s) return;
+            const k = s.toLowerCase();
+            if (seen.has(k)) return;
+            seen.add(k);
+            out.push(s);
+          });
+          return out;
+        })();
+
         unreplied.push({
           id,
           subject,
@@ -3289,6 +3338,7 @@ app.post('/api/seed-categories/add-all', (req, res) => {
           body: origBody,
           snippet,
           category,
+          categories: cats,
           tags: {
             unreplied: !!(it.tags && it.tags.unreplied),
             thread: !!(it.tags && it.tags.thread)
@@ -3330,6 +3380,22 @@ app.post('/api/seed-categories/add-all', (req, res) => {
       // 4) Persist a pseudo response record into response-emails.json so the main UI and category editor include it.
       // NOTE: response-emails endpoint requires a non-empty "body". We store the original text as a placeholder body so the item is visible.
       if (!responsesById.has(id)) {
+        // Build categories array (primary + additional, dedup)
+        const rawCats = Array.isArray(it.categories) ? it.categories : [];
+        const cats = (() => {
+          const out = [];
+          const seen = new Set();
+          [...rawCats, category].forEach(n => {
+            const s = String(n || '').trim();
+            if (!s) return;
+            const k = s.toLowerCase();
+            if (seen.has(k)) return;
+            seen.add(k);
+            out.push(s);
+          });
+          return out;
+        })();
+
         responses.push({
           id,
           subject,
@@ -3338,6 +3404,7 @@ app.post('/api/seed-categories/add-all', (req, res) => {
           originalFrom: from,
           date,
           category,
+          categories: cats,
           // Use original body as placeholder response text to satisfy validation; downstream cleaning is handled per-view
           body: origBody || '(seeded item)',
           snippet: snippet || 'No content available',
