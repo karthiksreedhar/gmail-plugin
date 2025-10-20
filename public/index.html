@@ -2427,7 +2427,7 @@
             </div>
             <div style="flex:1; display:flex; justify-content:center; gap:12px;">
                 <button class="refresh-btn" onclick="window.location.href='/seed.html'" title="Seed initial categories from important inbox">Seed Categories</button>
-                <button class="generate-btn" onclick="showLoadMoreImportantPrompt()" title="Load more important emails">Load More</button>
+                <button class="generate-btn" onclick="promptAndGoLoadMore()" title="Load more important emails">Load More</button>
             </div>
             <div class="header-buttons">
                 <button class="view-saved-generations-btn" onclick="showViewSavedGenerationsModal()">View Saved Generations</button>
@@ -13403,6 +13403,18 @@ async function addEmailNoteMain() {
 /* ===== End Per-email Notes (Main UI) ===== */
 
         // Load emails when page loads
+        function promptAndGoLoadMore() {
+            try {
+                const v = prompt('How many emails would you like to load? (1–50)', '10');
+                if (v === null) return;
+                const n = parseInt(v, 10);
+                const count = Number.isFinite(n) ? Math.max(1, Math.min(50, n)) : 10;
+                window.location.href = '/load.html?count=' + count;
+            } catch (e) {
+                window.location.href = '/load.html?count=10';
+            }
+        }
+
         document.addEventListener('DOMContentLoaded', function() {
             loadEmails();
             loadCurrentUser();

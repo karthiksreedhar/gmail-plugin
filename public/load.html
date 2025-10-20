@@ -1,0 +1,948 @@
+<![CDATA[<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Load More</title>
+  <style>
+    :root{
+      --tan:#d2b48c;
+      --tan-darker:#c19a6b;
+      --bg:#ffffff;
+      --border:#e0e0e0;
+      --text:#202124;
+      --muted:#5f6368;
+      --accent:#4285f4;
+      --green:#28a745;
+      --red:#dc3545;
+      --violet:#6f42c1;
+      --shadow:0 1px 3px rgba(0,0,0,0.1);
+      --chip-bg:#fafafa;
+      --predicted:#FFF9CC; /* highlight predicted categories */
+    }
+    *{box-sizing:border-box}
+    html,body{
+      margin:0;
+      padding:0;
+      height:100%;
+      background:var(--bg);
+      color:var(--text);
+      font-family: 'Google Sans','Roboto',Arial,sans-serif;
+    }
+    .header{
+      height:64px;
+      background: var(--tan);
+      border-bottom:1px solid var(--border);
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      padding:0 16px;
+      position:sticky;
+      top:0;
+      z-index:1000;
+      box-shadow: var(--shadow);
+    }
+    .hdr-left{
+      display:flex;
+      align-items:center;
+      gap:10px;
+    }
+    .hdr-left h1{
+      font-size:20px;
+      font-weight:600;
+      color:#000;
+      margin:0;
+    }
+    .hdr-right{
+      display:flex;
+      align-items:center;
+      gap:8px;
+    }
+    .btn{
+      padding:10px 14px;
+      border:none;
+      border-radius:6px;
+      font-weight:600;
+      font-size:14px;
+      cursor:pointer;
+      transition:opacity .15s ease;
+    }
+    .btn:disabled{opacity:.6;cursor:not-allowed}
+    .btn-primary{background:var(--green);color:#fff;}
+    .btn-secondary{background:#f8f9fa;color:#6c757d;border:1px solid #dee2e6;}
+    .btn-danger{background:var(--red);color:#fff;}
+    .btn:hover{opacity:.9}
+
+    .layout{
+      display:flex;
+      height:calc(100vh - 64px);
+      min-height:400px;
+    }
+    .pane-left{
+      flex:1 1 50%;
+      border-right:1px solid var(--border);
+      display:flex;
+      flex-direction:column;
+      overflow:hidden;
+      background:#f5f0e8;
+    }
+    .pane-right{
+      flex:1 1 50%;
+      min-width:0;
+      display:flex;
+      flex-direction:column;
+      overflow:hidden;
+    }
+
+    .left-top{
+      padding:10px 12px;
+      border-bottom:1px solid var(--border);
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+    }
+    .left-top .stat{
+      color:var(--muted);
+      font-size:13px;
+    }
+    .list{
+      overflow:auto;
+      padding:8px;
+      gap:8px;
+      display:flex;
+      flex-direction:column;
+      height:100%;
+    }
+    .item{
+      border:1px solid var(--border);
+      border-radius:8px;
+      background:#fff;
+      padding:10px;
+      cursor:pointer;
+      transition:background .12s ease, box-shadow .12s ease;
+      display:flex;
+      gap:10px;
+      align-items:flex-start;
+    }
+    .item:hover{background:#fafafa; box-shadow: var(--shadow);}
+    .item.active{outline:2px solid var(--tan-darker); outline-offset:-2px;}
+    .it-body{flex:1 1 auto; min-width:0;}
+    .it-row{
+      display:flex;
+      align-items:center;
+      gap:8px;
+      justify-content:space-between;
+    }
+    .it-subj{
+      font-weight:600;
+      font-size:14px;
+      color:#333;
+      overflow:hidden;
+      text-overflow:ellipsis;
+      white-space:nowrap;
+    }
+    .it-meta{
+      font-size:12px;
+      color:var(--muted);
+      margin-top:4px;
+      overflow:hidden;
+      text-overflow:ellipsis;
+      white-space:nowrap;
+    }
+    .it-actions{
+      display:flex;
+      align-items:center;
+      gap:6px;
+      flex-wrap:wrap;
+    }
+    .hide-btn, .approve-btn{
+      background:#f1f3f4;
+      color:#444;
+      border:1px solid #ddd;
+      border-radius:6px;
+      padding:6px 10px;
+      cursor:pointer;
+      font-size:12px;
+    }
+
+    .chips{
+      display:flex;
+      align-items:center;
+      flex-wrap:wrap;
+      gap:6px;
+      margin-top:8px;
+    }
+    .chip{
+      display:inline-flex;
+      align-items:center;
+      gap:6px;
+      padding:6px 10px;
+      border-radius:999px;
+      border:1px solid #ddd;
+      background:var(--chip-bg);
+      color:#333;
+      font-size:13px;
+      user-select:none;
+    }
+    .chip.predicted{
+      background: var(--predicted);
+      border-color:#e5d88b;
+    }
+    .chip .x{
+      font-weight:700;
+      cursor:pointer;
+    }
+    .chip-input{
+      min-width:120px;
+      max-width:200px;
+      padding:6px 10px;
+      border-radius:999px;
+      border:1px dashed #bbb;
+      background:#fff;
+      color:#333;
+      font-size:13px;
+      outline:none;
+    }
+    .suggestions{
+      position:absolute;
+      z-index:1200;
+      background:#fff;
+      border:1px solid #e0e0e0;
+      border-radius:6px;
+      box-shadow:0 4px 12px rgba(0,0,0,0.15);
+      padding:6px;
+      display:none;
+      max-height:180px;
+      overflow:auto;
+    }
+    .suggestions .opt{
+      padding:6px 8px;
+      border-radius:4px;
+      cursor:pointer;
+      font-size:13px;
+    }
+    .suggestions .opt:hover{
+      background:#f1f3f4;
+    }
+
+    .right-top{
+      padding:10px 16px;
+      border-bottom:1px solid var(--border);
+      background:#fff;
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:12px;
+      flex-wrap:wrap;
+    }
+    .right-top .title{
+      font-weight:600;
+      color:#333;
+      overflow:hidden;
+      text-overflow:ellipsis;
+      white-space:nowrap;
+    }
+    .viewer{
+      flex:1 1 auto;
+      overflow:auto;
+      padding:14px;
+      background:#fff;
+    }
+    .message{
+      border:1px solid #eee;
+      border-left:4px solid #999;
+      border-radius:8px;
+      overflow:hidden;
+      margin-bottom:12px;
+      background:#fff;
+    }
+    .message.response{border-left-color: var(--tan-darker);}
+    .msg-h{
+      background:#f8f6f2;
+      padding:10px 12px;
+      border-bottom:1px solid #eee;
+      font-size:12px;
+      color:#444;
+    }
+    .msg-b{
+      padding:12px;
+      white-space:pre-wrap;
+      line-height:1.5;
+      color:#222;
+      font-size:14px;
+    }
+
+    .loading-overlay{
+      position:fixed; inset:0;
+      background: rgba(0,0,0,0.5);
+      display:none;
+      align-items:center;
+      justify-content:center;
+      z-index:2000;
+    }
+    .loading-card{
+      background:#fff; padding:18px 22px; border-radius:10px; min-width:260px; max-width:420px; text-align:center;
+      box-shadow:0 8px 24px rgba(0,0,0,0.25);
+    }
+    .spinner{
+      width:36px; height:36px; border:4px solid #f3f3f3; border-top:4px solid var(--accent); border-radius:50%;
+      margin: 0 auto 12px auto;
+      animation:spin 1s linear infinite;
+    }
+    .overlay-title{font-weight:700; color:#333; margin-bottom:6px;}
+    .overlay-msg{color:#666; font-size:13px;}
+    @keyframes spin {
+      0% {transform:rotate(0)} 100% {transform:rotate(360deg)}
+    }
+
+    .empty{
+      color:#666; font-style:italic; text-align:center; padding:24px;
+    }
+
+    .cat-pill{
+      display:inline-block;
+      padding:4px 8px;
+      border-radius:12px;
+      font-size:12px;
+      font-weight:500;
+      border:1px solid #e0e0e0;
+      background:#fff;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="hdr-left">
+      <h1>Load More</h1>
+      <span id="countStat" class="stat"></span>
+    </div>
+    <div class="hdr-right">
+      <button id="cancelBtn" class="btn btn-secondary" title="Return to main page">Cancel</button>
+      <button id="approveAllBtn" class="btn btn-primary" title="Approve all listed items to database">Approve All</button>
+    </div>
+  </div>
+
+  <div class="layout">
+    <aside class="pane-left">
+      <div class="left-top">
+        <div class="stat" id="leftTitle">Requested: <span id="requestedCount">0</span></div>
+        <div id="leftStatus" class="stat"></div>
+      </div>
+      <div id="list" class="list">
+        <div class="empty">Loading emails...</div>
+      </div>
+    </aside>
+
+    <section class="pane-right">
+      <div class="right-top">
+        <div id="detailTitle" class="title">Select an item</div>
+        <div id="detailMeta" style="display:flex; align-items:center; gap:8px;">
+          <span id="detailCategoryPill" class="cat-pill" style="display:none;"></span>
+          <button id="approveBtn" class="btn btn-primary" style="display:none; padding:8px 12px;">Approve</button>
+        </div>
+      </div>
+
+      <div id="emailNotesSection" style="padding:10px 16px; border-bottom:1px solid #e9ecef; background:#fff; display:none;">
+        <div style="font-weight:600; color:#333; margin-bottom:6px;">Email Notes</div>
+        <div id="emailNotesList" style="max-height:140px; overflow:auto; border:1px solid #e9ecef; border-radius:6px; padding:8px; background:#fff;">
+          <div class="empty">No notes yet.</div>
+        </div>
+        <div style="display:flex; gap:8px; align-items:flex-start; margin-top:8px;">
+          <textarea id="emailNotesInput" rows="2" placeholder="Add a note..." style="flex:1; padding:8px; border:1px solid #ddd; border-radius:6px; font-size:13px;"></textarea>
+          <button class="btn btn-secondary" id="emailNotesAddBtn">Add</button>
+        </div>
+      </div>
+
+      <div id="viewer" class="viewer">
+        <div class="empty">Nothing selected.</div>
+      </div>
+    </section>
+  </div>
+
+  <div id="overlay" class="loading-overlay">
+    <div class="loading-card">
+      <div class="spinner"></div>
+      <div id="ovTitle" class="overlay-title">Loading</div>
+      <div id="ovMsg" class="overlay-msg">Please wait...</div>
+    </div>
+  </div>
+
+<script>
+  // State
+  let loadItems = []; // [{id, subject, from, date, snippet, body, category, __predicted:true/false}]
+  let categories = []; // authoritative categories
+  let selectedId = '';
+  let countRequested = 0;
+  let existingIds = new Set(); // ids already in DB (unreplied + responses)
+
+  // Utilities
+  function showOverlay(title, msg){
+    document.getElementById('ovTitle').textContent = title || 'Loading';
+    document.getElementById('ovMsg').textContent = msg || 'Please wait...';
+    document.getElementById('overlay').style.display = 'flex';
+  }
+  function hideOverlay(){
+    document.getElementById('overlay').style.display = 'none';
+  }
+  function escapeHtml(s){
+    return String(s||'')
+      .replace(/&/g,'&')
+      .replace(/</g,'<')
+      .replace(/>/g,'>')
+      .replace(/"/g,'"')
+      .replace(/'/g,'&#39;');
+  }
+  function fmtDate(s){
+    const d = new Date(s || Date.now());
+    if (Number.isNaN(+d)) return '';
+    const now = new Date();
+    const diff = (now - d) / 86400000;
+    if (diff < 1) return 'Today';
+    if (diff < 2) return 'Yesterday';
+    if (diff < 7) return `${Math.floor(diff)} days ago`;
+    return d.toLocaleDateString('en-US', {month:'short', day:'numeric'});
+  }
+
+  function getQueryCount() {
+    const p = new URLSearchParams(window.location.search);
+    const raw = p.get('count');
+    if (!raw) return 0;
+    const n = parseInt(raw, 10);
+    if (!Number.isFinite(n)) return 0;
+    return Math.max(1, Math.min(50, n));
+  }
+
+  async function loadInitial(){
+    try{
+      countRequested = getQueryCount();
+      if (!countRequested) {
+        // Ask user if count missing
+        const v = prompt('How many emails would you like to load? (1-50)', '10') || '10';
+        const n = parseInt(v, 10);
+        countRequested = (Number.isFinite(n) ? Math.max(1, Math.min(50, n)) : 10);
+        const u = new URL(window.location.href);
+        u.searchParams.set('count', String(countRequested));
+        window.history.replaceState({}, '', u.toString());
+      }
+      document.getElementById('requestedCount').textContent = countRequested;
+
+      // Load auth categories
+      try {
+        const r = await fetch('/api/current-categories');
+        const d = await r.json();
+        categories = Array.isArray(d.categories) ? d.categories : [];
+      } catch(_){ categories = []; }
+
+      // Build existing id set (unreplied + responses)
+      existingIds = new Set();
+      try {
+        const r1 = await fetch('/api/unreplied-emails'); const d1 = await r1.json();
+        const r2 = await fetch('/api/response-emails'); const d2 = await r2.json();
+        (Array.isArray(d1.emails) ? d1.emails : []).forEach(e => { if (e && e.id) existingIds.add(e.id); });
+        (Array.isArray(d2.emails) ? d2.emails : []).forEach(e => { if (e && e.id) existingIds.add(e.id); });
+      } catch(_){}
+
+      // Fetch more emails (overfetch to allow dedup)
+      document.getElementById('leftStatus').textContent = 'Loading...';
+      showOverlay('Fetching Emails', 'Retrieving from Gmail inbox...');
+      let rawEmails = [];
+      try {
+        const overfetch = Math.min(countRequested * 3, 100);
+        const r = await fetch('/api/fetch-more-emails', {
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ maxResults: overfetch })
+        });
+        const d = await r.json();
+        if (r.status === 401 && d && d.needsAuth) {
+          hideOverlay();
+          document.getElementById('list').innerHTML = `
+            <div class="empty">
+              Gmail authentication required.<br/>
+              <button style="margin-top:8px;" class="btn btn-secondary" onclick="startAuth()">Authenticate</button>
+            </div>`;
+          return;
+        }
+        rawEmails = Array.isArray(d.emails) ? d.emails : [];
+      } catch (e) {
+        console.error(e);
+        hideOverlay();
+        document.getElementById('list').innerHTML = '<div class="empty">Failed to fetch emails.</div>';
+        return;
+      }
+
+      // Deduplicate by id against DB then take requested count
+      const uniq = [];
+      const seen = new Set();
+      for (const e of rawEmails) {
+        if (!e || !e.id) continue;
+        if (existingIds.has(e.id)) continue; // skip already in DB
+        if (seen.has(e.id)) continue;
+        seen.add(e.id);
+        uniq.push(e);
+        if (uniq.length >= countRequested) break;
+      }
+
+      // If not enough, accept remaining until we reach countRequested (best-effort) ignoring seen DB duplicates
+      // (Already handled via break; leave as-is)
+
+      loadItems = uniq.map(e => ({
+        id: e.id,
+        subject: e.subject || 'No Subject',
+        from: e.from || 'Unknown Sender',
+        date: e.date || new Date().toISOString(),
+        snippet: e.snippet || (e.body ? String(e.body).slice(0, 100) + (e.body.length > 100 ? '...' : '') : ''),
+        body: e.body || '',
+        category: 'Other',
+        __predicted: true
+      }));
+
+      // Auto-categorize using server AI (semantic + summaries/examples)
+      try {
+        const payload = {
+          emails: loadItems.map(e => ({
+            id: e.id,
+            subject: e.subject || '',
+            body: e.body || e.snippet || '',
+            from: e.from || '',
+            category: 'Other'
+          })),
+          categories
+        };
+        const catResp = await fetch('/api/ai-enhanced-categorize', {
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify(payload)
+        });
+        const catData = await catResp.json().catch(()=> ({}));
+        if (catResp.ok && catData && catData.success && catData.assignments) {
+          const map = catData.assignments || {};
+          loadItems = loadItems.map(it => ({
+            ...it,
+            category: map[it.id] || it.category || 'Other',
+            __predicted: true
+          }));
+        }
+      } catch (e) {
+        console.warn('AI-enhanced categorize failed, keeping defaults:', e);
+      }
+
+      renderList();
+      if (loadItems.length) selectItem(loadItems[0].id);
+      document.getElementById('leftStatus').textContent = `${loadItems.length} loaded`;
+      document.getElementById('countStat').textContent = loadItems.length ? `(${loadItems.length})` : '';
+      hideOverlay();
+    } catch (e) {
+      console.error('Load initial failed:', e);
+      hideOverlay();
+      document.getElementById('list').innerHTML = '<div class="empty">Failed to load emails.</div>';
+    }
+  }
+
+  function renderList(){
+    const host = document.getElementById('list');
+    if (!loadItems.length){
+      host.innerHTML = '<div class="empty">No items found.</div>';
+      return;
+    }
+    host.innerHTML = '';
+    loadItems.forEach((it) => {
+      const div = document.createElement('div');
+      div.className = 'item' + (selectedId===it.id ? ' active':'');
+      div.onclick = () => selectItem(it.id);
+
+      const actionsHtml = `
+        <div class="it-actions">
+          <button class="approve-btn" title="Approve to database" onclick="event.stopPropagation(); approveOne('${it.id}')">Approve</button>
+          <button class="hide-btn" title="Hide this item" onclick="event.stopPropagation(); hideOne('${it.id}')">Hide</button>
+        </div>
+      `;
+
+      div.innerHTML = `
+        <div class="it-body">
+          <div class="it-row">
+            <div class="it-subj" title="${escapeHtml(it.subject||'No Subject')}">${escapeHtml(it.subject||'No Subject')}</div>
+            ${actionsHtml}
+          </div>
+          <div class="it-meta">${escapeHtml(it.from||'Unknown Sender')} • ${fmtDate(it.date)}</div>
+          <div class="chips" data-item="${it.id}"></div>
+        </div>
+      `;
+
+      const chipsHost = div.querySelector('.chips');
+      renderChipsEditorForItem(it.id, chipsHost);
+
+      host.appendChild(div);
+    });
+  }
+
+  function selectItem(id){
+    selectedId = id;
+    renderList();
+    renderDetail();
+  }
+
+  async function renderDetail(){
+    const it = loadItems.find(x => x.id === selectedId);
+    const titleEl = document.getElementById('detailTitle');
+    const metaPill = document.getElementById('detailCategoryPill');
+    const approveBtn = document.getElementById('approveBtn');
+    const notesSection = document.getElementById('emailNotesSection');
+
+    if (!it){
+      titleEl.textContent = 'Select an item';
+      metaPill.style.display = 'none';
+      approveBtn.style.display = 'none';
+      notesSection.style.display = 'none';
+      document.getElementById('viewer').innerHTML = '<div class="empty">Nothing selected.</div>';
+      return;
+    }
+
+    titleEl.textContent = it.subject || 'No Subject';
+    metaPill.textContent = it.category || 'Other';
+    metaPill.style.display = 'inline-block';
+    approveBtn.style.display = 'inline-block';
+    approveBtn.onclick = () => approveOne(it.id);
+
+    // Load notes
+    notesSection.style.display = 'block';
+    await loadEmailNotes(selectedId);
+
+    // Try to load full thread so messages render in separate boxes
+    const viewer = document.getElementById('viewer');
+    viewer.innerHTML = '<div class="empty">Loading...</div>';
+    let rendered = false;
+    try {
+      if (it.id) {
+        const r = await fetch(`/api/gmail-thread-by-message/${encodeURIComponent(it.id)}`);
+        const d = await r.json();
+        if (r.ok && d && d.success && Array.isArray(d.messages) && d.messages.length) {
+          viewer.innerHTML = '';
+          d.messages.forEach(m => {
+            const card = document.createElement('div');
+            card.className = 'message' + (m.isResponse ? ' response' : '');
+            const header = document.createElement('div');
+            header.className = 'msg-h';
+            header.innerHTML = `<strong>${escapeHtml(m.from||'')}</strong> • ${new Date(m.date||Date.now()).toLocaleString()}<br/>To: ${escapeHtml(Array.isArray(m.to)? m.to.join(', '):(m.to||''))}`;
+            const body = document.createElement('div');
+            body.className = 'msg-b';
+            body.textContent = m.body || '';
+            card.appendChild(header);
+            card.appendChild(body);
+            viewer.appendChild(card);
+          });
+          rendered = true;
+        }
+      }
+    } catch(_) {}
+
+    if (!rendered) {
+      const text = it.body || it.snippet || 'No content available';
+      const card = document.createElement('div');
+      card.className = 'message';
+      const header = document.createElement('div');
+      header.className = 'msg-h';
+      header.innerHTML = `<strong>${escapeHtml(it.from||'')}</strong> • ${new Date(it.date||Date.now()).toLocaleString()}`;
+      const body = document.createElement('div');
+      body.className = 'msg-b';
+      body.textContent = text || '';
+      card.appendChild(header);
+      card.appendChild(body);
+      viewer.innerHTML = '';
+      viewer.appendChild(card);
+    }
+  }
+
+  // Category chips editor (single category primary with suggested highlight)
+  function renderChipsEditorForItem(id, host){
+    host.innerHTML = '';
+    const it = loadItems.find(x => x.id === id);
+    if (!it) return;
+    const name = it.category || 'Other';
+
+    const chip = document.createElement('span');
+    chip.className = 'chip' + (it.__predicted ? ' predicted' : '');
+    chip.innerHTML = `<span>${escapeHtml(name)}</span> <span class="x" title="Remove category">×</span>`;
+    chip.querySelector('.x').onclick = (ev) => {
+      ev.stopPropagation();
+      // removing category sets to 'Other' and considered manual
+      it.category = 'Other';
+      it.__predicted = false;
+      refreshItemUI(id);
+    };
+    host.appendChild(chip);
+
+    // input + suggestions (choose from categories)
+    const wrapper = document.createElement('div');
+    wrapper.style.position = 'relative';
+    const input = document.createElement('input');
+    input.className = 'chip-input';
+    input.setAttribute('placeholder', 'Change category…');
+    wrapper.appendChild(input);
+    const sugg = document.createElement('div');
+    sugg.className = 'suggestions';
+    wrapper.appendChild(sugg);
+
+    let last = '';
+    input.addEventListener('input', () => {
+      const v = (input.value || '').trim();
+      if (v === last) return;
+      last = v;
+      if (!v) { sugg.style.display = 'none'; sugg.innerHTML=''; return; }
+      const opts = (categories || []).filter(c => c.toLowerCase().includes(v.toLowerCase())).slice(0, 8);
+      if (!opts.length) { sugg.style.display = 'none'; sugg.innerHTML=''; return; }
+      sugg.innerHTML = opts.map(o => `<div class="opt">${escapeHtml(o)}</div>`).join('');
+      positionSuggestionsUnder(input, sugg);
+      sugg.style.display = 'block';
+      Array.from(sugg.querySelectorAll('.opt')).forEach(el => {
+        el.onclick = (ev) => {
+          ev.stopPropagation();
+          commitCategory(id, el.textContent || '');
+        };
+      });
+    });
+
+    input.addEventListener('keydown', async (ev) => {
+      if (ev.key === 'Enter') {
+        ev.preventDefault();
+        const v = (input.value || '').trim();
+        if (!v) return;
+        commitCategory(id, v);
+      } else if (ev.key === 'Escape') {
+        sugg.style.display='none';
+      }
+    });
+
+    host.appendChild(wrapper);
+  }
+
+  function positionSuggestionsUnder(input, sugg){
+    try{
+      const top = input.offsetTop + input.offsetHeight + 4;
+      const left = input.offsetLeft;
+      sugg.style.top = top + 'px';
+      sugg.style.left = left + 'px';
+      sugg.style.minWidth = input.offsetWidth + 'px';
+    }catch(_){}
+  }
+
+  async function commitCategory(id, name){
+    const it = loadItems.find(x => x.id === id);
+    if (!it) return;
+    const n = (name || '').trim();
+    if (!n) return;
+
+    // Add unseen category to master list
+    const exists = (categories || []).some(c => c.toLowerCase() === n.toLowerCase());
+    if (!exists) {
+      try {
+        const res = await fetch('/api/categories/add', {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ name: n })
+        });
+        const data = await res.json();
+        if (res.ok && data && data.success){
+          categories = Array.isArray(data.categories) ? data.categories : categories;
+        }
+      } catch (e) {
+        console.error('Failed to add category', e);
+      }
+    }
+
+    it.category = n;
+    it.__predicted = false; // user changed => no longer predicted
+    refreshItemUI(id);
+  }
+
+  function refreshItemUI(id){
+    // refresh list row
+    document.querySelectorAll(`.chips[data-item="${cssEscape(id)}"]`).forEach(node => {
+      renderChipsEditorForItem(id, node);
+    });
+    // refresh detail pill if selected
+    if (selectedId === id) {
+      const it = loadItems.find(x => x.id === id);
+      const pill = document.getElementById('detailCategoryPill');
+      if (pill && it) {
+        pill.textContent = it.category || 'Other';
+      }
+    }
+  }
+
+  function cssEscape(s){
+    try { return CSS && CSS.escape ? CSS.escape(s) : String(s).replace(/"/g, '\\"'); } catch { return String(s).replace(/"/g, '\\"'); }
+  }
+
+  async function approveOne(id){
+    try {
+      const it = loadItems.find(x => x.id === id);
+      if (!it) return;
+      showOverlay('Approving', 'Saving email to database...');
+      const resp = await fetch('/api/add-approved-email', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({
+          email: {
+            id: it.id,
+            subject: it.subject || 'No Subject',
+            from: it.from || 'Unknown Sender',
+            date: it.date || new Date().toISOString(),
+            body: it.body || it.snippet || '',
+            snippet: it.snippet || (it.body ? String(it.body).slice(0, 100) + (it.body.length > 100 ? '...' : '') : ''),
+            category: it.category || 'Other'
+          }
+        })
+      });
+      const data = await resp.json();
+      hideOverlay();
+      if (!resp.ok || !data.success) {
+        alert('Failed to approve email.');
+        return;
+      }
+      // Remove from list
+      loadItems = loadItems.filter(x => x.id !== id);
+      if (selectedId === id) selectedId = '';
+      renderList();
+      if (loadItems.length) selectItem(loadItems[0].id);
+      document.getElementById('leftStatus').textContent = `${loadItems.length} remaining`;
+      document.getElementById('countStat').textContent = loadItems.length ? `(${loadItems.length})` : '';
+    } catch (e) {
+      hideOverlay();
+      alert('Failed to approve email.');
+    }
+  }
+
+  async function hideOne(id){
+    try {
+      const it = loadItems.find(x => x.id === id);
+      if (!it) return;
+      showOverlay('Hiding', 'Removing from view...');
+      await fetch('/api/hidden-inbox/add', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ id: it.id, subject: it.subject, date: it.date })
+      });
+      // Remove locally
+      loadItems = loadItems.filter(x => x.id !== id);
+      if (selectedId === id) selectedId = '';
+      renderList();
+      if (loadItems.length) selectItem(loadItems[0].id);
+      document.getElementById('leftStatus').textContent = `${loadItems.length} remaining`;
+      document.getElementById('countStat').textContent = loadItems.length ? `(${loadItems.length})` : '';
+      hideOverlay();
+    } catch (e) {
+      hideOverlay();
+      alert('Failed to hide item.');
+    }
+  }
+
+  async function approveAll(){
+    if (!loadItems.length) {
+      window.location.href = '/';
+      return;
+    }
+    showOverlay('Approving All', `Persisting ${loadItems.length} email${loadItems.length===1?'':'s'}...`);
+    let success = 0;
+    for (let i = 0; i < loadItems.length; i++) {
+      const it = loadItems[i];
+      try {
+        const resp = await fetch('/api/add-approved-email', {
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({
+            email: {
+              id: it.id,
+              subject: it.subject || 'No Subject',
+              from: it.from || 'Unknown Sender',
+              date: it.date || new Date().toISOString(),
+              body: it.body || it.snippet || '',
+              snippet: it.snippet || (it.body ? String(it.body).slice(0, 100) + (it.body.length > 100 ? '...' : '') : ''),
+              category: it.category || 'Other'
+            }
+          })
+        });
+        const data = await resp.json().catch(()=> ({}));
+        if (resp.ok && data && data.success) success++;
+      } catch(_){}
+    }
+    hideOverlay();
+    alert(`Approved ${success} email${success===1?'':'s'}.`);
+    window.location.href = '/';
+  }
+
+  // Email notes
+  let currentNotesEmailId = '';
+  async function loadEmailNotes(emailId){
+    currentNotesEmailId = emailId || '';
+    const listEl = document.getElementById('emailNotesList');
+    if (listEl) listEl.innerHTML = '<div class="empty">Loading notes...</div>';
+    if (!emailId) return;
+    try {
+      const r = await fetch(`/api/email-notes/${encodeURIComponent(emailId)}`);
+      const d = await r.json();
+      const notes = Array.isArray(d.notes) ? d.notes : [];
+      renderEmailNotes(notes);
+    } catch(_){
+      if (listEl) listEl.innerHTML = '<div class="empty">Failed to load notes.</div>';
+    }
+  }
+  function renderEmailNotes(notes){
+    const listEl = document.getElementById('emailNotesList');
+    if (!listEl) return;
+    if (!Array.isArray(notes) || notes.length === 0){
+      listEl.innerHTML = '<div class="empty">No notes yet.</div>';
+      return;
+    }
+    listEl.innerHTML = notes.map(n => {
+      const ts = new Date(n.updatedAt || n.createdAt || Date.now());
+      const when = isNaN(ts) ? '' : ts.toLocaleString();
+      return `
+        <div style="border:1px solid #e9ecef; border-radius:6px; padding:8px; margin-bottom:8px; background:#fff;">
+          <div style="font-size:12px; color:#666; margin-bottom:4px;">${when}</div>
+          <div style="white-space:pre-wrap; font-size:13px; color:#333;">${escapeHtml(n.text || '')}</div>
+        </div>
+      `;
+    }).join('');
+  }
+  async function addEmailNote(){
+    try {
+      const emailId = currentNotesEmailId || '';
+      if (!emailId) return;
+      const input = document.getElementById('emailNotesInput');
+      const text = (input?.value || '').trim();
+      if (!text) return;
+      const r = await fetch(`/api/email-notes/${encodeURIComponent(emailId)}`, {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ text })
+      });
+      const d = await r.json();
+      if (!r.ok || !d.success){
+        alert('Failed to add note.');
+        return;
+      }
+      if (input) input.value = '';
+      await loadEmailNotes(emailId);
+    } catch(_){
+      alert('Failed to add note.');
+    }
+  }
+
+  function startAuth(){
+    // Rely on index.html flow
+    window.location.href = '/';
+  }
+
+  // Wire header buttons
+  document.getElementById('cancelBtn').addEventListener('click', () => {
+    window.location.href = '/';
+  });
+  document.getElementById('approveAllBtn').addEventListener('click', approveAll);
+  document.getElementById('emailNotesAddBtn').addEventListener('click', addEmailNote);
+
+  // Boot
+  document.addEventListener('DOMContentLoaded', loadInitial);
+</script>
+</body>
+</html>
+]]>
