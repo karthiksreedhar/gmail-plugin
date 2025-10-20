@@ -912,7 +912,7 @@
       .replace(/'/g,'&#39;');
   }
 
-  // Persist (primary-only for now)
+  // Persist primary category (category) and additional categories (categories)
   async function addAllToDatabase(){
     if (!seedItems.length){
       alert('Nothing to add.');
@@ -921,13 +921,26 @@
     showOverlay('Adding to Database', 'Persisting items...');
     try{
       const items = seedItems.map(it => {
-        const primary = getPrimaryCat(it.id);
+        // Gather selected categories (ordered) for this item
+        const selected = (selectedCatsById.get(it.id) || [])
+          .map(s => String(s || '').trim())
+          .filter(Boolean);
+        // Determine primary: use explicit primary if set; otherwise first selected
+        let primary = String(getPrimaryCat(it.id) || '').trim();
+        if (!primary && selected.length) {
+          primary = selected[0];
+        }
+
         const rec = {
           id: it.id,
           subject: it.subject || 'No Subject',
           from: it.from || 'Unknown Sender',
           date: it.date || new Date().toISOString(),
-          snippet: it.snippet || (typeof it.body==='string' ? (it.body.slice(0,100) + (it.body.length>100?'...':'')) : ''),
+          snippet:
+            it.snippet ||
+            (typeof it.body === 'string'
+              ? it.body.slice(0, 100) + (it.body.length > 100 ? '...' : '')
+              : ''),
           body: it.body || it.snippet || '',
           tags: {
             // removed from UI, but still send if present
@@ -935,9 +948,30 @@
             thread: !!(it.tags && it.tags.thread)
           }
         };
-        if (primary && String(primary).trim()) {
-          rec.category = primary.trim();
+
+        // Persist primary category
+        if (primary) {
+          rec.category = primary;
         }
+
+        // Persist additional categories (exclude primary, de-dup case-insensitive)
+        const extras = (() => {
+          const out = [];
+          const seen = new Set();
+          selected.forEach(c => {
+            const lc = c.toLowerCase();
+            if (primary && lc === primary.toLowerCase()) return;
+            if (seen.has(lc)) return;
+            seen.add(lc);
+            out.push(c);
+          });
+          return out;
+        })();
+
+        if (extras.length) {
+          rec.categories = extras;
+        }
+
         return rec;
       });
 
