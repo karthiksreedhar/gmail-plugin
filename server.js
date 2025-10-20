@@ -79,6 +79,16 @@ function getCurrentUserPaths() {
 let gmailAuth = null;
 let gmail = null;
 
+// Seed Categories progress tracking (per user)
+const seedProgressByUser = {};
+function getSeedProgressForUser(email) {
+  const key = String(email || CURRENT_USER_EMAIL || '').toLowerCase();
+  if (!seedProgressByUser[key]) {
+    seedProgressByUser[key] = { active: false, total: 400, processed: 0, startedAt: 0, finishedAt: 0 };
+  }
+  return seedProgressByUser[key];
+}
+
 // Initialize Gmail API
 async function initializeGmailAPI() {
   try {
@@ -3101,9 +3111,17 @@ app.post('/api/hidden-inbox/add', (req, res) => {
 app.get('/api/seed-categories/list', async (req, res) => {
   try {
     console.log('[SeedCategories] Starting Gmail fetch for important inbox...');
+// Initialize progress for current user
+const __seedUserKey = String(CURRENT_USER_EMAIL || '').toLowerCase();
+const __seedProgress = getSeedProgressForUser(__seedUserKey);
+__seedProgress.active = true;
+__seedProgress.total = 400;
+__seedProgress.processed = 0;
+__seedProgress.startedAt = Date.now();
+__seedProgress.finishedAt = 0;
     // Fetch more than needed to allow dedup by subject
-    const TARGET = 50;
-    const LIMIT = 50;
+const TARGET = 50;
+const LIMIT = 400;
 
     // Ensure Gmail API is ready
     if (!gmail) {
@@ -3117,6 +3135,11 @@ app.get('/api/seed-categories/list', async (req, res) => {
 
     if (!gmail) {
       console.error('[SeedCategories] Gmail API unavailable');
+      try {
+        const p = getSeedProgressForUser(__seedUserKey);
+        p.active = false;
+        p.finishedAt = Date.now();
+      } catch(_) {}
       return res.status(500).json({ success: false, error: 'Gmail not authenticated' });
     }
 
@@ -3141,6 +3164,10 @@ app.get('/api/seed-categories/list', async (req, res) => {
           body: em.body || ''
         });
         processed++;
+        try {
+          const p = getSeedProgressForUser(__seedUserKey);
+          p.processed = Math.min(processed, p.total);
+        } catch (_) {}
         if (processed % 10 === 0 || processed === msgRefs.length) {
           console.log(`[SeedCategories] Processed ${processed}/${msgRefs.length}`);
         }
@@ -3153,8 +3180,10 @@ app.get('/api/seed-categories/list', async (req, res) => {
     // Build reference sets for tags and duplicates
     const responses = loadResponseEmails();
     const threads = loadEmailThreads();
+    const unreplied = loadUnrepliedEmails();
     const respBySubj = new Set((responses || []).map(e => String(e.subject || '').toLowerCase().replace(/^re:\s*/i, '').trim()));
     const threadBySubj = new Set((threads || []).map(t => String(t.subject || '').toLowerCase().replace(/^re:\s*/i, '').trim()));
+    const unrepliedBySubj = new Set((unreplied || []).map(e => String(e.subject || '').toLowerCase().replace(/^re:\s*/i, '').trim()));
 
     const meA = (SENDING_EMAIL || CURRENT_USER_EMAIL || '').toLowerCase();
     const meB = (CURRENT_USER_EMAIL || '').toLowerCase();
@@ -3181,6 +3210,13 @@ app.get('/api/seed-categories/list', async (req, res) => {
       }
 
       const key = norm(subject);
+      // Skip anything already present in local database (responses, threads, or unreplied)
+      if (respBySubj.has(key) || threadBySubj.has(key) || unrepliedBySubj.has(key)) {
+        if (processed % 10 === 0 || processed === emails.length) {
+          console.log(`[SeedCategories] Skipping existing item: ${subject}`);
+        }
+        continue;
+      }
       // unreplied = sender is not me (simple signal)
       const unreplied = !String(from || '').toLowerCase().includes(meA) && !String(from || '').toLowerCase().includes(meB);
       // thread tag if we already have a saved thread/response with same normalized subject
@@ -3218,10 +3254,32 @@ app.get('/api/seed-categories/list', async (req, res) => {
       .slice(0, TARGET);
 
     console.log(`[SeedCategories] Returning ${items.length} items`);
+    try {
+      const p = getSeedProgressForUser(__seedUserKey);
+      p.processed = Math.max(p.processed, p.total);
+      p.active = false;
+      p.finishedAt = Date.now();
+    } catch (_) {}
     return res.json({ success: true, items });
   } catch (e) {
     console.error('[SeedCategories] Failed:', e);
+    try {
+      const p = getSeedProgressForUser(__seedUserKey);
+      p.active = false;
+      p.finishedAt = Date.now();
+    } catch (_) {}
     return res.status(500).json({ success: false, error: 'Failed to fetch seed list' });
+  }
+});
+
+ // Seed Categories: progress polling
+app.get('/api/seed-categories/progress', (req, res) => {
+  try {
+    const key = String(CURRENT_USER_EMAIL || '').toLowerCase();
+    const p = getSeedProgressForUser(key);
+    return res.json({ success: true, active: !!p.active, processed: Number(p.processed) || 0, total: Number(p.total) || 400, startedAt: p.startedAt || 0, finishedAt: p.finishedAt || 0 });
+  } catch (e) {
+    return res.json({ success: true, active: false, processed: 0, total: 400 });
   }
 });
 
