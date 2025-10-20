@@ -2914,6 +2914,19 @@ function getCategoryBadgeStyle(category) {
     return `background: ${bg}; color: ${fg};`;
 }
 
+// Make category pills clickable to open Category Notes modal from main list
+function onCategoryPillClick(ev) {
+    try {
+        if (ev && ev.stopPropagation) ev.stopPropagation();
+        const el = ev && (ev.currentTarget || ev.target);
+        const cat = el ? (el.textContent || '').trim() : '';
+        if (cat) {
+            // Reuse the same modal/workflow as "Edit Categories & Notes → See Notes"
+            showCategoryNotesModal(cat);
+        }
+    } catch (_) {}
+}
+
         function filterByCategory(category) {
             currentFilter = category;
             
@@ -2951,7 +2964,8 @@ function getCategoryBadgeStyle(category) {
                 return;
             }
 
-            for (const email of emails) {
+            const sorted = (emails || []).slice().sort((a, b) => new Date(b.date) - new Date(a.date));
+            for (const email of sorted) {
                 const emailDiv = document.createElement('div');
                 emailDiv.className = 'email-item';
                 emailDiv.onclick = () => openEmailThread(email.id, email.subject);
@@ -2959,11 +2973,12 @@ function getCategoryBadgeStyle(category) {
                 const catNames = Array.isArray(email?.categories) && email.categories.length
                     ? email.categories
                     : (email?.category ? [email.category] : []);
-                const pillsHtml = catNames.map(cat => {
-                    const cls = `category-${String(cat).toLowerCase().replace(/\s+/g, '-')}`;
-                    const style = getCategoryBadgeStyle(cat);
-                    return `<span class="email-category ${cls}" style="${style}">${cat}</span>`;
-                }).join(' ');
+const pillsHtml = catNames.map(cat => {
+    const cls = `category-${String(cat).toLowerCase().replace(/\s+/g, '-')}`;
+    const style = getCategoryBadgeStyle(cat);
+    // Make pill clickable to view/add notes for this category (stop parent click)
+    return `<span class="email-category ${cls}" style="${style}" onclick="onCategoryPillClick(event)">${cat}</span>`;
+}).join(' ');
                 
                 // Get the original sender from email data
                 let originalSender = 'Unknown Sender';
