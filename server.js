@@ -66,7 +66,8 @@ function getUserPaths(userEmail = CURRENT_USER_EMAIL) {
     CATEGORIES_PATH: path.join(USER_DATA_DIR, 'categories.json'),
     CATEGORY_GUIDELINES_PATH: path.join(USER_DATA_DIR, 'category-guidelines.json'),
     HIDDEN_THREADS_PATH: path.join(USER_DATA_DIR, 'hidden-threads.json'),
-    CATEGORY_SUMMARIES_PATH: path.join(USER_DATA_DIR, 'categorysummaries.json')
+    CATEGORY_SUMMARIES_PATH: path.join(USER_DATA_DIR, 'categorysummaries.json'),
+    EMAIL_NOTES_PATH: path.join(USER_DATA_DIR, 'email-notes.json')
   };
 }
 
@@ -666,6 +667,54 @@ function saveCategorySummaries(summaries) {
     updatedAt: new Date().toISOString()
   };
   fs.writeFileSync(paths.CATEGORY_SUMMARIES_PATH, JSON.stringify(payload, null, 2));
+}
+
+/**
+ * Per-email notes persistence (data/{user}/email-notes.json)
+ * Shape:
+ * {
+ *   "notesByEmail": {
+ *     "<emailId>": [
+ *       { "id": "note-...", "text": "string", "createdAt": "ISO", "updatedAt": "ISO" }
+ *     ]
+ *   },
+ *   "updatedAt": "ISO"
+ * }
+ */
+function loadEmailNotesStore() {
+  try {
+    const paths = getCurrentUserPaths();
+    const p = paths.EMAIL_NOTES_PATH;
+    if (fs.existsSync(p)) {
+      const data = JSON.parse(fs.readFileSync(p, 'utf8'));
+      if (data && typeof data === 'object') {
+        // Normalize shape
+        const notesByEmail = (data.notesByEmail && typeof data.notesByEmail === 'object') ? data.notesByEmail : {};
+        return { notesByEmail, updatedAt: data.updatedAt || '' };
+      }
+    }
+  } catch (e) {
+    console.warn('Failed to load email-notes.json:', e?.message || e);
+  }
+  return { notesByEmail: {}, updatedAt: '' };
+}
+
+function saveEmailNotesStore(store) {
+  try {
+    const paths = getCurrentUserPaths();
+    if (!fs.existsSync(paths.USER_DATA_DIR)) {
+      fs.mkdirSync(paths.USER_DATA_DIR, { recursive: true });
+    }
+    const payload = {
+      notesByEmail: (store && typeof store.notesByEmail === 'object') ? store.notesByEmail : {},
+      updatedAt: new Date().toISOString()
+    };
+    fs.writeFileSync(paths.EMAIL_NOTES_PATH, JSON.stringify(payload, null, 2));
+    return true;
+  } catch (e) {
+    console.error('Failed to save email-notes.json:', e?.message || e);
+    return false;
+  }
 }
 
 // Categories list persistence (authoritative category names/order across the app)
@@ -5156,6 +5205,102 @@ app.delete('/api/notes/:id', (req, res) => {
   } catch (error) {
     console.error('Error deleting note:', error);
     res.status(500).json({ error: 'Failed to delete note' });
+  }
+});
+
+/**
+ * Email Notes API
+ * - GET /api/email-notes/:emailId
+ * - POST /api/email-notes/:emailId   body: { text }
+ * - PUT /api/email-notes/:emailId/:noteId   body: { text }
+ * - DELETE /api/email-notes/:emailId/:noteId
+ */
+app.get('/api/email-notes/:emailId', (req, res) => {
+  try {
+    const emailId = String(req.params.emailId || '').trim();
+    if (!emailId) return res.status(400).json({ success: false, error: 'emailId is required' });
+    const store = loadEmailNotesStore();
+    const notes = Array.isArray(store.notesByEmail[emailId]) ? store.notesByEmail[emailId] : [];
+    return res.json({ success: true, notes });
+  } catch (e) {
+    console.error('email-notes GET failed:', e);
+    return res.status(500).json({ success: false, error: 'Failed to load notes' });
+  }
+});
+
+app.post('/api/email-notes/:emailId', (req, res) => {
+  try {
+    const emailId = String(req.params.emailId || '').trim();
+    const text = typeof req.body?.text === 'string' ? req.body.text : '';
+    if (!emailId) return res.status(400).json({ success: false, error: 'emailId is required' });
+    if (!text.trim()) return res.status(400).json({ success: false, error: 'text is required' });
+
+    const store = loadEmailNotesStore();
+    const list = Array.isArray(store.notesByEmail[emailId]) ? store.notesByEmail[emailId] : [];
+    const now = new Date().toISOString();
+    const note = {
+      id: `note-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      text,
+      createdAt: now,
+      updatedAt: now
+    };
+    list.push(note);
+    store.notesByEmail[emailId] = list;
+    if (!saveEmailNotesStore(store)) {
+      return res.status(500).json({ success: false, error: 'Failed to persist note' });
+    }
+    return res.json({ success: true, note, total: list.length });
+  } catch (e) {
+    console.error('email-notes POST failed:', e);
+    return res.status(500).json({ success: false, error: 'Failed to add note' });
+  }
+});
+
+app.put('/api/email-notes/:emailId/:noteId', (req, res) => {
+  try {
+    const emailId = String(req.params.emailId || '').trim();
+    const noteId = String(req.params.noteId || '').trim();
+    const text = typeof req.body?.text === 'string' ? req.body.text : '';
+    if (!emailId || !noteId) return res.status(400).json({ success: false, error: 'emailId and noteId are required' });
+    if (!text.trim()) return res.status(400).json({ success: false, error: 'text is required' });
+
+    const store = loadEmailNotesStore();
+    const list = Array.isArray(store.notesByEmail[emailId]) ? store.notesByEmail[emailId] : [];
+    const idx = list.findIndex(n => n && n.id === noteId);
+    if (idx === -1) return res.status(404).json({ success: false, error: 'Note not found' });
+
+    list[idx].text = text;
+    list[idx].updatedAt = new Date().toISOString();
+    store.notesByEmail[emailId] = list;
+    if (!saveEmailNotesStore(store)) {
+      return res.status(500).json({ success: false, error: 'Failed to persist note' });
+    }
+    return res.json({ success: true, note: list[idx] });
+  } catch (e) {
+    console.error('email-notes PUT failed:', e);
+    return res.status(500).json({ success: false, error: 'Failed to update note' });
+  }
+});
+
+app.delete('/api/email-notes/:emailId/:noteId', (req, res) => {
+  try {
+    const emailId = String(req.params.emailId || '').trim();
+    const noteId = String(req.params.noteId || '').trim();
+    if (!emailId || !noteId) return res.status(400).json({ success: false, error: 'emailId and noteId are required' });
+
+    const store = loadEmailNotesStore();
+    const list = Array.isArray(store.notesByEmail[emailId]) ? store.notesByEmail[emailId] : [];
+    const next = list.filter(n => n && n.id !== noteId);
+    if (next.length === list.length) return res.status(404).json({ success: false, error: 'Note not found' });
+
+    store.notesByEmail[emailId] = next;
+    if (!saveEmailNotesStore(store)) {
+      return res.status(500).json({ success: false, error: 'Failed to persist note deletion' });
+    }
+    return res.json({ success: true, total: next.length });
+  } catch (e) {
+    console.error('email-notes DELETE failed:', e);
+    return res.status(500).json({ success: false, error: 'Failed to delete note' });
   }
 });
 

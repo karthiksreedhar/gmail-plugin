@@ -436,6 +436,20 @@
             margin-top: 8px;
         }
 
+        .email-meta-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            margin-top: 6px;
+        }
+
+        .email-categories {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+        }
+
         /* Light color category tags */
         .category-teaching-\&-student-support { background: #e3f2fd; color: #1565c0; }
         .category-research-\&-lab-work { background: #f3e5f5; color: #7b1fa2; }
@@ -2970,7 +2984,10 @@ function getCategoryBadgeStyle(category) {
                             <div class="email-date">${formatDate(email.date)}</div>
                         </div>
                         <div class="email-subject">${email.subject}</div>
-                        <div class="email-categories">${pillsHtml}</div>
+                        <div class="email-meta-row">
+                            <div class="email-categories">${pillsHtml}</div>
+                            <button class="select-email-btn" onclick="openEmailNotes('${email.id}', event)" title="View and add notes for this email">Notes</button>
+                        </div>
                     </div>
                     <div class="email-actions">
                         <button class="delete-thread-btn" onclick="deleteEmailThread('${email.id}', '${email.subject.replace(/'/g, "\\'")}', event)" title="Delete this thread">
@@ -13261,6 +13278,114 @@ function saveKeywordGrouping() {
                 showErrorPopup('Failed to open categories editor with grouping.', 'Open Failed');
             }
         }
+
+/* ===== Per-email Notes (Main UI) ===== */
+let currentEmailNotesId = '';
+
+function ensureEmailNotesModal() {
+    let modal = document.getElementById('emailNotesModal');
+    if (modal) return modal;
+    modal = document.createElement('div');
+    modal.id = 'emailNotesModal';
+    modal.className = 'modal';
+    modal.innerHTML = `
+        <div class="modal-content" style="max-width: 700px; max-height: 80vh;">
+            <div class="modal-header">
+                <h2 class="modal-title">Email Notes</h2>
+                <button class="close" onclick="closeEmailNotesModal()">&times;</button>
+            </div>
+            <div style="padding:16px; display:flex; flex-direction:column; gap:10px; max-height:60vh; overflow:auto;">
+                <div id="emailNotesListMain" style="border:1px solid #e9ecef; border-radius:8px; background:#fff; padding:10px; min-height:80px; max-height:40vh; overflow:auto;">
+                    <div class="loading">Loading notes...</div>
+                </div>
+                <div style="display:flex; gap:8px; align-items:flex-start;">
+                    <textarea id="emailNotesInputMain" rows="2" placeholder="Add a note..." style="flex:1; padding:8px; border:1px solid #ddd; border-radius:6px; font-size:13px;"></textarea>
+                    <button class="select-email-btn" onclick="addEmailNoteMain()">Add</button>
+                </div>
+            </div>
+        </div>
+    `;
+    modal.addEventListener('click', (ev) => { if (ev.target === modal) closeEmailNotesModal(); });
+    document.body.appendChild(modal);
+    return modal;
+}
+
+function openEmailNotes(emailId, ev) {
+    try { if (ev && ev.stopPropagation) ev.stopPropagation(); } catch(_) {}
+    currentEmailNotesId = emailId || '';
+    const modal = ensureEmailNotesModal();
+    modal.style.display = 'block';
+    loadEmailNotesMain(emailId);
+}
+
+function closeEmailNotesModal() {
+    const modal = document.getElementById('emailNotesModal');
+    if (modal) modal.style.display = 'none';
+}
+
+async function loadEmailNotesMain(emailId) {
+    const listEl = document.getElementById('emailNotesListMain');
+    if (listEl) listEl.innerHTML = '<div class="loading">Loading notes...</div>';
+    try {
+        if (!emailId) {
+            if (listEl) listEl.innerHTML = '<div class="empty">No notes yet.</div>';
+            return;
+        }
+        const r = await fetch(`/api/email-notes/${encodeURIComponent(emailId)}`);
+        const d = await r.json();
+        const notes = Array.isArray(d.notes) ? d.notes : [];
+        renderEmailNotesListMain(notes);
+    } catch (e) {
+        if (listEl) listEl.innerHTML = '<div class="error">Failed to load notes.</div>';
+    }
+}
+
+function renderEmailNotesListMain(notes) {
+    const listEl = document.getElementById('emailNotesListMain');
+    if (!listEl) return;
+    if (!Array.isArray(notes) || notes.length === 0) {
+        listEl.innerHTML = '<div class="empty">No notes yet.</div>';
+        return;
+    }
+    const html = notes.map(n => {
+        const ts = new Date(n.updatedAt || n.createdAt || Date.now());
+        const when = isNaN(ts) ? '' : ts.toLocaleString();
+        const safeText = escapeHtml(n.text || '');
+        return `
+            <div style="border:1px solid #e9ecef; border-radius:6px; padding:8px; margin-bottom:8px; background:#fff;">
+                <div style="font-size:12px; color:#666; margin-bottom:4px;">${when}</div>
+                <div style="white-space:pre-wrap; font-size:13px; color:#333;">${safeText}</div>
+            </div>
+        `;
+    }).join('');
+    listEl.innerHTML = html;
+}
+
+async function addEmailNoteMain() {
+    try {
+        const emailId = currentEmailNotesId || '';
+        if (!emailId) return;
+        const input = document.getElementById('emailNotesInputMain');
+        const text = (input?.value || '').trim();
+        if (!text) return;
+        const r = await fetch(`/api/email-notes/${encodeURIComponent(emailId)}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text })
+        });
+        const d = await r.json();
+        if (!r.ok || !d.success) {
+            showErrorPopup('Failed to add note. Please try again.', 'Add Note Failed');
+            return;
+        }
+        if (input) input.value = '';
+        await loadEmailNotesMain(emailId);
+    } catch (e) {
+        showErrorPopup('Failed to add note. Please try again.', 'Add Note Failed');
+    }
+}
+
+/* ===== End Per-email Notes (Main UI) ===== */
 
         // Load emails when page loads
         document.addEventListener('DOMContentLoaded', function() {

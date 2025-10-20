@@ -372,6 +372,19 @@
           <div id="detailTags" class="it-actions"><!-- removed unreplied/thread --></div>
         </div>
       </div>
+
+      <!-- Email Notes section (per-email) -->
+      <div id="emailNotesSection" class="email-notes-section" style="padding:10px 16px; border-bottom:1px solid #e9ecef; background:#fff;">
+        <div style="font-weight:600; color:#333; margin-bottom:6px;">Email Notes</div>
+        <div id="emailNotesListSeed" style="max-height:140px; overflow:auto; border:1px solid #e9ecef; border-radius:6px; padding:8px; background:#fff;">
+          <div class="empty">No notes yet.</div>
+        </div>
+        <div style="display:flex; gap:8px; align-items:flex-start; margin-top:8px;">
+          <textarea id="emailNotesInputSeed" rows="2" placeholder="Add a note..." style="flex:1; padding:8px; border:1px solid #ddd; border-radius:6px; font-size:13px;"></textarea>
+          <button class="select-email-btn" id="emailNotesAddBtnSeed" onclick="seedAddEmailNote()">Add</button>
+        </div>
+      </div>
+
       <div id="viewer" class="viewer">
         <div class="empty">Nothing selected.</div>
       </div>
@@ -650,6 +663,7 @@
     }
     document.getElementById('detailTitle').textContent = it.subject || 'No Subject';
     document.getElementById('detailTags').innerHTML = ''; // removed unreplied/thread tags
+    try { await seedLoadEmailNotes(it.id); } catch(_){}
 
     const viewer = document.getElementById('viewer');
     viewer.innerHTML = '<div class="empty">Loading...</div>';
@@ -953,6 +967,93 @@
 
   // Boot
   document.addEventListener('DOMContentLoaded', loadInitial);
+/* ===== Per-email Notes (Seed page) ===== */
+window.__seedCurrentEmailIdNotes = '';
+
+async function seedLoadEmailNotes(emailId){
+  try{
+    window.__seedCurrentEmailIdNotes = emailId || '';
+    const listEl = document.getElementById('emailNotesListSeed');
+    if (listEl) listEl.innerHTML = '<div class="loading">Loading notes...</div>';
+    if (!emailId){
+      if (listEl) listEl.innerHTML = '<div class="empty">No notes yet.</div>';
+      return;
+    }
+    const r = await fetch(`/api/email-notes/${encodeURIComponent(emailId)}`);
+    const d = await r.json();
+    const notes = Array.isArray(d.notes) ? d.notes : [];
+    seedRenderEmailNotes(emailId, notes);
+  }catch(e){
+    const listEl = document.getElementById('emailNotesListSeed');
+    if (listEl) listEl.innerHTML = '<div class="error">Failed to load notes.</div>';
+  }
+}
+
+function seedRenderEmailNotes(emailId, notes){
+  const listEl = document.getElementById('emailNotesListSeed');
+  if (!listEl) return;
+  if (!Array.isArray(notes) || notes.length === 0){
+    listEl.innerHTML = '<div class="empty">No notes yet.</div>';
+    return;
+  }
+  const html = notes.map(n => {
+    const ts = new Date(n.updatedAt || n.createdAt || Date.now());
+    const when = isNaN(ts) ? '' : ts.toLocaleString();
+    return `
+      <div style="border:1px solid #e9ecef; border-radius:6px; padding:8px; margin-bottom:8px; background:#fff;">
+        <div style="font-size:12px; color:#666; margin-bottom:4px;">${when}</div>
+        <div style="white-space:pre-wrap; font-size:13px; color:#333;">${escapeHtml(n.text || '')}</div>
+        <div style="text-align:right; margin-top:6px;">
+          <button class="refinement-delete-btn" style="padding:4px 8px; font-size:12px;" onclick="seedDeleteEmailNote('${(n.id || '').replace(/'/g, "\\'")}')">Delete</button>
+        </div>
+      </div>
+    `;
+  }).join('');
+  listEl.innerHTML = html;
+}
+
+async function seedAddEmailNote(){
+  try{
+    const emailId = window.__seedCurrentEmailIdNotes || '';
+    if (!emailId) return;
+    const input = document.getElementById('emailNotesInputSeed');
+    const text = (input?.value || '').trim();
+    if (!text) return;
+    const r = await fetch(`/api/email-notes/${encodeURIComponent(emailId)}`, {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ text })
+    });
+    const d = await r.json();
+    if (!r.ok || !d.success){
+      alert('Failed to add note.');
+      return;
+    }
+    if (input) input.value = '';
+    // reload notes
+    await seedLoadEmailNotes(emailId);
+  }catch(e){
+    alert('Failed to add note.');
+  }
+}
+
+async function seedDeleteEmailNote(noteId){
+  try{
+    const emailId = window.__seedCurrentEmailIdNotes || '';
+    if (!emailId || !noteId) return;
+    const r = await fetch(`/api/email-notes/${encodeURIComponent(emailId)}/${encodeURIComponent(noteId)}`, {
+      method:'DELETE'
+    });
+    const d = await r.json();
+    if (!r.ok || !d.success){
+      alert('Failed to delete note.');
+      return;
+    }
+    await seedLoadEmailNotes(emailId);
+  }catch(e){
+    alert('Failed to delete note.');
+  }
+}
 </script>
 </body>
 </html>
