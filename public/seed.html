@@ -394,7 +394,7 @@
       <div class="progress-bar">
         <div class="fill" id="progressFill" style="width:0%"></div>
       </div>
-      <div class="progress-text" id="progressText">0 / 50</div>
+      <!-- Removed numeric progress text by request -->
     </div>
   </div>
 
@@ -421,31 +421,39 @@
 
   // Progress overlay utilities
   let progTimer = null;
+  let progPollTimer = null;
   let progDisplayed = 0;
   let progTotal = 50;
 
   function setProgressDisplay(current){
     progDisplayed = Math.max(0, Math.min(current || 0, progTotal));
     const fill = document.getElementById('progressFill');
-    const txt = document.getElementById('progressText');
     const pct = Math.round((progDisplayed / (progTotal || 1)) * 100);
     if (fill) fill.style.width = pct + '%';
-    if (txt) txt.textContent = `${progDisplayed} / ${progTotal}`;
   }
 
-  function startProgress(total = 50){
+  function startProgress(total = 400){
     progTotal = total;
     const ov = document.getElementById('progressOverlay');
     if (ov) ov.style.display = 'flex';
     setProgressDisplay(0);
-    if (progTimer) clearInterval(progTimer);
-    // Gentle auto-advance up to ~80% while waiting for network
-    progTimer = setInterval(() => {
-      const cap = Math.floor(progTotal * 0.8);
-      if (progDisplayed < cap) {
-        setProgressDisplay(progDisplayed + 1);
-      }
-    }, 80);
+    if (progTimer) { clearInterval(progTimer); progTimer = null; }
+    if (typeof progPollTimer !== 'undefined' && progPollTimer) { clearInterval(progPollTimer); progPollTimer = null; }
+    // Poll backend for real progress towards total (400)
+    progPollTimer = setInterval(async () => {
+      try {
+        const r = await fetch('/api/seed-categories/progress');
+        const d = await r.json();
+        if (d && d.success) {
+          if (Number.isFinite(d.total) && d.total > 0) progTotal = d.total;
+          if (Number.isFinite(d.processed)) setProgressDisplay(d.processed);
+          if (!d.active && (d.finishedAt || 0) > 0) {
+            clearInterval(progPollTimer);
+            progPollTimer = null;
+          }
+        }
+      } catch (_) {}
+    }, 500);
   }
 
   function updateProgress(current, total){
@@ -455,6 +463,7 @@
 
   function finishProgress(){
     if (progTimer) { clearInterval(progTimer); progTimer = null; }
+    if (typeof progPollTimer !== 'undefined' && progPollTimer) { clearInterval(progPollTimer); progPollTimer = null; }
     // Snap to current display and hide shortly after for visual smoothness
     setTimeout(() => {
       const ov = document.getElementById('progressOverlay');
@@ -510,8 +519,8 @@
 
       // load seed list
       document.getElementById('leftStatus').textContent = 'Loading...';
-      // Show centered progress overlay for the 50 target items
-      startProgress(50);
+      // Show centered progress overlay and poll real progress (target ~400)
+      startProgress(400);
       const r = await fetch('/api/seed-categories/list');
       const d = await r.json();
       if(!r.ok || !d.success){
@@ -529,8 +538,6 @@
       renderList();
       updateCount();
       document.getElementById('leftStatus').textContent = seedItems.length ? `${seedItems.length} items` : '0 items';
-      // Update progress based on how many items we ended up with (towards 50)
-      updateProgress(Math.min(seedItems.length, 50), 50);
 
       if (seedItems.length){
         selectItem(seedItems[0].id);
