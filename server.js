@@ -3229,56 +3229,140 @@ app.post('/api/seed-categories/add-all', (req, res) => {
       return res.status(400).json({ success: false, error: 'items array is required' });
     }
 
-    // Update categories list with any new names
-    const cats = loadCategoriesList();
-    const seen = new Set(cats.map(c => String(c).toLowerCase()));
-    const toAdd = [];
-    items.forEach(it => {
-      const c = String(it?.category || '').trim();
-      if (c && !seen.has(c.toLowerCase())) {
-        seen.add(c.toLowerCase());
-        toAdd.push(c);
-      }
-    });
-    if (toAdd.length) {
-      saveCategoriesList([...cats, ...toAdd]);
-    }
-
-    // Merge into unreplied-emails.json (this captures both unreplied/thread distinction for now)
-    const unreplied = loadUnrepliedEmails();
-    const existingById = new Set(unreplied.map(e => e.id));
-    let added = 0;
-
-    items.forEach(it => {
-      if (!it || (!it.id && !it.subject)) return;
-      if (existingById.has(it.id)) return;
-      const rec = {
-        id: it.id || `seed-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-        subject: it.subject || 'No Subject',
-        from: it.from || 'Unknown Sender',
-        date: it.date || new Date().toISOString(),
-        body: it.body || it.snippet || '',
-        snippet: it.snippet || (it.body ? String(it.body).slice(0, 100) + (String(it.body).length > 100 ? '...' : '') : ''),
-        ...(typeof it.category === 'string' && it.category.trim() ? { category: it.category.trim() } : {}),
-        tags: {
-          unreplied: !!(it.tags && it.tags.unreplied),
-          thread: !!(it.tags && it.tags.thread)
-        },
-        source: 'seed-categories'
-      };
-      unreplied.push(rec);
-      existingById.add(rec.id);
-      added++;
-      console.log(`[SeedCategories] Added: ${rec.subject} (${rec.category})`);
-    });
-
     const paths = getCurrentUserPaths();
     if (!fs.existsSync(paths.USER_DATA_DIR)) {
       fs.mkdirSync(paths.USER_DATA_DIR, { recursive: true });
     }
-    fs.writeFileSync(paths.UNREPLIED_EMAILS_PATH, JSON.stringify({ emails: unreplied }, null, 2));
 
-    return res.json({ success: true, added, totalUnreplied: unreplied.length });
+    // 1) Update authoritative categories list with any new names
+    const currentCats = loadCategoriesList();
+    const seenCats = new Set(currentCats.map(c => String(c).toLowerCase()));
+    const newCats = [];
+    items.forEach(it => {
+      const c = String(it?.category || '').trim();
+      if (c && !seenCats.has(c.toLowerCase())) {
+        seenCats.add(c.toLowerCase());
+        newCats.push(c);
+      }
+    });
+    if (newCats.length) {
+      saveCategoriesList([...currentCats, ...newCats]);
+    }
+
+    // Load existing stores
+    const unreplied = loadUnrepliedEmails() || [];
+    const responses = loadResponseEmails() || [];
+    const threads = loadEmailThreads() || [];
+
+    // Build quick lookups
+    const unrepliedById = new Set(unreplied.map(e => e && e.id).filter(Boolean));
+    const responsesById = new Set(responses.map(e => e && e.id).filter(Boolean));
+    const threadsById = new Set(threads.map(t => t && t.id).filter(Boolean));
+
+    // Track counts
+    let addedUnreplied = 0;
+    let addedResponses = 0;
+    let addedThreads = 0;
+
+    // Current user identity for thread direction and pseudo response author
+    const meEmail = SENDING_EMAIL || CURRENT_USER_EMAIL || '';
+    const meName = getDisplayNameForUser(meEmail);
+
+    items.forEach(it => {
+      if (!it || (!it.id && !it.subject)) return;
+
+      const id = it.id || `seed-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const subject = it.subject || 'No Subject';
+      const from = it.from || 'Unknown Sender';
+      const date = it.date || new Date().toISOString();
+      const category = (typeof it.category === 'string' && it.category.trim()) ? it.category.trim() : 'Other';
+      const origBody = (typeof it.body === 'string' && it.body.trim()) ? it.body : (it.snippet || '');
+      const snippet = it.snippet || (origBody ? String(origBody).slice(0, 100) + (String(origBody).length > 100 ? '...' : '') : '');
+
+      // 2) Persist to unreplied-emails.json (as before) so inbox-oriented flows can use it
+      if (!unrepliedById.has(id)) {
+        unreplied.push({
+          id,
+          subject,
+          from,
+          date,
+          body: origBody,
+          snippet,
+          category,
+          tags: {
+            unreplied: !!(it.tags && it.tags.unreplied),
+            thread: !!(it.tags && it.tags.thread)
+          },
+          source: 'seed-categories'
+        });
+        unrepliedById.add(id);
+        addedUnreplied++;
+        console.log(`[SeedCategories] Unreplied+ ${subject} (${category})`);
+      }
+
+      // 3) Persist a minimal thread in email-threads.json (original-only), so the thread modal can show the original message
+      const threadId = `thread-${id}`;
+      if (!threadsById.has(threadId)) {
+        threads.push({
+          id: threadId,
+          subject,
+          originalFrom: from,
+          from: meEmail,
+          date,
+          // Keep a one-message thread (original only)
+          messages: [
+            {
+              id: `original-${id}`,
+              from: from,
+              to: [meEmail || 'You'],
+              date: date,
+              subject: subject.replace(/^Re:\s*/i, ''),
+              body: origBody || 'Original email content not available',
+              isResponse: false
+            }
+          ]
+        });
+        threadsById.add(threadId);
+        addedThreads++;
+        console.log(`[SeedCategories] Thread+ ${subject} (original only)`);
+      }
+
+      // 4) Persist a pseudo response record into response-emails.json so the main UI and category editor include it.
+      // NOTE: response-emails endpoint requires a non-empty "body". We store the original text as a placeholder body so the item is visible.
+      if (!responsesById.has(id)) {
+        responses.push({
+          id,
+          subject,
+          // Treat this as a to-be-answered item authored by the user (for UI consistency)
+          from: meEmail || meName || 'You',
+          originalFrom: from,
+          date,
+          category,
+          // Use original body as placeholder response text to satisfy validation; downstream cleaning is handled per-view
+          body: origBody || '(seeded item)',
+          snippet: snippet || 'No content available',
+          originalBody: origBody || ''
+        });
+        responsesById.add(id);
+        addedResponses++;
+        console.log(`[SeedCategories] Responses+ ${subject} (${category})`);
+      }
+    });
+
+    // Persist all stores
+    fs.writeFileSync(paths.UNREPLIED_EMAILS_PATH, JSON.stringify({ emails: unreplied }, null, 2));
+    fs.writeFileSync(paths.RESPONSE_EMAILS_PATH, JSON.stringify({ emails: responses }, null, 2));
+    fs.writeFileSync(paths.EMAIL_THREADS_PATH, JSON.stringify({ threads }, null, 2));
+
+    return res.json({
+      success: true,
+      addedUnreplied,
+      addedResponses,
+      addedThreads,
+      totalUnreplied: unreplied.length,
+      totalResponses: responses.length,
+      totalThreads: threads.length
+    });
   } catch (e) {
     console.error('seed-categories/add-all failed:', e);
     return res.status(500).json({ success: false, error: 'Failed to add items' });
