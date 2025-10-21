@@ -1231,8 +1231,29 @@ app.get('/api/email-thread/:emailId', async (req, res) => {
     if (!email) {
       return res.status(404).json({ error: 'Email thread not found' });
     }
+
+    // If this is a seeded original-only record, do NOT fabricate a user response.
+    // Return a single original message and ensure all fields are real.
+    if (email.seededOriginalOnly) {
+      const subj = (email.subject || '').replace(/^Re:\s*/i, '');
+      const originalOnly = {
+        messages: [
+          {
+            id: 'original-' + email.id,
+            from: email.originalFrom || 'Unknown Sender',
+            to: [email.from || 'Unknown Recipient'],
+            date: email.date || new Date().toISOString(),
+            subject: subj || 'No Subject',
+            body: email.originalBody || email.snippet || 'Original email content not available',
+            isResponse: false
+          }
+        ]
+      };
+      console.log(`Returning single-message seeded thread for email: ${email.subject}`);
+      return res.json(originalOnly);
+    }
     
-    // Create thread data using originalBody from response emails
+    // Otherwise, construct a two-message thread using original + the actual response
     const threadData = {
       messages: [
         {
@@ -1240,7 +1261,7 @@ app.get('/api/email-thread/:emailId', async (req, res) => {
           from: email.originalFrom || 'Unknown Sender',
           to: [email.from],
           date: new Date(new Date(email.date).getTime() - 86400000).toISOString(),
-          subject: email.subject.replace('Re: ', ''),
+          subject: (email.subject || '').replace(/^Re:\s*/i, ''),
           body: email.originalBody || 'Original email content not available',
           isResponse: false
         },
@@ -1250,7 +1271,7 @@ app.get('/api/email-thread/:emailId', async (req, res) => {
           to: [email.originalFrom || 'Unknown Sender'],
           date: email.date,
           subject: email.subject,
-            body: await cleanResponseBody(email.body),
+          body: await cleanResponseBody(email.body),
           isResponse: true
         }
       ]
@@ -3483,6 +3504,7 @@ app.post('/api/seed-categories/add-all', (req, res) => {
           originalFrom: from,
           from: meEmail,
           date,
+          responseId: id,
           // Keep a one-message thread (original only)
           messages: [
             {
@@ -3527,6 +3549,7 @@ app.post('/api/seed-categories/add-all', (req, res) => {
           from: meEmail || meName || 'You',
           originalFrom: from,
           date,
+          seededOriginalOnly: true,
           category,
           categories: cats,
           // Use original body as placeholder response text to satisfy validation; downstream cleaning is handled per-view

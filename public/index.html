@@ -3149,26 +3149,49 @@ const pillsHtml = catNames.map(cat => {
                     `;
                 }
 
-                // Fetch thread data
-                const response = await fetch(`/api/email-thread/${emailId}`);
-                const threadData = await response.json();
+                // Fetch thread data (prefer live Gmail thread when available to ensure latest user message shows)
+                let messages = null;
+                let finalSubject = subject;
 
-                if (threadData && Array.isArray(threadData.messages)) {
+                // Try Gmail full thread by message id first
+                try {
+                    const g = await fetch(`/api/gmail-thread-by-message/${encodeURIComponent(emailId)}`);
+                    const gd = await g.json().catch(() => ({}));
+                    if (g.ok && gd && gd.success && Array.isArray(gd.messages) && gd.messages.length) {
+                        messages = gd.messages;
+                        if (gd.thread && gd.thread.subject) {
+                            finalSubject = gd.thread.subject || finalSubject;
+                        }
+                    }
+                } catch (_) {
+                    // ignore and fall back
+                }
+
+                // Fallback to stored thread construction
+                if (!messages) {
+                    const response = await fetch(`/api/email-thread/${encodeURIComponent(emailId)}`);
+                    const threadData = await response.json().catch(() => ({}));
+                    if (response.ok && threadData && Array.isArray(threadData.messages) && threadData.messages.length) {
+                        messages = threadData.messages;
+                    }
+                }
+
+                if (Array.isArray(messages)) {
                     const metaEmail = (Array.isArray(allEmails) ? allEmails : []).find(e => e && e.id === emailId) || null;
                     const categories = (Array.isArray(metaEmail?.categories) && metaEmail.categories.length)
                         ? metaEmail.categories
                         : (metaEmail?.category ? [metaEmail.category] : []);
                     window.currentThreadContext = {
                         emailId,
-                        subject,
+                        subject: finalSubject,
                         categories,
-                        messages: threadData.messages
+                        messages
                     };
                     // Seed current context for Generate Response buttons
                     window.currentContextCategories = categories.slice();
                     currentContextCategory = categories[0] || '';
                     window.currentContextEmailId = emailId;
-                    renderThreadInPane(subject, threadData.messages, currentContextCategory);
+                    renderThreadInPane(finalSubject, messages, currentContextCategory);
                 } else {
                     if (threadPane) {
                         const bodyEl = threadPane.querySelector('.thread-body');
