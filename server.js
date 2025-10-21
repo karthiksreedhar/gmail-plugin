@@ -7070,7 +7070,7 @@ Return only JSON: {"category":"<name>"} where <name> is one of: ${categoriesX.jo
  *
  * Notes:
  * - 'similarity': computes average embedding cosine similarity to each category; returns best category first per email
- * - 'sender': returns any categories where >= 25% of items contain the same sender email address
+ * - 'sender': returns any categories where at least one item has the same sender email address as the new email/thread
  * - 'subject': OpenAI chooses best category based on subject vs DB subjects per category
  * - 'body': OpenAI chooses best category based on body vs a few body snippets per category
  */
@@ -7126,6 +7126,7 @@ app.post('/api/suggest-categories', async (req, res) => {
   try {
     const emails = Array.isArray(req.body?.emails) ? req.body.emails : [];
     const stage = String(req.body?.stage || '').toLowerCase();
+    const __reqId = Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7);
     if (!emails.length || !['similarity','sender','subject','body','subject-nn','body-nn'].includes(stage)) {
       return res.status(400).json({ success: false, error: 'Invalid payload. Provide emails[] and valid stage.' });
     }
@@ -7212,6 +7213,15 @@ Return only JSON.`;
           choices[id] = picked ? [picked] : [];
         }
 
+        try {
+          console.log(`[SuggestCategories ${__reqId}] stage=summary results:`);
+          emails.forEach(em => {
+            const id = String(em.id || '');
+            const arr = choices[id] || [];
+            const subj = String(em.subject || '').slice(0, 80);
+            console.log(` - ${id}: [${arr.join(', ')}] | subj="${subj}"`);
+          });
+        } catch (_) {}
         return res.json({ success: true, stage, choices });
       } catch (e) {
         console.error('summary stage failed:', e);
@@ -7249,11 +7259,20 @@ Return only JSON.`;
         } catch {}
         choices[id] = best ? [best] : ['Other'];
       }
+      try {
+        console.log(`[SuggestCategories ${__reqId}] stage=similarity results:`);
+        emails.forEach(em => {
+          const id = String(em.id || '');
+          const arr = choices[id] || [];
+          const subj = String(em.subject || '').slice(0, 80);
+          console.log(` - ${id}: [${arr.join(', ')}] | subj="${subj}"`);
+        });
+      } catch (_) {}
       return res.json({ success: true, stage, choices });
     }
 
     if (stage === 'sender') {
-      // Sender affinity: categories where sender appears in at least 3 emails/threads (participated)
+      // Sender affinity: categories where sender already appears at least once in that category (>= 1)
       // Build thread buckets by category using responseId link where possible
       const responses = loadResponseEmails() || [];
       const responseById = new Map(responses.map(r => [r.id, r]));
@@ -7298,7 +7317,7 @@ Return only JSON.`;
             if (participated) cnt++;
           }
 
-          if (cnt >= 3) {
+          if (cnt >= 1) {
             hits.push({ name, count: cnt });
           }
         }
@@ -7306,6 +7325,15 @@ Return only JSON.`;
         hits.sort((a,b) => b.count - a.count || a.name.localeCompare(b.name));
         choices[id] = hits.length ? hits.map(h => h.name) : [];
       }
+      try {
+        console.log(`[SuggestCategories ${__reqId}] stage=sender results:`);
+        emails.forEach(em => {
+          const id = String(em.id || '');
+          const arr = choices[id] || [];
+          const subj = String(em.subject || '').slice(0, 80);
+          console.log(` - ${id}: [${arr.join(', ')}] | subj="${subj}"`);
+        });
+      } catch (_) {}
       return res.json({ success: true, stage, choices });
     }
 
@@ -7413,6 +7441,15 @@ Return only JSON.`;
           const mapped = bestCat ? matchToCurrentCategory(bestCat, categoriesX) || bestCat : '';
           choices[id] = mapped ? [mapped] : [];
         }
+        try {
+          console.log(`[SuggestCategories ${__reqId}] stage=subject-nn results:`);
+          emails.forEach(em => {
+            const id = String(em.id || '');
+            const arr = choices[id] || [];
+            const subj = String(em.subject || '').slice(0, 80);
+            console.log(` - ${id}: [${arr.join(', ')}] | subj="${subj}"`);
+          });
+        } catch (_) {}
         return res.json({ success: true, stage, choices });
       } catch (e) {
         console.error('subject-nn stage failed:', e);
@@ -7474,6 +7511,15 @@ Return only JSON.`;
           const mapped = bestCat ? matchToCurrentCategory(bestCat, categoriesX) || bestCat : '';
           choices[id] = mapped ? [mapped] : [];
         }
+        try {
+          console.log(`[SuggestCategories ${__reqId}] stage=body-nn results:`);
+          emails.forEach(em => {
+            const id = String(em.id || '');
+            const arr = choices[id] || [];
+            const subj = String(em.subject || '').slice(0, 80);
+            console.log(` - ${id}: [${arr.join(', ')}] | subj="${subj}"`);
+          });
+        } catch (_) {}
         return res.json({ success: true, stage, choices });
       } catch (e) {
         console.error('body-nn stage failed:', e);
@@ -7519,6 +7565,15 @@ Return only JSON.`;
         } catch {}
         choices[id] = [picked];
       }
+      try {
+        console.log(`[SuggestCategories ${__reqId}] stage=subject results:`);
+        emails.forEach(em => {
+          const id = String(em.id || '');
+          const arr = choices[id] || [];
+          const subj = String(em.subject || '').slice(0, 80);
+          console.log(` - ${id}: [${arr.join(', ')}] | subj="${subj}"`);
+        });
+      } catch (_) {}
       return res.json({ success: true, stage, choices });
     }
 
@@ -7562,6 +7617,15 @@ Return only JSON.`;
         } catch {}
         choices[id] = [picked];
       }
+      try {
+        console.log(`[SuggestCategories ${__reqId}] stage=body results:`);
+        emails.forEach(em => {
+          const id = String(em.id || '');
+          const arr = choices[id] || [];
+          const subj = String(em.subject || '').slice(0, 80);
+          console.log(` - ${id}: [${arr.join(', ')}] | subj="${subj}"`);
+        });
+      } catch (_) {}
       return res.json({ success: true, stage, choices });
     }
 
