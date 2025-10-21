@@ -3308,6 +3308,8 @@ const pillsHtml = catNames.map(cat => {
                     : (ctx.category ? [ctx.category] : []);
                 window.currentContextCategories = cats;
                 currentContextCategory = cats[0] || '';
+                // Ensure the selected email context survives modal reset so "See Email Notes" can appear
+                window.currentContextEmailId = ctx.emailId || window.currentContextEmailId;
 
                 const seeNotesBtn = document.getElementById('seeCategoryNotesBtn');
                 const seeSummaryBtn = document.getElementById('seeCategorySummaryBtn');
@@ -3412,10 +3414,30 @@ window.currentContextEmailId = window.currentContextEmailId || '';
             window.currentContextCategories = [];
             window.currentContextEmailId = '';
 
+            // Ensure contextual buttons exist and order with "See Email Notes" first (leftmost)
+            const _summaryBtn = document.getElementById('seeCategorySummaryBtn');
+            const _notesBtn = document.getElementById('seeCategoryNotesBtn');
+            let _emailBtn = document.getElementById('seeEmailNotesBtn');
+            const _btnRow = (_summaryBtn && _summaryBtn.parentElement) || (_notesBtn && _notesBtn.parentElement);
+            if (_btnRow) {
+                if (!_emailBtn) {
+                    _emailBtn = document.createElement('button');
+                    _emailBtn.type = 'button';
+                    _emailBtn.id = 'seeEmailNotesBtn';
+                    _emailBtn.className = 'select-email-btn';
+                    _emailBtn.style.display = 'none';
+                    _emailBtn.textContent = 'See Email Notes';
+                    _btnRow.insertBefore(_emailBtn, _btnRow.firstChild);
+                } else {
+                    if (_btnRow.firstChild !== _emailBtn) {
+                        _btnRow.insertBefore(_emailBtn, _btnRow.firstChild);
+                    }
+                }
+            }
             // Hide contextual buttons by default
-            const seeNotesBtn = document.getElementById('seeCategoryNotesBtn');
-            const seeSummaryBtn = document.getElementById('seeCategorySummaryBtn');
-            const seeEmailNotesBtn = document.getElementById('seeEmailNotesBtn');
+            const seeNotesBtn = _notesBtn || document.getElementById('seeCategoryNotesBtn');
+            const seeSummaryBtn = _summaryBtn || document.getElementById('seeCategorySummaryBtn');
+            const seeEmailNotesBtn = _emailBtn || document.getElementById('seeEmailNotesBtn');
             if (seeNotesBtn) { seeNotesBtn.style.display = 'none'; seeNotesBtn.onclick = null; }
             if (seeSummaryBtn) { seeSummaryBtn.style.display = 'none'; seeSummaryBtn.onclick = null; }
             if (seeEmailNotesBtn) { seeEmailNotesBtn.style.display = 'none'; seeEmailNotesBtn.onclick = null; }
@@ -3461,6 +3483,7 @@ window.currentContextEmailId = window.currentContextEmailId || '';
                                 <label for="contextInput" style="display:flex; align-items:center; justify-content:space-between;">
                                     <span>Additional Context:</span>
                                     <div style="display:flex; gap:8px;">
+                                        <button type="button" id="seeEmailNotesBtn" class="select-email-btn" style="display:none;">See Email Notes</button>
                                         <button type="button" id="seeCategorySummaryBtn" class="select-email-btn" style="display:none;">See Category Summary</button>
                                         <button type="button" id="seeCategoryNotesBtn" class="select-email-btn" style="display:none;">See Category Notes</button>
                                     </div>
