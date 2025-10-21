@@ -14383,8 +14383,46 @@ async function seedAddAll() {
         const data = await resp.json();
         if (!resp.ok || !data.success) throw new Error(data.error || 'Failed to add');
 
-        // After adding, show category descriptions popup
+        // Categories involved in this seeding run
         const cats = Array.from(new Set(__seedItems.map(it => String(it.category || 'Other')).filter(Boolean)));
+
+        // Immediately generate summaries for categories that don't already have one
+        // 1) Load existing summaries map
+        let missingCats = [];
+        try {
+            const sResp = await fetch('/api/category-summaries');
+            const sData = await sResp.json();
+            const summaries = (sData && sData.summaries) ? sData.summaries : {};
+            missingCats = cats.filter(c => {
+                const txt = summaries && typeof summaries[c] === 'string' ? summaries[c] : '';
+                return !txt || !String(txt).trim();
+            });
+        } catch (_) {
+            // If we can't read current summaries, assume all need generation
+            missingCats = cats.slice();
+        }
+
+        if (missingCats.length > 0) {
+            // 2) Show loading popup and generate summaries without overwriting existing ones
+            showLoadingOverlay('Generating Category Summaries', 'Please wait while summaries are generated...', false);
+            try {
+                const gResp = await fetch('/api/generate-category-summaries', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ categories: missingCats, overwrite: false })
+                });
+                const gData = await gResp.json().catch(() => ({}));
+                if (!gResp.ok || !gData || gData.success !== true) {
+                    console.warn('Category summary generation failed:', gData && gData.error);
+                }
+            } catch (e) {
+                console.error('Summary generation error:', e);
+            } finally {
+                hideLoadingOverlay();
+            }
+        }
+
+        // After adding (and generating summaries), show optional category descriptions popup
         const modal = ensureSeedDescriptionsModal();
         renderSeedDescriptions(cats);
         modal.style.display = 'block';
