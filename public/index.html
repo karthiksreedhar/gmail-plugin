@@ -14047,7 +14047,7 @@ async function showSeedCategoriesModal() {
         const r = await fetch('/api/seed-categories/list');
         const data = await r.json();
         if (!r.ok || !data.success) throw new Error(data.error || 'Failed');
-        __seedItems = Array.isArray(data.items) ? data.items.map(it => ({ ...it, category: it.category || 'Other', categories: Array.isArray(it.categories) ? it.categories : [] })) : [];
+        __seedItems = Array.isArray(data.items) ? data.items.map(it => ({ ...it, category: it.category || '', categories: Array.isArray(it.categories) ? it.categories : [] })) : [];
         renderSeedList();
     } catch (e) {
         if (host) host.innerHTML = '<div class="error">Failed to load important emails. Gmail authentication may be required. Use the Authenticate flow (you will be prompted automatically) and try again.</div>';
@@ -14157,8 +14157,8 @@ async function seedEditCategory(index, anchorEl) {
         picker.style.left = (window.scrollX + rect.left) + 'px';
 
         // Selected sets
-        const selectedSet = new Set([...(it.categories || []), it.category].filter(Boolean));
-        let primary = it.category || Array.from(selectedSet)[0] || 'Other';
+const selectedSet = new Set([...(it.categories || []), it.category].filter(Boolean));
+let primary = it.category || Array.from(selectedSet)[0] || '';
 
         // Build list of checkboxes + radio for primary
         const list = document.createElement('div');
@@ -14277,16 +14277,17 @@ async function seedEditCategory(index, anchorEl) {
         const apply = document.createElement('button');
         apply.className = 'popup-btn popup-btn-success';
         apply.textContent = 'Apply';
-        apply.onclick = () => {
-            const cats = Array.from(selectedSet);
-            // Ensure primary exists
-            if (!primary && cats.length) primary = cats[0];
-            it.category = primary || 'Other';
-            // Store additional categories (excluding primary)
-            it.categories = cats.filter(c => String(c).toLowerCase() !== String(it.category || '').toLowerCase());
-            renderSeedList();
-            picker.remove();
-        };
+apply.onclick = () => {
+    const cats = Array.from(selectedSet);
+    // Ensure primary exists if any category selected
+    if (!primary && cats.length) primary = cats[0];
+    // If nothing was selected, leave uncategorized (no auto-default)
+    it.category = primary || '';
+    // Store additional categories (excluding primary)
+    it.categories = cats.filter(c => String(c).toLowerCase() !== String(it.category || '').toLowerCase());
+    renderSeedList();
+    picker.remove();
+};
         const cancel = document.createElement('button');
         cancel.className = 'popup-btn popup-btn-secondary';
         cancel.textContent = 'Cancel';
@@ -14370,67 +14371,97 @@ function renderSeedDescriptions(categories) {
 }
 
 async function seedAddAll() {
-    try {
-        if (!Array.isArray(__seedItems) || __seedItems.length === 0) {
-            showErrorPopup('Nothing to add.', 'No Items');
-            return;
-        }
+  try {
+    if (!Array.isArray(__seedItems) || __seedItems.length === 0) {
+      showErrorPopup('Nothing to add.', 'No Items');
+      return;
+    }
+
+    // Determine categorized vs uncategorized
+    const isCategorized = (it) => {
+      const primary = String(it?.category || '').trim();
+      const extras = Array.isArray(it?.categories) ? it.categories.filter(Boolean) : [];
+      return !!primary || extras.length > 0;
+    };
+    const toAdd = __seedItems.filter(isCategorized);
+    const skippedCount = __seedItems.length - toAdd.length;
+
+    const proceed = async () => {
+      if (toAdd.length === 0) {
+        closeSeedCategoriesModal();
+        showSuccessPopup('No categorized emails to add.', 'Nothing Added');
+        return;
+      }
+
+      showLoadingOverlay('Saving Emails', `Persisting ${toAdd.length} email${toAdd.length === 1 ? '' : 's'}...`, false);
+      try {
         const resp = await fetch('/api/seed-categories/add-all', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ items: __seedItems })
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ items: toAdd })
         });
         const data = await resp.json();
+        hideLoadingOverlay();
         if (!resp.ok || !data.success) throw new Error(data.error || 'Failed to add');
 
-        // Categories involved in this seeding run
-        const cats = Array.from(new Set(__seedItems.map(it => String(it.category || 'Other')).filter(Boolean)));
+        // Categories involved in this seeding run (from items actually added)
+        const cats = Array.from(
+          new Set(
+            toAdd.flatMap(it => {
+              const primary = String(it.category || '').trim();
+              const extras = Array.isArray(it.categories) ? it.categories.filter(Boolean) : [];
+              return [primary, ...extras].filter(Boolean);
+            })
+          )
+        );
 
-        // Immediately generate summaries for categories that don't already have one
-        // 1) Load existing summaries map
-        let missingCats = [];
-        try {
-            const sResp = await fetch('/api/category-summaries');
-            const sData = await sResp.json();
-            const summaries = (sData && sData.summaries) ? sData.summaries : {};
-            missingCats = cats.filter(c => {
-                const txt = summaries && typeof summaries[c] === 'string' ? summaries[c] : '';
-                return !txt || !String(txt).trim();
-            });
-        } catch (_) {
-            // If we can't read current summaries, assume all need generation
-            missingCats = cats.slice();
+        // Generate summaries for categories that don't already have one (do not overwrite)
+        if (cats.length > 0) {
+          showLoadingOverlay('Generating Category Summaries', 'Please wait while summaries are generated...', false);
+          try {
+            await fetch('/api/generate-category-summaries', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ categories: cats, overwrite: false })
+            }).then(r => r.json()).catch(() => ({}));
+          } catch (_) {}
+          hideLoadingOverlay();
         }
 
-        if (missingCats.length > 0) {
-            // 2) Show loading popup and generate summaries without overwriting existing ones
-            showLoadingOverlay('Generating Category Summaries', 'Please wait while summaries are generated...', false);
-            try {
-                const gResp = await fetch('/api/generate-category-summaries', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ categories: missingCats, overwrite: false })
-                });
-                const gData = await gResp.json().catch(() => ({}));
-                if (!gResp.ok || !gData || gData.success !== true) {
-                    console.warn('Category summary generation failed:', gData && gData.error);
-                }
-            } catch (e) {
-                console.error('Summary generation error:', e);
-            } finally {
-                hideLoadingOverlay();
-            }
-        }
-
-        // After adding (and generating summaries), show optional category descriptions popup
+        // Show optional category descriptions popup
         const modal = ensureSeedDescriptionsModal();
         renderSeedDescriptions(cats);
         modal.style.display = 'block';
-        showSuccessPopup(`Added ${data.added} item(s) to database.`, 'Added');
-    } catch (e) {
+
+        showSuccessPopup(
+          `Added ${toAdd.length} item${toAdd.length === 1 ? '' : 's'} to database.${skippedCount > 0 ? ' ' + skippedCount + ' uncategorized skipped.' : ''}`,
+          'Added'
+        );
+      } catch (e) {
         console.error('seedAddAll failed:', e);
+        hideLoadingOverlay();
         showErrorPopup('Failed to add items. Please try again.', 'Add Failed');
+      }
+    };
+
+    if (skippedCount > 0) {
+      showCustomPopup({
+        title: 'Uncategorized Emails Detected',
+        message: `${skippedCount} email${skippedCount === 1 ? '' : 's'} have not been categorized and will not be added to database - please press Confirm to proceed`,
+        icon: 'warning',
+        primaryText: 'Confirm',
+        secondaryText: 'Cancel',
+        onPrimary: proceed,
+        onSecondary: () => {},
+        type: 'confirm'
+      });
+    } else {
+      await proceed();
     }
+  } catch (e) {
+    console.error('seedAddAll wrapper failed:', e);
+    showErrorPopup('Failed to add items. Please try again.', 'Add Failed');
+  }
 }
 
 async function saveSeedDescriptions() {

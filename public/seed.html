@@ -918,66 +918,80 @@
       alert('Nothing to add.');
       return;
     }
-    showOverlay('Adding to Database', 'Persisting items...');
+
+    // Build payloads from current selections
+    const allBuilt = seedItems.map(it => {
+      const selected = (selectedCatsById.get(it.id) || [])
+        .map(s => String(s || '').trim())
+        .filter(Boolean);
+
+      let primary = String(getPrimaryCat(it.id) || '').trim();
+      if (!primary && selected.length) primary = selected[0];
+
+      const rec = {
+        id: it.id,
+        subject: it.subject || 'No Subject',
+        from: it.from || 'Unknown Sender',
+        date: it.date || new Date().toISOString(),
+        snippet:
+          it.snippet ||
+          (typeof it.body === 'string'
+            ? it.body.slice(0, 100) + (it.body.length > 100 ? '...' : '')
+            : ''),
+        body: it.body || it.snippet || '',
+        tags: {
+          unreplied: !!(it.tags && it.tags.unreplied),
+          thread: !!(it.tags && it.tags.thread)
+        }
+      };
+
+      if (primary) rec.category = primary;
+
+      // Additional categories (exclude primary, de-dup)
+      const extras = (() => {
+        const out = [];
+        const seen = new Set();
+        selected.forEach(c => {
+          const lc = c.toLowerCase();
+          if (primary && lc === primary.toLowerCase()) return;
+          if (seen.has(lc)) return;
+          seen.add(lc);
+          out.push(c);
+        });
+        return out;
+      })();
+
+      if (extras.length) rec.categories = extras;
+
+      return rec;
+    });
+
+    // Split into categorized vs uncategorized
+    const isCategorized = (r) => {
+      const p = String(r?.category || '').trim();
+      const ex = Array.isArray(r?.categories) ? r.categories.filter(Boolean) : [];
+      return !!p || ex.length > 0;
+    };
+    const toAdd = allBuilt.filter(isCategorized);
+    const skippedCount = allBuilt.length - toAdd.length;
+
+    // Confirmation popup if there are uncategorized emails
+    if (skippedCount > 0) {
+      const msg = `${skippedCount} email${skippedCount === 1 ? '' : 's'} have not been categorized and will not be added to database - please press Confirm to proceed`;
+      const proceed = window.confirm(msg);
+      if (!proceed) return;
+    }
+
+    if (toAdd.length === 0) {
+      alert('No categorized emails to add.');
+      return;
+    }
+
+    showOverlay('Adding to Database', `Persisting ${toAdd.length} item${toAdd.length === 1 ? '' : 's'}...`);
     try{
-      const items = seedItems.map(it => {
-        // Gather selected categories (ordered) for this item
-        const selected = (selectedCatsById.get(it.id) || [])
-          .map(s => String(s || '').trim())
-          .filter(Boolean);
-        // Determine primary: use explicit primary if set; otherwise first selected
-        let primary = String(getPrimaryCat(it.id) || '').trim();
-        if (!primary && selected.length) {
-          primary = selected[0];
-        }
-
-        const rec = {
-          id: it.id,
-          subject: it.subject || 'No Subject',
-          from: it.from || 'Unknown Sender',
-          date: it.date || new Date().toISOString(),
-          snippet:
-            it.snippet ||
-            (typeof it.body === 'string'
-              ? it.body.slice(0, 100) + (it.body.length > 100 ? '...' : '')
-              : ''),
-          body: it.body || it.snippet || '',
-          tags: {
-            // removed from UI, but still send if present
-            unreplied: !!(it.tags && it.tags.unreplied),
-            thread: !!(it.tags && it.tags.thread)
-          }
-        };
-
-        // Persist primary category
-        if (primary) {
-          rec.category = primary;
-        }
-
-        // Persist additional categories (exclude primary, de-dup case-insensitive)
-        const extras = (() => {
-          const out = [];
-          const seen = new Set();
-          selected.forEach(c => {
-            const lc = c.toLowerCase();
-            if (primary && lc === primary.toLowerCase()) return;
-            if (seen.has(lc)) return;
-            seen.add(lc);
-            out.push(c);
-          });
-          return out;
-        })();
-
-        if (extras.length) {
-          rec.categories = extras;
-        }
-
-        return rec;
-      });
-
       const res = await fetch('/api/seed-categories/add-all', {
         method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ items })
+        body: JSON.stringify({ items: toAdd })
       });
       const data = await res.json();
       if (!res.ok || !data || data.success !== true){

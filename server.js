@@ -3369,6 +3369,16 @@ app.post('/api/seed-categories/add-all', (req, res) => {
       return res.status(400).json({ success: false, error: 'items array is required' });
     }
 
+    // Filter out uncategorized items server-side: must have a primary category OR at least one additional category
+    const filteredItems = items.filter(it => {
+      const primary = String(it?.category || '').trim();
+      const extras = Array.isArray(it?.categories)
+        ? it.categories.map(c => String(c || '').trim()).filter(Boolean)
+        : [];
+      return !!primary || extras.length > 0;
+    });
+    const skippedUncategorized = items.length - filteredItems.length;
+
     const paths = getCurrentUserPaths();
     if (!fs.existsSync(paths.USER_DATA_DIR)) {
       fs.mkdirSync(paths.USER_DATA_DIR, { recursive: true });
@@ -3378,7 +3388,7 @@ app.post('/api/seed-categories/add-all', (req, res) => {
     const currentCats = loadCategoriesList();
     const seenCats = new Set(currentCats.map(c => String(c).toLowerCase()));
     const newCats = [];
-    items.forEach(it => {
+    filteredItems.forEach(it => {
       const primary = String(it?.category || '').trim();
       const extras = Array.isArray(it?.categories) ? it.categories : [];
       const all = [primary, ...extras.map(x => String(x || '').trim())];
@@ -3412,14 +3422,17 @@ app.post('/api/seed-categories/add-all', (req, res) => {
     const meEmail = SENDING_EMAIL || CURRENT_USER_EMAIL || '';
     const meName = getDisplayNameForUser(meEmail);
 
-    items.forEach(it => {
+    filteredItems.forEach(it => {
       if (!it || (!it.id && !it.subject)) return;
 
       const id = it.id || `seed-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       const subject = it.subject || 'No Subject';
       const from = it.from || 'Unknown Sender';
       const date = it.date || new Date().toISOString();
-      const category = (typeof it.category === 'string' && it.category.trim()) ? it.category.trim() : 'Other';
+      // Determine primary category: explicit 'category' if provided, otherwise first additional category
+      const primaryExplicit = (typeof it.category === 'string' && it.category.trim()) ? it.category.trim() : '';
+      const providedExtras = Array.isArray(it.categories) ? it.categories.map(c => String(c || '').trim()).filter(Boolean) : [];
+      const category = primaryExplicit || (providedExtras[0] || '');
       const origBody = (typeof it.body === 'string' && it.body.trim()) ? it.body : (it.snippet || '');
       const snippet = it.snippet || (origBody ? String(origBody).slice(0, 100) + (String(origBody).length > 100 ? '...' : '') : '');
 
@@ -3537,6 +3550,7 @@ app.post('/api/seed-categories/add-all', (req, res) => {
       addedUnreplied,
       addedResponses,
       addedThreads,
+      skippedUncategorized,
       totalUnreplied: unreplied.length,
       totalResponses: responses.length,
       totalThreads: threads.length
