@@ -8574,10 +8574,14 @@ function previousSlide() {
                     loadMoreEmailsData = data.emails;
                     selectedLoadMoreEmails.clear();
                     currentLoadMoreSlideIndex = 0;
-                    
+
+                    // Compute multi-stage category suggestions (progress updates shown in overlay)
+                    try { updateLoadingOverlayMessage('Categorizing Emails', 'Preparing suggestions…'); } catch (_) {}
+                    await computeLoadMoreCategorySuggestions(loadMoreEmailsData);
+
                     // Hide loading overlay
                     hideLoadingOverlay();
-                    
+
                     // Show email carousel
                     showLoadMoreEmailsCarousel();
                 } else {
@@ -8645,7 +8649,117 @@ function previousSlide() {
             return modal;
         }
 
-        function populateLoadMoreEmailsCarousel() {
+        /* Compute multi-stage category suggestions for Load More emails.
+   Stages:
+   1) similarity  - average embedding cosine vs. each category (server: /api/suggest-categories)
+   2) sender      - categories where >=25% of items share the sender
+   3) subject     - OpenAI subject-only chooser vs. DB subjects
+   4) body        - OpenAI body-based chooser vs. top bodies per category
+   Aggregation:
+   - For each email, merge categories suggested across stages.
+   - Sort by: (appearsInStagesCount desc) then (earliestStageIndex asc) then (name asc).
+   UI:
+   - The caller will render these as yellow suggestion pills under each email preview. */
+async function computeLoadMoreCategorySuggestions(emails) {
+    try {
+        if (!Array.isArray(emails) || !emails.length) return;
+
+        const stageOrder = ['similarity', 'sender', 'subject-nn', 'body-nn', 'subject', 'body'];
+        const stageLabels = {
+            similarity: 'Stage 1/6: Computing similarity suggestions…',
+            sender: 'Stage 2/6: Analyzing sender affinity…',
+            'subject-nn': 'Stage 3/6: Nearest-neighbor by subject…',
+            'body-nn': 'Stage 4/6: Nearest-neighbor by body…',
+            subject: 'Stage 5/6: Subject-based suggestions…',
+            body: 'Stage 6/6: Body-based suggestions…'
+        };
+
+        // Normalize payload for the API
+        const minimal = emails.map(e => ({
+            id: String(e.id || ''),
+            subject: String(e.subject || ''),
+            body: typeof e.body === 'string' ? e.body : (e.snippet || ''),
+            from: String(e.from || '')
+        })).filter(x => x.id);
+
+        // Per-email aggregation
+        const agg = new Map(); // id -> Map<category, { count, firstStageIx }>
+        minimal.forEach(m => agg.set(m.id, new Map()));
+
+        for (let si = 0; si < stageOrder.length; si++) {
+            const stage = stageOrder[si];
+            try {
+                if (typeof updateLoadingOverlayMessage === 'function') {
+                    updateLoadingOverlayMessage('Categorizing Emails', stageLabels[stage] || `Running ${stage}…`);
+                }
+            } catch (_) {}
+
+            // Call backend for this stage
+            let data = null;
+            try {
+                const resp = await fetch('/api/suggest-categories', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ emails: minimal, stage })
+                });
+                data = await resp.json().catch(() => ({}));
+                if (!resp.ok || !data || data.success !== true || !data.choices) {
+                    // Non-fatal: proceed to next stage
+                    continue;
+                }
+            } catch (e) {
+                // Non-fatal: proceed to next stage
+                continue;
+            }
+
+            // Merge this stage's choices
+            const choices = data.choices || {};
+            Object.keys(choices).forEach(id => {
+                const cats = Array.isArray(choices[id]) ? choices[id] : [];
+                const per = agg.get(id);
+                if (!per) return;
+                for (const c of cats) {
+                    const name = String(c || '').trim();
+                    if (!name) continue;
+                    if (!per.has(name)) {
+                        per.set(name, { count: 1, firstStageIx: si });
+                    } else {
+                        const entry = per.get(name);
+                        entry.count += 1;
+                        // keep earliest stage index
+                        if (si < entry.firstStageIx) entry.firstStageIx = si;
+                        per.set(name, entry);
+                    }
+                }
+            });
+        }
+
+        // Finalize: store sorted suggestion list on each email
+        emails.forEach(e => {
+            const per = agg.get(e.id);
+            if (!per || !per.size) {
+                e.suggestedCategories = [];
+                return;
+            }
+            const arr = Array.from(per.entries()).map(([name, meta]) => ({ name, ...meta }));
+            arr.sort((a, b) => {
+                if (b.count !== a.count) return b.count - a.count;
+                if (a.firstStageIx !== b.firstStageIx) return a.firstStageIx - b.firstStageIx;
+                return a.name.localeCompare(b.name);
+            });
+            e.suggestedCategories = arr.map(x => x.name);
+        });
+    } catch (e) {
+        try {
+            if (typeof updateLoadingOverlayMessage === 'function') {
+                updateLoadingOverlayMessage('Categorizing Emails', 'Suggestion pipeline failed, continuing…');
+            }
+        } catch (_) {}
+        // Soft failure: do nothing; the UI will still work without suggestions
+    }
+}
+
+function populateLoadMoreEmailsCarousel() {
             const carousel = document.getElementById('loadMoreEmailCarousel');
             const carouselInfo = document.getElementById('loadMoreCarouselInfo');
             const carouselCounter = document.getElementById('loadMoreCarouselCounter');
@@ -8663,6 +8777,27 @@ function previousSlide() {
             loadMoreEmailsData.forEach((email, index) => {
                 const slide = document.createElement('div');
                 slide.className = `thread-slide ${index === 0 ? 'active' : ''}`;
+
+                // Build suggested categories row (yellow pills), ordered by aggregated signals
+                let suggestHtml = '';
+                try {
+                    const list = Array.isArray(email.suggestedCategories) ? email.suggestedCategories : [];
+                    if (list.length) {
+                        const pills = list.map(cat => {
+                            const style = getCategoryBadgeStyle(cat); // reuse deterministic pastel styles
+                            const cls = `category-${String(cat).toLowerCase().replace(/\s+/g, '-')}`;
+                            // Wrap in a subtle yellow container effect by tinting the pill slightly
+                            return `<span class="email-category ${cls}" style="background:#FFF9CC; color:#5f6368; border:1px solid #f1e4a6; padding:4px 8px; border-radius:12px; font-size:12px; font-weight:500; margin-right:6px;">${cat}</span>`;
+                        }).join('');
+                        suggestHtml = `
+                            <div class="email-suggestions" style="margin-top:8px;">
+                                <div style="font-size:12px; color:#666; margin-bottom:4px;">Suggested Categories:</div>
+                                <div>${pills}</div>
+                            </div>
+                        `;
+                    }
+                } catch (_) {}
+
                 slide.innerHTML = `
                     <div class="thread-preview">
                         <div class="thread-subject">${email.subject}</div>
@@ -8675,6 +8810,7 @@ function previousSlide() {
                                 <div class="message-preview-body">${email.body.substring(0, 300)}${email.body.length > 300 ? '...' : ''}</div>
                             </div>
                         </div>
+                        ${suggestHtml}
                         <div class="thread-selection">
                             <input type="checkbox" id="loadMoreEmail-${index}" class="thread-select-checkbox" onchange="toggleLoadMoreEmailSelection(${index})">
                             <label for="loadMoreEmail-${index}" class="thread-select-label">Use this email for response generation</label>

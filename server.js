@@ -2965,10 +2965,14 @@ app.post('/api/fetch-more-emails', async (req, res) => {
       // Load existing unreplied emails to check for duplicates
       const existingUnrepliedEmails = loadUnrepliedEmails();
       
-      // Build Gmail search query
+      // Build Gmail search query (enforce important/priority)
       let searchQuery = 'in:inbox';
       if (query && query.trim()) {
         searchQuery += ` ${query.trim()}`;
+      }
+      // Ensure we only fetch important emails unless user query explicitly overrides with -is:important
+      if (!/(\bis:important\b|\b-is:important\b)/i.test(searchQuery)) {
+        searchQuery += ' is:important';
       }
 
       console.log(`Searching Gmail with query: ${searchQuery}`);
@@ -7055,6 +7059,382 @@ Return only JSON: {"category":"<name>"} where <name> is one of: ${categoriesX.jo
   } catch (err) {
     console.error('ai-enhanced-categorize failed:', err);
     return res.status(500).json({ success: false, error: 'Failed to run AI-enhanced categorization' });
+  }
+});
+
+/**
+ * Suggest categories for "Load More" using multi-stage signals.
+ * POST /api/suggest-categories
+ * body: { emails: [{ id, subject, body, from }], stage: 'similarity' | 'sender' | 'subject' | 'body' }
+ * returns: { success: true, stage, choices: { [emailId]: string[] } }
+ *
+ * Notes:
+ * - 'similarity': computes average embedding cosine similarity to each category; returns best category first per email
+ * - 'sender': returns any categories where >= 25% of items contain the same sender email address
+ * - 'subject': OpenAI chooses best category based on subject vs DB subjects per category
+ * - 'body': OpenAI chooses best category based on body vs a few body snippets per category
+ */
+const __embeddingCache = new Map();
+function __cosine(a, b) {
+  if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return 0;
+  let dot = 0, na = 0, nb = 0;
+  for (let i = 0; i < a.length; i++) { const x = a[i] || 0; const y = b[i] || 0; dot += x * y; na += x * x; nb += y * y; }
+  const denom = Math.sqrt(na) * Math.sqrt(nb) || 1;
+  return dot / denom;
+}
+async function __embed(text) {
+  const key = `e:${text.slice(0,512)}`;
+  if (__embeddingCache.has(key)) return __embeddingCache.get(key);
+  const cleaned = String(text || '').slice(0, 2000);
+  const resp = await openai.embeddings.create({
+    model: 'text-embedding-3-small',
+    input: cleaned
+  });
+  const vec = resp.data?.[0]?.embedding || [];
+  __embeddingCache.set(key, vec);
+  return vec;
+}
+function __extractEmailAddress(header) {
+  try {
+    const s = String(header || '');
+    const m = s.match(/<?([A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})>?/i);
+    return m ? String(m[1]).toLowerCase() : s.toLowerCase();
+  } catch { return String(header || '').toLowerCase(); }
+}
+function __getCategoriesList() {
+  let categoriesX = loadCategoriesList();
+  if (!Array.isArray(categoriesX) || !categoriesX.length) {
+    categoriesX = getCurrentCategoriesFromResponses();
+    if (!Array.isArray(categoriesX) || !categoriesX.length) {
+      categoriesX = CANONICAL_CATEGORIES.slice();
+    }
+  }
+  return categoriesX;
+}
+function __groupDbByCategory() {
+  const responses = loadResponseEmails() || [];
+  const map = new Map();
+  for (const e of responses) {
+    const c = String(e.category || 'Other');
+    if (!map.has(c)) map.set(c, []);
+    map.get(c).push(e);
+  }
+  return map;
+}
+
+app.post('/api/suggest-categories', async (req, res) => {
+  try {
+    const emails = Array.isArray(req.body?.emails) ? req.body.emails : [];
+    const stage = String(req.body?.stage || '').toLowerCase();
+    if (!emails.length || !['similarity','sender','subject','body','subject-nn','body-nn'].includes(stage)) {
+      return res.status(400).json({ success: false, error: 'Invalid payload. Provide emails[] and valid stage.' });
+    }
+
+    const categoriesX = __getCategoriesList();
+    const byCat = __groupDbByCategory();
+
+    const choices = {}; // { id: [cat1, cat2...] ordered by preference }
+
+    if (stage === 'similarity') {
+      // Precompute embeddings per category for DB items (subject+snippet+body)
+      const catVecs = new Map();
+      for (const name of categoriesX) {
+        const arr = (byCat.get(name) || []).slice(0, 60);
+        const vecs = [];
+        for (const e of arr) {
+          const txt = `${e.subject || ''}\n${e.snippet || ''}\n${e.body || ''}`;
+          try { vecs.push(await __embed(txt)); } catch {}
+        }
+        catVecs.set(name, vecs);
+      }
+      for (const em of emails) {
+        const id = String(em.id || '');
+        const txt = `${em.subject || ''}\n${em.body || ''}`;
+        let best = 'Other';
+        let bestScore = -1;
+        try {
+          const v = await __embed(txt);
+          for (const name of categoriesX) {
+            const vecs = catVecs.get(name) || [];
+            if (!vecs.length) continue;
+            let sum = 0;
+            for (const dv of vecs) sum += __cosine(v, dv);
+            const avg = sum / vecs.length;
+            if (avg > bestScore) { bestScore = avg; best = name; }
+          }
+        } catch {}
+        choices[id] = best ? [best] : ['Other'];
+      }
+      return res.json({ success: true, stage, choices });
+    }
+
+    if (stage === 'sender') {
+      // Sender affinity: categories where >= 25% contain this sender
+      for (const em of emails) {
+        const id = String(em.id || '');
+        const sender = __extractEmailAddress(em.from || '');
+        const hits = [];
+        for (const name of categoriesX) {
+          const items = byCat.get(name) || [];
+          if (!items.length) continue;
+          const cnt = items.reduce((acc, e) => {
+            const o = __extractEmailAddress(e.originalFrom || e.from || '');
+            return acc + (o.includes(sender) || sender.includes(o) ? 1 : 0);
+          }, 0);
+          const ratio = cnt / items.length;
+          if (ratio >= 0.25) hits.push({ name, ratio });
+        }
+        hits.sort((a,b) => b.ratio - a.ratio || a.name.localeCompare(b.name));
+        choices[id] = hits.length ? hits.map(h => h.name) : [];
+      }
+      return res.json({ success: true, stage, choices });
+    }
+
+    if (stage === 'subject-nn') {
+      try {
+        // Build flat DB list from response emails
+        const byCat = __groupDbByCategory();
+        const dbItems = [];
+        for (const [name, arr] of byCat.entries()) {
+          (arr || []).forEach(e => {
+            dbItems.push({
+              id: e.id,
+              category: e.category || name,
+              subject: e.subject || ''
+            });
+          });
+        }
+
+        // Exact subject-equality short-circuit (normalized)
+        const normSubj = (s) => String(s || '').toLowerCase().replace(/^re:\s*/i, '').trim();
+        const subjCounts = new Map(); // key -> Map<category,count>
+        for (const it of dbItems) {
+          const key = normSubj(it.subject);
+          if (!key) continue;
+          const cat = String(it.category || '').trim();
+          if (!cat) continue;
+          let m = subjCounts.get(key);
+          if (!m) { m = new Map(); subjCounts.set(key, m); }
+          m.set(cat, (m.get(cat) || 0) + 1);
+        }
+        const subjToCat = new Map();
+        for (const [key, m] of subjCounts.entries()) {
+          let best = ''; let bestCount = -1;
+          for (const [cat, cnt] of m.entries()) {
+            if (cnt > bestCount) { best = cat; bestCount = cnt; }
+          }
+          if (best) subjToCat.set(key, best);
+        }
+
+        // Precompute subject embeddings for DB items (cached)
+        const dbVecs = [];
+        for (const it of dbItems) {
+          const text = String(it.subject || '').trim();
+          if (!text) continue;
+          try {
+            const vec = await __embed(text);
+            dbVecs.push({ vec, category: it.category });
+          } catch (_) {}
+        }
+
+        const choices = {};
+        for (const em of emails) {
+          const id = String(em.id || '');
+          const sub = String(em.subject || '').trim();
+          if (!id) continue;
+
+          if (!sub) {
+            choices[id] = [];
+            continue;
+          }
+
+          // Exact subject equality mapping (normalized)
+          const key = normSubj(sub);
+          const exactCat = subjToCat.get(key);
+          if (exactCat) {
+            const mapped = matchToCurrentCategory(exactCat, categoriesX) || exactCat;
+            choices[id] = mapped ? [mapped] : [];
+            continue;
+          }
+
+          if (dbVecs.length === 0) {
+            choices[id] = [];
+            continue;
+          }
+
+          let bestCat = '';
+          let bestScore = -1;
+          try {
+            const v = await __embed(sub);
+            for (const dv of dbVecs) {
+              const s = __cosine(v, dv.vec);
+              if (s > bestScore) {
+                bestScore = s;
+                bestCat = dv.category || '';
+              }
+            }
+          } catch (_) {}
+
+          const categoriesX = __getCategoriesList();
+          const mapped = bestCat ? matchToCurrentCategory(bestCat, categoriesX) || bestCat : '';
+          choices[id] = mapped ? [mapped] : [];
+        }
+        return res.json({ success: true, stage, choices });
+      } catch (e) {
+        console.error('subject-nn stage failed:', e);
+        return res.json({ success: true, stage, choices: {} });
+      }
+    }
+
+    if (stage === 'body-nn') {
+      try {
+        // Build flat DB list from response emails
+        const byCat = __groupDbByCategory();
+        const dbItems = [];
+        for (const [name, arr] of byCat.entries()) {
+          (arr || []).forEach(e => {
+            dbItems.push({
+              id: e.id,
+              category: e.category || name,
+              body: (e.body && String(e.body)) || (e.snippet || '')
+            });
+          });
+        }
+
+        // Precompute body embeddings for DB items (cached)
+        const dbVecs = [];
+        for (const it of dbItems) {
+          const text = String(it.body || '').trim();
+          if (!text) continue;
+          try {
+            const vec = await __embed(text);
+            dbVecs.push({ vec, category: it.category });
+          } catch (_) {}
+        }
+
+        const choices = {};
+        for (const em of emails) {
+          const id = String(em.id || '');
+          const body = String(em.body || em.snippet || '').trim();
+          if (!id) continue;
+
+          if (!body || dbVecs.length === 0) {
+            choices[id] = [];
+            continue;
+          }
+
+          let bestCat = '';
+          let bestScore = -1;
+          try {
+            const v = await __embed(body);
+            for (const dv of dbVecs) {
+              const s = __cosine(v, dv.vec);
+              if (s > bestScore) {
+                bestScore = s;
+                bestCat = dv.category || '';
+              }
+            }
+          } catch (_) {}
+
+          const categoriesX = __getCategoriesList();
+          const mapped = bestCat ? matchToCurrentCategory(bestCat, categoriesX) || bestCat : '';
+          choices[id] = mapped ? [mapped] : [];
+        }
+        return res.json({ success: true, stage, choices });
+      } catch (e) {
+        console.error('body-nn stage failed:', e);
+        return res.json({ success: true, stage, choices: {} });
+      }
+    }
+
+    if (stage === 'subject') {
+      // Subject-based OpenAI choose best category
+      const perCatSubjects = {};
+      for (const name of categoriesX) {
+        perCatSubjects[name] = (byCat.get(name) || []).slice(0, 40).map(e => e.subject || '').filter(Boolean);
+      }
+      for (const em of emails) {
+        const id = String(em.id || '');
+        const SYSTEM = `Choose the single best category for an email based on its subject, from among the provided category names. Return strictly valid JSON: {"category":"<name>"}. If no good fit, return "Other".`;
+        const USER = `CATEGORIES WITH SUBJECT EXAMPLES:
+${JSON.stringify(perCatSubjects, null, 2)}
+
+EMAIL SUBJECT:
+${em.subject || 'No Subject'}
+
+Return only JSON.`;
+        let picked = 'Other';
+        try {
+          const completion = await openai.chat.completions.create({
+            model: 'o3',
+            messages: [
+              { role: 'system', content: SYSTEM },
+              { role: 'user', content: USER }
+            ],
+            max_completion_tokens: 60,
+            response_format: { type: 'json_object' }
+          });
+          const raw = completion.choices?.[0]?.message?.content || '';
+          let parsed = null;
+          try { parsed = JSON.parse(raw); } catch {
+            const m = raw.match(/\{[\s\S]*\}/);
+            if (m) { try { parsed = JSON.parse(m[0]); } catch {} }
+          }
+          const catRaw = parsed && typeof parsed.category === 'string' ? parsed.category : 'Other';
+          picked = matchToCurrentCategory(catRaw, categoriesX) || 'Other';
+        } catch {}
+        choices[id] = [picked];
+      }
+      return res.json({ success: true, stage, choices });
+    }
+
+    if (stage === 'body') {
+      // Body-based OpenAI choose best category (compare to top few bodies per category)
+      const perCatBodies = {};
+      for (const name of categoriesX) {
+        perCatBodies[name] = (byCat.get(name) || []).slice(0, 8)
+          .map(e => (e.body && String(e.body).slice(0, 300)) || (e.snippet || ''))
+          .filter(Boolean);
+      }
+      for (const em of emails) {
+        const id = String(em.id || '');
+        const SYSTEM = `Choose the single best category for an email based on body content, from the provided categories with example bodies. Return strictly valid JSON: {"category":"<name>"}; use "Other" if uncertain.`;
+        const USER = `CATEGORIES WITH EXAMPLE BODIES:
+${JSON.stringify(perCatBodies, null, 2)}
+
+EMAIL BODY:
+${(em.body || '').slice(0, 1000)}
+
+Return only JSON.`;
+        let picked = 'Other';
+        try {
+          const completion = await openai.chat.completions.create({
+            model: 'o3',
+            messages: [
+              { role: 'system', content: SYSTEM },
+              { role: 'user', content: USER }
+            ],
+            max_completion_tokens: 60,
+            response_format: { type: 'json_object' }
+          });
+          const raw = completion.choices?.[0]?.message?.content || '';
+          let parsed = null;
+          try { parsed = JSON.parse(raw); } catch {
+            const m = raw.match(/\{[\s\S]*\}/);
+            if (m) { try { parsed = JSON.parse(m[0]); } catch {} }
+          }
+          const catRaw = parsed && typeof parsed.category === 'string' ? parsed.category : 'Other';
+          picked = matchToCurrentCategory(catRaw, categoriesX) || 'Other';
+        } catch {}
+        choices[id] = [picked];
+      }
+      return res.json({ success: true, stage, choices });
+    }
+
+    return res.status(400).json({ success: false, error: 'Unsupported stage' });
+  } catch (e) {
+    console.error('suggest-categories failed:', e);
+    return res.status(500).json({ success: false, error: 'Failed to compute suggestions' });
   }
 });
 

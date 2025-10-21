@@ -188,6 +188,25 @@
       background: var(--predicted);
       border-color:#e5d88b;
     }
+
+    /* Suggested categories (yellow pills) */
+    .sugg-row{
+      margin-top:6px;
+      display:flex;
+      flex-wrap:wrap;
+      gap:6px;
+    }
+    .sugg-pill{
+      display:inline-block;
+      padding:4px 8px;
+      border-radius:12px;
+      font-size:12px;
+      font-weight:500;
+      background: var(--predicted);
+      border:1px solid #e5d88b;
+      color:#5f6368;
+      user-select:none;
+    }
     .chip .x{
       font-weight:700;
       cursor:pointer;
@@ -560,6 +579,11 @@
         </div>
       `;
 
+      // Build suggestions row (multiple yellow tags if available)
+      const suggHtml = (Array.isArray(it.suggestedCategories) && it.suggestedCategories.length)
+        ? `<div class="sugg-row">` + it.suggestedCategories.map(c => `<span class="sugg-pill" title="Suggested">${escapeHtml(c)}</span>`).join('') + `</div>`
+        : '';
+
       div.innerHTML = `
         <div class="it-body">
           <div class="it-row">
@@ -568,6 +592,7 @@
           </div>
           <div class="it-meta">${escapeHtml(it.from||'Unknown Sender')} • ${fmtDate(it.date)}</div>
           <div class="chips" data-item="${it.id}"></div>
+          ${suggHtml}
         </div>
       `;
 
@@ -756,6 +781,64 @@
     refreshItemUI(id);
   }
 
+  // Suggestions aggregator for Load More items (subject/body similarity + others)
+  async function computeLoadMoreCategorySuggestions(items){
+    try{
+      if (!Array.isArray(items) || !items.length) return;
+      const stageOrder = ['subject-nn','body-nn','similarity','subject','body','sender'];
+      const minimal = items.map(e => ({
+        id: String(e.id || ''),
+        subject: String(e.subject || ''),
+        body: typeof e.body === 'string' ? e.body : (e.snippet || ''),
+        from: String(e.from || '')
+      })).filter(x => x.id);
+
+      const agg = new Map(); // id -> Map<cat,{count, firstIx}>
+      minimal.forEach(m => agg.set(m.id, new Map()));
+
+      for (let si = 0; si < stageOrder.length; si++){
+        const stage = stageOrder[si];
+        let data = null;
+        try{
+          const resp = await fetch('/api/suggest-categories', {
+            method:'POST',
+            headers:{'Content-Type':'application/json'},
+            body: JSON.stringify({ emails: minimal, stage })
+          });
+          data = await resp.json().catch(()=>({}));
+          if (!resp.ok || !data || data.success !== true || !data.choices) continue;
+        }catch(_){ continue; }
+
+        const choices = data.choices || {};
+        Object.keys(choices).forEach(id => {
+          const cats = Array.isArray(choices[id]) ? choices[id] : [];
+          const per = agg.get(id);
+          if (!per) return;
+          cats.forEach(c => {
+            const name = String(c || '').trim();
+            if (!name) return;
+            if (!per.has(name)) per.set(name, {count:1, firstIx: si});
+            else {
+              const entry = per.get(name);
+              entry.count += 1;
+              if (si < entry.firstIx) entry.firstIx = si;
+              per.set(name, entry);
+            }
+          });
+        });
+      }
+
+      // assign sorted suggestions back to items
+      items.forEach(e => {
+        const per = agg.get(e.id);
+        if (!per || !per.size){ e.suggestedCategories = []; return; }
+        const arr = Array.from(per.entries()).map(([name, meta]) => ({ name, ...meta }));
+        arr.sort((a,b) => (b.count - a.count) || (a.firstIx - b.firstIx) || a.name.localeCompare(b.name));
+        e.suggestedCategories = arr.map(x => x.name);
+      });
+    }catch(_){}
+  }
+
   function refreshItemUI(id){
     // refresh list row
     document.querySelectorAll(`.chips[data-item="${cssEscape(id)}"]`).forEach(node => {
@@ -776,10 +859,10 @@
   }
 
   async function approveOne(id){
+    const it = loadItems.find(x => x.id === id);
+    if (!it) return;
+    showOverlay('Approving', 'Saving to database...');
     try {
-      const it = loadItems.find(x => x.id === id);
-      if (!it) return;
-      showOverlay('Approving', 'Saving email to database...');
       const resp = await fetch('/api/add-approved-email', {
         method:'POST',
         headers:{'Content-Type':'application/json'},
@@ -795,13 +878,13 @@
           }
         })
       });
-      const data = await resp.json();
+      const data = await resp.json().catch(()=> ({}));
       hideOverlay();
-      if (!resp.ok || !data.success) {
+      if (!resp.ok || !data || data.success !== true){
         alert('Failed to approve email.');
         return;
       }
-      // Remove from list
+      // Remove approved item locally and refresh UI
       loadItems = loadItems.filter(x => x.id !== id);
       if (selectedId === id) selectedId = '';
       renderList();
