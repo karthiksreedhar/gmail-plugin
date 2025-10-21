@@ -2399,6 +2399,91 @@
             column-gap: 12px !important; /* explicit to override column-gap:0 !important */
             row-gap: 12px;
         }
+
+        /* In-pane Thread View (Gmail-like) */
+        .thread-view {
+            flex: 1;
+            background: #ffffff;
+            overflow-y: auto;
+            border-left: none;
+        }
+        .thread-header {
+            position: sticky;
+            top: 0;
+            background: #ffffff;
+            border-bottom: 1px solid #e0e0e0;
+            padding: 12px 24px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            z-index: 10;
+        }
+        .thread-title {
+            font-size: 20px;
+            font-weight: 600;
+            color: #202124;
+            margin-left: 12px;
+        }
+        .thread-header-left {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .back-thread-btn {
+            background: #f1f3f4;
+            color: #202124;
+            border: 1px solid #dadce0;
+            padding: 8px 12px;
+            border-radius: 20px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        .back-thread-btn:hover {
+            background: #e8eaed;
+        }
+        .reply-thread-btn {
+            background: #1a73e8;
+            color: #fff;
+            border: none;
+            padding: 8px 14px;
+            border-radius: 20px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+        }
+        .reply-thread-btn:hover {
+            background: #1967d2;
+        }
+        .thread-body {
+            padding: 16px 24px 40px 24px;
+        }
+        .thread-meta {
+            color: #5f6368;
+            font-size: 13px;
+        }
+        .thread-message-card {
+            border: 1px solid #e0e0e0;
+            border-radius: 8px;
+            margin-bottom: 16px;
+            overflow: hidden;
+            background: #fff;
+        }
+        .thread-message-card .message-header {
+            background: #f8f9fa;
+            border-bottom: 1px solid #e0e0e0;
+        }
+        .thread-message-card.response {
+            border-left: 4px solid #d2b48c;
+        }
+        .thread-message-card.original {
+            border-left: 4px solid #9aa0a6;
+        }
+        .thread-subject-row {
+            padding: 8px 24px;
+            border-bottom: 1px solid #e0e0e0;
+            font-weight: 500;
+            color: #202124;
+        }
     </style>
 </head>
 <body>
@@ -2483,6 +2568,11 @@
                     <div id="emailContainer">
                         <div class="loading">Loading emails...</div>
                     </div>
+                </div>
+
+                <!-- Thread View Pane -->
+                <div id="threadView" class="thread-view" style="display: none;">
+                    <!-- Populated dynamically -->
                 </div>
             </div>
         </div>
@@ -3031,27 +3121,71 @@ const pillsHtml = catNames.map(cat => {
         }
 
         async function openEmailThread(emailId, subject) {
-            const modal = document.getElementById('threadModal');
-            const modalTitle = document.getElementById('modalTitle');
-            const threadContainer = document.getElementById('threadContainer');
-            
-            // Show modal and loading state
-            modal.style.display = 'block';
-            modalTitle.textContent = subject;
-            threadContainer.innerHTML = '<div class="loading">Loading thread...</div>';
-            
             try {
+                const listPane = document.querySelector('.email-list');
+                const threadPane = document.getElementById('threadView');
+
+                if (threadPane) {
+                    threadPane.style.display = 'block';
+                }
+                if (listPane) {
+                    listPane.style.display = 'none';
+                }
+
+                // Render skeleton header while loading
+                if (threadPane) {
+                    const safeSubject = (typeof escapeHtml === 'function') ? escapeHtml(subject || 'Email Thread') : (subject || 'Email Thread');
+                    threadPane.innerHTML = `
+                        <div class="thread-header">
+                            <div class="thread-header-left">
+                                <button class="back-thread-btn" onclick="backToEmailList()">← Back</button>
+                                <div class="thread-title">${safeSubject}</div>
+                            </div>
+                            <button class="reply-thread-btn" onclick="replyToCurrentThread()">Reply</button>
+                        </div>
+                        <div class="thread-body">
+                            <div class="loading">Loading thread...</div>
+                        </div>
+                    `;
+                }
+
+                // Fetch thread data
                 const response = await fetch(`/api/email-thread/${emailId}`);
                 const threadData = await response.json();
-                
-                if (threadData.messages) {
-                    displayThread(threadData.messages);
+
+                if (threadData && Array.isArray(threadData.messages)) {
+                    const metaEmail = (Array.isArray(allEmails) ? allEmails : []).find(e => e && e.id === emailId) || null;
+                    window.currentThreadContext = {
+                        emailId,
+                        subject,
+                        category: metaEmail && metaEmail.category ? metaEmail.category : '',
+                        messages: threadData.messages
+                    };
+                    renderThreadInPane(subject, threadData.messages, window.currentThreadContext.category);
                 } else {
-                    threadContainer.innerHTML = '<div class="error">Failed to load email thread.</div>';
+                    if (threadPane) {
+                        const bodyEl = threadPane.querySelector('.thread-body');
+                        if (bodyEl) bodyEl.innerHTML = '<div class="error">Failed to load email thread.</div>';
+                    }
                 }
             } catch (error) {
                 console.error('Error loading thread:', error);
-                threadContainer.innerHTML = '<div class="error">Failed to load email thread. Please try again.</div>';
+                const threadPane = document.getElementById('threadView');
+                if (threadPane) {
+                    const safeSubject = (typeof escapeHtml === 'function') ? escapeHtml(subject || 'Email Thread') : (subject || 'Email Thread');
+                    threadPane.innerHTML = `
+                        <div class="thread-header">
+                            <div class="thread-header-left">
+                                <button class="back-thread-btn" onclick="backToEmailList()">← Back</button>
+                                <div class="thread-title">${safeSubject}</div>
+                            </div>
+                            <button class="reply-thread-btn" onclick="replyToCurrentThread()">Reply</button>
+                        </div>
+                        <div class="thread-body">
+                            <div class="error">Failed to load email thread. Please try again.</div>
+                        </div>
+                    `;
+                }
             }
         }
 
@@ -3079,6 +3213,114 @@ const pillsHtml = catNames.map(cat => {
                 
                 threadContainer.appendChild(messageDiv);
             });
+        }
+
+        // Render the thread inside the RHS pane (Gmail-like)
+        function renderThreadInPane(subject, messages, category) {
+            const threadPane = document.getElementById('threadView');
+            if (!threadPane) return;
+
+            const safeSubject = (typeof escapeHtml === 'function') ? escapeHtml(subject || 'Email Thread') : (subject || 'Email Thread');
+            const sorted = (Array.isArray(messages) ? messages.slice() : []).sort((a,b) => new Date(a.date) - new Date(b.date));
+            const cards = sorted.map(m => {
+                const toList = Array.isArray(m.to) ? m.to.join(', ') : (m.to || '');
+                const fromSafe = (typeof escapeHtml === 'function') ? escapeHtml(m.from || 'Unknown Sender') : (m.from || 'Unknown Sender');
+                const toSafe = (typeof escapeHtml === 'function') ? escapeHtml(toList) : toList;
+                const badge = m.isResponse ? '<span class="response-badge">Your Response</span>' : '';
+                const bodyHtml = m.body != null ? String(m.body) : '';
+                return `
+                    <div class="thread-message-card ${m.isResponse ? 'response' : 'original'}">
+                        <div class="message-header">
+                            <div class="message-from" style="display:flex; align-items:center; gap:8px;">
+                                ${fromSafe} ${badge}
+                            </div>
+                            <div class="message-to">To: ${toSafe}</div>
+                            <div class="message-date">${new Date(m.date).toLocaleString()}</div>
+                        </div>
+                        <div class="message-body">${bodyHtml}</div>
+                    </div>
+                `;
+            }).join('');
+
+            threadPane.innerHTML = `
+                <div class="thread-header">
+                    <div class="thread-header-left">
+                        <button class="back-thread-btn" onclick="backToEmailList()">← Back</button>
+                        <div class="thread-title">${safeSubject}</div>
+                    </div>
+                    <button class="reply-thread-btn" onclick="replyToCurrentThread()">Reply</button>
+                </div>
+                <div class="thread-body">
+                    ${cards || '<div class="no-emails" style="padding: 12px;">No messages in this thread.</div>'}
+                </div>
+            `;
+        }
+
+        // Back to list view
+        function backToEmailList() {
+            try {
+                const listPane = document.querySelector('.email-list');
+                const threadPane = document.getElementById('threadView');
+                if (listPane) listPane.style.display = 'block';
+                if (threadPane) {
+                    threadPane.style.display = 'none';
+                    threadPane.innerHTML = '';
+                }
+                window.currentThreadContext = null;
+            } catch (_) {}
+        }
+
+        // Reply button entrypoint: open Generate Response with latest message filled in
+        function replyToCurrentThread() {
+            try {
+                const ctx = window.currentThreadContext || {};
+                const messages = Array.isArray(ctx.messages) ? ctx.messages.slice() : [];
+                if (!messages.length) {
+                    showErrorPopup('No messages available to reply to.', 'No Messages');
+                    return;
+                }
+                // Prefer the latest non-response message; fallback to the last message
+                const sorted = messages.slice().sort((a,b) => new Date(a.date) - new Date(b.date));
+                const latestIncoming = [...sorted].reverse().find(m => !m.isResponse) || sorted[sorted.length - 1];
+                const from = latestIncoming.from || '';
+                const subj = latestIncoming.subject || ctx.subject || '';
+                const body = (latestIncoming.body != null ? String(latestIncoming.body) : '');
+
+                // Open the existing Generate Response modal and prefill
+                showGenerateResponseModal();
+                const senderInput = document.getElementById('senderInput');
+                const subjectInput = document.getElementById('subjectInput');
+                const emailBodyInput = document.getElementById('emailBodyInput');
+                if (senderInput) senderInput.value = from;
+                if (subjectInput) subjectInput.value = subj;
+                if (emailBodyInput) emailBodyInput.value = body;
+
+                // Expose "See Category Notes" and "See Category Summary" for the thread's category
+                window.currentContextCategory = ctx.category || '';
+                const seeNotesBtn = document.getElementById('seeCategoryNotesBtn');
+                const seeSummaryBtn = document.getElementById('seeCategorySummaryBtn');
+                if (seeNotesBtn) {
+                    if (window.currentContextCategory) {
+                        seeNotesBtn.style.display = 'inline-block';
+                        seeNotesBtn.onclick = showSeeCategoryNotesModal;
+                    } else {
+                        seeNotesBtn.style.display = 'none';
+                        seeNotesBtn.onclick = null;
+                    }
+                }
+                if (seeSummaryBtn) {
+                    if (window.currentContextCategory) {
+                        seeSummaryBtn.style.display = 'inline-block';
+                        seeSummaryBtn.onclick = () => showCategorySummaryModal(window.currentContextCategory);
+                    } else {
+                        seeSummaryBtn.style.display = 'none';
+                        seeSummaryBtn.onclick = null;
+                    }
+                }
+            } catch (e) {
+                console.error('replyToCurrentThread failed:', e);
+                showErrorPopup('Failed to open reply composer.', 'Reply Failed');
+            }
         }
 
         function closeModal() {
