@@ -85,7 +85,7 @@ const seedProgressByUser = {};
 function getSeedProgressForUser(email) {
   const key = String(email || CURRENT_USER_EMAIL || '').toLowerCase();
   if (!seedProgressByUser[key]) {
-    seedProgressByUser[key] = { active: false, total: 400, processed: 0, startedAt: 0, finishedAt: 0 };
+    seedProgressByUser[key] = { active: false, total: 450, processed: 0, startedAt: 0, finishedAt: 0 };
   }
   return seedProgressByUser[key];
 }
@@ -3158,13 +3158,13 @@ app.get('/api/seed-categories/list', async (req, res) => {
 const __seedUserKey = String(CURRENT_USER_EMAIL || '').toLowerCase();
 const __seedProgress = getSeedProgressForUser(__seedUserKey);
 __seedProgress.active = true;
-__seedProgress.total = 400;
+__seedProgress.total = 450;
 __seedProgress.processed = 0;
 __seedProgress.startedAt = Date.now();
 __seedProgress.finishedAt = 0;
     // Fetch more than needed to allow dedup by subject
 const TARGET = 50;
-const LIMIT = 400;
+const LIMIT = 450;
 
     // Ensure Gmail API is ready
     if (!gmail) {
@@ -3271,6 +3271,9 @@ const LIMIT = 400;
           subject,
           from,
           date,
+          // carry through preview fields so UI and add-all can persist actual text
+          snippet: e.snippet || '',
+          body: e.body || '',
           tags: { unreplied: !!unreplied, thread: !!thread },
           category: 'Other'
         });
@@ -3281,6 +3284,9 @@ const LIMIT = 400;
           entry.id = id;
           entry.from = from;
           entry.date = date;
+          // refresh preview fields from latest message for this subject group
+          entry.snippet = e.snippet || entry.snippet || '';
+          entry.body = e.body || entry.body || '';
         }
         entry.tags.unreplied = entry.tags.unreplied || unreplied;
         entry.tags.thread = entry.tags.thread || thread;
@@ -3320,7 +3326,7 @@ app.get('/api/seed-categories/progress', (req, res) => {
   try {
     const key = String(CURRENT_USER_EMAIL || '').toLowerCase();
     const p = getSeedProgressForUser(key);
-    return res.json({ success: true, active: !!p.active, processed: Number(p.processed) || 0, total: Number(p.total) || 400, startedAt: p.startedAt || 0, finishedAt: p.finishedAt || 0 });
+    return res.json({ success: true, active: !!p.active, processed: Number(p.processed) || 0, total: Number(p.total) || 450, startedAt: p.startedAt || 0, finishedAt: p.finishedAt || 0 });
   } catch (e) {
     return res.json({ success: true, active: false, processed: 0, total: 400 });
   }

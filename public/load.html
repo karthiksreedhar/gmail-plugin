@@ -497,7 +497,9 @@
         __predicted: true
       }));
 
-      // Auto-categorize using server AI (semantic + summaries/examples)
+      // Update status and overlay, then auto-categorize using server AI (semantic + summaries/examples)
+      document.getElementById('leftStatus').textContent = 'Categorizing...';
+      showOverlay('Categorizing', 'Analyzing emails and assigning categories...');
       try {
         const payload = {
           emails: loadItems.map(e => ({

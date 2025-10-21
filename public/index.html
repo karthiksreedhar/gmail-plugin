@@ -13404,13 +13404,101 @@ async function addEmailNoteMain() {
 
         // Load emails when page loads
         function promptAndGoLoadMore() {
+            // Open system-styled modal instead of native browser prompt
+            showLoadMorePromptModal();
+        }
+
+        function ensureLoadMorePromptModal() {
+            let modal = document.getElementById('loadMorePromptModal');
+            if (modal) return modal;
+
+            modal = document.createElement('div');
+            modal.id = 'loadMorePromptModal';
+            modal.className = 'modal';
+            modal.innerHTML = `
+                <div class="modal-content load-threads-modal">
+                    <div class="modal-header">
+                        <h2 class="modal-title">Load More Emails</h2>
+                        <button class="close" onclick="closeLoadMorePromptModal()">&times;</button>
+                    </div>
+                    <div class="load-threads-container">
+                        <div class="load-threads-intro">
+                            <h4>📥 How many emails should we load?</h4>
+                            <p>Choose the number of emails to fetch from your inbox. You can adjust categories on the next screen.</p>
+                        </div>
+
+                        <div class="thread-count-selector">
+                            <label for="loadMoreCountInput">Number of Emails (1–50):</label>
+                            <input id="loadMoreCountInput" type="number" min="1" max="50" value="10" step="1" class="thread-count-dropdown" style="width: 140px;" />
+                            <div id="loadMoreCountError" style="margin-top:8px; color:#d93025; font-size:12px; display:none;">Please enter a number between 1 and 50.</div>
+                        </div>
+
+                        <div class="load-threads-actions">
+                            <button class="load-threads-btn load-threads-btn-cancel" onclick="closeLoadMorePromptModal()">Cancel</button>
+                            <button class="load-threads-btn load-threads-btn-load" onclick="confirmLoadMoreCount()">Load</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+
+            // Close on backdrop click
+            modal.addEventListener('click', (ev) => {
+                if (ev.target === modal) closeLoadMorePromptModal();
+            });
+
+            document.body.appendChild(modal);
+
+            // Enter key to submit
+            setTimeout(() => {
+                try {
+                    const input = document.getElementById('loadMoreCountInput');
+                    if (input) {
+                        input.addEventListener('keydown', (ev) => {
+                            if (ev.key === 'Enter') {
+                                ev.preventDefault();
+                                confirmLoadMoreCount();
+                            }
+                        });
+                    }
+                } catch (_) {}
+            }, 0);
+
+            return modal;
+        }
+
+        function showLoadMorePromptModal() {
+            const modal = ensureLoadMorePromptModal();
+            // Reset defaults each time it opens
+            const input = document.getElementById('loadMoreCountInput');
+            const err = document.getElementById('loadMoreCountError');
+            if (input) input.value = '10';
+            if (err) err.style.display = 'none';
+            modal.style.display = 'block';
+            // Focus input for quick entry
+            setTimeout(() => { try { input && input.focus(); input && input.select(); } catch(_) {} }, 0);
+        }
+
+        function closeLoadMorePromptModal() {
+            const modal = document.getElementById('loadMorePromptModal');
+            if (modal) modal.style.display = 'none';
+        }
+
+        function confirmLoadMoreCount() {
             try {
-                const v = prompt('How many emails would you like to load? (1–50)', '10');
-                if (v === null) return;
-                const n = parseInt(v, 10);
-                const count = Number.isFinite(n) ? Math.max(1, Math.min(50, n)) : 10;
+                const input = document.getElementById('loadMoreCountInput');
+                const err = document.getElementById('loadMoreCountError');
+                const raw = input ? parseInt(input.value, 10) : NaN;
+                const n = Number.isFinite(raw) ? raw : 10;
+                const count = Math.max(1, Math.min(50, n));
+                if (!Number.isFinite(raw) || raw < 1 || raw > 50) {
+                    if (err) err.style.display = 'block';
+                    return;
+                }
+                closeLoadMorePromptModal();
                 window.location.href = '/load.html?count=' + count;
             } catch (e) {
+                // Fallback
+                closeLoadMorePromptModal();
                 window.location.href = '/load.html?count=10';
             }
         }
