@@ -7135,6 +7135,90 @@ app.post('/api/suggest-categories', async (req, res) => {
 
     const choices = {}; // { id: [cat1, cat2...] ordered by preference }
 
+    // New: summary stage — choose best category using category summaries and examples
+    if (stage === 'summary') {
+      try {
+        const summariesMap = loadCategorySummaries() || {};
+        const categoriesX = __getCategoriesList();
+        const byCat = __groupDbByCategory();
+        const examplesByCat = {};
+        const EXAMPLES_PER_CAT = 8;
+        for (const name of categoriesX) {
+          const items = (byCat.get(name) || []).slice(0, EXAMPLES_PER_CAT).map(e => ({
+            subject: e.subject || 'No Subject',
+            from: e.originalFrom || e.from || 'Unknown Sender',
+            snippet: e.snippet || (e.body ? String(e.body).slice(0, 160) + (e.body.length > 160 ? '...' : '') : '')
+          }));
+          examplesByCat[name] = items;
+        }
+
+        for (const em of emails) {
+          const id = String(em.id || '');
+          if (!id) continue;
+
+          // If we have zero context for all categories, skip to avoid garbage guesses
+          const hasAnyContext = categoriesX.some(n => (summariesMap[n] && summariesMap[n].trim()) || (examplesByCat[n] && examplesByCat[n].length));
+          if (!hasAnyContext) {
+            choices[id] = [];
+            continue;
+          }
+
+          const chooserContext = categoriesX.map(name => ({
+            name,
+            summary: summariesMap[name] || '',
+            examples: (examplesByCat[name] || []).slice(0, 5)
+          }));
+
+          const SYSTEM = `You choose the single best category for an email from a provided list.
+- Use the category definitions and examples to avoid loose or garbage matches.
+- Prefer high-precision matches over vague ones.
+- If none fit reasonably, answer "Other".
+Return strictly valid JSON only: {"category":"<one of the provided names or Other>"}.`;
+          const USER = `CATEGORIES (with summaries and examples):
+${JSON.stringify(chooserContext, null, 2)}
+
+EMAIL:
+Subject: ${em.subject || 'No Subject'}
+From: ${em.from || 'Unknown Sender'}
+Body:
+${(em.body || em.snippet || '').slice(0, 1200)}
+
+Return only JSON.`;
+
+          let picked = 'Other';
+          try {
+            const resp = await openai.chat.completions.create({
+              model: 'o3',
+              messages: [
+                { role: 'system', content: SYSTEM },
+                { role: 'user', content: USER }
+              ],
+              max_completion_tokens: 60,
+              response_format: { type: 'json_object' }
+            });
+            const raw = resp.choices?.[0]?.message?.content || '';
+            let parsed = null;
+            try { parsed = JSON.parse(raw); } catch {
+              const m = raw.match(/\{[\s\S]*\}/);
+              if (m) { try { parsed = JSON.parse(m[0]); } catch {} }
+            }
+            const catRaw = parsed && typeof parsed.category === 'string' ? parsed.category : 'Other';
+            picked = matchToCurrentCategory(catRaw, categoriesX) || 'Other';
+          } catch (_) {
+            // fall back to keyword mapping
+            const kw = keywordCategorizeUnreplied(em.subject || '', em.body || em.snippet || '', em.from || '');
+            picked = matchToCurrentCategory(kw, categoriesX) || 'Other';
+          }
+          choices[id] = picked ? [picked] : [];
+        }
+
+        return res.json({ success: true, stage, choices });
+      } catch (e) {
+        console.error('summary stage failed:', e);
+        return res.json({ success: true, stage, choices: {} });
+      }
+    }
+
     if (stage === 'similarity') {
       // Precompute embeddings per category for DB items (subject+snippet+body)
       const catVecs = new Map();
@@ -7169,22 +7253,57 @@ app.post('/api/suggest-categories', async (req, res) => {
     }
 
     if (stage === 'sender') {
-      // Sender affinity: categories where >= 25% contain this sender
+      // Sender affinity: categories where sender appears in at least 3 emails/threads (participated)
+      // Build thread buckets by category using responseId link where possible
+      const responses = loadResponseEmails() || [];
+      const responseById = new Map(responses.map(r => [r.id, r]));
+      const threads = loadEmailThreads() || [];
+      const threadsByCat = new Map();
+      for (const t of threads) {
+        // determine category via responseId -> response category
+        let cat = '';
+        if (t && t.responseId && responseById.has(t.responseId)) {
+          cat = responseById.get(t.responseId).category || '';
+        }
+        if (!cat) continue;
+        if (!threadsByCat.has(cat)) threadsByCat.set(cat, []);
+        threadsByCat.get(cat).push(t);
+      }
+
       for (const em of emails) {
         const id = String(em.id || '');
         const sender = __extractEmailAddress(em.from || '');
         const hits = [];
         for (const name of categoriesX) {
           const items = byCat.get(name) || [];
-          if (!items.length) continue;
-          const cnt = items.reduce((acc, e) => {
+          let cnt = 0;
+
+          // Count DB emails (originalFrom/from match)
+          for (const e of items) {
             const o = __extractEmailAddress(e.originalFrom || e.from || '');
-            return acc + (o.includes(sender) || sender.includes(o) ? 1 : 0);
-          }, 0);
-          const ratio = cnt / items.length;
-          if (ratio >= 0.25) hits.push({ name, ratio });
+            if (o && (o === sender)) cnt++;
+          }
+
+          // Count threads participation (sender appears as from or in to)
+          const tlist = threadsByCat.get(name) || [];
+          for (const t of tlist) {
+            const msgs = Array.isArray(t.messages) ? t.messages : [];
+            let participated = false;
+            for (const m of msgs) {
+              const fromAddr = __extractEmailAddress(m.from || '');
+              if (fromAddr === sender) { participated = true; break; }
+              const toArr = Array.isArray(m.to) ? m.to : (m.to ? [m.to] : []);
+              if (toArr.some(x => __extractEmailAddress(x || '') === sender)) { participated = true; break; }
+            }
+            if (participated) cnt++;
+          }
+
+          if (cnt >= 3) {
+            hits.push({ name, count: cnt });
+          }
         }
-        hits.sort((a,b) => b.ratio - a.ratio || a.name.localeCompare(b.name));
+
+        hits.sort((a,b) => b.count - a.count || a.name.localeCompare(b.name));
         choices[id] = hits.length ? hits.map(h => h.name) : [];
       }
       return res.json({ success: true, stage, choices });
@@ -7226,6 +7345,21 @@ app.post('/api/suggest-categories', async (req, res) => {
           if (best) subjToCat.set(key, best);
         }
 
+        // Also build thread subject -> category map by linking thread.responseId to response emails
+        const threadSubjToCat = new Map();
+        try {
+          const threads = loadEmailThreads() || [];
+          const responses = loadResponseEmails() || [];
+          const responseById = new Map(responses.map(r => [r.id, r]));
+          for (const t of threads) {
+            const cat = (t && t.responseId && responseById.get(t.responseId)) ? (responseById.get(t.responseId).category || '') : '';
+            if (!cat) continue;
+            const skey = normSubj(t.subject || '');
+            if (!skey) continue;
+            if (!threadSubjToCat.has(skey)) threadSubjToCat.set(skey, cat);
+          }
+        } catch (_) {}
+
         // Precompute subject embeddings for DB items (cached)
         const dbVecs = [];
         for (const it of dbItems) {
@@ -7250,7 +7384,7 @@ app.post('/api/suggest-categories', async (req, res) => {
 
           // Exact subject equality mapping (normalized)
           const key = normSubj(sub);
-          const exactCat = subjToCat.get(key);
+          const exactCat = subjToCat.get(key) || threadSubjToCat.get(key);
           if (exactCat) {
             const mapped = matchToCurrentCategory(exactCat, categoriesX) || exactCat;
             choices[id] = mapped ? [mapped] : [];

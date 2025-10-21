@@ -3155,13 +3155,20 @@ const pillsHtml = catNames.map(cat => {
 
                 if (threadData && Array.isArray(threadData.messages)) {
                     const metaEmail = (Array.isArray(allEmails) ? allEmails : []).find(e => e && e.id === emailId) || null;
+                    const categories = (Array.isArray(metaEmail?.categories) && metaEmail.categories.length)
+                        ? metaEmail.categories
+                        : (metaEmail?.category ? [metaEmail.category] : []);
                     window.currentThreadContext = {
                         emailId,
                         subject,
-                        category: metaEmail && metaEmail.category ? metaEmail.category : '',
+                        categories,
                         messages: threadData.messages
                     };
-                    renderThreadInPane(subject, threadData.messages, window.currentThreadContext.category);
+                    // Seed current context for Generate Response buttons
+                    window.currentContextCategories = categories.slice();
+                    currentContextCategory = categories[0] || '';
+                    window.currentContextEmailId = emailId;
+                    renderThreadInPane(subject, threadData.messages, currentContextCategory);
                 } else {
                     if (threadPane) {
                         const bodyEl = threadPane.querySelector('.thread-body');
@@ -3295,12 +3302,19 @@ const pillsHtml = catNames.map(cat => {
                 if (subjectInput) subjectInput.value = subj;
                 if (emailBodyInput) emailBodyInput.value = body;
 
-                // Expose "See Category Notes" and "See Category Summary" for the thread's category
-                window.currentContextCategory = ctx.category || '';
+                // Expose contextual buttons for all associated categories and email notes
+                const cats = Array.isArray(ctx.categories) && ctx.categories.length
+                    ? ctx.categories.slice()
+                    : (ctx.category ? [ctx.category] : []);
+                window.currentContextCategories = cats;
+                currentContextCategory = cats[0] || '';
+
                 const seeNotesBtn = document.getElementById('seeCategoryNotesBtn');
                 const seeSummaryBtn = document.getElementById('seeCategorySummaryBtn');
+                const seeEmailNotesBtn = document.getElementById('seeEmailNotesBtn');
+
                 if (seeNotesBtn) {
-                    if (window.currentContextCategory) {
+                    if (cats.length) {
                         seeNotesBtn.style.display = 'inline-block';
                         seeNotesBtn.onclick = showSeeCategoryNotesModal;
                     } else {
@@ -3309,12 +3323,21 @@ const pillsHtml = catNames.map(cat => {
                     }
                 }
                 if (seeSummaryBtn) {
-                    if (window.currentContextCategory) {
+                    if (cats.length) {
                         seeSummaryBtn.style.display = 'inline-block';
-                        seeSummaryBtn.onclick = () => showCategorySummaryModal(window.currentContextCategory);
+                        seeSummaryBtn.onclick = () => showAggregateCategorySummariesModal(cats);
                     } else {
                         seeSummaryBtn.style.display = 'none';
                         seeSummaryBtn.onclick = null;
+                    }
+                }
+                if (seeEmailNotesBtn) {
+                    if (window.currentContextEmailId) {
+                        seeEmailNotesBtn.style.display = 'inline-block';
+                        seeEmailNotesBtn.onclick = showEmailNotesForContext;
+                    } else {
+                        seeEmailNotesBtn.style.display = 'none';
+                        seeEmailNotesBtn.onclick = null;
                     }
                 }
             } catch (e) {
@@ -3352,12 +3375,15 @@ const pillsHtml = catNames.map(cat => {
         }
 
         // Generate Response Modal functionality
-        let unrepliedEmails = [];
-        let currentGeneratedResponse = '';
-        // Category notes support for Generate Response workflow
-        let currentContextCategory = '';
-        let cachedCategoryNotes = [];
-        let cachedGlobalNotes = [];
+let unrepliedEmails = [];
+let currentGeneratedResponse = '';
+// Category notes support for Generate Response workflow
+let currentContextCategory = '';
+let currentContextCategories = [];
+let cachedCategoryNotes = [];
+let cachedGlobalNotes = [];
+// Email context for "See Email Notes" in Generate Response flow
+window.currentContextEmailId = window.currentContextEmailId || '';
 
         async function generateResponse() {
             // Show the Generate Response modal
@@ -3382,6 +3408,17 @@ const pillsHtml = catNames.map(cat => {
             
             // Clear the cached response
             currentGeneratedResponse = '';
+            currentContextCategory = '';
+            window.currentContextCategories = [];
+            window.currentContextEmailId = '';
+
+            // Hide contextual buttons by default
+            const seeNotesBtn = document.getElementById('seeCategoryNotesBtn');
+            const seeSummaryBtn = document.getElementById('seeCategorySummaryBtn');
+            const seeEmailNotesBtn = document.getElementById('seeEmailNotesBtn');
+            if (seeNotesBtn) { seeNotesBtn.style.display = 'none'; seeNotesBtn.onclick = null; }
+            if (seeSummaryBtn) { seeSummaryBtn.style.display = 'none'; seeSummaryBtn.onclick = null; }
+            if (seeEmailNotesBtn) { seeEmailNotesBtn.style.display = 'none'; seeEmailNotesBtn.onclick = null; }
             
             // Remove any existing justification section
             const existingJustification = document.getElementById('justificationSection');
@@ -3598,13 +3635,18 @@ const pillsHtml = catNames.map(cat => {
             document.getElementById('subjectInput').value = email.subject;
             document.getElementById('emailBodyInput').value = email.body;
 
-            // If a category is present on the test email, set current context category
-            // and reveal the "See Category Notes" and "See Category Summary" buttons to keep UX consistent with inbox emails.
-            currentContextCategory = email.category || '';
+            // If categories are present on the test email, set context categories (may be multiple)
+            const cats = Array.isArray(email?.categories) && email.categories.length ? email.categories.slice() : (email.category ? [email.category] : []);
+            window.currentContextCategories = cats;
+            currentContextCategory = cats[0] || '';
+            window.currentContextEmailId = email.id || '';
+
             const seeNotesBtn = document.getElementById('seeCategoryNotesBtn');
             const seeSummaryBtn = document.getElementById('seeCategorySummaryBtn');
+            const seeEmailNotesBtn = document.getElementById('seeEmailNotesBtn');
+
             if (seeNotesBtn) {
-                if (currentContextCategory) {
+                if (cats.length) {
                     seeNotesBtn.style.display = 'inline-block';
                     seeNotesBtn.onclick = showSeeCategoryNotesModal;
                 } else {
@@ -3613,12 +3655,21 @@ const pillsHtml = catNames.map(cat => {
                 }
             }
             if (seeSummaryBtn) {
-                if (currentContextCategory) {
+                if (cats.length) {
                     seeSummaryBtn.style.display = 'inline-block';
-                    seeSummaryBtn.onclick = () => showCategorySummaryModal(currentContextCategory);
+                    seeSummaryBtn.onclick = () => showAggregateCategorySummariesModal(cats);
                 } else {
                     seeSummaryBtn.style.display = 'none';
                     seeSummaryBtn.onclick = null;
+                }
+            }
+            if (seeEmailNotesBtn) {
+                if (window.currentContextEmailId) {
+                    seeEmailNotesBtn.style.display = 'inline-block';
+                    seeEmailNotesBtn.onclick = showEmailNotesForContext;
+                } else {
+                    seeEmailNotesBtn.style.display = 'none';
+                    seeEmailNotesBtn.onclick = null;
                 }
             }
             
@@ -3866,12 +3917,18 @@ function mapToCurrentCategory(name) {
             document.getElementById('subjectInput').value = email.subject;
             document.getElementById('emailBodyInput').value = email.body;
             
-            // Set current category and reveal "See Category Notes" and "See Category Summary" buttons
-            currentContextCategory = email.category || '';
+            // Set current categories (may be multiple) and expose contextual buttons
+            const cats = Array.isArray(email?.categories) && email.categories.length ? email.categories.slice() : (email.category ? [email.category] : []);
+            window.currentContextCategories = cats;
+            currentContextCategory = cats[0] || '';
+            window.currentContextEmailId = email.id || '';
+
             const seeNotesBtn = document.getElementById('seeCategoryNotesBtn');
             const seeSummaryBtn = document.getElementById('seeCategorySummaryBtn');
+            const seeEmailNotesBtn = document.getElementById('seeEmailNotesBtn');
+
             if (seeNotesBtn) {
-                if (currentContextCategory) {
+                if (cats.length) {
                     seeNotesBtn.style.display = 'inline-block';
                     seeNotesBtn.onclick = showSeeCategoryNotesModal;
                 } else {
@@ -3880,12 +3937,21 @@ function mapToCurrentCategory(name) {
                 }
             }
             if (seeSummaryBtn) {
-                if (currentContextCategory) {
+                if (cats.length) {
                     seeSummaryBtn.style.display = 'inline-block';
-                    seeSummaryBtn.onclick = () => showCategorySummaryModal(currentContextCategory);
+                    seeSummaryBtn.onclick = () => showAggregateCategorySummariesModal(cats);
                 } else {
                     seeSummaryBtn.style.display = 'none';
                     seeSummaryBtn.onclick = null;
+                }
+            }
+            if (seeEmailNotesBtn) {
+                if (window.currentContextEmailId) {
+                    seeEmailNotesBtn.style.display = 'inline-block';
+                    seeEmailNotesBtn.onclick = showEmailNotesForContext;
+                } else {
+                    seeEmailNotesBtn.style.display = 'none';
+                    seeEmailNotesBtn.onclick = null;
                 }
             }
 
@@ -11264,10 +11330,11 @@ function ensureSuggestCategoriesModal() {
             <div style="padding: 12px 16px; border-bottom: 1px solid #e9ecef;">
                 <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
                     <div style="font-weight:600; color:#333;">Additional Keywords</div>
-                    <div style="display:flex; gap:8px;">
-                        <button id="sugAddKwBtn" class="select-email-btn" style="background:#28a745; padding:6px 10px;">+ Add</button>
-                        <button id="sugFindKwBtn" class="select-email-btn" style="background:#6f42c1; padding:6px 10px;">Find by Keywords</button>
-                    </div>
+                                    <div style="display:flex; gap:8px;">
+                                        <button type="button" id="seeCategorySummaryBtn" class="select-email-btn" style="display:none;">See Category Summary</button>
+                                        <button type="button" id="seeCategoryNotesBtn" class="select-email-btn" style="display:none;">See Category Notes</button>
+                                        <button type="button" id="seeEmailNotesBtn" class="select-email-btn" style="display:none;">See Email Notes</button>
+                                    </div>
                 </div>
                 <div id="suggestKeywordsEditor"></div>
                 <div style="color:#666; font-size:12px; margin-top:6px;">
@@ -12587,9 +12654,12 @@ function getCategorySeedTokens(name) {
 
             // Set heading
             const titleEl = document.getElementById('seeNotesCategoryTitle');
+            const cats = (Array.isArray(window.currentContextCategories) && window.currentContextCategories.length)
+                ? window.currentContextCategories.slice()
+                : (currentContextCategory ? [currentContextCategory] : []);
             if (titleEl) {
-                titleEl.textContent = currentContextCategory
-                    ? `Notes for: ${currentContextCategory}`
+                titleEl.textContent = cats.length
+                    ? `Notes for: ${cats.join(', ')}`
                     : 'Category Notes';
             }
 
@@ -12607,8 +12677,11 @@ function getCategorySeedTokens(name) {
                 const data = await resp.json();
                 const allNotes = Array.isArray(data.notes) ? data.notes : [];
 
-                cachedCategoryNotes = allNotes.filter(n => (n.category === currentContextCategory));
-                cachedGlobalNotes = allNotes.filter(n => (n.scope === 'GLOBAL' && n.category !== currentContextCategory));
+                const cats = (Array.isArray(window.currentContextCategories) && window.currentContextCategories.length)
+                    ? window.currentContextCategories
+                    : (currentContextCategory ? [currentContextCategory] : []);
+                cachedCategoryNotes = allNotes.filter(n => cats.includes(n.category));
+                cachedGlobalNotes = allNotes.filter(n => (n.scope === 'GLOBAL' && !cats.includes(n.category)));
 
                 renderSeeCategoryNotesLists();
 
@@ -14754,6 +14827,89 @@ function lmOpenEditCategories() {
     } catch (e) {
         console.error('lmOpenEditCategories failed:', e);
         showErrorPopup('Failed to open Edit Categories.', 'Open Failed');
+    }
+}
+/* ===== Aggregate Category Summaries (multi-category view) ===== */
+function ensureAggregateCategorySummariesModal() {
+    let modal = document.getElementById('aggregateCategorySummariesModal');
+    if (modal) return modal;
+    modal = document.createElement('div');
+    modal.id = 'aggregateCategorySummariesModal';
+    modal.className = 'modal';
+    modal.innerHTML = `
+        <div class="modal-content" style="max-width: 900px; max-height: 80vh; display:flex; flex-direction:column;">
+            <div class="modal-header">
+                <h2 class="modal-title">Category Summaries</h2>
+                <button class="close" onclick="closeAggregateCategorySummariesModal()">&times;</button>
+            </div>
+            <div id="aggregateSummariesBody" style="padding:16px; flex:1 1 auto; overflow:auto;">
+                <div class="loading">Loading summaries...</div>
+            </div>
+        </div>
+    `;
+    modal.addEventListener('click', (ev) => { if (ev.target === modal) closeAggregateCategorySummariesModal(); });
+    document.body.appendChild(modal);
+    return modal;
+}
+function closeAggregateCategorySummariesModal() {
+    const modal = document.getElementById('aggregateCategorySummariesModal');
+    if (modal) modal.style.display = 'none';
+}
+async function showAggregateCategorySummariesModal(categories) {
+    try {
+        const cats = Array.isArray(categories) ? categories.slice() : (categories ? [categories] : []);
+        const modal = ensureAggregateCategorySummariesModal();
+        const body = document.getElementById('aggregateSummariesBody');
+        if (body) body.innerHTML = '<div class="loading">Loading summaries...</div>';
+        modal.style.display = 'block';
+
+        let summaries = {};
+        try {
+            const resp = await fetch('/api/category-summaries');
+            const data = await resp.json();
+            summaries = (data && data.summaries) || {};
+        } catch (e) {
+            summaries = {};
+        }
+
+        const sections = cats.map(cat => {
+            const txt = summaries && typeof summaries[cat] === 'string' ? summaries[cat] : '(No summary saved)';
+            return `
+                <div style="border:1px solid #e9ecef; border-left:4px solid #5a67d8; border-radius:6px; background:#fff; padding:12px; margin-bottom:10px;">
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                        <div style="font-weight:600; color:#333;">${escapeHtml(cat)}</div>
+                        <div style="display:flex; gap:8px;">
+                            <button class="select-email-btn" style="background:#5a67d8;" onclick="showCategorySummaryModal('${String(cat).replace(/'/g, "\\'")}')">Open Q&A</button>
+                        </div>
+                    </div>
+                    <div style="white-space:pre-wrap; font-size:14px; color:#333;">${escapeHtml(txt)}</div>
+                </div>
+            `;
+        }).join('');
+
+        if (body) {
+            body.innerHTML = cats.length ? sections : '<div class="no-emails" style="padding:12px;">No categories selected.</div>';
+        }
+    } catch (e) {
+        console.error('showAggregateCategorySummariesModal failed:', e);
+        showErrorPopup('Failed to load category summaries.', 'Load Failed');
+    }
+}
+
+/* ===== See Email Notes from Generate Response ===== */
+function showEmailNotesForContext() {
+    try {
+        const id = window.currentContextEmailId || '';
+        if (!id) {
+            showErrorPopup('No email selected for notes.', 'No Email');
+            return;
+        }
+        const modal = ensureEmailNotesModal();
+        modal.style.display = 'block';
+        loadEmailNotesMain(id);
+    } catch (e) {
+        console.error('showEmailNotesForContext failed:', e);
+        showErrorPopup('Failed to open email notes.', 'Open Failed');
     }
 }
 </script>
