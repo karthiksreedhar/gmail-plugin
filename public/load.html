@@ -699,7 +699,12 @@
     host.appendChild(chip);
 
     // inline suggested categories as chips with dismiss (×)
-    const suggs = Array.isArray(it.suggestedCategories) ? it.suggestedCategories : [];
+    // Filter "Other" unless it's the only suggestion from all stages
+    const suggsRaw = Array.isArray(it.suggestedCategories) ? it.suggestedCategories : [];
+    const hasNonOther = suggsRaw.some(c => String(c || '').toLowerCase() !== 'other');
+    const suggs = hasNonOther
+      ? suggsRaw.filter(c => String(c || '').toLowerCase() !== 'other')
+      : (suggsRaw.length && suggsRaw.every(c => String(c || '').toLowerCase() === 'other') ? ['Other'] : []);
     suggs.forEach((name) => {
       const s = document.createElement('span');
       s.className = 'chip predicted';
@@ -810,6 +815,8 @@
         body: typeof e.body === 'string' ? e.body : (e.snippet || ''),
         from: String(e.from || '')
       })).filter(x => x.id);
+      // By default, run fallback aggregation on all items; this may be narrowed after "all" stage
+      let targets = minimal;
 
       // Try unified server-side "all" stage first. This runs the 5-step pipeline,
       // excludes "Other" from consideration, and logs results per email on the server.
@@ -829,16 +836,30 @@
               it.suggestedCategories = cats.slice();
             }
           });
-          return; // done
+          // If every item received at least one non-"Other" suggestion from server, we're done.
+          // Otherwise, fall back for only the items that still have empty suggestions so we can
+          // detect the "only Other" case and surface ["Other"] when appropriate.
+          const pendingIds = new Set();
+          items.forEach(e => {
+            if (!Array.isArray(e.suggestedCategories) || e.suggestedCategories.length === 0) {
+              pendingIds.add(String(e.id));
+            }
+          });
+          if (pendingIds.size === 0) {
+            return; // done
+          }
+          targets = minimal.filter(m => pendingIds.has(String(m.id)));
         }
       } catch(_) {
         // fall through to client-side fallback aggregator
       }
 
-      // Fallback: multi-stage aggregator (filters out "Other" locally)
+      // Fallback: multi-stage aggregator (tracks "Other" visibility and only returns "Other"
+      // if no non-Other suggestions appear across all stages)
       const stageOrder = ['subject-nn','body-nn','similarity','subject','body','sender'];
       const agg = new Map(); // id -> Map<cat,{count, firstIx}>
-      minimal.forEach(m => agg.set(m.id, new Map()));
+      const sawOther = new Map(); // id -> boolean (saw "Other" in any stage)
+      targets.forEach(m => { agg.set(m.id, new Map()); sawOther.set(m.id, false); });
 
       for (let si = 0; si < stageOrder.length; si++){
         const stage = stageOrder[si];
@@ -847,7 +868,7 @@
           const resp = await fetch('/api/suggest-categories', {
             method:'POST',
             headers:{'Content-Type':'application/json'},
-            body: JSON.stringify({ emails: minimal, stage })
+            body: JSON.stringify({ emails: targets, stage })
           });
           data = await resp.json().catch(()=>({}));
           if (!resp.ok || !data || data.success !== true || !data.choices) continue;
@@ -860,7 +881,8 @@
           if (!per) return;
           cats.forEach(c => {
             const name = String(c || '').trim();
-            if (!name || name.toLowerCase() === 'other') return; // exclude Other in suggestions
+            if (!name) return;
+            if (name.toLowerCase() === 'other') { sawOther.set(id, true); return; }
             if (!per.has(name)) per.set(name, {count:1, firstIx: si});
             else {
               const entry = per.get(name);
@@ -872,13 +894,18 @@
         });
       }
 
-      // assign sorted suggestions back to items
-      items.forEach(e => {
-        const per = agg.get(e.id);
-        if (!per || !per.size){ e.suggestedCategories = []; return; }
+      // assign sorted suggestions back to only target items
+      targets.forEach(t => {
+        const per = agg.get(t.id);
+        const it = items.find(e => String(e.id) === String(t.id));
+        if (!it) return;
+        if (!per || !per.size){
+          it.suggestedCategories = sawOther.get(t.id) ? ['Other'] : [];
+          return;
+        }
         const arr = Array.from(per.entries()).map(([name, meta]) => ({ name, ...meta }));
         arr.sort((a,b) => (b.count - a.count) || (a.firstIx - b.firstIx) || a.name.localeCompare(b.name));
-        e.suggestedCategories = arr.map(x => x.name);
+        it.suggestedCategories = arr.map(x => x.name);
       });
     }catch(_){}
   }
