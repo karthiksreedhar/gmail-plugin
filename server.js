@@ -3383,7 +3383,7 @@ app.post('/api/categories/add', (req, res) => {
  * Input: { items: [{ id, subject, from, date, category, tags: { unreplied, thread } }] }
  * Behavior: Persist to unreplied-emails.json with given category and tags; update categories list with any new names.
  */
-app.post('/api/seed-categories/add-all', (req, res) => {
+app.post('/api/seed-categories/add-all', async (req, res) => {
   try {
     const { items } = req.body || {};
     if (!Array.isArray(items) || items.length === 0) {
@@ -3567,6 +3567,27 @@ app.post('/api/seed-categories/add-all', (req, res) => {
     fs.writeFileSync(paths.UNREPLIED_EMAILS_PATH, JSON.stringify({ emails: unreplied }, null, 2));
     fs.writeFileSync(paths.RESPONSE_EMAILS_PATH, JSON.stringify({ emails: responses }, null, 2));
     fs.writeFileSync(paths.EMAIL_THREADS_PATH, JSON.stringify({ threads }, null, 2));
+
+    // After persisting, auto-generate summaries for any categories that don't yet have one.
+    try {
+      const allCats = loadCategoriesList() || [];
+      const existingSummaries = loadCategorySummaries() || {};
+      const missingCats = (allCats || []).filter(name => !existingSummaries[name]);
+      if (missingCats.length) {
+        try {
+          // Reuse existing endpoint logic via internal HTTP call
+          await fetch(`http://localhost:${PORT}/api/generate-category-summaries`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ categories: missingCats, overwrite: false })
+          });
+        } catch (e) {
+          console.warn('Internal summary generation request failed:', e?.message || e);
+        }
+      }
+    } catch (e) {
+      console.warn('Auto-generate category summaries failed:', e?.message || e);
+    }
 
     return res.json({
       success: true,

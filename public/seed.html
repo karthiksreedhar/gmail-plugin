@@ -397,6 +397,10 @@
       <div class="spinner"></div>
       <div id="ovTitle" class="overlay-title">Loading</div>
       <div id="ovMsg" class="overlay-msg">Please wait...</div>
+      <div id="ovActions" class="overlay-actions" style="display:none; margin-top:12px; display:flex; gap:8px; justify-content:center;">
+        <button id="ovCancel" class="btn btn-secondary">Cancel</button>
+        <button id="ovConfirm" class="btn btn-primary">Confirm</button>
+      </div>
     </div>
   </div>
 
@@ -426,10 +430,66 @@
   function showOverlay(title, msg){
     document.getElementById('ovTitle').textContent = title || 'Loading';
     document.getElementById('ovMsg').textContent = msg || 'Please wait...';
+    // Reset overlay to loading state
+    const spin = document.querySelector('#overlay .spinner');
+    const actions = document.getElementById('ovActions');
+    if (spin) spin.style.display = '';
+    if (actions) actions.style.display = 'none';
     document.getElementById('overlay').style.display = 'flex';
   }
   function hideOverlay(){
-    document.getElementById('overlay').style.display = 'none';
+    const ov = document.getElementById('overlay');
+    if (ov) ov.style.display = 'none';
+    const actions = document.getElementById('ovActions');
+    if (actions) actions.style.display = 'none';
+    const spin = document.querySelector('#overlay .spinner');
+    if (spin) spin.style.display = '';
+  }
+
+  // Styled inline confirmation dialog (uses overlay)
+  function showConfirmDialog(title, message, options){
+    return new Promise((resolve) => {
+      const opts = options || {};
+      const confirmText = opts.confirmText || 'Confirm';
+      const cancelText = opts.cancelText || 'Cancel';
+
+      const ov = document.getElementById('overlay');
+      const spin = document.querySelector('#overlay .spinner');
+      const actions = document.getElementById('ovActions');
+      const btnConfirm = document.getElementById('ovConfirm');
+      const btnCancel = document.getElementById('ovCancel');
+
+      // Set content
+      document.getElementById('ovTitle').textContent = title || 'Confirm';
+      document.getElementById('ovMsg').textContent = message || '';
+      if (btnConfirm) btnConfirm.textContent = confirmText;
+      if (btnCancel) btnCancel.textContent = cancelText;
+
+      // Show overlay in confirm mode (hide spinner, show actions)
+      if (spin) spin.style.display = 'none';
+      if (actions) actions.style.display = 'flex';
+      if (ov) ov.style.display = 'flex';
+
+      // One-time handlers
+      const cleanup = () => {
+        if (actions) actions.style.display = 'none';
+        if (spin) spin.style.display = '';
+        if (ov) ov.style.display = 'none';
+        if (btnConfirm) btnConfirm.removeEventListener('click', onConfirm);
+        if (btnCancel) btnCancel.removeEventListener('click', onCancel);
+        document.removeEventListener('keydown', onKey);
+      };
+      const onConfirm = () => { cleanup(); resolve(true); };
+      const onCancel = () => { cleanup(); resolve(false); };
+      const onKey = (e) => {
+        if (e.key === 'Escape') { onCancel(); }
+        if (e.key === 'Enter') { onConfirm(); }
+      };
+
+      if (btnConfirm) btnConfirm.addEventListener('click', onConfirm);
+      if (btnCancel) btnCancel.addEventListener('click', onCancel);
+      document.addEventListener('keydown', onKey);
+    });
   }
 
   // Progress overlay utilities
@@ -975,10 +1035,10 @@
     const toAdd = allBuilt.filter(isCategorized);
     const skippedCount = allBuilt.length - toAdd.length;
 
-    // Confirmation popup if there are uncategorized emails
+    // Inline confirmation (styled overlay) if there are uncategorized emails
     if (skippedCount > 0) {
-      const msg = `${skippedCount} email${skippedCount === 1 ? '' : 's'} have not been categorized and will not be added to database - please press Confirm to proceed`;
-      const proceed = window.confirm(msg);
+      const msg = `${skippedCount} email${skippedCount === 1 ? '' : 's'} have not been categorized and will not be added to database.`;
+      const proceed = await showConfirmDialog('Uncategorized emails', msg, { confirmText: 'Proceed', cancelText: 'Review' });
       if (!proceed) return;
     }
 
@@ -987,8 +1047,46 @@
       return;
     }
 
-    showOverlay('Adding to Database', `Persisting ${toAdd.length} item${toAdd.length === 1 ? '' : 's'}...`);
-    try{
+    try {
+      // 1) Determine which categories are missing summaries BEFORE persisting (so we can show per-category progress)
+      let existingSummaries = {};
+      try {
+        const r = await fetch('/api/category-summaries');
+        const d = await r.json();
+        existingSummaries = (d && d.summaries) || {};
+      } catch (_) {
+        existingSummaries = {};
+      }
+
+      // Collect all categories from payload (primary + additional)
+      const catsSet = new Set();
+      toAdd.forEach(rec => {
+        if (rec.category) catsSet.add(rec.category);
+        if (Array.isArray(rec.categories)) rec.categories.forEach(c => { if (c) catsSet.add(c); });
+      });
+      const allCats = Array.from(catsSet);
+      const missingCats = allCats.filter(name => !existingSummaries || !existingSummaries[name]);
+
+      // 2) Generate missing summaries sequentially with UI feedback
+      for (const cat of missingCats) {
+        // Update overlay to show the current category being summarized
+        showOverlay(`Generating Summary for ${cat}`, `Creating a concise knowledge summary for "${cat}"…`);
+        try {
+          const resp = await fetch('/api/generate-category-summaries', {
+            method:'POST',
+            headers:{'Content-Type':'application/json'},
+            body: JSON.stringify({ categories: [cat], overwrite: false })
+          });
+          // Best-effort: ignore response content; UI just progresses to next
+          await resp.json().catch(() => ({}));
+        } catch (e) {
+          // Continue even if a single category fails; server-side fallback will try again later if needed
+          console.warn('Failed to generate summary for', cat, e?.message || e);
+        }
+      }
+
+      // 3) Persist items to database
+      showOverlay('Adding to Database', `Persisting ${toAdd.length} item${toAdd.length === 1 ? '' : 's'}…`);
       const res = await fetch('/api/seed-categories/add-all', {
         method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({ items: toAdd })
@@ -997,10 +1095,11 @@
       if (!res.ok || !data || data.success !== true){
         throw new Error((data && data.error) || 'Add failed');
       }
+
       hideOverlay();
       // Navigate back to home
       window.location.href = '/';
-    }catch(e){
+    } catch(e){
       console.error('Add all failed:', e);
       hideOverlay();
       alert('Failed to add items. Please try again.');
