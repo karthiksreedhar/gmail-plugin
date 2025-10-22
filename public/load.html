@@ -580,10 +580,8 @@
         </div>
       `;
 
-      // Build suggestions row (multiple yellow tags if available)
-      const suggHtml = (Array.isArray(it.suggestedCategories) && it.suggestedCategories.length)
-        ? `<div class="sugg-row">` + it.suggestedCategories.map(c => `<span class="sugg-pill" title="Suggested">${escapeHtml(c)}</span>`).join('') + `</div>`
-        : '';
+      // Build suggestions row inline with chips (handled in renderChipsEditorForItem)
+      const suggHtml = '';
 
       div.innerHTML = `
         <div class="it-body">
@@ -699,6 +697,26 @@
       refreshItemUI(id);
     };
     host.appendChild(chip);
+
+    // inline suggested categories as chips with dismiss (×)
+    const suggs = Array.isArray(it.suggestedCategories) ? it.suggestedCategories : [];
+    suggs.forEach((name) => {
+      const s = document.createElement('span');
+      s.className = 'chip predicted';
+      s.innerHTML = `<span>${escapeHtml(name)}</span> <span class="x" title="Dismiss suggestion">×</span>`;
+      // clicking label applies this category
+      s.querySelector('span:first-child').onclick = (ev) => {
+        ev.stopPropagation();
+        commitCategory(id, name);
+      };
+      // clicking × removes the suggestion chip
+      s.querySelector('.x').onclick = (ev) => {
+        ev.stopPropagation();
+        it.suggestedCategories = (it.suggestedCategories || []).filter(c => c !== name);
+        refreshItemUI(id);
+      };
+      host.appendChild(s);
+    });
 
     // input + suggestions (choose from categories)
     const wrapper = document.createElement('div');
