@@ -2515,6 +2515,25 @@
             font-weight: 500;
             color: #202124;
         }
+
+        /* Inline notes preview box */
+        .notes-preview {
+            background: #fffbe6;
+            border: 1px solid #ffe58f;
+            border-radius: 8px;
+            padding: 8px 10px;
+            margin-top: 8px;
+            font-size: 13px;
+            color: #5b5b00;
+            cursor: pointer;
+            max-height: 64px;
+            overflow: hidden;
+        }
+        .notes-preview .more {
+            color: #1a73e8;
+            margin-left: 8px;
+            font-weight: 500;
+        }
     </style>
 </head>
 <body>
@@ -3127,8 +3146,8 @@ const pillsHtml = catNames.map(cat => {
                         <div class="email-subject">${email.subject}</div>
                         <div class="email-meta-row">
                             <div class="email-categories">${pillsHtml}</div>
-                            <button class="select-email-btn" onclick="openEmailNotes('${email.id}', event)" title="View and add notes for this email">Notes</button>
                         </div>
+                        <div class="notes-preview" data-email-notes="${email.id}" style="display:none;"></div>
                     </div>
                     <div class="email-actions">
                         <button class="delete-thread-btn" onclick="deleteEmailThread('${email.id}', '${email.subject.replace(/'/g, "\\'")}', event)" title="Delete this thread">
@@ -3137,6 +3156,8 @@ const pillsHtml = catNames.map(cat => {
                     </div>
                 `;
                 
+                const __notesEl = emailDiv.querySelector(`.notes-preview[data-email-notes="${email.id}"]`);
+                if (__notesEl) { renderEmailNotesPreview(__notesEl, email.id); }
                 container.appendChild(emailDiv);
             }
         }
@@ -3438,9 +3459,16 @@ const pillsHtml = catNames.map(cat => {
                     <button class="reply-thread-btn" onclick="replyToCurrentThread()">Reply</button>
                 </div>
                 <div class="thread-body">
+                    <div id="thread-notes-preview" class="notes-preview" style="display:none;"></div>
                     ${cards || '<div class="no-emails" style="padding: 12px;">No messages in this thread.</div>'}
                 </div>
             `;
+            // Render email notes preview box for this thread
+            try {
+                const __tnp = threadPane.querySelector('#thread-notes-preview');
+                const __eid = (window.currentThreadContext && window.currentThreadContext.emailId) || '';
+                if (__tnp && __eid) renderEmailNotesPreview(__tnp, __eid);
+            } catch (_) {}
         }
 
         // Back to list view
@@ -14054,6 +14082,78 @@ async function addEmailNoteMain() {
     }
 }
 
+/* Inline notes preview helpers (cache, summarize, render) */
+window.__emailNotesCache = window.__emailNotesCache || {};
+
+async function getEmailNotesCached(emailId) {
+    try {
+        const key = String(emailId || '');
+        if (!key) return [];
+        if (window.__emailNotesCache[key]) return window.__emailNotesCache[key];
+        const r = await fetch(`/api/email-notes/${encodeURIComponent(key)}`);
+        const d = await r.json().catch(() => ({}));
+        const notes = Array.isArray(d.notes) ? d.notes : [];
+        window.__emailNotesCache[key] = notes;
+        return notes;
+    } catch (_) {
+        return [];
+    }
+}
+
+function summarizeNotes(notes, maxChars = 160, maxItems = 2) {
+    try {
+        const arr = (Array.isArray(notes) ? notes : []).map(n => String(n?.text || '').trim()).filter(Boolean);
+        if (!arr.length) return { text: '', truncated: false };
+        const picked = arr.slice(0, maxItems);
+        let text = picked.join(' • ');
+        let truncated = false;
+        if (text.length > maxChars) {
+            text = text.slice(0, maxChars - 1).trimEnd() + '…';
+            truncated = true;
+        }
+        // If there are more notes beyond maxItems, treat as truncated to show "View all"
+        if (arr.length > maxItems) truncated = true;
+        return { text, truncated };
+    } catch (_) {
+        return { text: '', truncated: false };
+    }
+}
+
+async function renderEmailNotesPreview(el, emailId) {
+    try {
+        if (!el || !emailId) return;
+        const notes = await getEmailNotesCached(emailId);
+        if (!Array.isArray(notes) || notes.length === 0) {
+            el.style.display = 'none';
+            el.textContent = '';
+            return;
+        }
+        const { text, truncated } = summarizeNotes(notes);
+        if (!text) {
+            el.style.display = 'none';
+            el.textContent = '';
+            return;
+        }
+        // Basic content
+        el.innerHTML = '';
+        const span = document.createElement('span');
+        span.textContent = text;
+        el.appendChild(span);
+        if (truncated) {
+            const more = document.createElement('span');
+            more.className = 'more';
+            more.textContent = 'View all';
+            el.appendChild(more);
+        }
+        el.style.display = 'block';
+        el.onclick = (ev) => {
+            try { if (ev && ev.stopPropagation) ev.stopPropagation(); } catch(_){}
+            openEmailNotes(emailId, ev);
+        };
+    } catch (_) {
+        try { el.style.display = 'none'; } catch(_){}
+    }
+}
 /* ===== End Per-email Notes (Main UI) ===== */
 
         // Load emails when page loads

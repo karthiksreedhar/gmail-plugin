@@ -505,7 +505,7 @@
     if (fill) fill.style.width = pct + '%';
   }
 
-  function startProgress(total = 400){
+  function startProgress(total = 200){
     progTotal = total;
     const ov = document.getElementById('progressOverlay');
     if (ov) ov.style.display = 'flex';
@@ -592,8 +592,8 @@
 
       // load seed list
       document.getElementById('leftStatus').textContent = 'Loading...';
-      // Show centered progress overlay and poll real progress (target ~400)
-      startProgress(400);
+      // Show centered progress overlay and poll real progress (target ~200)
+      startProgress(200);
       const r = await fetch('/api/seed-categories/list');
       const d = await r.json();
       if(!r.ok || !d.success){
