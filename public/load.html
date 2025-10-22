@@ -548,6 +548,7 @@
         console.warn('AI-enhanced categorize failed, keeping defaults:', e);
       }
 
+      await computeLoadMoreCategorySuggestions(loadItems);
       renderList();
       if (loadItems.length) selectItem(loadItems[0].id);
       document.getElementById('leftStatus').textContent = `${loadItems.length} loaded`;
@@ -785,7 +786,6 @@
   async function computeLoadMoreCategorySuggestions(items){
     try{
       if (!Array.isArray(items) || !items.length) return;
-      const stageOrder = ['subject-nn','body-nn','similarity','subject','body','sender'];
       const minimal = items.map(e => ({
         id: String(e.id || ''),
         subject: String(e.subject || ''),
@@ -793,6 +793,32 @@
         from: String(e.from || '')
       })).filter(x => x.id);
 
+      // Try unified server-side "all" stage first. This runs the 5-step pipeline,
+      // excludes "Other" from consideration, and logs results per email on the server.
+      try {
+        const resp = await fetch('/api/suggest-categories', {
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ emails: minimal, stage: 'all' })
+        });
+        const data = await resp.json().catch(()=>({}));
+        if (resp.ok && data && data.success === true && data.choices) {
+          Object.keys(data.choices || {}).forEach(id => {
+            const cats = Array.isArray(data.choices[id]) ? data.choices[id] : [];
+            const it = items.find(e => String(e.id) === String(id));
+            if (it) {
+              // Server already excludes "Other"; just assign in given order.
+              it.suggestedCategories = cats.slice();
+            }
+          });
+          return; // done
+        }
+      } catch(_) {
+        // fall through to client-side fallback aggregator
+      }
+
+      // Fallback: multi-stage aggregator (filters out "Other" locally)
+      const stageOrder = ['subject-nn','body-nn','similarity','subject','body','sender'];
       const agg = new Map(); // id -> Map<cat,{count, firstIx}>
       minimal.forEach(m => agg.set(m.id, new Map()));
 
@@ -816,7 +842,7 @@
           if (!per) return;
           cats.forEach(c => {
             const name = String(c || '').trim();
-            if (!name) return;
+            if (!name || name.toLowerCase() === 'other') return; // exclude Other in suggestions
             if (!per.has(name)) per.set(name, {count:1, firstIx: si});
             else {
               const entry = per.get(name);
