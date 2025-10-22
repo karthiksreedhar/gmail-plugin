@@ -7919,6 +7919,98 @@ Return only JSON.`;
   }
 });
 
+/**
+ * Semantic + keyword search of stored emails with notes
+ * POST /api/search-emails
+ * body: { query: string, limit?: number }
+ * returns: { success: true, emails: [ ...same shape as /api/response-emails ] }
+ *
+ * Notes:
+ * - Searches across subject, body, and per-email notes
+ * - Ranks using OpenAI embeddings (if available) + keyword hits as fallback/booster
+ * - Does not mutate any data; returns up to "limit" results (default 10)
+ */
+app.post('/api/search-emails', async (req, res) => {
+  try {
+    const { query, limit } = req.body || {};
+    const q = String(query || '').trim();
+    const topN = Math.max(1, Math.min(50, Number(limit) || 10));
+    if (!q) return res.json({ success: true, emails: [] });
+
+    // Load corpus (response emails drive the RHS list)
+    const responses = loadResponseEmails() || [];
+
+    // Load per-email notes (used to enrich document for search)
+    const notesStore = loadEmailNotesStore() || { notesByEmail: {}, updatedAt: '' };
+    const notesByEmail = (notesStore && typeof notesStore.notesByEmail === 'object') ? notesStore.notesByEmail : {};
+
+    // Build documents: subject + body + any notes
+    const corpus = responses.map(e => {
+      const notesArr = Array.isArray(notesByEmail[e.id]) ? notesByEmail[e.id] : [];
+      const notesText = notesArr.map(n => n && n.text ? String(n.text) : '').filter(Boolean).join('\n');
+      const text = [e.subject || '', e.body || e.snippet || '', notesText].join('\n').trim();
+      return { email: e, text };
+    });
+
+    // Basic keyword scoring (word-boundary counts) for robustness
+    const esc = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const tokens = q.toLowerCase().split(/\s+/).filter(Boolean);
+    const kwScore = (text) => {
+      if (!text) return 0;
+      const t = String(text || '').toLowerCase();
+      let sum = 0;
+      for (const tok of tokens) {
+        const re = new RegExp(`\\b${esc(tok)}\\b`, 'g');
+        const m = t.match(re);
+        if (m && m.length) sum += m.length;
+      }
+      return sum;
+    };
+
+    // Embedding scoring (cached via __embed)
+    let queryVec = null;
+    try {
+      queryVec = await __embed(q);
+    } catch (e) {
+      queryVec = null; // continue with keyword-only fallback
+    }
+
+    const scored = [];
+    for (const doc of corpus) {
+      let emb = 0;
+      if (queryVec) {
+        try {
+          const v = await __embed(String(doc.text || '').slice(0, 2000));
+          emb = __cosine(queryVec, v);
+        } catch (_) {
+          emb = 0;
+        }
+      }
+      const key = kwScore(`${doc.email.subject || ''}\n${doc.email.body || doc.email.snippet || ''}\n${doc.text || ''}`);
+      scored.push({ email: doc.email, emb, key });
+    }
+
+    // Normalize keyword score to [0,1]
+    const maxKey = scored.reduce((m, s) => Math.max(m, s.key), 0) || 1;
+    for (const s of scored) {
+      const keyNorm = s.key / maxKey;
+      // If embeddings available, weight 70% embedding + 30% keyword booster
+      // If not, use keyword only (tiny epsilon to break pure-zero ties)
+      s.score = queryVec ? (0.7 * s.emb + 0.3 * keyNorm) : (keyNorm + (s.key > 0 ? 1e-6 : 0));
+    }
+
+    // Sort by combined score and filter out completely irrelevant docs
+    scored.sort((a, b) => b.score - a.score);
+    const filtered = scored.filter(s => (queryVec ? (s.emb > 0 || s.key > 0) : s.key > 0));
+    const top = (filtered.length ? filtered : scored).slice(0, topN).map(s => s.email);
+
+    return res.json({ success: true, emails: top });
+  } catch (e) {
+    console.error('search-emails failed:', e);
+    return res.status(500).json({ success: false, error: 'Search failed' });
+  }
+});
+
 // Serve the main HTML file
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));

@@ -349,15 +349,46 @@
         .stats-bar {
             background: #ffffff;
             border-bottom: 1px solid #e0e0e0;
-            padding: 12px 24px;
+            padding: 20px 24px;
             display: flex;
             align-items: center;
             justify-content: space-between;
         }
 
+        /* Search bar */
+        .search-bar {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        .search-input {
+            width: 420px;
+            max-width: 560px;
+            padding: 12px 16px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            font-size: 16px;
+        }
+        .search-input:focus {
+            outline: none;
+            border-color: #4285f4;
+            box-shadow: 0 0 0 2px rgba(66,133,244,0.15);
+        }
+        /* Make the search/clear buttons larger without affecting other .select-email-btn */
+        #searchBtn,
+        #clearSearchBtn {
+            padding: 10px 16px;
+            font-size: 16px;
+            border-radius: 8px;
+        }
+
         .stats-info {
-            font-size: 18px;
+            font-size: 22px;
             color: #5f6368;
+        }
+        #currentFilter {
+            font-weight: 600;
+            color: #202124;
         }
 
         .stats-count {
@@ -2561,6 +2592,11 @@
                         <span id="currentFilter">All Emails</span>
                         <span class="stats-count">(<span id="displayedCount">-</span> emails)</span>
                     </div>
+                    <div class="search-bar">
+                        <input type="text" id="searchInput" class="search-input" placeholder="Search emails and notes…" />
+                        <button class="select-email-btn" id="searchBtn">Search</button>
+                        <button class="select-email-btn" id="clearSearchBtn" style="display:none; background:#6c757d;">Clear</button>
+                    </div>
                 </div>
 
                 <!-- Email List -->
@@ -3085,7 +3121,7 @@ const pillsHtml = catNames.map(cat => {
                 emailDiv.innerHTML = `
                     <div class="email-content">
                         <div class="email-header">
-                            <div class="email-from">${window.currentUserDisplayName || displayNameFromEmail(document.getElementById('currentUser')?.textContent || '')} → ${originalSender}</div>
+                            <div class="email-from">${originalSender}</div>
                             <div class="email-date">${formatDate(email.date)}</div>
                         </div>
                         <div class="email-subject">${email.subject}</div>
@@ -3118,6 +3154,127 @@ const pillsHtml = catNames.map(cat => {
 
         function updateDisplayStats(emails) {
             document.getElementById('displayedCount').textContent = emails.length;
+        }
+
+        // ===== Search (subjects, bodies, and notes via /api/search-emails) =====
+        let isSearchActive = false;
+        let lastSearchQuery = '';
+        let lastNonSearchFilter = 'all';
+
+        function initSearchBar() {
+            try {
+                const input = document.getElementById('searchInput');
+                const btn = document.getElementById('searchBtn');
+                const clearBtn = document.getElementById('clearSearchBtn');
+
+                if (input) {
+                    input.addEventListener('keydown', (ev) => {
+                        if (ev.key === 'Enter') {
+                            ev.preventDefault();
+                            performSearch();
+                        } else if (ev.key === 'Escape') {
+                            ev.preventDefault();
+                            clearSearch();
+                        }
+                    });
+                }
+                if (btn) {
+                    btn.addEventListener('click', () => performSearch());
+                }
+                if (clearBtn) {
+                    clearBtn.addEventListener('click', () => clearSearch());
+                }
+            } catch (e) {
+                console.error('initSearchBar failed:', e);
+            }
+        }
+
+        async function performSearch(q) {
+            try {
+                const input = document.getElementById('searchInput');
+                const clearBtn = document.getElementById('clearSearchBtn');
+                const container = document.getElementById('emailContainer');
+
+                const query = typeof q === 'string' ? q.trim() : String(input?.value || '').trim();
+                if (!query) {
+                    clearSearch();
+                    return;
+                }
+
+                // Save pre-search filter so "Clear" can restore
+                if (!isSearchActive) {
+                    lastNonSearchFilter = currentFilter;
+                }
+
+                if (container) container.innerHTML = '<div class="loading">Searching…</div>';
+
+                const resp = await fetch('/api/search-emails', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ query, limit: 10 })
+                });
+                const data = await resp.json().catch(() => ({}));
+
+                if (!resp.ok) {
+                    throw new Error(data.error || 'Search failed');
+                }
+
+                const results = Array.isArray(data.emails) ? data.emails : [];
+                isSearchActive = true;
+                lastSearchQuery = query;
+                currentFilter = `search:${query}`;
+
+                // Update header and render results in same format
+                const cf = document.getElementById('currentFilter');
+                if (cf) cf.textContent = `Search: "${query}"`;
+
+                displayEmails(results);
+                updateDisplayStats(results);
+
+                // Show "Clear" button
+                if (clearBtn) clearBtn.style.display = 'inline-block';
+
+                // Deactivate any sidebar selection to reflect search scope
+                try {
+                    document.querySelectorAll('.category-item').forEach(el => el.classList.remove('active'));
+                    const viewAll = document.getElementById('viewAll');
+                    if (viewAll) viewAll.classList.remove('active');
+                } catch (_) {}
+            } catch (e) {
+                console.error('performSearch failed:', e);
+                const container = document.getElementById('emailContainer');
+                if (container) container.innerHTML = '<div class="error">Search failed. Please try again.</div>';
+            }
+        }
+
+        function clearSearch() {
+            try {
+                const input = document.getElementById('searchInput');
+                const clearBtn = document.getElementById('clearSearchBtn');
+
+                if (input) input.value = '';
+                if (clearBtn) clearBtn.style.display = 'none';
+
+                isSearchActive = false;
+                lastSearchQuery = '';
+                currentFilter = 'all';
+
+                const cf = document.getElementById('currentFilter');
+                if (cf) cf.textContent = 'All Emails';
+
+                // Restore full list
+                displayEmails(allEmails || []);
+                updateDisplayStats(allEmails || []);
+
+                // Restore sidebar state to "View All"
+                try {
+                    document.querySelectorAll('.category-item').forEach(el => el.classList.remove('active'));
+                    const viewAll = document.getElementById('viewAll');
+                    if (viewAll) viewAll.classList.add('active');
+                } catch (_) {}
+            } catch (e) {
+                console.error('clearSearch failed:', e);
+            }
         }
 
         async function openEmailThread(emailId, subject) {
@@ -14003,6 +14160,7 @@ async function addEmailNoteMain() {
         document.addEventListener('DOMContentLoaded', function() {
             loadEmails();
             loadCurrentUser();
+            initSearchBar();
         });
 
         // Load current user on page load
