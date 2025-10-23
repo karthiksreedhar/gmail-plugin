@@ -698,6 +698,14 @@
     host.innerHTML = '';
     const it = loadItems.find(x => x.id === id);
     if (!it) return;
+    // Normalize suggestions and auto-promote primary (Plan B1) when predicted and non-Other suggestions exist
+    const suggs = normalizeSuggestionsList(it.suggestedCategories || []);
+    if (String(it.category || 'Other').trim().toLowerCase() === 'other' && it.__predicted === true) {
+      const firstNonOther = suggs.find(c => String(c || '').trim().toLowerCase() !== 'other');
+      if (firstNonOther) {
+        it.category = String(firstNonOther).trim();
+      }
+    }
     const name = it.category || 'Other';
 
     const chip = document.createElement('span');
@@ -727,12 +735,7 @@
     });
 
     // inline suggested categories as chips with dismiss (×)
-    // Filter "Other" unless it's the only suggestion from all stages
-    const suggsRaw = Array.isArray(it.suggestedCategories) ? it.suggestedCategories : [];
-    const hasNonOther = suggsRaw.some(c => String(c || '').toLowerCase() !== 'other');
-    const suggs = hasNonOther
-      ? suggsRaw.filter(c => String(c || '').toLowerCase() !== 'other')
-      : (suggsRaw.length && suggsRaw.every(c => String(c || '').toLowerCase() === 'other') ? ['Other'] : []);
+    // suggs already normalized above
     suggs.forEach((name) => {
       const s = document.createElement('span');
       s.className = 'chip predicted';
@@ -742,10 +745,11 @@
         ev.stopPropagation();
         commitCategory(id, name);
       };
-      // clicking × removes the suggestion chip
+      // clicking × removes the suggestion chip (case-insensitive)
       s.querySelector('.x').onclick = (ev) => {
         ev.stopPropagation();
-        it.suggestedCategories = (it.suggestedCategories || []).filter(c => c !== name);
+        const removeLc = String(name || '').trim().toLowerCase();
+        it.suggestedCategories = (it.suggestedCategories || []).filter(c => String(c || '').trim().toLowerCase() !== removeLc);
         refreshItemUI(id);
       };
       host.appendChild(s);
@@ -890,11 +894,23 @@
         const data = await resp.json().catch(()=>({}));
         if (resp.ok && data && data.success === true && data.choices) {
           Object.keys(data.choices || {}).forEach(id => {
-            const cats = Array.isArray(data.choices[id]) ? data.choices[id] : [];
+            const raw = Array.isArray(data.choices[id]) ? data.choices[id] : [];
+            // Deduplicate while preserving order
+            const seen = new Set();
+            const unique = raw.filter(c => {
+              const s = String(c || '').trim();
+              if (!s) return false;
+              const key = s.toLowerCase();
+              if (seen.has(key)) return false;
+              seen.add(key);
+              return true;
+            });
+            // If any non-"Other" exists, drop "Other" entirely from suggestions
+            const nonOther = unique.filter(c => String(c).toLowerCase() !== 'other');
+            const finalList = nonOther.length ? nonOther : (unique.every(c => String(c).toLowerCase() === 'other') ? ['Other'] : []);
             const it = items.find(e => String(e.id) === String(id));
             if (it) {
-              // Server already excludes "Other"; just assign in given order.
-              it.suggestedCategories = cats.slice();
+              it.suggestedCategories = finalList;
             }
           });
           // If every item received at least one non-"Other" suggestion from server, we're done.
@@ -968,6 +984,21 @@
         arr.sort((a,b) => (b.count - a.count) || (a.firstIx - b.firstIx) || a.name.localeCompare(b.name));
         it.suggestedCategories = arr.map(x => x.name);
       });
+
+      // Final normalization across all items to enforce "no Other when non-Other exists"
+      items.forEach(it => {
+        it.suggestedCategories = normalizeSuggestionsList(it.suggestedCategories || []);
+      });
+      // Plan B1: auto-promote primary from "Other" to first non-Other suggestion when still predicted
+      items.forEach(it => {
+        const sc = Array.isArray(it.suggestedCategories) ? it.suggestedCategories : [];
+        if (String(it.category || 'Other').trim().toLowerCase() === 'other' && it.__predicted === true) {
+          const firstNonOther = sc.find(c => String(c || '').trim().toLowerCase() !== 'other');
+          if (firstNonOther) {
+            it.category = String(firstNonOther).trim();
+          }
+        }
+      });
     }catch(_){}
   }
 
@@ -990,31 +1021,62 @@
     try { return CSS && CSS.escape ? CSS.escape(s) : String(s).replace(/"/g, '\\"'); } catch { return String(s).replace(/"/g, '\\"'); }
   }
 
+  // Normalize suggestions:
+  // - Dedupe while preserving order
+  // - If any non-"Other" exists, drop "Other" entirely
+  // - If only "Other" appears, keep a single ["Other"]
+  function normalizeSuggestionsList(list){
+    try{
+      const arr = Array.isArray(list) ? list.map(x => String(x || '').trim()).filter(Boolean) : [];
+      const seen = new Set();
+      const uniq = arr.filter(c => {
+        const k = c.toLowerCase();
+        if (seen.has(k)) return false;
+        seen.add(k);
+        return true;
+      });
+      const nonOther = uniq.filter(c => c.toLowerCase() !== 'other');
+      if (nonOther.length) return nonOther;
+      if (uniq.length && uniq.every(c => c.toLowerCase() === 'other')) return ['Other'];
+      return [];
+    }catch(_){ return []; }
+  }
+
   async function approveOne(id){
     const it = loadItems.find(x => x.id === id);
     if (!it) return;
     showOverlay('Approving', 'Saving to database...');
     try {
-      // Build final additional categories:
-      // - union of user-added extras (it.categories) + remaining suggested categories (it.suggestedCategories)
-      // - exclude primary and "Other"
-      const primary = String(it.category || 'Other').trim();
-      const extrasA = Array.isArray(it.categories) ? it.categories : [];
-      const extrasB = Array.isArray(it.suggestedCategories) ? it.suggestedCategories : [];
+        // Build final additional categories:
+        // - union of user-added extras (it.categories) + remaining suggested categories (it.suggestedCategories)
+        // - exclude primary and "Other"
+        // Determine effective primary category at save time:
+        // If current primary is "Other" but we have any non-"Other" suggestions and the value is still predicted (i.e., user hasn't changed it),
+        // promote the first non-"Other" suggestion to avoid saving "Other" by default.
+        const primaryRaw = String(it.category || 'Other').trim();
+        let primary = primaryRaw;
+        const hasNonOtherSuggestion = Array.isArray(it.suggestedCategories) && it.suggestedCategories.some(c => String(c || '').trim().toLowerCase() !== 'other');
+        if (primaryRaw.toLowerCase() === 'other' && hasNonOtherSuggestion && it.__predicted === true) {
+          const firstNonOther = (it.suggestedCategories || []).find(c => String(c || '').trim().toLowerCase() !== 'other');
+          if (firstNonOther) primary = String(firstNonOther).trim();
+        }
+        const extrasA = Array.isArray(it.categories) ? it.categories : [];
+        const extrasB = Array.isArray(it.suggestedCategories) ? it.suggestedCategories : [];
       const wanted = [];
       const seen = new Set();
-      const pushIf = (name) => {
+      const pushIf = (name, isUser = false) => {
         const n = String(name || '').trim();
         if (!n) return;
         const lc = n.toLowerCase();
-        if (lc === 'other') return;
+        // Allow "Other" only if explicitly user-added; never from suggestions
+        if (lc === 'other' && !isUser) return;
         if (primary && lc === primary.toLowerCase()) return;
         if (seen.has(lc)) return;
         seen.add(lc);
         wanted.push(n);
       };
-      extrasA.forEach(pushIf);
-      extrasB.forEach(pushIf);
+      extrasA.forEach(n => pushIf(n, true));  // user-added extras
+      extrasB.forEach(n => pushIf(n, false)); // suggestion-derived extras
 
       // Ensure master category list contains any new category names
       for (const n of wanted) {
@@ -1111,23 +1173,33 @@
       const it = loadItems[i];
       try {
         // Compute final extras for each item (union of user-added + remaining suggestions)
-        const primary = String(it.category || 'Other').trim();
+        // Determine effective primary at save time for each item:
+        // If primary is "Other", non-"Other" suggestions exist, and the value is still predicted (user hasn't changed it),
+        // promote first non-"Other" suggestion to avoid saving "Other" by default.
+        const primaryRaw = String(it.category || 'Other').trim();
+        let primary = primaryRaw;
+        const hasNonOtherSuggestion = Array.isArray(it.suggestedCategories) && it.suggestedCategories.some(c => String(c || '').trim().toLowerCase() !== 'other');
+        if (primaryRaw.toLowerCase() === 'other' && hasNonOtherSuggestion && it.__predicted === true) {
+          const firstNonOther = (it.suggestedCategories || []).find(c => String(c || '').trim().toLowerCase() !== 'other');
+          if (firstNonOther) primary = String(firstNonOther).trim();
+        }
         const extrasA = Array.isArray(it.categories) ? it.categories : [];
         const extrasB = Array.isArray(it.suggestedCategories) ? it.suggestedCategories : [];
         const wanted = [];
         const seen = new Set();
-        const pushIf = (name) => {
+        const pushIf = (name, isUser = false) => {
           const n = String(name || '').trim();
           if (!n) return;
           const lc = n.toLowerCase();
-          if (lc === 'other') return;
+          // Allow "Other" only if explicitly user-added; never from suggestions
+          if (lc === 'other' && !isUser) return;
           if (primary && lc === primary.toLowerCase()) return;
           if (seen.has(lc)) return;
           seen.add(lc);
           wanted.push(n);
         };
-        extrasA.forEach(pushIf);
-        extrasB.forEach(pushIf);
+        extrasA.forEach(n => pushIf(n, true));  // user-added extras
+        extrasB.forEach(n => pushIf(n, false)); // suggestion-derived extras
 
         // Ensure master category list contains these names
         for (const n of wanted) {
