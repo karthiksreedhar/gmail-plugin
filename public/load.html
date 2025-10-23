@@ -337,6 +337,7 @@
     </div>
     <div class="hdr-right">
       <button id="cancelBtn" class="btn btn-secondary" title="Return to main page">Cancel</button>
+      <button id="saveChangesBtn" class="btn btn-secondary" title="Save approved items and return">Save Changes</button>
       <button id="approveAllBtn" class="btn btn-primary" title="Approve all listed items to database">Approve All</button>
     </div>
   </div>
@@ -513,6 +514,7 @@
         snippet: e.snippet || (e.body ? String(e.body).slice(0, 100) + (e.body.length > 100 ? '...' : '') : ''),
         body: e.body || '',
         category: 'Other',
+        categories: [], // additional categories (multi-category support)
         __predicted: true
       }));
 
@@ -571,7 +573,19 @@
     loadItems.forEach((it) => {
       const div = document.createElement('div');
       div.className = 'item' + (selectedId===it.id ? ' active':'');
-      div.onclick = () => selectItem(it.id);
+      div.onclick = (ev) => {
+        // Ignore clicks/typing inside the Add Category input or its suggestions popover
+        if (
+          ev &&
+          ev.target &&
+          ev.target.classList &&
+          (ev.target.classList.contains('chip-input') ||
+            (ev.target.closest && ev.target.closest('.suggestions')))
+        ) {
+          return;
+        }
+        selectItem(it.id);
+      };
 
       const actionsHtml = `
         <div class="it-actions">
@@ -698,6 +712,20 @@
     };
     host.appendChild(chip);
 
+    // render additional categories (extras)
+    if (!Array.isArray(it.categories)) it.categories = [];
+    it.categories.forEach(extra => {
+      const ec = document.createElement('span');
+      ec.className = 'chip';
+      ec.innerHTML = `<span>${escapeHtml(extra)}</span> <span class="x" title="Remove category">×</span>`;
+      ec.querySelector('.x').onclick = (ev) => {
+        ev.stopPropagation();
+        it.categories = it.categories.filter(c => c.toLowerCase() !== String(extra).toLowerCase());
+        refreshItemUI(id);
+      };
+      host.appendChild(ec);
+    });
+
     // inline suggested categories as chips with dismiss (×)
     // Filter "Other" unless it's the only suggestion from all stages
     const suggsRaw = Array.isArray(it.suggestedCategories) ? it.suggestedCategories : [];
@@ -728,7 +756,7 @@
     wrapper.style.position = 'relative';
     const input = document.createElement('input');
     input.className = 'chip-input';
-    input.setAttribute('placeholder', 'Change category…');
+    input.setAttribute('placeholder', 'Add Category…');
     wrapper.appendChild(input);
     const sugg = document.createElement('div');
     sugg.className = 'suggestions';
@@ -748,7 +776,7 @@
       Array.from(sugg.querySelectorAll('.opt')).forEach(el => {
         el.onclick = (ev) => {
           ev.stopPropagation();
-          commitCategory(id, el.textContent || '');
+          addExtraCategory(id, el.textContent || '');
         };
       });
     });
@@ -758,7 +786,9 @@
         ev.preventDefault();
         const v = (input.value || '').trim();
         if (!v) return;
-        commitCategory(id, v);
+        addExtraCategory(id, v);
+        input.value = '';
+        sugg.style.display='none';
       } else if (ev.key === 'Escape') {
         sugg.style.display='none';
       }
@@ -806,6 +836,37 @@
   }
 
   // Suggestions aggregator for Load More items (subject/body similarity + others)
+  // Add a new extra category (keeps primary unchanged)
+  async function addExtraCategory(id, name){
+    const it = loadItems.find(x => x.id === id);
+    if (!it) return;
+    if (!Array.isArray(it.categories)) it.categories = [];
+    const n = (name || '').trim();
+    if (!n) return;
+
+    // Add unseen category to master list
+    const exists = (categories || []).some(c => c.toLowerCase() === n.toLowerCase());
+    if (!exists) {
+      try {
+        const res = await fetch('/api/categories/add', {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ name: n })
+        });
+        const data = await res.json();
+        if (res.ok && data && data.success){
+          categories = Array.isArray(data.categories) ? data.categories : categories;
+        }
+      } catch (e) { console.error('Failed to add category', e); }
+    }
+
+    // Avoid duplicates (case-insensitive)
+    if (!it.categories.some(c => String(c).toLowerCase() === n.toLowerCase())) {
+      it.categories.push(n);
+      it.__predicted = false;
+      refreshItemUI(id);
+    }
+  }
+
   async function computeLoadMoreCategorySuggestions(items){
     try{
       if (!Array.isArray(items) || !items.length) return;
@@ -934,6 +995,43 @@
     if (!it) return;
     showOverlay('Approving', 'Saving to database...');
     try {
+      // Build final additional categories:
+      // - union of user-added extras (it.categories) + remaining suggested categories (it.suggestedCategories)
+      // - exclude primary and "Other"
+      const primary = String(it.category || 'Other').trim();
+      const extrasA = Array.isArray(it.categories) ? it.categories : [];
+      const extrasB = Array.isArray(it.suggestedCategories) ? it.suggestedCategories : [];
+      const wanted = [];
+      const seen = new Set();
+      const pushIf = (name) => {
+        const n = String(name || '').trim();
+        if (!n) return;
+        const lc = n.toLowerCase();
+        if (lc === 'other') return;
+        if (primary && lc === primary.toLowerCase()) return;
+        if (seen.has(lc)) return;
+        seen.add(lc);
+        wanted.push(n);
+      };
+      extrasA.forEach(pushIf);
+      extrasB.forEach(pushIf);
+
+      // Ensure master category list contains any new category names
+      for (const n of wanted) {
+        if (!categories.some(c => String(c || '').toLowerCase() === n.toLowerCase())) {
+          try {
+            const res = await fetch('/api/categories/add', {
+              method:'POST', headers:{'Content-Type':'application/json'},
+              body: JSON.stringify({ name: n })
+            });
+            const dataAdd = await res.json().catch(() => ({}));
+            if (res.ok && dataAdd && dataAdd.success && Array.isArray(dataAdd.categories)) {
+              categories = dataAdd.categories;
+            }
+          } catch (_) {}
+        }
+      }
+
       const resp = await fetch('/api/add-approved-email', {
         method:'POST',
         headers:{'Content-Type':'application/json'},
@@ -945,7 +1043,8 @@
             date: it.date || new Date().toISOString(),
             body: it.body || it.snippet || '',
             snippet: it.snippet || (it.body ? String(it.body).slice(0, 100) + (it.body.length > 100 ? '...' : '') : ''),
-            category: it.category || 'Other'
+            category: primary || 'Other',
+            categories: wanted
           }
         })
       });
@@ -962,6 +1061,10 @@
       if (loadItems.length) selectItem(loadItems[0].id);
       document.getElementById('leftStatus').textContent = `${loadItems.length} remaining`;
       document.getElementById('countStat').textContent = loadItems.length ? `(${loadItems.length})` : '';
+      if (!loadItems.length) {
+        window.location.href = '/?msg=All Email/Threads processed';
+        return;
+      }
     } catch (e) {
       hideOverlay();
       alert('Failed to approve email.');
@@ -985,6 +1088,11 @@
       if (loadItems.length) selectItem(loadItems[0].id);
       document.getElementById('leftStatus').textContent = `${loadItems.length} remaining`;
       document.getElementById('countStat').textContent = loadItems.length ? `(${loadItems.length})` : '';
+      if (!loadItems.length) {
+        hideOverlay();
+        window.location.href = '/?msg=All Email/Threads processed';
+        return;
+      }
       hideOverlay();
     } catch (e) {
       hideOverlay();
@@ -1002,6 +1110,41 @@
     for (let i = 0; i < loadItems.length; i++) {
       const it = loadItems[i];
       try {
+        // Compute final extras for each item (union of user-added + remaining suggestions)
+        const primary = String(it.category || 'Other').trim();
+        const extrasA = Array.isArray(it.categories) ? it.categories : [];
+        const extrasB = Array.isArray(it.suggestedCategories) ? it.suggestedCategories : [];
+        const wanted = [];
+        const seen = new Set();
+        const pushIf = (name) => {
+          const n = String(name || '').trim();
+          if (!n) return;
+          const lc = n.toLowerCase();
+          if (lc === 'other') return;
+          if (primary && lc === primary.toLowerCase()) return;
+          if (seen.has(lc)) return;
+          seen.add(lc);
+          wanted.push(n);
+        };
+        extrasA.forEach(pushIf);
+        extrasB.forEach(pushIf);
+
+        // Ensure master category list contains these names
+        for (const n of wanted) {
+          if (!categories.some(c => String(c || '').toLowerCase() === n.toLowerCase())) {
+            try {
+              const res = await fetch('/api/categories/add', {
+                method:'POST', headers:{'Content-Type':'application/json'},
+                body: JSON.stringify({ name: n })
+              });
+              const dataAdd = await res.json().catch(() => ({}));
+              if (res.ok && dataAdd && dataAdd.success && Array.isArray(dataAdd.categories)) {
+                categories = dataAdd.categories;
+              }
+            } catch (_) {}
+          }
+        }
+
         const resp = await fetch('/api/add-approved-email', {
           method:'POST',
           headers:{'Content-Type':'application/json'},
@@ -1013,7 +1156,8 @@
               date: it.date || new Date().toISOString(),
               body: it.body || it.snippet || '',
               snippet: it.snippet || (it.body ? String(it.body).slice(0, 100) + (it.body.length > 100 ? '...' : '') : ''),
-              category: it.category || 'Other'
+              category: primary || 'Other',
+              categories: wanted
             }
           })
         });
@@ -1022,8 +1166,7 @@
       } catch(_){}
     }
     hideOverlay();
-    alert(`Approved ${success} email${success===1?'':'s'}.`);
-    window.location.href = '/';
+    window.location.href = '/?msg=All Email/Threads processed';
   }
 
   // Email notes
@@ -1092,6 +1235,9 @@
   // Wire header buttons
   document.getElementById('cancelBtn').addEventListener('click', () => {
     window.location.href = '/';
+  });
+  document.getElementById('saveChangesBtn').addEventListener('click', () => {
+    window.location.href = '/?msg=Changes saved';
   });
   document.getElementById('approveAllBtn').addEventListener('click', approveAll);
   document.getElementById('emailNotesAddBtn').addEventListener('click', addEmailNote);

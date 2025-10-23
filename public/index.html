@@ -14257,10 +14257,42 @@ async function renderEmailNotesPreview(el, emailId) {
             }
         }
 
+        function showFlashFromQuery() {
+            try {
+                const params = new URLSearchParams(window.location.search);
+                const msg = params.get('msg');
+                if (!msg) return;
+
+                // Create a temporary success bar just below the fixed header (64px)
+                const container = document.querySelector('.gmail-container') || document.body;
+                const bar = document.createElement('div');
+                bar.textContent = msg;
+                bar.style.position = 'fixed';
+                bar.style.top = '64px';
+                bar.style.left = '0';
+                bar.style.right = '0';
+                bar.style.background = '#28a745';
+                bar.style.color = '#fff';
+                bar.style.padding = '10px 16px';
+                bar.style.textAlign = 'center';
+                bar.style.zIndex = '1500';
+                container.appendChild(bar);
+
+                // Auto-hide after 2.5s
+                setTimeout(() => { try { bar.remove(); } catch(_){} }, 2500);
+
+                // Remove ?msg= from URL so it doesn't persist on refresh
+                const url = new URL(window.location.href);
+                url.searchParams.delete('msg');
+                window.history.replaceState({}, '', url.toString());
+            } catch (_) {}
+        }
+
         document.addEventListener('DOMContentLoaded', function() {
             loadEmails();
             loadCurrentUser();
             initSearchBar();
+            showFlashFromQuery();
         });
 
         // Load current user on page load

@@ -3801,7 +3801,7 @@ app.post('/api/mcp-fetch-emails', async (req, res) => {
 app.post('/api/add-approved-email', async (req, res) => {
   try {
     const { email } = req.body;
-    
+
     if (!email || !email.id || !email.subject || !email.from || !email.body) {
       return res.status(400).json({
         success: false,
@@ -3811,74 +3811,181 @@ app.post('/api/add-approved-email', async (req, res) => {
 
     console.log(`Adding approved email to database: ${email.subject}`);
 
-    // Load existing unreplied emails
-    const existingUnrepliedEmails = loadUnrepliedEmails();
-    
-    // Check if email already exists (avoid duplicates)
-    const isDuplicate = existingUnrepliedEmails.some(existing => 
-      existing.id === email.id || 
-      (existing.subject === email.subject && 
-       existing.from === email.from &&
-       Math.abs(new Date(existing.date) - new Date(email.date)) < 3600000) // Within 1 hour
-    );
-    
-    if (isDuplicate) {
-      return res.json({
-        success: true,
-        message: 'Email already exists in database',
-        duplicate: true
+    const meEmail = SENDING_EMAIL || CURRENT_USER_EMAIL || '';
+    const meName = getDisplayNameForUser(meEmail);
+
+    // Process categories (primary + additional, case-insensitive de-dup)
+    const primaryCategory = (email.category && String(email.category).trim()) ||
+      keywordCategorizeUnreplied(email.subject || '', email.body || '', email.from || '');
+    const extras = Array.isArray(email.categories)
+      ? email.categories.map(c => String(c || '').trim()).filter(Boolean)
+      : [];
+    const categoriesArr = (() => {
+      const out = [];
+      const seen = new Set();
+      [...extras, primaryCategory].forEach(n => {
+        const s = String(n || '').trim();
+        if (!s) return;
+        const k = s.toLowerCase();
+        if (seen.has(k)) return;
+        seen.add(k);
+        out.push(s);
       });
-    }
+      return out;
+    })();
 
-    // Process and categorize the email
-      const processedEmail = {
-        id: email.id,
-        subject: email.subject || 'No Subject',
-        from: email.from || 'Unknown Sender',
-        date: email.date || new Date().toISOString(),
-        body: email.body || 'No content available',
-        snippet: email.snippet || (email.body ? email.body.substring(0, 100) + (email.body.length > 100 ? '...' : '') : 'No content available'),
-        category: email.category || keywordCategorizeUnreplied(email.subject || '', email.body || '', email.from || ''),
-        source: 'approved-fetch'
-      };
-
-    // Add to unreplied emails
-    const allUnrepliedEmails = [...existingUnrepliedEmails, processedEmail];
-
-    // Save updated unreplied emails
+    // Update authoritative categories list with any new names
     try {
-      const paths = getCurrentUserPaths();
-      
-      // Ensure data directory exists
-      if (!fs.existsSync(paths.USER_DATA_DIR)) {
-        fs.mkdirSync(paths.USER_DATA_DIR, { recursive: true });
+      const currentCats = loadCategoriesList();
+      const seen = new Set(currentCats.map(c => String(c).toLowerCase()));
+      const toAdd = [];
+      categoriesArr.forEach(c => {
+        if (c && !seen.has(c.toLowerCase())) {
+          seen.add(c.toLowerCase());
+          toAdd.push(c);
+        }
+      });
+      if (toAdd.length) {
+        saveCategoriesList([...currentCats, ...toAdd]);
       }
-
-      fs.writeFileSync(paths.UNREPLIED_EMAILS_PATH, JSON.stringify({
-        emails: allUnrepliedEmails
-      }, null, 2));
-
-      console.log(`Successfully added approved email to database: ${email.subject}`);
-      
-      res.json({
-        success: true,
-        message: 'Email approved and added to database',
-        email: processedEmail
-      });
-
-    } catch (saveError) {
-      console.error('Error saving approved email to database:', saveError);
-      res.status(500).json({
-        success: false,
-        error: 'Failed to save approved email to database'
-      });
+    } catch (e) {
+      console.warn('Failed to update categories list:', e?.message || e);
     }
 
+    // Build normalized unreplied email record
+    const processedEmail = {
+      id: email.id,
+      subject: email.subject || 'No Subject',
+      from: email.from || 'Unknown Sender',
+      date: email.date || new Date().toISOString(),
+      body: email.body || 'No content available',
+      snippet:
+        email.snippet ||
+        (email.body ? String(email.body).slice(0, 100) + (email.body.length > 100 ? '...' : '') : 'No content available'),
+      category: primaryCategory,
+      categories: categoriesArr,
+      source: 'approved-fetch'
+    };
+
+    // Load existing stores
+    const paths = getCurrentUserPaths();
+    const existingUnrepliedEmails = loadUnrepliedEmails() || [];
+    const existingResponses = loadResponseEmails() || [];
+    const existingThreads = loadEmailThreads() || [];
+
+    // Duplicate checks
+    const unrepliedDup = existingUnrepliedEmails.some(existing =>
+      existing && (
+        existing.id === email.id ||
+        (
+          existing.subject === email.subject &&
+          existing.from === email.from &&
+          Math.abs(new Date(existing.date) - new Date(email.date || Date.now())) < 3600000 // within 1h
+        )
+      )
+    );
+    const responsesById = new Set(existingResponses.map(e => e && e.id).filter(Boolean));
+    const threadsById = new Set(existingThreads.map(t => t && t.id).filter(Boolean));
+
+    // Append to unreplied if new
+    let wroteUnreplied = false;
+    if (!unrepliedDup) {
+      const allUnrepliedEmails = [...existingUnrepliedEmails, processedEmail];
+      try {
+        if (!fs.existsSync(paths.USER_DATA_DIR)) {
+          fs.mkdirSync(paths.USER_DATA_DIR, { recursive: true });
+        }
+        fs.writeFileSync(paths.UNREPLIED_EMAILS_PATH, JSON.stringify({ emails: allUnrepliedEmails }, null, 2));
+        wroteUnreplied = true;
+      } catch (e) {
+        console.error('Failed to write unreplied-emails.json:', e);
+        // continue to try writing other stores
+      }
+    }
+
+    // Persist a minimal thread (original-only) so UI can render the original message
+    const threadId = `thread-${email.id}`;
+    let wroteThread = false;
+    if (!threadsById.has(threadId)) {
+      try {
+        const threads = existingThreads.slice();
+        threads.push({
+          id: threadId,
+          subject: email.subject || 'No Subject',
+          originalFrom: email.from || 'Unknown Sender',
+          from: meEmail || meName || 'You',
+          date: email.date || new Date().toISOString(),
+          responseId: email.id,
+          messages: [
+            {
+              id: `original-${email.id}`,
+              from: email.from || 'Unknown Sender',
+              to: [meEmail || 'You'],
+              date: email.date || new Date().toISOString(),
+              subject: String(email.subject || '').replace(/^Re:\s*/i, ''),
+              body: email.body || 'Original email content not available',
+              isResponse: false
+            }
+          ]
+        });
+        if (!fs.existsSync(paths.USER_DATA_DIR)) {
+          fs.mkdirSync(paths.USER_DATA_DIR, { recursive: true });
+        }
+        fs.writeFileSync(paths.EMAIL_THREADS_PATH, JSON.stringify({ threads }, null, 2));
+        wroteThread = true;
+      } catch (e) {
+        console.error('Failed to write email-threads.json:', e);
+      }
+    }
+
+    // Persist a response email record so main UI (response-emails.json) reflects approval
+    let wroteResponse = false;
+    if (!responsesById.has(email.id)) {
+      try {
+        const responses = existingResponses.slice();
+        responses.push({
+          id: email.id,
+          subject: email.subject || 'No Subject',
+          // treat as user-authored entry for RHS list consistency
+          from: meEmail || meName || 'You',
+          originalFrom: email.from || 'Unknown Sender',
+          date: email.date || new Date().toISOString(),
+          seededOriginalOnly: true,
+          category: primaryCategory,
+          categories: categoriesArr,
+          // Use original body as placeholder to satisfy validation; cleaning is handled per-view
+          body: email.body || '(seeded item)',
+          snippet:
+            email.snippet ||
+            (email.body ? String(email.body).slice(0, 100) + (email.body.length > 100 ? '...' : '') : 'No content available'),
+          originalBody: email.body || ''
+        });
+        if (!fs.existsSync(paths.USER_DATA_DIR)) {
+          fs.mkdirSync(paths.USER_DATA_DIR, { recursive: true });
+        }
+        fs.writeFileSync(paths.RESPONSE_EMAILS_PATH, JSON.stringify({ emails: responses }, null, 2));
+        wroteResponse = true;
+      } catch (e) {
+        console.error('Failed to write response-emails.json:', e);
+      }
+    }
+
+    // Success response
+    return res.json({
+      success: true,
+      message: 'Email approved and added to database',
+      email: processedEmail,
+      writes: {
+        unreplied: wroteUnreplied || unrepliedDup, // true if present after op
+        response: wroteResponse || responsesById.has(email.id),
+        thread: wroteThread || threadsById.has(`thread-${email.id}`)
+      }
+    });
   } catch (error) {
     console.error('Error adding approved email:', error);
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
-      error: 'Failed to add approved email: ' + error.message
+      error: 'Failed to add approved email: ' + (error?.message || error)
     });
   }
 });
