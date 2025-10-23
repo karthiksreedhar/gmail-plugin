@@ -155,7 +155,7 @@
       gap:6px;
       flex-wrap:wrap;
     }
-    .hide-btn{
+    .hide-btn, .approve-btn{
       background:#f1f3f4;
       color:#444;
       border:1px solid #ddd;
@@ -184,6 +184,13 @@
       color:#333;
       font-size:13px;
       user-select:none;
+    }
+
+    /* Suggested sender category chip */
+    .chip-sender{
+      background:#e6f2ff;
+      border-color:#b3d4ff;
+      color:#084298;
     }
     .chip .x{
       font-weight:700;
@@ -350,6 +357,7 @@
     </div>
     <div class="hdr-right">
       <button id="cancelBtn" class="btn btn-secondary" title="Return to main page">Cancel</button>
+      <button id="saveBtn" class="btn btn-secondary" title="Save approved items and return">Save Changes</button>
       <button id="addBtn" class="btn btn-primary" title="Add all listed items to database">Add to Database</button>
     </div>
   </div>
@@ -425,6 +433,11 @@
   const selectedCatsById = new Map(); // id -> array (ordered)
   // cache of response emails for matching threads
   let responseEmails = [];
+
+  // Suggested sender category state
+  const senderKeyById = new Map();     // id -> normalized sender key
+  const senderLabelByKey = new Map();  // senderKey -> current label (editable suggestion)
+  const senderPresenceById = new Map(); // id -> boolean (whether sender chip is present)
 
   // Utilities
   function showOverlay(title, msg){
@@ -556,6 +569,33 @@
   function normalizeSubjectKey(s){
     return String(s || '').toLowerCase().replace(/^re:\s*/i,'').trim();
   }
+  function normalizeSenderKey(s){
+    return String(s || '').toLowerCase().trim();
+  }
+  // Parse "From" header into a grouping key (prefer email) and a display label (prefer name)
+  function parseSenderParts(s){
+    const str = String(s || '').trim();
+    // Common: "Name <email@domain>"
+    const m = str.match(/^(?:"?([^"<]+)"?\s*)?<([^>]+)>/);
+    let email = '', name = '';
+    if (m) {
+      name = (m[1] || '').trim();
+      email = (m[2] || '').trim().toLowerCase();
+    } else {
+      // Fallbacks: "<email@domain>" or plain email or just name
+      const m2 = str.match(/<([^>]+)>/);
+      if (m2) email = (m2[1] || '').trim().toLowerCase();
+      if (!email && /@/.test(str)) {
+        email = str.toLowerCase();
+      }
+      if (!name) {
+        name = str.replace(/<[^>]*>/g, '').replace(/"/g, '').trim();
+      }
+    }
+    const key = email || normalizeSenderKey(name);
+    const label = name || (email ? email : (str || 'Unknown Sender'));
+    return { key, label };
+  }
   function getPrimaryCat(id){
     const arr = selectedCatsById.get(id) || [];
     return arr.length ? arr[0] : '';
@@ -606,8 +646,17 @@
         ...it,
         category: (typeof it.category === 'string' ? it.category : '')
       }));
-      // initialize multi-cat map (no default category)
-      seedItems.forEach(it => ensureCatArray(it.id, ''));
+      // initialize multi-cat map (no default category) + initialize sender suggestion
+      seedItems.forEach(it => {
+        ensureCatArray(it.id, '');
+        const rawSender = String(it.from || '').trim();
+        const info = parseSenderParts(rawSender);
+        const key = info.key || normalizeSenderKey(rawSender);
+        const label = info.label || (rawSender || 'Unknown Sender');
+        senderKeyById.set(it.id, key);
+        if (!senderLabelByKey.has(key)) senderLabelByKey.set(key, label);
+        senderPresenceById.set(it.id, true);
+      });
       renderList();
       updateCount();
       document.getElementById('leftStatus').textContent = seedItems.length ? `${seedItems.length} items` : '0 items';
@@ -648,6 +697,7 @@
       // Build actions: Hide button
       const actionsHtml = `
         <div class="it-actions">
+          <button class="approve-btn" title="Approve to database">Approve</button>
           <button class="hide-btn" title="Hide this item">Hide</button>
         </div>
       `;
@@ -663,11 +713,21 @@
         </div>
       `;
 
-      // Hook hide
-      div.querySelector('.hide-btn').addEventListener('click', (ev) => {
-        ev.stopPropagation();
-        trashItem(it);
-      });
+      // Hook approve/hide
+      const approveBtn = div.querySelector('.approve-btn');
+      if (approveBtn) {
+        approveBtn.addEventListener('click', (ev) => {
+          ev.stopPropagation();
+          approveOneSeed(it);
+        });
+      }
+      const hideBtn = div.querySelector('.hide-btn');
+      if (hideBtn) {
+        hideBtn.addEventListener('click', (ev) => {
+          ev.stopPropagation();
+          trashItem(it);
+        });
+      }
 
       // Render inline chips with input
       const chipsHost = div.querySelector('.chips');
@@ -699,6 +759,80 @@
       console.error('Hide failed', e);
       alert('Failed to hide this item. Please try again.');
     }finally{
+      hideOverlay();
+    }
+  }
+
+  // Approve a single item: persist to DB using seed add-all endpoint and remove from list
+  async function approveOneSeed(it){
+    try{
+      if (!it || !it.id) return;
+      showOverlay('Approving', 'Saving to database...');
+
+      // Build combined selection for this item: sender suggestion (if present) first, then user-added (de-duped)
+      const userSelected = (selectedCatsById.get(it.id) || [])
+        .map(s => String(s || '').trim())
+        .filter(Boolean);
+      const sel = [];
+      const sKey = senderKeyById.get(it.id);
+      if (sKey && senderPresenceById.get(it.id)) {
+        const sLabel = (senderLabelByKey.get(sKey) || '').trim();
+        if (sLabel) sel.push(sLabel);
+      }
+      userSelected.forEach(c => {
+        if (!sel.some(x => x.toLowerCase() === c.toLowerCase())) sel.push(c);
+      });
+      const primary = sel.length ? sel[0] : '';
+
+      const rec = {
+        id: it.id,
+        subject: it.subject || 'No Subject',
+        from: it.from || 'Unknown Sender',
+        date: it.date || new Date().toISOString(),
+        snippet:
+          it.snippet ||
+          (typeof it.body === 'string'
+            ? it.body.slice(0, 100) + (it.body.length > 100 ? '...' : '')
+            : ''),
+        body: it.body || it.snippet || '',
+        tags: {
+          unreplied: !!(it.tags && it.tags.unreplied),
+          thread: !!(it.tags && it.tags.thread)
+        }
+      };
+      if (primary) rec.category = primary;
+
+      const extras = sel.slice(1);
+      if (extras.length) rec.categories = extras;
+
+      // Persist single item via seed batch endpoint
+      const res = await fetch('/api/seed-categories/add-all', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ items: [rec] })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data || data.success !== true){
+        throw new Error((data && data.error) || 'Approve failed');
+      }
+
+      // Remove locally and refresh UI
+      seedItems = seedItems.filter(x => x.id !== it.id);
+      selectedCatsById.delete(it.id);
+      senderKeyById.delete(it.id);
+      senderPresenceById.delete(it.id);
+
+      if (selectedId === it.id) selectedId = '';
+      renderList();
+      updateCount();
+      if (seedItems.length){
+        selectItem(seedItems[0].id);
+      } else {
+        renderDetailEmpty();
+      }
+    } catch(e){
+      console.error('Approve failed', e);
+      alert('Failed to approve this item. Please try again.');
+    } finally {
       hideOverlay();
     }
   }
@@ -833,7 +967,51 @@
   function renderChipsEditorForItem(id, host){
     host.innerHTML = '';
     const arr = (selectedCatsById.get(id) || []).slice();
-    // render chips
+
+    // Render suggested sender chip first (light blue), with inline edit
+    const senderKey = senderKeyById.get(id);
+    if (senderKey && senderPresenceById.get(id)) {
+      const senderLabel = senderLabelByKey.get(senderKey) || '';
+      const chip = document.createElement('span');
+      chip.className = 'chip chip-sender';
+      chip.setAttribute('data-sender', '1');
+      chip.innerHTML = `<span class="txt">${escapeHtml(senderLabel)}</span> <span class="x" title="Remove category">×</span>`;
+      chip.querySelector('.x').onclick = (ev) => {
+        ev.stopPropagation();
+        senderPresenceById.set(id, false);
+        refreshAllChipEditorsForItem(id);
+      };
+      // Click anywhere but X to edit inline
+      chip.addEventListener('click', (ev) => {
+        if (ev.target && ev.target.classList && ev.target.classList.contains('x')) return;
+        ev.stopPropagation();
+        const current = senderLabel;
+        chip.innerHTML = '';
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.value = current;
+        input.className = 'chip-input';
+        input.style.maxWidth = '240px';
+        chip.appendChild(input);
+        input.focus();
+        const commit = async () => {
+          const v = (input.value || '').trim();
+          if (v && v !== current) {
+            await commitSenderRename(senderKey, v);
+          }
+          // Re-render all affected chips for this item
+          refreshAllChipEditorsForItem(id);
+        };
+        input.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter') { e.preventDefault(); commit(); }
+          else if (e.key === 'Escape') { refreshAllChipEditorsForItem(id); }
+        });
+        input.addEventListener('blur', commit);
+      });
+      host.appendChild(chip);
+    }
+
+    // render user-added chips
     arr.forEach(name => {
       const chip = document.createElement('span');
       chip.className = 'chip';
@@ -928,6 +1106,36 @@
     refreshAllChipEditorsForItem(id);
   }
 
+  // Commit a sender rename: update map, ensure category exists, and propagate UI updates
+  async function commitSenderRename(senderKey, newLabel){
+    const label = String(newLabel || '').trim();
+    if (!label) return;
+    const old = senderLabelByKey.get(senderKey) || '';
+    if (label.toLowerCase() !== old.toLowerCase()) {
+      const exists = (categories || []).some(c => c.toLowerCase() === label.toLowerCase());
+      if (!exists) {
+        try {
+          const res = await fetch('/api/categories/add', {
+            method:'POST', headers:{'Content-Type':'application/json'},
+            body: JSON.stringify({ name: label })
+          });
+          const data = await res.json();
+          if (res.ok && data && data.success){
+            categories = Array.isArray(data.categories) ? data.categories : categories;
+            setCatOptionsDatalist();
+          }
+        } catch (_) {}
+      }
+    }
+    senderLabelByKey.set(senderKey, label);
+    // propagate re-render for all items in this sender group that kept the sender chip
+    (seedItems || []).forEach(it => {
+      if (senderKeyById.get(it.id) === senderKey && senderPresenceById.get(it.id)) {
+        refreshAllChipEditorsForItem(it.id);
+      }
+    });
+  }
+
   function addCategorySelection(id, name){
     const arr = selectedCatsById.get(id) || [];
     if (!arr.some(c => c.toLowerCase() === name.toLowerCase())){
@@ -945,15 +1153,17 @@
     document.querySelectorAll(`.chips[data-item="${cssEscape(id)}"]`).forEach(node => {
       renderChipsEditorForItem(id, node);
     });
-    // refresh detail if it's the same item
+    // refresh detail if it's the same item (guard element presence)
     if (selectedId === id) {
       const host = document.getElementById('detailCats');
-      host.innerHTML = '';
-      const chips = document.createElement('div');
-      chips.className = 'chips';
-      chips.setAttribute('data-item', id);
-      host.appendChild(chips);
-      renderChipsEditorForItem(id, chips);
+      if (host) {
+        host.innerHTML = '';
+        const chips = document.createElement('div');
+        chips.className = 'chips';
+        chips.setAttribute('data-item', id);
+        host.appendChild(chips);
+        renderChipsEditorForItem(id, chips);
+      }
     }
   }
 
@@ -981,12 +1191,22 @@
 
     // Build payloads from current selections
     const allBuilt = seedItems.map(it => {
-      const selected = (selectedCatsById.get(it.id) || [])
+      // Build combined selection: sender suggestion (if present) first, then user-added
+      const userSelected = (selectedCatsById.get(it.id) || [])
         .map(s => String(s || '').trim())
         .filter(Boolean);
 
-      let primary = String(getPrimaryCat(it.id) || '').trim();
-      if (!primary && selected.length) primary = selected[0];
+      const sel = [];
+      const sKey = senderKeyById.get(it.id);
+      if (sKey && senderPresenceById.get(it.id)) {
+        const sLabel = (senderLabelByKey.get(sKey) || '').trim();
+        if (sLabel) sel.push(sLabel);
+      }
+      userSelected.forEach(c => {
+        if (!sel.some(x => x.toLowerCase() === c.toLowerCase())) sel.push(c);
+      });
+
+      const primary = sel.length ? sel[0] : '';
 
       const rec = {
         id: it.id,
@@ -1007,20 +1227,8 @@
 
       if (primary) rec.category = primary;
 
-      // Additional categories (exclude primary, de-dup)
-      const extras = (() => {
-        const out = [];
-        const seen = new Set();
-        selected.forEach(c => {
-          const lc = c.toLowerCase();
-          if (primary && lc === primary.toLowerCase()) return;
-          if (seen.has(lc)) return;
-          seen.add(lc);
-          out.push(c);
-        });
-        return out;
-      })();
-
+      // Additional categories are the remaining selections
+      const extras = sel.slice(1);
       if (extras.length) rec.categories = extras;
 
       return rec;
@@ -1110,6 +1318,12 @@
   document.getElementById('cancelBtn').addEventListener('click', () => {
     window.location.href = '/';
   });
+  const saveBtnEl = document.getElementById('saveBtn');
+  if (saveBtnEl) {
+    saveBtnEl.addEventListener('click', () => {
+      window.location.href = '/?msg=Changes saved';
+    });
+  }
   document.getElementById('addBtn').addEventListener('click', addAllToDatabase);
 
   // Boot
