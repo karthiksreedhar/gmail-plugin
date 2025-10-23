@@ -639,8 +639,13 @@
     }
 
     titleEl.textContent = it.subject || 'No Subject';
-    metaPill.textContent = it.category || 'Other';
-    metaPill.style.display = 'inline-block';
+    const hasPrimary = !!(it.category && String(it.category).trim());
+    if (hasPrimary) {
+      metaPill.textContent = it.category;
+      metaPill.style.display = 'inline-block';
+    } else {
+      metaPill.style.display = 'none';
+    }
     approveBtn.style.display = 'inline-block';
     approveBtn.onclick = () => approveOne(it.id);
 
@@ -706,23 +711,26 @@
         it.category = String(firstNonOther).trim();
       }
     }
-    const name = it.category || 'Other';
-
-    const chip = document.createElement('span');
-    chip.className = 'chip' + (it.__predicted ? ' predicted' : '');
-    chip.innerHTML = `<span>${escapeHtml(name)}</span> <span class="x" title="Remove category">×</span>`;
-    chip.querySelector('.x').onclick = (ev) => {
-      ev.stopPropagation();
-      // removing category sets to 'Other' and considered manual
-      it.category = 'Other';
-      it.__predicted = false;
-      refreshItemUI(id);
-    };
-    host.appendChild(chip);
+    const primaryName = (it.category || '').trim();
+    if (primaryName) {
+      const chip = document.createElement('span');
+      chip.className = 'chip' + (it.__predicted ? ' predicted' : '');
+      chip.innerHTML = `<span>${escapeHtml(primaryName)}</span> <span class="x" title="Remove category">×</span>`;
+      chip.querySelector('.x').onclick = (ev) => {
+        ev.stopPropagation();
+        // removing primary allows empty; user can add their own
+        it.category = '';
+        it.__predicted = false;
+        refreshItemUI(id);
+      };
+      host.appendChild(chip);
+    }
 
     // render additional categories (extras)
     if (!Array.isArray(it.categories)) it.categories = [];
+    const primaryLc = (it.category || '').trim().toLowerCase();
     it.categories.forEach(extra => {
+      if (String(extra || '').trim().toLowerCase() === primaryLc) return;
       const ec = document.createElement('span');
       ec.className = 'chip';
       ec.innerHTML = `<span>${escapeHtml(extra)}</span> <span class="x" title="Remove category">×</span>`;
@@ -736,7 +744,8 @@
 
     // inline suggested categories as chips with dismiss (×)
     // suggs already normalized above
-    suggs.forEach((name) => {
+    const shownSuggs = suggs.filter(c => String(c || '').trim().toLowerCase() !== primaryLc);
+    shownSuggs.forEach((name) => {
       const s = document.createElement('span');
       s.className = 'chip predicted';
       s.innerHTML = `<span>${escapeHtml(name)}</span> <span class="x" title="Dismiss suggestion">×</span>`;
@@ -1012,7 +1021,13 @@
       const it = loadItems.find(x => x.id === id);
       const pill = document.getElementById('detailCategoryPill');
       if (pill && it) {
-        pill.textContent = it.category || 'Other';
+        const hasPrimary = !!(it.category && String(it.category).trim());
+        if (hasPrimary) {
+          pill.textContent = it.category;
+          pill.style.display = 'inline-block';
+        } else {
+          pill.style.display = 'none';
+        }
       }
     }
   }
@@ -1053,7 +1068,7 @@
         // Determine effective primary category at save time:
         // If current primary is "Other" but we have any non-"Other" suggestions and the value is still predicted (i.e., user hasn't changed it),
         // promote the first non-"Other" suggestion to avoid saving "Other" by default.
-        const primaryRaw = String(it.category || 'Other').trim();
+        const primaryRaw = String(it.category || '').trim();
         let primary = primaryRaw;
         const hasNonOtherSuggestion = Array.isArray(it.suggestedCategories) && it.suggestedCategories.some(c => String(c || '').trim().toLowerCase() !== 'other');
         if (primaryRaw.toLowerCase() === 'other' && hasNonOtherSuggestion && it.__predicted === true) {
@@ -1105,7 +1120,7 @@
             date: it.date || new Date().toISOString(),
             body: it.body || it.snippet || '',
             snippet: it.snippet || (it.body ? String(it.body).slice(0, 100) + (it.body.length > 100 ? '...' : '') : ''),
-            category: primary || 'Other',
+            category: primary,
             categories: wanted
           }
         })
@@ -1176,7 +1191,7 @@
         // Determine effective primary at save time for each item:
         // If primary is "Other", non-"Other" suggestions exist, and the value is still predicted (user hasn't changed it),
         // promote first non-"Other" suggestion to avoid saving "Other" by default.
-        const primaryRaw = String(it.category || 'Other').trim();
+        const primaryRaw = String(it.category || '').trim();
         let primary = primaryRaw;
         const hasNonOtherSuggestion = Array.isArray(it.suggestedCategories) && it.suggestedCategories.some(c => String(c || '').trim().toLowerCase() !== 'other');
         if (primaryRaw.toLowerCase() === 'other' && hasNonOtherSuggestion && it.__predicted === true) {
@@ -1228,7 +1243,7 @@
               date: it.date || new Date().toISOString(),
               body: it.body || it.snippet || '',
               snippet: it.snippet || (it.body ? String(it.body).slice(0, 100) + (it.body.length > 100 ? '...' : '') : ''),
-              category: primary || 'Other',
+              category: primary,
               categories: wanted
             }
           })
