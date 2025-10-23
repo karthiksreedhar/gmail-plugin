@@ -3815,8 +3815,23 @@ app.post('/api/add-approved-email', async (req, res) => {
     const meName = getDisplayNameForUser(meEmail);
 
     // Process categories (primary + additional, case-insensitive de-dup)
-    const primaryCategory = (email.category && String(email.category).trim()) ||
-      keywordCategorizeUnreplied(email.subject || '', email.body || '', email.from || '');
+    // Primary selection rules:
+    // - If client provided an explicit primary (non-empty), use it
+    // - ELSE if client provided additional categories and any are non-"Other", prefer the first non-"Other" as primary
+    // - ELSE fall back to keyword categorization (may return "Other" only when no non-Other context was given)
+    const primaryExplicit = (email.category && String(email.category).trim()) || '';
+    let primaryCategory = primaryExplicit;
+    if (!primaryCategory) {
+      const providedExtras = Array.isArray(email.categories)
+        ? email.categories.map(c => String(c || '').trim()).filter(Boolean)
+        : [];
+      const nonOtherExtras = providedExtras.filter(c => c.toLowerCase() !== 'other');
+      if (nonOtherExtras.length) {
+        primaryCategory = nonOtherExtras[0];
+      } else {
+        primaryCategory = keywordCategorizeUnreplied(email.subject || '', email.body || '', email.from || '');
+      }
+    }
     const extras = Array.isArray(email.categories)
       ? email.categories.map(c => String(c || '').trim()).filter(Boolean)
       : [];
@@ -3834,12 +3849,29 @@ app.post('/api/add-approved-email', async (req, res) => {
       return out;
     })();
 
+    // Enforce "Other" persistence policy:
+    // Only allow "Other" if explicitly provided by the user (either as explicit primary or in extras from the client).
+    const userExtrasRaw = Array.isArray(email.categories) ? email.categories : [];
+    const userExtras = userExtrasRaw.map(c => String(c || '').trim()).filter(Boolean);
+    const userExplicitOther =
+      userExtras.some(c => c.toLowerCase() === 'other') ||
+      (primaryExplicit && String(primaryExplicit).trim().toLowerCase() === 'other');
+
+    const categoriesArrFinal = userExplicitOther
+      ? categoriesArr
+      : categoriesArr.filter(c => String(c || '').trim().toLowerCase() !== 'other');
+
+    // If primary is "Other" but not explicitly chosen by the user, prefer first non-Other final category as primary (or leave empty)
+    if (!userExplicitOther && String(primaryCategory || '').trim().toLowerCase() === 'other') {
+      primaryCategory = categoriesArrFinal[0] || '';
+    }
+
     // Update authoritative categories list with any new names
     try {
       const currentCats = loadCategoriesList();
       const seen = new Set(currentCats.map(c => String(c).toLowerCase()));
       const toAdd = [];
-      categoriesArr.forEach(c => {
+      categoriesArrFinal.forEach(c => {
         if (c && !seen.has(c.toLowerCase())) {
           seen.add(c.toLowerCase());
           toAdd.push(c);
@@ -3863,7 +3895,7 @@ app.post('/api/add-approved-email', async (req, res) => {
         email.snippet ||
         (email.body ? String(email.body).slice(0, 100) + (email.body.length > 100 ? '...' : '') : 'No content available'),
       category: primaryCategory,
-      categories: categoriesArr,
+      categories: categoriesArrFinal,
       source: 'approved-fetch'
     };
 
@@ -3952,7 +3984,7 @@ app.post('/api/add-approved-email', async (req, res) => {
           date: email.date || new Date().toISOString(),
           seededOriginalOnly: true,
           category: primaryCategory,
-          categories: categoriesArr,
+          categories: categoriesArrFinal,
           // Use original body as placeholder to satisfy validation; cleaning is handled per-view
           body: email.body || '(seeded item)',
           snippet:
