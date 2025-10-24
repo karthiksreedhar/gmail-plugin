@@ -228,6 +228,10 @@
     .suggestions .opt:hover{
       background:#f1f3f4;
     }
+    .suggestions .opt.active{
+      background:#e8f0fe;
+      outline:1px solid #c7d2fe;
+    }
 
     .right-top{
       padding:10px 16px;
@@ -1037,34 +1041,94 @@
     sugg.className = 'suggestions';
     wrapper.appendChild(sugg);
 
-    // show custom suggestions when typing (enhances datalist)
+    // show custom suggestions when typing (enhances datalist) + keyboard nav
     let lastFilter = '';
+    let options = [];
+    let activeIndex = -1;
+
+    function renderOptions() {
+      if (!options.length) {
+        sugg.style.display = 'none';
+        sugg.innerHTML = '';
+        return;
+      }
+      sugg.innerHTML = options.map((o, i) => `<div class="opt${i===activeIndex ? ' active' : ''}">${escapeHtml(o)}</div>`).join('');
+      positionSuggestionsUnder(input, sugg);
+      sugg.style.display = 'block';
+      Array.from(sugg.querySelectorAll('.opt')).forEach((el, i) => {
+        el.onmouseenter = () => { activeIndex = i; updateActive(); };
+        el.onclick = (ev) => {
+          ev.stopPropagation();
+          chooseOption(options[i]);
+        };
+      });
+    }
+
+    function updateActive() {
+      const nodes = sugg.querySelectorAll('.opt');
+      nodes.forEach((el, i) => {
+        if (i === activeIndex) el.classList.add('active');
+        else el.classList.remove('active');
+      });
+      const node = nodes[activeIndex];
+      if (node && typeof node.scrollIntoView === 'function') {
+        node.scrollIntoView({ block: 'nearest' });
+      }
+    }
+
+    function chooseOption(name) {
+      const n = String(name || '').trim();
+      if (!n) return;
+      commitCategory(id, n);
+      input.value = '';
+      options = [];
+      activeIndex = -1;
+      sugg.style.display = 'none';
+    }
+
     input.addEventListener('input', () => {
       const v = (input.value || '').trim();
       if (v === lastFilter) return;
       lastFilter = v;
-      if (!v) { sugg.style.display = 'none'; sugg.innerHTML=''; return; }
-      const opts = (categories || []).filter(c => c.toLowerCase().includes(v.toLowerCase()) && !arr.some(a => a.toLowerCase() === c.toLowerCase())).slice(0, 8);
-      if (!opts.length) { sugg.style.display = 'none'; sugg.innerHTML=''; return; }
-      sugg.innerHTML = opts.map(o => `<div class="opt">${escapeHtml(o)}</div>`).join('');
-      positionSuggestionsUnder(input, sugg);
-      sugg.style.display = 'block';
-      Array.from(sugg.querySelectorAll('.opt')).forEach(el => {
-        el.onclick = (ev) => {
-          ev.stopPropagation();
-          commitCategory(id, el.textContent || '');
-        };
-      });
+      if (!v) {
+        options = [];
+        activeIndex = -1;
+        sugg.style.display = 'none';
+        sugg.innerHTML = '';
+        return;
+      }
+      const next = (categories || [])
+        .filter(c =>
+          c.toLowerCase().includes(v.toLowerCase()) &&
+          !arr.some(a => a.toLowerCase() === c.toLowerCase())
+        )
+        .slice(0, 8);
+      options = next;
+      activeIndex = -1;
+      renderOptions();
     });
 
     input.addEventListener('keydown', async (ev) => {
-      if (ev.key === 'Enter') {
+      if (ev.key === 'ArrowDown' && options.length) {
         ev.preventDefault();
-        const v = (input.value || '').trim();
-        if (!v) return;
-        commitCategory(id, v);
+        activeIndex = (activeIndex + 1) % options.length;
+        updateActive();
+      } else if (ev.key === 'ArrowUp' && options.length) {
+        ev.preventDefault();
+        activeIndex = (activeIndex <= 0 ? options.length - 1 : activeIndex - 1);
+        updateActive();
+      } else if (ev.key === 'Enter') {
+        ev.preventDefault();
+        if (options.length && activeIndex >= 0) {
+          chooseOption(options[activeIndex]);
+        } else {
+          const v = (input.value || '').trim();
+          if (v) chooseOption(v);
+        }
       } else if (ev.key === 'Escape') {
-        sugg.style.display='none';
+        sugg.style.display = 'none';
+        options = [];
+        activeIndex = -1;
       }
     });
 
