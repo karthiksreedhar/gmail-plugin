@@ -703,6 +703,7 @@
         <div class="it-actions">
           <button class="approve-btn" title="Approve to database">Approve</button>
           <button class="hide-btn" title="Hide this item">Hide</button>
+          <button class="hide-btn other-btn" title="Save as Other">Other</button>
         </div>
       `;
 
@@ -717,7 +718,7 @@
         </div>
       `;
 
-      // Hook approve/hide
+      // Hook approve/hide/other
       const approveBtn = div.querySelector('.approve-btn');
       if (approveBtn) {
         approveBtn.addEventListener('click', (ev) => {
@@ -730,6 +731,13 @@
         hideBtn.addEventListener('click', (ev) => {
           ev.stopPropagation();
           trashItem(it);
+        });
+      }
+      const otherBtn = div.querySelector('.other-btn');
+      if (otherBtn) {
+        otherBtn.addEventListener('click', (ev) => {
+          ev.stopPropagation();
+          approveOtherSeed(it);
         });
       }
 
@@ -837,6 +845,62 @@
       console.error('Approve failed', e);
       alert('Failed to approve this item. Please try again.');
     } finally {
+      hideOverlay();
+    }
+  }
+
+  async function approveOtherSeed(it){
+    try{
+      if (!it || !it.id) return;
+      showOverlay('Saving as Other', 'Saving to database...');
+
+      const rec = {
+        id: it.id,
+        subject: it.subject || 'No Subject',
+        from: it.from || 'Unknown Sender',
+        date: it.date || new Date().toISOString(),
+        snippet:
+          it.snippet ||
+          (typeof it.body === 'string'
+            ? it.body.slice(0, 100) + (it.body.length > 100 ? '...' : '')
+            : ''),
+        body: it.body || it.snippet || '',
+        tags: {
+          unreplied: !!(it.tags && it.tags.unreplied),
+          thread: !!(it.tags && it.tags.thread)
+        },
+        // Force ONLY "Other" as the category
+        category: 'Other',
+        categories: []
+      };
+
+      const res = await fetch('/api/seed-categories/add-all', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ items: [rec] })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data || data.success !== true){
+        throw new Error((data && data.error) || 'Save failed');
+      }
+
+      // Remove locally and refresh UI
+      seedItems = seedItems.filter(x => x.id !== it.id);
+      selectedCatsById.delete(it.id);
+      senderKeyById.delete(it.id);
+      senderPresenceById.delete(it.id);
+
+      if (selectedId === it.id) selectedId = '';
+      renderList();
+      updateCount();
+      if (seedItems.length){
+        selectItem(seedItems[0].id);
+      }else{
+        renderDetailEmpty();
+      }
+    }catch(e){
+      console.error('Save as Other failed', e);
+      alert('Failed to save as Other. Please try again.');
+    }finally{
       hideOverlay();
     }
   }

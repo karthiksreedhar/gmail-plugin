@@ -620,6 +620,7 @@
         <div class="it-actions">
           <button class="approve-btn" title="Approve to database" onclick="event.stopPropagation(); approveOne('${it.id}')">Approve</button>
           <button class="hide-btn" title="Hide this item" onclick="event.stopPropagation(); hideOne('${it.id}')">Hide</button>
+          <button class="hide-btn" title="Save as Other" onclick="event.stopPropagation(); approveOther('${it.id}')">Other</button>
         </div>
       `;
 
@@ -1228,6 +1229,65 @@
     } catch (e) {
       hideOverlay();
       alert('Failed to approve email.');
+    }
+  }
+
+  // Save to DB as "Other" only (no extra categories)
+  async function approveOther(id){
+    const it = loadItems.find(x => x.id === id);
+    if (!it) return;
+    showOverlay('Saving as Other', 'Persisting to database...');
+    try {
+      // Ensure "Other" exists in master list (best-effort)
+      if (!categories.some(c => String(c || '').toLowerCase() === 'other')) {
+        try {
+          const res = await fetch('/api/categories/add', {
+            method:'POST', headers:{'Content-Type':'application/json'},
+            body: JSON.stringify({ name: 'Other' })
+          });
+          const dataAdd = await res.json().catch(()=> ({}));
+          if (res.ok && dataAdd && dataAdd.success && Array.isArray(dataAdd.categories)) {
+            categories = dataAdd.categories;
+          }
+        } catch(_){}
+      }
+
+      const resp = await fetch('/api/add-approved-email', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({
+          email: {
+            id: it.id,
+            subject: it.subject || 'No Subject',
+            from: it.from || 'Unknown Sender',
+            date: it.date || new Date().toISOString(),
+            body: it.body || it.snippet || '',
+            snippet: it.snippet || (it.body ? String(it.body).slice(0, 100) + (it.body.length > 100 ? '...' : '') : ''),
+            category: 'Other',
+            categories: []
+          }
+        })
+      });
+      const data = await resp.json().catch(()=> ({}));
+      hideOverlay();
+      if (!resp.ok || !data || data.success !== true){
+        alert('Failed to save as Other.');
+        return;
+      }
+      // Remove approved item locally and refresh UI
+      loadItems = loadItems.filter(x => x.id !== id);
+      if (selectedId === id) selectedId = '';
+      renderList();
+      if (loadItems.length) selectItem(loadItems[0].id);
+      document.getElementById('leftStatus').textContent = `${loadItems.length} remaining`;
+      document.getElementById('countStat').textContent = loadItems.length ? `(${loadItems.length})` : '';
+      if (!loadItems.length) {
+        window.location.href = '/?msg=All Email/Threads processed';
+        return;
+      }
+    } catch (e) {
+      hideOverlay();
+      alert('Failed to save as Other.');
     }
   }
 
