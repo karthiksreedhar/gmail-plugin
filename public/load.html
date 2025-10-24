@@ -394,6 +394,7 @@
   let selectedId = '';
   let countRequested = 0;
   let existingIds = new Set(); // ids already in DB (unreplied + responses)
+  let existingSubjectKeys = new Set(); // normalized subjects already in DB (responses + unreplied)
 
   // Utilities
   function showOverlay(title, msg){
@@ -421,6 +422,12 @@
     if (diff < 2) return 'Yesterday';
     if (diff < 7) return `${Math.floor(diff)} days ago`;
     return d.toLocaleDateString('en-US', {month:'short', day:'numeric'});
+  }
+
+  function normSubject(s){
+    try{
+      return String(s || '').toLowerCase().replace(/^re:\s*/i,'').trim();
+    }catch(_){ return ''; }
   }
 
   function getQueryCount() {
@@ -453,13 +460,22 @@
         categories = Array.isArray(d.categories) ? d.categories : [];
       } catch(_){ categories = []; }
 
-      // Build existing id set (unreplied + responses)
+      // Build existing id and subject/from pairs sets (unreplied + responses)
       existingIds = new Set();
+      existingSubjectKeys = new Set();
       try {
         const r1 = await fetch('/api/unreplied-emails'); const d1 = await r1.json();
         const r2 = await fetch('/api/response-emails'); const d2 = await r2.json();
-        (Array.isArray(d1.emails) ? d1.emails : []).forEach(e => { if (e && e.id) existingIds.add(e.id); });
-        (Array.isArray(d2.emails) ? d2.emails : []).forEach(e => { if (e && e.id) existingIds.add(e.id); });
+        const add = (arr) => {
+          (Array.isArray(arr) ? arr : []).forEach(e => {
+            if (e && e.id) existingIds.add(e.id);
+            const sk = normSubject(e && e.subject);
+            const fromLc = String((e && (e.originalFrom || e.from)) || '').toLowerCase();
+            if (sk) existingSubjectKeys.add(`${sk}|${fromLc}`);
+          });
+        };
+        add(d1.emails);
+        add(d2.emails);
       } catch(_){}
 
       // Fetch more emails (overfetch to allow dedup)
@@ -491,14 +507,23 @@
         return;
       }
 
-      // Deduplicate by id against DB then take requested count
+      // Deduplicate against DB by id and by normalized subject/from; then take requested count
       const uniq = [];
       const seen = new Set();
+      const seenSubjPairs = new Set();
       for (const e of rawEmails) {
         if (!e || !e.id) continue;
-        if (existingIds.has(e.id)) continue; // skip already in DB
+        const subjKey = normSubject(e.subject);
+        const fromLc = String(e.from || '').toLowerCase();
+        const pairKey = `${subjKey}|${fromLc}`;
+        if (existingIds.has(e.id)) continue; // skip already in DB by id
         if (seen.has(e.id)) continue;
+        // skip if DB already contains same normalized subject/from pair
+        if (subjKey && existingSubjectKeys.has(pairKey)) continue;
+        // skip duplicates within this batch by subject/from too
+        if (subjKey && seenSubjPairs.has(pairKey)) continue;
         seen.add(e.id);
+        if (subjKey) seenSubjPairs.add(pairKey);
         uniq.push(e);
         if (uniq.length >= countRequested) break;
       }

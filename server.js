@@ -2944,19 +2944,20 @@ app.post('/api/fetch-more-emails', async (req, res) => {
             );
 
             if (!isDuplicate && !isAlreadyAdded) {
-              const processedEmail = {
-                id: emailData.id,
-                subject: emailData.subject,
-                from: emailData.from,
-                date: emailData.date,
-                body: emailData.body,
-                snippet: emailData.snippet || (emailData.body ? emailData.body.substring(0, 100) + (emailData.body.length > 100 ? '...' : '') : 'No content available'),
-                category: keywordCategorizeUnreplied(emailData.subject || '', emailData.body || '', emailData.from || ''),
-                source: 'gmail-api',
-                webUrl: emailData.webUrl || ''
-              };
+          const processedEmail = {
+            id: emailData.id,
+            subject: emailData.subject,
+            from: emailData.from,
+            date: emailData.date,
+            threadId: emailData.threadId || '',
+            body: emailData.body,
+            snippet: emailData.snippet || (emailData.body ? emailData.body.substring(0, 100) + (emailData.body.length > 100 ? '...' : '') : 'No content available'),
+            category: keywordCategorizeUnreplied(emailData.subject || '', emailData.body || '', emailData.from || ''),
+            source: 'gmail-api',
+            webUrl: emailData.webUrl || ''
+          };
 
-              uniqueEmails.push(processedEmail);
+          uniqueEmails.push(processedEmail);
             }
           } catch (emailError) {
             console.error('Error processing email:', emailError);
@@ -2964,12 +2965,38 @@ app.post('/api/fetch-more-emails', async (req, res) => {
           }
         }
 
-        console.log(`Successfully processed ${uniqueEmails.length} emails from today`);
+        // Group by thread to ensure one entry per thread and skip threads already in DB
+        const existingThreadsForToday = loadEmailThreads();
+        const existingThreadIdSet = new Set((existingThreadsForToday || []).map(t => t && t.id).filter(Boolean));
+        // Also build a subject/from normalization set from existing DB to prevent duplicates by content when thread linking is unavailable
+        const existingRespForToday = loadResponseEmails();
+        const existingUnrepForToday = loadUnrepliedEmails();
+        const toPairKey = (subj, from) => `${String(subj || '').toLowerCase().replace(/^re:\s*/i,'').trim()}|${String(from || '').toLowerCase()}`;
+        const existingPairs = new Set();
+        (existingRespForToday || []).forEach(x => existingPairs.add(toPairKey(x && x.subject, (x && (x.originalFrom || x.from)) || '')));
+        (existingUnrepForToday || []).forEach(x => existingPairs.add(toPairKey(x && x.subject, (x && (x.originalFrom || x.from)) || '')));
+
+        const dedupedByThread = [];
+        const seenThreads = new Set();
+        const seenPairs = new Set();
+        for (const e of uniqueEmails) {
+          const threadKey = e.threadId ? `thread-${e.threadId}` : `thread-${e.id}`;
+          const pairKey = toPairKey(e && e.subject, e && e.from);
+          if (existingThreadIdSet.has(threadKey)) continue;
+          if (existingPairs.has(pairKey)) continue;
+          if (seenThreads.has(threadKey)) continue;
+          if (seenPairs.has(pairKey)) continue;
+          seenThreads.add(threadKey);
+          seenPairs.add(pairKey);
+          dedupedByThread.push(e);
+        }
+
+        console.log(`Successfully processed ${dedupedByThread.length} threads from today`);
 
         return res.json({
           success: true,
-          message: `Fetched ${uniqueEmails.length} emails from today`,
-          emails: uniqueEmails,
+          message: `Fetched ${dedupedByThread.length} threads from today`,
+          emails: dedupedByThread,
           fallback: false,
           fetchAttempts: 1
         });
@@ -3039,8 +3066,9 @@ app.post('/api/fetch-more-emails', async (req, res) => {
                 subject: emailData.subject,
                 from: emailData.from,
                 date: emailData.date,
+                threadId: emailData.threadId || '',
                 body: emailData.body,
-                snippet: emailData.snippet || (emailData.body ? emailData.body.substring(0, 100) + (emailData.body.length > 100 ? '...' : '') : 'No content available'),
+                snippet: emailData.snippet || (emailData.body ? String(emailData.body).slice(0, 100) + (String(emailData.body).length > 100 ? '...' : '') : 'No content available'),
                 category: keywordCategorizeUnreplied(emailData.subject || '', emailData.body || '', emailData.from || ''),
                 source: 'gmail-api',
                 webUrl: emailData.webUrl || ''
@@ -3069,12 +3097,109 @@ app.post('/api/fetch-more-emails', async (req, res) => {
         }
       }
 
-      console.log(`Successfully processed ${uniqueEmails.length} unique emails from Gmail`);
+      // Group by thread to ensure one entry per thread and skip threads already in DB
+      const existingThreadsForInbox = loadEmailThreads();
+      const existingThreadIdSet = new Set((existingThreadsForInbox || []).map(t => t && t.id).filter(Boolean));
+      // Also build a subject/from normalization set from existing DB to prevent duplicates by content when thread linking is unavailable
+      const existingRespForInbox = loadResponseEmails();
+      const existingUnrepForInbox = loadUnrepliedEmails();
+      const toPairKey = (subj, from) => `${String(subj || '').toLowerCase().replace(/^re:\s*/i,'').trim()}|${String(from || '').toLowerCase()}`;
+      const existingPairs = new Set();
+      (existingRespForInbox || []).forEach(x => existingPairs.add(toPairKey(x && x.subject, (x && (x.originalFrom || x.from)) || '')));
+      (existingUnrepForInbox || []).forEach(x => existingPairs.add(toPairKey(x && x.subject, (x && (x.originalFrom || x.from)) || '')));
+
+      const dedupedByThread = [];
+      const seenThreads = new Set();
+      const seenPairs = new Set();
+      for (const e of uniqueEmails) {
+        const threadKey = e.threadId ? `thread-${e.threadId}` : `thread-${e.id}`;
+        const pairKey = toPairKey(e && e.subject, e && e.from);
+        if (existingThreadIdSet.has(threadKey)) continue;
+        if (existingPairs.has(pairKey)) continue;
+        if (seenThreads.has(threadKey)) continue;
+        if (seenPairs.has(pairKey)) continue;
+        seenThreads.add(threadKey);
+        seenPairs.add(pairKey);
+        dedupedByThread.push(e);
+        if (dedupedByThread.length >= emailCount) break;
+      }
+
+      // If after thread + subject/from de-dup we still don't have enough,
+      // widen the search (drop is:important) and increase the fetch size to top up.
+      if (dedupedByThread.length < emailCount) {
+        let widenAttempts = 0;
+        let widenedQuery = searchQuery.replace(/\bis:important\b/ig, '').trim();
+        let cap = Math.min(Math.max((typeof currentMaxResults === 'number' ? currentMaxResults : emailCount * 2) * 2, emailCount * 4), 100);
+
+        while (dedupedByThread.length < emailCount && widenAttempts < 3) {
+          try {
+            const moreMessages = await searchGmailEmails(widenedQuery || 'in:inbox', cap);
+
+            // Process and merge any additional emails into uniqueEmails
+            for (const message of moreMessages) {
+              try {
+                const emailData = await getGmailEmail(message.id);
+
+                const isDuplicate = existingUnrepliedEmails.some(existing =>
+                  existing && existing.id === emailData.id
+                );
+                const isAlreadyAdded = uniqueEmails.some(added =>
+                  added && added.id === emailData.id
+                );
+
+                if (!isDuplicate && !isAlreadyAdded) {
+                  const processedEmail = {
+                    id: emailData.id,
+                    subject: emailData.subject,
+                    from: emailData.from,
+                    date: emailData.date,
+                    threadId: emailData.threadId || '',
+                    body: emailData.body,
+                    snippet: emailData.snippet || (emailData.body ? String(emailData.body).slice(0, 100) + (String(emailData.body).length > 100 ? '...' : '') : 'No content available'),
+                    category: keywordCategorizeUnreplied(emailData.subject || '', emailData.body || '', emailData.from || ''),
+                    source: 'gmail-api',
+                    webUrl: emailData.webUrl || ''
+                  };
+                  uniqueEmails.push(processedEmail);
+                }
+              } catch (_) {
+                // ignore and continue
+              }
+            }
+
+            // Recompute deduped list from the expanded uniqueEmails pool
+            dedupedByThread.length = 0;
+            seenThreads.clear();
+            seenPairs.clear();
+            for (const e of uniqueEmails) {
+              const threadKey = e.threadId ? `thread-${e.threadId}` : `thread-${e.id}`;
+              const pairKey = toPairKey(e && e.subject, e && e.from);
+              if (existingThreadIdSet.has(threadKey)) continue;
+              if (existingPairs.has(pairKey)) continue;
+              if (seenThreads.has(threadKey)) continue;
+              if (seenPairs.has(pairKey)) continue;
+              seenThreads.add(threadKey);
+              seenPairs.add(pairKey);
+              dedupedByThread.push(e);
+              if (dedupedByThread.length >= emailCount) break;
+            }
+
+            // Increase cap for next attempt if still short
+            cap = Math.min(cap * 2, 100);
+          } catch (_) {
+            // break out on repeated failures
+          }
+          widenAttempts++;
+        }
+      }
+
+      const finalList = dedupedByThread.slice(0, emailCount);
+      console.log(`Successfully processed ${finalList.length} unique threads from Gmail`);
 
       res.json({
         success: true,
-        message: `Fetched ${uniqueEmails.length} unique emails from Gmail inbox`,
-        emails: uniqueEmails,
+        message: `Fetched ${finalList.length} unique threads from Gmail inbox`,
+        emails: finalList,
         fallback: false,
         fetchAttempts: fetchAttempts
       });
@@ -3936,13 +4061,21 @@ app.post('/api/add-approved-email', async (req, res) => {
     }
 
     // Persist a minimal thread (original-only) so UI can render the original message
-    const threadId = `thread-${email.id}`;
+    let computedThreadId = `thread-${email.id}`;
+    try {
+      if (gmail) {
+        const info = await getGmailEmail(email.id);
+        if (info && info.threadId) {
+          computedThreadId = `thread-${info.threadId}`;
+        }
+      }
+    } catch (_) {}
     let wroteThread = false;
-    if (!threadsById.has(threadId)) {
+    if (!threadsById.has(computedThreadId)) {
       try {
         const threads = existingThreads.slice();
         threads.push({
-          id: threadId,
+          id: computedThreadId,
           subject: email.subject || 'No Subject',
           originalFrom: email.from || 'Unknown Sender',
           from: meEmail || meName || 'You',
