@@ -3461,6 +3461,7 @@ const pillsHtml = catNames.map(cat => {
                 <div class="thread-body">
                     <div id="thread-notes-preview" class="notes-preview" style="display:none;"></div>
                     ${cards || '<div class="no-emails" style="padding: 12px;">No messages in this thread.</div>'}
+                    <div id="inlineReplyCompose" class="inline-compose" style="display:none; margin-top: 12px;"></div>
                 </div>
             `;
             // Render email notes preview box for this thread
@@ -3485,7 +3486,7 @@ const pillsHtml = catNames.map(cat => {
             } catch (_) {}
         }
 
-        // Reply button entrypoint: open Generate Response with latest message filled in
+        // Reply button entrypoint: open inline Generate Response with latest message filled in
         function replyToCurrentThread() {
             try {
                 const ctx = window.currentThreadContext || {};
@@ -3497,12 +3498,108 @@ const pillsHtml = catNames.map(cat => {
                 // Prefer the latest non-response message; fallback to the last message
                 const sorted = messages.slice().sort((a,b) => new Date(a.date) - new Date(b.date));
                 const latestIncoming = [...sorted].reverse().find(m => !m.isResponse) || sorted[sorted.length - 1];
+
+                // Show inline composer instead of popup
+                showInlineReplyComposer(latestIncoming, ctx);
+            } catch (e) {
+                console.error('replyToCurrentThread failed:', e);
+                showErrorPopup('Failed to open reply composer.', 'Reply Failed');
+            }
+        }
+
+        // Inline composer renderer (injects Generate Response UI below thread and scrolls to it)
+        function showInlineReplyComposer(latestIncoming, ctx) {
+            try {
+                // Remove popup modal if it exists to avoid duplicate element IDs
+                const existingModal = document.getElementById('generateResponseModal');
+                if (existingModal) { try { existingModal.remove(); } catch(_) {} }
+
+                const threadPane = document.getElementById('threadView');
+                const container = document.getElementById('inlineReplyCompose');
+                if (!threadPane || !container) return;
+
+                // Build inline compose once
+                if (!container.hasChildNodes()) {
+                    container.innerHTML = `
+                        <div class="generate-form-container">
+                            <form id="generateResponseForm" onsubmit="handleGenerateResponse(event)">
+                                <div class="form-group">
+                                    <label for="senderInput">Sender:</label>
+                                    <input type="text" id="senderInput" placeholder="Enter sender email (optional)">
+                                </div>
+                                <div class="form-group">
+                                    <label for="subjectInput">Subject:</label>
+                                    <input type="text" id="subjectInput" placeholder="Enter email subject (optional)">
+                                </div>
+                                <div class="form-group">
+                                    <label for="emailBodyInput">Email Body: <span class="required">*</span></label>
+                                    <textarea id="emailBodyInput" rows="8" placeholder="Enter the email content you want to respond to..." required></textarea>
+                                </div>
+                                <div class="form-group">
+                                    <label for="contextInput" style="display:flex; align-items:center; justify-content:space-between;">
+                                        <span>Additional Context:</span>
+                                        <div style="display:flex; gap:8px;">
+                                            <button type="button" id="seeEmailNotesBtn" class="select-email-btn" style="display:none;">See Email Notes</button>
+                                            <button type="button" id="seeCategorySummaryBtn" class="select-email-btn" style="display:none;">See Category Summary</button>
+                                            <button type="button" id="seeCategoryNotesBtn" class="select-email-btn" style="display:none;">See Category Notes</button>
+                                        </div>
+                                    </label>
+                                    <textarea id="contextInput" rows="3" placeholder="Any additional context or specific instructions (optional)"></textarea>
+                                </div>
+                                <div class="form-actions">
+                                    <button type="submit" class="generate-submit-btn">
+                                        <span class="btn-text">Generate Response</span>
+                                        <span class="btn-loading" style="display: none;">Generating...</span>
+                                    </button>
+                                </div>
+                            </form>
+
+                            <div id="generatedResponseArea" style="display: none;">
+                                <div class="response-header">
+                                    <h3>Generated Response:</h3>
+                                    <div style="display: flex; gap: 8px;">
+                                        <button class="copy-response-btn" onclick="copyResponseToClipboard()">Copy to Clipboard</button>
+                                        <button class="edit-response-btn" onclick="enableResponseEditing()">Edit</button>
+                                    </div>
+                                </div>
+                                <div class="response-content">
+                                    <div id="responseDisplay" class="response-display"></div>
+                                    <textarea id="responseEditor" class="response-editor" style="display: none;"></textarea>
+                                </div>
+                                <div class="response-actions">
+                                    <button class="save-edit-btn" onclick="saveResponseEdit()" style="display: none;">Save Changes</button>
+                                    <button class="cancel-edit-btn" onclick="cancelResponseEdit()" style="display: none;">Cancel</button>
+                                </div>
+                            </div>
+
+                            <div id="refineSection" style="display: none;">
+                                <div class="refine-header">
+                                    <h3>Refine Response:</h3>
+                                </div>
+                                <div class="form-group">
+                                    <textarea id="refinePrompt" rows="3" placeholder="Describe how you'd like to modify the response (e.g., 'make it more formal', 'add availability for next week', 'make it shorter')"></textarea>
+                                </div>
+                                <div class="refine-actions">
+                                    <button class="refine-btn" onclick="refineResponse()">
+                                        <span class="btn-text">Refine Response</span>
+                                        <span class="btn-loading" style="display: none;">Refining...</span>
+                                    </button>
+                                    <button class="save-response-btn" onclick="saveCurrentResponse()">
+                                        <span class="btn-text">Save Response</span>
+                                        <span class="btn-loading" style="display: none;">Saving...</span>
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                }
+
+                // Make visible and prefill fields
+                container.style.display = 'block';
                 const from = latestIncoming.from || '';
-                const subj = latestIncoming.subject || ctx.subject || '';
+                const subj = latestIncoming.subject || (ctx && ctx.subject) || '';
                 const body = (latestIncoming.body != null ? String(latestIncoming.body) : '');
 
-                // Open the existing Generate Response modal and prefill
-                showGenerateResponseModal();
                 const senderInput = document.getElementById('senderInput');
                 const subjectInput = document.getElementById('subjectInput');
                 const emailBodyInput = document.getElementById('emailBodyInput');
@@ -3510,13 +3607,12 @@ const pillsHtml = catNames.map(cat => {
                 if (subjectInput) subjectInput.value = subj;
                 if (emailBodyInput) emailBodyInput.value = body;
 
-                // Expose contextual buttons for all associated categories and email notes
+                // Expose contextual buttons for associated categories and email notes
                 const cats = Array.isArray(ctx.categories) && ctx.categories.length
                     ? ctx.categories.slice()
                     : (ctx.category ? [ctx.category] : []);
                 window.currentContextCategories = cats;
                 currentContextCategory = cats[0] || '';
-                // Ensure the selected email context survives modal reset so "See Email Notes" can appear
                 window.currentContextEmailId = ctx.emailId || window.currentContextEmailId;
 
                 const seeNotesBtn = document.getElementById('seeCategoryNotesBtn');
@@ -3550,9 +3646,14 @@ const pillsHtml = catNames.map(cat => {
                         seeEmailNotesBtn.onclick = null;
                     }
                 }
+
+                // Focus and scroll into view
+                try { emailBodyInput && emailBodyInput.focus(); } catch(_) {}
+                try { container.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
+                catch(_) { try { threadPane.scrollTop = threadPane.scrollHeight; } catch(_) {} }
             } catch (e) {
-                console.error('replyToCurrentThread failed:', e);
-                showErrorPopup('Failed to open reply composer.', 'Reply Failed');
+                console.error('showInlineReplyComposer failed:', e);
+                showErrorPopup('Failed to render inline composer.', 'Reply Failed');
             }
         }
 
