@@ -1,0 +1,417 @@
+User: ks4190@columbia.edu
+Train size: 194 | Test size: 49
+Accuracy (strict multi-label containment): 55.10% (27/49)
+Correctly assigned tags: 31/59
+Extra Tags Suggested: 18
+Emails completely correct (exact match): 27
+Emails mostly correct (<=1 total tag error): 31
+Emails almost correct (<=2 total tag error): 43
+Emails somewhat correct (<=3 total tag error): 49
+Emails Assigned Correctly Other than Extra Tags: 0
+
+Details per test email:
+-----------------------
+ID: 198a5603d8e3b4fa
+Subject: Re: Updated invitation: Riya Karthik lydia @ Wed Aug 13, 2025 6:30pm - 7:30pm (EDT) (Karthik Sreedhar)
+Actual: Lydia Chilton
+Suggested: Lydia Chilton
+Missing (actual not suggested): (none)
+Extra (suggested not in actual): (none)
+Reason:
+  - Model chose "Lydia Chilton" mapped to "Lydia Chilton"
+
+ID: 1992ec50ab9544bf
+Subject: You're in! Thank you for registering for Trivia Night on 9/16
+Actual: Other
+Suggested: Other
+Missing (actual not suggested): (none)
+Extra (suggested not in actual): (none)
+
+ID: 19a08691d4cbddfb
+Subject: Cocoahouse this Thursday ☕️🍪| EGSC Weekly Newsletter
+Actual: Engineering, University
+Suggested: Engineering
+Missing (actual not suggested): University
+Extra (suggested not in actual): (none)
+Reason:
+  - Model chose "Engineering" mapped to "Engineering"
+
+ID: 19976e2b23d26fcd
+Subject: Share Your Thoughts on Columbia’s Institutional Culture by Friday, Sept. 26
+Actual: University
+Suggested: University
+Missing (actual not suggested): (none)
+Extra (suggested not in actual): (none)
+Reason:
+  - Model chose "University" mapped to "University"
+
+ID: 198fc3cb955f0282
+Subject: Ride Receipt from Muhammad
+Actual: Receipts
+Suggested: Receipts
+Missing (actual not suggested): (none)
+Extra (suggested not in actual): (none)
+Reason:
+  - Model chose "Receipts" mapped to "Receipts"
+
+ID: 1989a5c88822320d
+Subject: Re: Fw: Invitation from Carson at 110-114 Ridge St
+Actual: Apartment
+Suggested: Other
+Missing (actual not suggested): Apartment
+Extra (suggested not in actual): Other
+
+ID: 19953b2d56f74772
+Subject: Re: COMS9902 Homework
+Actual: Other
+Suggested: Other
+Missing (actual not suggested): (none)
+Extra (suggested not in actual): (none)
+
+ID: 1992a80284280156
+Subject: INFORM: your enrollment request for COMS6998E016: IMMERSIVE PRODUCTION AI has been approved!
+Actual: University
+Suggested: University
+Missing (actual not suggested): (none)
+Extra (suggested not in actual): (none)
+Reason:
+  - Model chose "University" mapped to "University"
+
+ID: 19955204a40be50a
+Subject: Re: gmail error
+Actual: Lydia Chilton
+Suggested: Lydia Chilton
+Missing (actual not suggested): (none)
+Extra (suggested not in actual): (none)
+Reason:
+  - Model chose "Lydia Chilton" mapped to "Lydia Chilton"
+
+ID: 199e59b3d3f11137
+Subject: New Sign-in to Your Account
+Actual: Accounts
+Suggested: Accounts
+Missing (actual not suggested): (none)
+Extra (suggested not in actual): (none)
+Reason:
+  - Model chose "Accounts" mapped to "Accounts"
+
+ID: 1992f45cfab122ae
+Subject: Update on Columbia Presidential Search
+Actual: University
+Suggested: University
+Missing (actual not suggested): (none)
+Extra (suggested not in actual): (none)
+Reason:
+  - Model chose "University" mapped to "University"
+
+ID: 19621abecc439477
+Subject: Re: Request to Resubmit HW1 Main & Submit HW5 Main
+Actual: UI Design
+Suggested: University
+Missing (actual not suggested): UI Design
+Extra (suggested not in actual): University
+Reason:
+  - Model chose "University" mapped to "University"
+
+ID: 196ea8accd29b3d4
+Subject: Re: ACT NOW - Time is running out - Get your graduation tickets.
+Actual: University
+Suggested: University
+Missing (actual not suggested): (none)
+Extra (suggested not in actual): (none)
+Reason:
+  - Model chose "University" mapped to "University"
+
+ID: 19a11a0f8b8409dc
+Subject: [Phd-students] Sidewalk Repair Work in front of Mudd - November 1-4th
+Actual: Engineering, University
+Suggested: Other
+Missing (actual not suggested): Engineering, University
+Extra (suggested not in actual): Other
+
+ID: 199ca8f9aa2f836e
+Subject: Re: Canceled event: Karthik Riya lydia @ Thu Oct 9, 2025 11:45am - 12:45pm (EDT) (Karthik Sreedhar)
+Actual: Lydia Chilton
+Suggested: Lydia Chilton
+Missing (actual not suggested): (none)
+Extra (suggested not in actual): (none)
+Reason:
+  - Model chose "Lydia Chilton" mapped to "Lydia Chilton"
+
+ID: 1992fc38dde63761
+Subject: Get Your BOAT CRUISE Tickets THIS WEEK! | EGSC Weekly Newsletter
+Actual: University, Engineering
+Suggested: Other
+Missing (actual not suggested): University, Engineering
+Extra (suggested not in actual): Other
+
+ID: 19a06a058589b6a6
+Subject: Re: Karthik Lydia
+Actual: Lydia Chilton
+Suggested: Lydia Chilton
+Missing (actual not suggested): (none)
+Extra (suggested not in actual): (none)
+Reason:
+  - Model chose "Lydia Chilton" mapped to "Lydia Chilton"
+
+ID: 1996dfe020eb2c39
+Subject: Receipt from square pizza inc #XnC2
+Actual: Receipts
+Suggested: Receipts
+Missing (actual not suggested): (none)
+Extra (suggested not in actual): (none)
+Reason:
+  - Model chose "Receipts" mapped to "Receipts"
+
+ID: 18f6a6a82df5f351
+Subject: Re: Last 2 assignments
+Actual: UI Design
+Suggested: University
+Missing (actual not suggested): UI Design
+Extra (suggested not in actual): University
+Reason:
+  - Model chose "University" mapped to "University"
+
+ID: 1989b9be51ddddf1
+Subject: Re: Security Deposit
+Actual: Apartment
+Suggested: Apartment
+Missing (actual not suggested): (none)
+Extra (suggested not in actual): (none)
+Reason:
+  - Model chose "Apartment" mapped to "Apartment"
+
+ID: 1991f84a485b742d
+Subject: Fw: Lululemon is falling out of fashion
+Actual: Appa
+Suggested: Other
+Missing (actual not suggested): Appa
+Extra (suggested not in actual): Other
+
+ID: 19978185b0a26042
+Subject: BOAT CRUISE THIS FRIDAY! | EGSC Weekly Newsletter
+Actual: University, Engineering
+Suggested: Engineering
+Missing (actual not suggested): University
+Extra (suggested not in actual): (none)
+Reason:
+  - Model chose "Engineering" mapped to "Engineering"
+
+ID: 199347ee18eaca0c
+Subject: Re: [tickets.cs.columbia.edu #202359] Re: Fall 2025 New GRA Appointment
+Actual: University
+Suggested: Other
+Missing (actual not suggested): University
+Extra (suggested not in actual): Other
+
+ID: 195ed502abccd25a
+Subject: Re: MS Program Clearance
+Actual: University
+Suggested: University
+Missing (actual not suggested): (none)
+Extra (suggested not in actual): (none)
+Reason:
+  - Model chose "University" mapped to "University"
+
+ID: 1991aed2b0e07a2c
+Subject: Fwd: secret class!
+Actual: Lydia Chilton
+Suggested: Lydia Chilton
+Missing (actual not suggested): (none)
+Extra (suggested not in actual): (none)
+Reason:
+  - Model chose "Lydia Chilton" mapped to "Lydia Chilton"
+
+ID: 198664ba25a20172
+Subject: Re: look what kayak just added!!!!
+Actual: Lydia Chilton
+Suggested: Lydia Chilton
+Missing (actual not suggested): (none)
+Extra (suggested not in actual): (none)
+Reason:
+  - Model chose "Lydia Chilton" mapped to "Lydia Chilton"
+
+ID: 1999c549c25c6189
+Subject: In case you missed it
+Actual: University
+Suggested: University
+Missing (actual not suggested): (none)
+Extra (suggested not in actual): (none)
+Reason:
+  - Model chose "University" mapped to "University"
+
+ID: 196011e10eb3a505
+Subject: Re: NICAR reimbursement
+Actual: Other
+Suggested: Other
+Missing (actual not suggested): (none)
+Extra (suggested not in actual): (none)
+
+ID: 1995cea415bfd6ff
+Subject: Action Required: Columbia Student Health Insurance Plan
+Actual: Medical, University
+Suggested: Other
+Missing (actual not suggested): Medical, University
+Extra (suggested not in actual): Other
+
+ID: 19a02dc0137be3ff
+Subject: Confirm your email address on Slack
+Actual: Accounts
+Suggested: Accounts
+Missing (actual not suggested): (none)
+Extra (suggested not in actual): (none)
+Reason:
+  - Model chose "Accounts" mapped to "Accounts"
+
+ID: 198e2a4f3068da4e
+Subject: Re: Welcome to CS@CU from CS Operations
+Actual: University
+Suggested: Other
+Missing (actual not suggested): University
+Extra (suggested not in actual): Other
+
+ID: 19992b755861ca0f
+Subject: Receipt from square pizza inc #P51C
+Actual: Receipts
+Suggested: Receipts
+Missing (actual not suggested): (none)
+Extra (suggested not in actual): (none)
+Reason:
+  - Model chose "Receipts" mapped to "Receipts"
+
+ID: 19981bce533fe8a7
+Subject: Flybridge Columbia Breakfast: Connect with Startups & Talent
+Actual: University
+Suggested: Other
+Missing (actual not suggested): University
+Extra (suggested not in actual): Other
+
+ID: 199f347966db548b
+Subject: CCPE - 2026 Graduate Student Grant Opportunity
+Actual: Engineering, University
+Suggested: Other
+Missing (actual not suggested): Engineering, University
+Extra (suggested not in actual): Other
+
+ID: 199343f04e313615
+Subject: Re: Canceled event: Karthik Riya lydia @ Wed Sep 10, 2025 1pm - 2pm (EDT) (Karthik Sreedhar)
+Actual: Lydia Chilton
+Suggested: Lydia Chilton
+Missing (actual not suggested): (none)
+Extra (suggested not in actual): (none)
+Reason:
+  - Model chose "Lydia Chilton" mapped to "Lydia Chilton"
+
+ID: 19a306a25aeb6d6d
+Subject: DoubleAgents
+Actual: Lydia Chilton
+Suggested: Lydia Chilton
+Missing (actual not suggested): (none)
+Extra (suggested not in actual): (none)
+Reason:
+  - Model chose "Lydia Chilton" mapped to "Lydia Chilton"
+
+ID: 19973ade9c3fbb04
+Subject: Upcoming October IDP Sessions – Flyers Attached
+Actual: University, Engineering
+Suggested: University
+Missing (actual not suggested): Engineering
+Extra (suggested not in actual): (none)
+Reason:
+  - Model chose "University" mapped to "University"
+
+ID: 19943a2e926ffb3b
+Subject: Order complete: #63591498 Doodie Baby Ch. 5
+Actual: Receipts
+Suggested: Receipts
+Missing (actual not suggested): (none)
+Extra (suggested not in actual): (none)
+Reason:
+  - Model chose "Receipts" mapped to "Receipts"
+
+ID: 1995f2a9ae5f45f4
+Subject: Re: random feature request for gmail twin
+Actual: Lydia Chilton
+Suggested: Lydia Chilton
+Missing (actual not suggested): (none)
+Extra (suggested not in actual): (none)
+Reason:
+  - Model chose "Lydia Chilton" mapped to "Lydia Chilton"
+
+ID: 199fdcaa088884a6
+Subject: amazon.com: Password recovery
+Actual: Accounts
+Suggested: Accounts
+Missing (actual not suggested): (none)
+Extra (suggested not in actual): (none)
+Reason:
+  - Model chose "Accounts" mapped to "Accounts"
+
+ID: 19a2bc3f400a9261
+Subject: GDM links
+Actual: Kavya Sreedhar
+Suggested: Other
+Missing (actual not suggested): Kavya Sreedhar
+Extra (suggested not in actual): Other
+
+ID: 199864ab8d858f71
+Subject: Fwd: Potential Student Membership Extension due to Back Injury
+Actual: Accounts
+Suggested: Other
+Missing (actual not suggested): Accounts
+Extra (suggested not in actual): Other
+
+ID: 1987ac46c443a50e
+Subject: Re: Fw: Resident Memo – Community Guidelines & Building Security
+Actual: Apartment
+Suggested: Apartment
+Missing (actual not suggested): (none)
+Extra (suggested not in actual): (none)
+Reason:
+  - Model chose "Apartment" mapped to "Apartment"
+
+ID: 199aa7ee0f168e11
+Subject: 110-114 Rivington House Partners LLC - Online Payment Confirmation
+Actual: Apartment
+Suggested: Other
+Missing (actual not suggested): Apartment
+Extra (suggested not in actual): Other
+
+ID: 19953209e22b5fe8
+Subject: Re: Welcome New CS PhD Students
+Actual: Other
+Suggested: Accounts
+Missing (actual not suggested): Other
+Extra (suggested not in actual): Accounts
+Reason:
+  - Model chose "Accounts" mapped to "Accounts"
+
+ID: 199794f913fa0ff3
+Subject: Sep 20 2024 injection - unable to find the billing record for it
+Actual: Appa
+Suggested: Other
+Missing (actual not suggested): Appa
+Extra (suggested not in actual): Other
+
+ID: 1993dcd9a3eba057
+Subject: Graduate Campus Life Fair 12:00 - 2:00 PM Today! | Ask EGSC About DR Applications
+Actual: University, Engineering
+Suggested: Engineering
+Missing (actual not suggested): University
+Extra (suggested not in actual): (none)
+Reason:
+  - Model chose "Engineering" mapped to "Engineering"
+
+ID: 199ff776458d8775
+Subject: Invitation from Kavya Sreedhar to apply to Google
+Actual: Kavya, Internships
+Suggested: Other
+Missing (actual not suggested): Kavya, Internships
+Extra (suggested not in actual): Other
+
+ID: 19986a773f4c2493
+Subject: EGSC Boat Cruise – Important Security & Documentation Reminder
+Actual: Engineering, University
+Suggested: Other
+Missing (actual not suggested): Engineering, University
+Extra (suggested not in actual): Other

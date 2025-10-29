@@ -1,0 +1,508 @@
+User: ks4190@columbia.edu
+Train size: 194 | Test size: 49
+Accuracy (strict multi-label containment): 79.59% (39/49)
+Correctly assigned tags: 49/59
+Extra Tags Suggested: 55
+Emails completely correct (exact match): 14
+Emails mostly correct (<=1 total tag error): 26
+Emails almost correct (<=2 total tag error): 42
+Emails somewhat correct (<=3 total tag error): 49
+Emails Assigned Correctly Other than Extra Tags: 25
+
+Details per test email:
+-----------------------
+ID: 198a5603d8e3b4fa
+Subject: Re: Updated invitation: Riya Karthik lydia @ Wed Aug 13, 2025 6:30pm - 7:30pm (EDT) (Karthik Sreedhar)
+Actual: Lydia Chilton
+Suggested: Lydia Chilton
+Missing (actual not suggested): (none)
+Extra (suggested not in actual): (none)
+Reasons:
+  - Lydia Chilton: Semantic similarity to “Lydia Chilton” (avg cos 0.73). Closest example: “Re: Updated invitation: Karthik Riya lydia @ Mon Aug 18, 2025 10:30am - 11:30am (EDT) (Karthik Sreedhar)” from "Lydia B. Chilton" <lc3251@columbia.edu> (cos 0.81) (rule: semantic similarity); Sender appears 10× in this category historically (rule: sender affinity); Subject contains “lydia” (rule: subject keyword match).
+
+ID: 1992ec50ab9544bf
+Subject: You're in! Thank you for registering for Trivia Night on 9/16
+Actual: Other
+Suggested: Internships
+Missing (actual not suggested): Other
+Extra (suggested not in actual): Internships
+Reasons:
+  - Internships: Semantic similarity to “Internships” (avg cos 0.50). Closest example: “Keep track of your application” from noreply@mail.amazon.jobs (cos 0.65) (rule: semantic similarity).
+
+ID: 19a08691d4cbddfb
+Subject: Cocoahouse this Thursday ☕️🍪| EGSC Weekly Newsletter
+Actual: Engineering, University
+Suggested: University, Engineering, Columbia Business School Behavioral Research Lab
+Missing (actual not suggested): (none)
+Extra (suggested not in actual): Columbia Business School Behavioral Research Lab
+Reasons:
+  - University: Semantic similarity to “University” (avg cos 0.64). Closest example: “Last Chance for Boat Cruise Tickets! | EGSC Weekly Newsletter” from Jonovan Osorio <communications-chair@egsc.seas.columbia.edu> (cos 0.75) (rule: semantic similarity); Sender appears 1× in this category historically (rule: sender affinity); Body contains “university” (rule: body keyword match).
+  - Engineering: Sender appears 3× in this category historically (rule: sender affinity); Body contains “engineering” (rule: body keyword match).
+  - Columbia Business School Behavioral Research Lab: Body contains “columbia”, “research” (rule: body keyword match).
+
+ID: 19976e2b23d26fcd
+Subject: Share Your Thoughts on Columbia’s Institutional Culture by Friday, Sept. 26
+Actual: University
+Suggested: University, Columbia Business School Behavioral Research Lab
+Missing (actual not suggested): (none)
+Extra (suggested not in actual): Columbia Business School Behavioral Research Lab
+Reasons:
+  - University: Semantic similarity to “University” (avg cos 0.55). Closest example: “October 30 Faculty Panel - Invitation” from Richard Hagen <rh3224@columbia.edu> (cos 0.62) (rule: semantic similarity); Body mentions “University” 5 times (rule: body keyword match).
+  - Columbia Business School Behavioral Research Lab: Subject contains “columbia” (rule: subject keyword match); Body contains “columbia” (rule: body keyword match).
+
+ID: 198fc3cb955f0282
+Subject: Ride Receipt from Muhammad
+Actual: Receipts
+Suggested: Receipts
+Missing (actual not suggested): (none)
+Extra (suggested not in actual): (none)
+Reasons:
+  - Receipts: Semantic similarity to “Receipts” (avg cos 0.55). Closest example: “Ride Receipt from MD ABDULLAH AL” from Driver MD ABDULLAH AL <noreply@rideempower.com> (cos 0.91) (rule: semantic similarity); Sender appears 2× in this category historically (rule: sender affinity).
+
+ID: 1989a5c88822320d
+Subject: Re: Fw: Invitation from Carson at 110-114 Ridge St
+Actual: Apartment
+Suggested: Lydia Chilton, Apartment, Appa
+Missing (actual not suggested): (none)
+Extra (suggested not in actual): Lydia Chilton, Appa
+Reasons:
+  - Lydia Chilton: Semantic similarity to “Lydia Chilton” (avg cos 0.41). Closest example: “Re:” from Lydia Chilton <chilton@cs.columbia.edu> (cos 0.46) (rule: semantic similarity).
+  - Apartment: Sender appears 1× in this category historically (rule: sender affinity).
+  - Appa: Sender appears 6× in this category historically (rule: sender affinity).
+
+ID: 19953b2d56f74772
+Subject: Re: COMS9902 Homework
+Actual: Other
+Suggested: UI Design
+Missing (actual not suggested): Other
+Extra (suggested not in actual): UI Design
+Reasons:
+  - UI Design: Semantic similarity to “UI Design” (avg cos 0.52). Closest example: “UI Design late pass for HW 6” from Emily Chen <ec3365@barnard.edu> (cos 0.59) (rule: semantic similarity).
+
+ID: 1992a80284280156
+Subject: INFORM: your enrollment request for COMS6998E016: IMMERSIVE PRODUCTION AI has been approved!
+Actual: University
+Suggested: University, Columbia Business School Behavioral Research Lab
+Missing (actual not suggested): (none)
+Extra (suggested not in actual): Columbia Business School Behavioral Research Lab
+Reasons:
+  - University: Semantic similarity to “University” (avg cos 0.56). Closest example: “INFORM: your enrollment request for COMS9902E048: GENAI TECH & SOCIAL has been approved!” from vergil-notification@columbia.edu (cos 0.89) (rule: semantic similarity); Sender appears 1× in this category historically (rule: sender affinity).
+  - Columbia Business School Behavioral Research Lab: Body contains “columbia”, “school” (rule: body keyword match).
+
+ID: 19955204a40be50a
+Subject: Re: gmail error
+Actual: Lydia Chilton
+Suggested: Lydia Chilton, Internships, University
+Missing (actual not suggested): (none)
+Extra (suggested not in actual): Internships, University
+Reasons:
+  - Lydia Chilton: Semantic similarity to “Lydia Chilton” (avg cos 0.44). Closest example: “Re: Emails” from Lydia Chilton <chilton@cs.columbia.edu> (cos 0.55) (rule: semantic similarity); Sender appears 25× in this category historically (rule: sender affinity); Sender matches “Lydia Chilton” (rule: sender exact match).
+  - Internships: Sender appears 1× in this category historically (rule: sender affinity).
+  - University: Sender appears 1× in this category historically (rule: sender affinity).
+
+ID: 199e59b3d3f11137
+Subject: New Sign-in to Your Account
+Actual: Accounts
+Suggested: Accounts
+Missing (actual not suggested): (none)
+Extra (suggested not in actual): (none)
+Reasons:
+  - Accounts: Semantic similarity to “Accounts” (avg cos 0.46). Closest example: “Update Your Password” from Hulu <hulu@hulumail.com> (cos 0.74) (rule: semantic similarity); Sender appears 1× in this category historically (rule: sender affinity).
+
+ID: 1992f45cfab122ae
+Subject: Update on Columbia Presidential Search
+Actual: University
+Suggested: University, Columbia Business School Behavioral Research Lab
+Missing (actual not suggested): (none)
+Extra (suggested not in actual): Columbia Business School Behavioral Research Lab
+Reasons:
+  - University: Semantic similarity to “University” (avg cos 0.53). Closest example: “Student Affairs Committee Welcome Back to Campus” from University Senate Student Affairs Committee <sacunisenate@columbia.edu> (cos 0.63) (rule: semantic similarity); Body mentions “University” 3 times (rule: body keyword match).
+  - Columbia Business School Behavioral Research Lab: Subject contains “columbia” (rule: subject keyword match); Body contains “columbia” (rule: body keyword match).
+
+ID: 19621abecc439477
+Subject: Re: Request to Resubmit HW1 Main & Submit HW5 Main
+Actual: UI Design
+Suggested: UI Design
+Missing (actual not suggested): (none)
+Extra (suggested not in actual): (none)
+Reasons:
+  - UI Design: Semantic similarity to “UI Design” (avg cos 0.53). Closest example: “Re: about the regrading of hw1 main” from Sungho Hwang <sh3991@columbia.edu> (cos 0.67) (rule: semantic similarity).
+
+ID: 196ea8accd29b3d4
+Subject: Re: ACT NOW - Time is running out - Get your graduation tickets.
+Actual: University
+Suggested: Lydia Chilton
+Missing (actual not suggested): University
+Extra (suggested not in actual): Lydia Chilton
+Reasons:
+  - Lydia Chilton: Semantic similarity to “Lydia Chilton” (avg cos 0.46). Closest example: “Re: Canceled event: Riya (+Karthik) Lydia @ Thu Aug 7, 2025 10am - 10:30am (EDT) (Karthik Sreedhar)” from "Lydia B. Chilton" <lc3251@columbia.edu> (cos 0.48) (rule: semantic similarity).
+
+ID: 19a11a0f8b8409dc
+Subject: [Phd-students] Sidewalk Repair Work in front of Mudd - November 1-4th
+Actual: Engineering, University
+Suggested: University, Columbia Business School Behavioral Research Lab
+Missing (actual not suggested): Engineering
+Extra (suggested not in actual): Columbia Business School Behavioral Research Lab
+Reasons:
+  - University: Semantic similarity to “University” (avg cos 0.46). Closest example: “[Phd-students] Sept 22 (Mon) -- Sign up to meet Alex Mariakakis (UofT)” from Tao Long <long@cs.columbia.edu> (cos 0.55) (rule: semantic similarity).
+  - Columbia Business School Behavioral Research Lab: Body contains “columbia” (rule: body keyword match).
+
+ID: 199ca8f9aa2f836e
+Subject: Re: Canceled event: Karthik Riya lydia @ Thu Oct 9, 2025 11:45am - 12:45pm (EDT) (Karthik Sreedhar)
+Actual: Lydia Chilton
+Suggested: Lydia Chilton
+Missing (actual not suggested): (none)
+Extra (suggested not in actual): (none)
+Reasons:
+  - Lydia Chilton: Semantic similarity to “Lydia Chilton” (avg cos 0.68). Closest example: “Re: Canceled event with note: Riya Jenny Karthik Lydia @ Fri Aug 15, 2025 1:30pm - 2:30pm (EDT) (Karthik Sreedhar)” from Lydia B. Chilton <lc3251@columbia.edu> (cos 0.76) (rule: semantic similarity); Sender appears 10× in this category historically (rule: sender affinity); Subject contains “lydia” (rule: subject keyword match).
+
+ID: 1992fc38dde63761
+Subject: Get Your BOAT CRUISE Tickets THIS WEEK! | EGSC Weekly Newsletter
+Actual: University, Engineering
+Suggested: University, Engineering, Columbia Business School Behavioral Research Lab, UI Design
+Missing (actual not suggested): (none)
+Extra (suggested not in actual): Columbia Business School Behavioral Research Lab, UI Design
+Reasons:
+  - University: Semantic similarity to “University” (avg cos 0.66). Closest example: “Last Chance for Boat Cruise Tickets! | EGSC Weekly Newsletter” from Jonovan Osorio <communications-chair@egsc.seas.columbia.edu> (cos 0.87) (rule: semantic similarity); Sender appears 1× in this category historically (rule: sender affinity); Body mentions “University” 5 times (rule: body keyword match).
+  - Engineering: Sender appears 3× in this category historically (rule: sender affinity); Body mentions “Engineering” 4 times (rule: body keyword match).
+  - Columbia Business School Behavioral Research Lab: Body contains “columbia”, “business”, “school” (rule: body keyword match).
+  - UI Design: Body contains “design” (rule: body keyword match).
+
+ID: 19a06a058589b6a6
+Subject: Re: Karthik Lydia
+Actual: Lydia Chilton
+Suggested: Lydia Chilton, Internships, University, Columbia Business School Behavioral Research Lab
+Missing (actual not suggested): (none)
+Extra (suggested not in actual): Internships, University, Columbia Business School Behavioral Research Lab
+Reasons:
+  - Lydia Chilton: Semantic similarity to “Lydia Chilton” (avg cos 0.63). Closest example: “Re: Updated invitation: Karthik Riya lydia @ Mon Aug 18, 2025 10:30am - 11:30am (EDT) (Karthik Sreedhar)” from "Lydia B. Chilton" <lc3251@columbia.edu> (cos 0.68) (rule: semantic similarity); Sender appears 25× in this category historically (rule: sender affinity); Subject contains “lydia” (rule: subject keyword match).
+  - Internships: Sender appears 1× in this category historically (rule: sender affinity).
+  - University: Sender appears 1× in this category historically (rule: sender affinity).
+  - Columbia Business School Behavioral Research Lab: Body contains “columbia” (rule: body keyword match).
+
+ID: 1996dfe020eb2c39
+Subject: Receipt from square pizza inc #XnC2
+Actual: Receipts
+Suggested: Receipts
+Missing (actual not suggested): (none)
+Extra (suggested not in actual): (none)
+Reasons:
+  - Receipts: Semantic similarity to “Receipts” (avg cos 0.57). Closest example: “Receipt from square pizza inc #NYLX” from square pizza inc <messenger@messaging.squareup.com> (cos 0.93) (rule: semantic similarity); Sender appears 4× in this category historically (rule: sender affinity).
+
+ID: 18f6a6a82df5f351
+Subject: Re: Last 2 assignments
+Actual: UI Design
+Suggested: UI Design
+Missing (actual not suggested): (none)
+Extra (suggested not in actual): (none)
+Reasons:
+  - UI Design: Semantic similarity to “UI Design” (avg cos 0.51). Closest example: “UI Design late pass for HW 6” from Emily Chen <ec3365@barnard.edu> (cos 0.59) (rule: semantic similarity).
+
+ID: 1989b9be51ddddf1
+Subject: Re: Security Deposit
+Actual: Apartment
+Suggested: Other, Apartment
+Missing (actual not suggested): (none)
+Extra (suggested not in actual): Other
+Reasons:
+  - Other: Suggested by heuristic/model signals.
+  - Apartment: Semantic similarity to “Apartment” (avg cos 0.36). Closest example: “Fw: 110-114 Rivington House Partners LLC - Rent Payment Reminder” from Sreedhar Sivakumaran <sreedhar_sivakumaran@yahoo.com> (cos 0.44) (rule: semantic similarity).
+
+ID: 1991f84a485b742d
+Subject: Fw: Lululemon is falling out of fashion
+Actual: Appa
+Suggested: Appa, Apartment, Columbia Business School Behavioral Research Lab, Tao Long
+Missing (actual not suggested): (none)
+Extra (suggested not in actual): Apartment, Columbia Business School Behavioral Research Lab, Tao Long
+Reasons:
+  - Appa: Semantic similarity to “Appa” (avg cos 0.40). Closest example: “Fw: Here’s what broke the internet yesterday” from Sreedhar Sivakumaran <sreedhar_sivakumaran@yahoo.com> (cos 0.60) (rule: semantic similarity); Sender appears 6× in this category historically (rule: sender affinity).
+  - Apartment: Sender appears 1× in this category historically (rule: sender affinity).
+  - Columbia Business School Behavioral Research Lab: Body contains “business” (rule: body keyword match).
+  - Tao Long: Body contains “long” (rule: body keyword match).
+
+ID: 19978185b0a26042
+Subject: BOAT CRUISE THIS FRIDAY! | EGSC Weekly Newsletter
+Actual: University, Engineering
+Suggested: University, Engineering, Columbia Business School Behavioral Research Lab, Medical, UI Design
+Missing (actual not suggested): (none)
+Extra (suggested not in actual): Columbia Business School Behavioral Research Lab, Medical, UI Design
+Reasons:
+  - University: Semantic similarity to “University” (avg cos 0.62). Closest example: “Last Chance for Boat Cruise Tickets! | EGSC Weekly Newsletter” from Jonovan Osorio <communications-chair@egsc.seas.columbia.edu> (cos 0.85) (rule: semantic similarity); Sender appears 1× in this category historically (rule: sender affinity); Body mentions “University” 6 times (rule: body keyword match).
+  - Engineering: Sender appears 3× in this category historically (rule: sender affinity); Body mentions “Engineering” 3 times (rule: body keyword match).
+  - Columbia Business School Behavioral Research Lab: Body contains “columbia”, “business”, “school” (rule: body keyword match).
+  - Medical: Body contains “medical” (rule: body keyword match).
+  - UI Design: Body contains “design” (rule: body keyword match).
+
+ID: 199347ee18eaca0c
+Subject: Re: [tickets.cs.columbia.edu #202359] Re: Fall 2025 New GRA Appointment
+Actual: University
+Suggested: University, Columbia Business School Behavioral Research Lab
+Missing (actual not suggested): (none)
+Extra (suggested not in actual): Columbia Business School Behavioral Research Lab
+Reasons:
+  - University: Semantic similarity to “University” (avg cos 0.50). Closest example: “Re: [tickets.cs.columbia.edu #200010] Re: [Phd-students] Fall 2025 Registration OPEN - PhD Funding & Insurance Deadlines” from PhD Student Services <phd-advising@cs.columbia.edu> (cos 0.56) (rule: semantic similarity); Sender appears 1× in this category historically (rule: sender affinity).
+  - Columbia Business School Behavioral Research Lab: Subject contains “columbia” (rule: subject keyword match).
+
+ID: 195ed502abccd25a
+Subject: Re: MS Program Clearance
+Actual: University
+Suggested: University
+Missing (actual not suggested): (none)
+Extra (suggested not in actual): (none)
+Reasons:
+  - University: Semantic similarity to “University” (avg cos 0.46). Closest example: “Re: [tickets.cs.columbia.edu #200010] Re: [Phd-students] Fall 2025 Registration OPEN - PhD Funding & Insurance Deadlines” from PhD Student Services <phd-advising@cs.columbia.edu> (cos 0.57) (rule: semantic similarity).
+
+ID: 1991aed2b0e07a2c
+Subject: Fwd: secret class!
+Actual: Lydia Chilton
+Suggested: Lydia Chilton, Internships, University, Columbia Business School Behavioral Research Lab
+Missing (actual not suggested): (none)
+Extra (suggested not in actual): Internships, University, Columbia Business School Behavioral Research Lab
+Reasons:
+  - Lydia Chilton: Semantic similarity to “Lydia Chilton” (avg cos 0.43). Closest example: “Fwd: zoom link for our prep meeting” from "Matthew J. Connelly" <mjc96@columbia.edu> (cos 0.51) (rule: semantic similarity); Sender appears 25× in this category historically (rule: sender affinity); Body contains “lydia”, “chilton” (rule: body keyword match).
+  - Internships: Sender appears 1× in this category historically (rule: sender affinity).
+  - University: Sender appears 1× in this category historically (rule: sender affinity).
+  - Columbia Business School Behavioral Research Lab: Body contains “columbia” (rule: body keyword match).
+
+ID: 198664ba25a20172
+Subject: Re: look what kayak just added!!!!
+Actual: Lydia Chilton
+Suggested: Lydia Chilton, Internships, University
+Missing (actual not suggested): (none)
+Extra (suggested not in actual): Internships, University
+Reasons:
+  - Lydia Chilton: Semantic similarity to “Lydia Chilton” (avg cos 0.26). Closest example: “Re: don't you want a more memorable name like "karthik@columbia.edu"” from Lydia Chilton <chilton@cs.columbia.edu> (cos 0.30) (rule: semantic similarity); Sender appears 25× in this category historically (rule: sender affinity); Sender matches “Lydia Chilton” (rule: sender exact match).
+  - Internships: Sender appears 1× in this category historically (rule: sender affinity).
+  - University: Sender appears 1× in this category historically (rule: sender affinity).
+
+ID: 1999c549c25c6189
+Subject: In case you missed it
+Actual: University
+Suggested: University, Columbia Business School Behavioral Research Lab, Medical
+Missing (actual not suggested): (none)
+Extra (suggested not in actual): Columbia Business School Behavioral Research Lab, Medical
+Reasons:
+  - University: Semantic similarity to “University” (avg cos 0.50). Closest example: “Compensation and Stipend Increases” from "Theresa A. McKenzie" <tm2050@columbia.edu> (cos 0.53) (rule: semantic similarity); Body contains “university” (rule: body keyword match).
+  - Columbia Business School Behavioral Research Lab: Body contains “columbia”, “research” (rule: body keyword match).
+  - Medical: Body contains “medical” (rule: body keyword match).
+
+ID: 196011e10eb3a505
+Subject: Re: NICAR reimbursement
+Actual: Other
+Suggested: Other, University
+Missing (actual not suggested): (none)
+Extra (suggested not in actual): University
+Reasons:
+  - Other: Suggested by heuristic/model signals.
+  - University: Semantic similarity to “University” (avg cos 0.30). Closest example: “Re: EGSC Professional Development Scholarship Reimbursement Request” from Christian Hernandez <cdh2155@columbia.edu> (cos 0.40) (rule: semantic similarity).
+
+ID: 1995cea415bfd6ff
+Subject: Action Required: Columbia Student Health Insurance Plan
+Actual: Medical, University
+Suggested: University, Columbia Business School Behavioral Research Lab
+Missing (actual not suggested): Medical
+Extra (suggested not in actual): Columbia Business School Behavioral Research Lab
+Reasons:
+  - University: Semantic similarity to “University” (avg cos 0.53). Closest example: “RE: Welcome to the Columbia University Student Health Insurance Plan” from studentinsurance <studentinsurance@cumc.columbia.edu> (cos 0.78) (rule: semantic similarity).
+  - Columbia Business School Behavioral Research Lab: Subject contains “columbia” (rule: subject keyword match); Body contains “columbia” (rule: body keyword match).
+
+ID: 19a02dc0137be3ff
+Subject: Confirm your email address on Slack
+Actual: Accounts
+Suggested: Accounts, Columbia Business School Behavioral Research Lab
+Missing (actual not suggested): (none)
+Extra (suggested not in actual): Columbia Business School Behavioral Research Lab
+Reasons:
+  - Accounts: Semantic similarity to “Accounts” (avg cos 0.43). Closest example: “Slack confirmation code: LD4-XEE” from Slack <no-reply-E9TR6zLm3io4AjGnnoN0jYn8@slack.com> (cos 0.78) (rule: semantic similarity).
+  - Columbia Business School Behavioral Research Lab: Body contains “columbia” (rule: body keyword match).
+
+ID: 198e2a4f3068da4e
+Subject: Re: Welcome to CS@CU from CS Operations
+Actual: University
+Suggested: University
+Missing (actual not suggested): (none)
+Extra (suggested not in actual): (none)
+Reasons:
+  - University: Semantic similarity to “University” (avg cos 0.47). Closest example: “Re: EGSC Professional Development Scholarship Reimbursement Request” from Christian Hernandez <cdh2155@columbia.edu> (cos 0.50) (rule: semantic similarity).
+
+ID: 19992b755861ca0f
+Subject: Receipt from square pizza inc #P51C
+Actual: Receipts
+Suggested: Receipts
+Missing (actual not suggested): (none)
+Extra (suggested not in actual): (none)
+Reasons:
+  - Receipts: Semantic similarity to “Receipts” (avg cos 0.57). Closest example: “Receipt from square pizza inc #3Lu3” from square pizza inc <messenger@messaging.squareup.com> (cos 0.94) (rule: semantic similarity); Sender appears 4× in this category historically (rule: sender affinity).
+
+ID: 19981bce533fe8a7
+Subject: Flybridge Columbia Breakfast: Connect with Startups & Talent
+Actual: University
+Suggested: Lydia Chilton, Columbia Business School Behavioral Research Lab, Engineering, University
+Missing (actual not suggested): (none)
+Extra (suggested not in actual): Lydia Chilton, Columbia Business School Behavioral Research Lab, Engineering
+Reasons:
+  - Lydia Chilton: Semantic similarity to “Lydia Chilton” (avg cos 0.48). Closest example: “dump of my terminal” from Lydia Chilton <chilton@cs.columbia.edu> (cos 0.58) (rule: semantic similarity).
+  - Columbia Business School Behavioral Research Lab: Subject contains “columbia” (rule: subject keyword match); Body contains “columbia”, “research” (rule: body keyword match).
+  - Engineering: Body contains “engineering” (rule: body keyword match).
+  - University: Body contains “university” (rule: body keyword match).
+
+ID: 199f347966db548b
+Subject: CCPE - 2026 Graduate Student Grant Opportunity
+Actual: Engineering, University
+Suggested: University, Columbia Business School Behavioral Research Lab, Engineering, Tao Long
+Missing (actual not suggested): (none)
+Extra (suggested not in actual): Columbia Business School Behavioral Research Lab, Tao Long
+Reasons:
+  - University: Semantic similarity to “University” (avg cos 0.55). Closest example: “Re: Fall 2025 Cycle: Professional Development Scholarship” from Lydia Chilton <chilton@cs.columbia.edu> (cos 0.67) (rule: semantic similarity); Sender appears 3× in this category historically (rule: sender affinity).
+  - Columbia Business School Behavioral Research Lab: Body contains “columbia”, “research” (rule: body keyword match).
+  - Engineering: Body contains “engineering” (rule: body keyword match).
+  - Tao Long: Body contains “long” (rule: body keyword match).
+
+ID: 199343f04e313615
+Subject: Re: Canceled event: Karthik Riya lydia @ Wed Sep 10, 2025 1pm - 2pm (EDT) (Karthik Sreedhar)
+Actual: Lydia Chilton
+Suggested: Lydia Chilton
+Missing (actual not suggested): (none)
+Extra (suggested not in actual): (none)
+Reasons:
+  - Lydia Chilton: Semantic similarity to “Lydia Chilton” (avg cos 0.64). Closest example: “Re: Canceled event with note: Riya Jenny Karthik Lydia @ Fri Aug 15, 2025 1:30pm - 2:30pm (EDT) (Karthik Sreedhar)” from Lydia B. Chilton <lc3251@columbia.edu> (cos 0.73) (rule: semantic similarity); Sender appears 10× in this category historically (rule: sender affinity); Subject contains “lydia” (rule: subject keyword match).
+
+ID: 19a306a25aeb6d6d
+Subject: DoubleAgents
+Actual: Lydia Chilton
+Suggested: Lydia Chilton, Internships, University
+Missing (actual not suggested): (none)
+Extra (suggested not in actual): Internships, University
+Reasons:
+  - Lydia Chilton: Semantic similarity to “Lydia Chilton” (avg cos 0.31). Closest example: “Order Confirmation for AI Agents for Work: Partner Working Groups (Day 2)” from Eventbrite <noreply@order.eventbrite.com> (cos 0.42) (rule: semantic similarity); Sender appears 25× in this category historically (rule: sender affinity); Sender matches “Lydia Chilton” (rule: sender exact match).
+  - Internships: Sender appears 1× in this category historically (rule: sender affinity).
+  - University: Sender appears 1× in this category historically (rule: sender affinity).
+
+ID: 19973ade9c3fbb04
+Subject: Upcoming October IDP Sessions – Flyers Attached
+Actual: University, Engineering
+Suggested: University, Columbia Business School Behavioral Research Lab, Engineering
+Missing (actual not suggested): (none)
+Extra (suggested not in actual): Columbia Business School Behavioral Research Lab
+Reasons:
+  - University: Semantic similarity to “University” (avg cos 0.51). Closest example: “October 30 Faculty Panel - Invitation” from Richard Hagen <rh3224@columbia.edu> (cos 0.69) (rule: semantic similarity); Sender appears 3× in this category historically (rule: sender affinity).
+  - Columbia Business School Behavioral Research Lab: Body contains “columbia”, “research” (rule: body keyword match).
+  - Engineering: Body contains “engineering” (rule: body keyword match).
+
+ID: 19943a2e926ffb3b
+Subject: Order complete: #63591498 Doodie Baby Ch. 5
+Actual: Receipts
+Suggested: Receipts
+Missing (actual not suggested): (none)
+Extra (suggested not in actual): (none)
+Reasons:
+  - Receipts: Semantic similarity to “Receipts” (avg cos 0.42). Closest example: “Order Confirmation for Carleton Commons Social” from Eventbrite <noreply@order.eventbrite.com> (cos 0.48) (rule: semantic similarity).
+
+ID: 1995f2a9ae5f45f4
+Subject: Re: random feature request for gmail twin
+Actual: Lydia Chilton
+Suggested: Lydia Chilton, Internships, University
+Missing (actual not suggested): (none)
+Extra (suggested not in actual): Internships, University
+Reasons:
+  - Lydia Chilton: Semantic similarity to “Lydia Chilton” (avg cos 0.44). Closest example: “Re: email system” from Lydia Chilton <chilton@cs.columbia.edu> (cos 0.51) (rule: semantic similarity); Sender appears 25× in this category historically (rule: sender affinity); Sender matches “Lydia Chilton” (rule: sender exact match).
+  - Internships: Sender appears 1× in this category historically (rule: sender affinity).
+  - University: Sender appears 1× in this category historically (rule: sender affinity).
+
+ID: 199fdcaa088884a6
+Subject: amazon.com: Password recovery
+Actual: Accounts
+Suggested: Accounts
+Missing (actual not suggested): (none)
+Extra (suggested not in actual): (none)
+Reasons:
+  - Accounts: Semantic similarity to “Accounts” (avg cos 0.43). Closest example: “Revision to Your Amazon.com Account” from Amazon <account-update@amazon.com> (cos 0.63) (rule: semantic similarity); Sender appears 1× in this category historically (rule: sender affinity).
+
+ID: 19a2bc3f400a9261
+Subject: GDM links
+Actual: Kavya Sreedhar
+Suggested: Lydia Chilton, Columbia Business School Behavioral Research Lab
+Missing (actual not suggested): Kavya Sreedhar
+Extra (suggested not in actual): Lydia Chilton, Columbia Business School Behavioral Research Lab
+Reasons:
+  - Lydia Chilton: Semantic similarity to “Lydia Chilton” (avg cos 0.38). Closest example: “dump of my terminal” from Lydia Chilton <chilton@cs.columbia.edu> (cos 0.44) (rule: semantic similarity).
+  - Columbia Business School Behavioral Research Lab: Body contains “research” (rule: body keyword match).
+
+ID: 199864ab8d858f71
+Subject: Fwd: Potential Student Membership Extension due to Back Injury
+Actual: Accounts
+Suggested: University, Medical
+Missing (actual not suggested): Accounts
+Extra (suggested not in actual): University, Medical
+Reasons:
+  - University: Semantic similarity to “University” (avg cos 0.42). Closest example: “RE: Welcome to the Columbia University Student Health Insurance Plan” from studentinsurance <studentinsurance@cumc.columbia.edu> (cos 0.55) (rule: semantic similarity).
+  - Medical: Body mentions “Medical” 4 times (rule: body keyword match).
+
+ID: 1987ac46c443a50e
+Subject: Re: Fw: Resident Memo – Community Guidelines & Building Security
+Actual: Apartment
+Suggested: Apartment
+Missing (actual not suggested): (none)
+Extra (suggested not in actual): (none)
+Reasons:
+  - Apartment: Semantic similarity to “Apartment” (avg cos 0.36). Closest example: “Resident Memo – Community Guidelines & Building Security” from MD2 Support <support@md2pg.com> (cos 0.67) (rule: semantic similarity); Sender appears 2× in this category historically (rule: sender affinity).
+
+ID: 199aa7ee0f168e11
+Subject: 110-114 Rivington House Partners LLC - Online Payment Confirmation
+Actual: Apartment
+Suggested: Receipts
+Missing (actual not suggested): Apartment
+Extra (suggested not in actual): Receipts
+Reasons:
+  - Receipts: Semantic similarity to “Receipts” (avg cos 0.55). Closest example: “Thanks for Paying Your Con Edison Bill” from noreply@customerassistance.coned.com (cos 0.74) (rule: semantic similarity).
+
+ID: 19953209e22b5fe8
+Subject: Re: Welcome New CS PhD Students
+Actual: Other
+Suggested: University
+Missing (actual not suggested): Other
+Extra (suggested not in actual): University
+Reasons:
+  - University: Semantic similarity to “University” (avg cos 0.46). Closest example: “Re: [tickets.cs.columbia.edu #200010] Re: [Phd-students] Fall 2025 Registration OPEN - PhD Funding & Insurance Deadlines” from PhD Student Services <phd-advising@cs.columbia.edu> (cos 0.55) (rule: semantic similarity).
+
+ID: 199794f913fa0ff3
+Subject: Sep 20 2024 injection - unable to find the billing record for it
+Actual: Appa
+Suggested: Disposables, Apartment, Appa
+Missing (actual not suggested): (none)
+Extra (suggested not in actual): Disposables, Apartment
+Reasons:
+  - Disposables: Semantic similarity to “Disposables” (avg cos 0.44). Closest example: “CRC Film Process sent you 11045C01_000011 via WeTransfer” from WeTransfer <noreply@wetransfer.com> (cos 0.45) (rule: semantic similarity).
+  - Apartment: Sender appears 1× in this category historically (rule: sender affinity).
+  - Appa: Sender appears 6× in this category historically (rule: sender affinity).
+
+ID: 1993dcd9a3eba057
+Subject: Graduate Campus Life Fair 12:00 - 2:00 PM Today! | Ask EGSC About DR Applications
+Actual: University, Engineering
+Suggested: University, Columbia Business School Behavioral Research Lab, Engineering
+Missing (actual not suggested): (none)
+Extra (suggested not in actual): Columbia Business School Behavioral Research Lab
+Reasons:
+  - University: Semantic similarity to “University” (avg cos 0.63). Closest example: “FIRST EGSC Carleton Commons Social Tonight!! | 6:00 - 9:00 PM @ Carleton Commons | No pre-reg needed!” from Thomas Bina <president@egsc.seas.columbia.edu> (cos 0.75) (rule: semantic similarity); Sender appears 2× in this category historically (rule: sender affinity); Body contains “university” (rule: body keyword match).
+  - Columbia Business School Behavioral Research Lab: Body contains “columbia” (rule: body keyword match).
+  - Engineering: Body contains “engineering” (rule: body keyword match).
+
+ID: 199ff776458d8775
+Subject: Invitation from Kavya Sreedhar to apply to Google
+Actual: Kavya, Internships
+Suggested: Internships, Kavya, Columbia Business School Behavioral Research Lab
+Missing (actual not suggested): (none)
+Extra (suggested not in actual): Columbia Business School Behavioral Research Lab
+Reasons:
+  - Internships: Semantic similarity to “Internships” (avg cos 0.65). Closest example: “Invitation from Abhijit Adsule to apply to Google” from Google Recruiting <noreply+jobs@google.com> (cos 0.92) (rule: semantic similarity); Sender appears 2× in this category historically (rule: sender affinity).
+  - Kavya: Sender appears 1× in this category historically (rule: sender affinity); Subject contains “Kavya” (rule: subject keyword match); Body mentions “Kavya” 4 times (rule: body keyword match).
+  - Columbia Business School Behavioral Research Lab: Body contains “columbia” (rule: body keyword match).
+
+ID: 19986a773f4c2493
+Subject: EGSC Boat Cruise – Important Security & Documentation Reminder
+Actual: Engineering, University
+Suggested: University
+Missing (actual not suggested): Engineering
+Extra (suggested not in actual): (none)
+Reasons:
+  - University: Semantic similarity to “University” (avg cos 0.46). Closest example: “Re: 🚢 Fall 2025 EGSC Boat Cruise Ticket Drop Schedule” from Divya Thirugnanasambandan <social-chair@egsc.seas.columbia.edu> (cos 0.62) (rule: semantic similarity).
