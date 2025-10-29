@@ -981,6 +981,38 @@ function matchToCurrentCategory(name, currentCategories) {
  * Ensure there are at least minCount categories by heuristically splitting the largest buckets.
  * Uses categorizeEmail() to derive meaningful sub-groups. Does not create empty categories.
  */
+/**
+ * Strict mapping for OpenAI category picks:
+ * - Only accept exact (case-insensitive) match or normalized-key equality
+ * - Otherwise return "Other" if present, else empty string
+ * This avoids biased fallback to the first category (e.g., "Apartment") when the model returns garbage/unknown labels.
+ */
+function __strictMapToCategory(name, currentCategories) {
+  try {
+    const cats = Array.isArray(currentCategories) ? currentCategories : [];
+    const hasOther = cats.some(c => String(c || '').toLowerCase() === 'other');
+    const input = String(name || '').trim();
+    if (!input) return hasOther ? 'Other' : '';
+
+    // 1) Exact case-insensitive
+    const lower = input.toLowerCase();
+    const exact = cats.find(c => String(c || '').toLowerCase() === lower);
+    if (exact) return exact;
+
+    // 2) Normalized-key equality
+    const key = normalizeKey(input);
+    const mapByKey = new Map(cats.map(c => [normalizeKey(c), c]));
+    if (mapByKey.has(key)) return mapByKey.get(key);
+
+    // 3) No strict match -> prefer "Other" (if available) or empty
+    return hasOther ? 'Other' : '';
+  } catch {
+    const cats = Array.isArray(currentCategories) ? currentCategories : [];
+    const hasOther = cats.some(c => String(c || '').toLowerCase() === 'other');
+    return hasOther ? 'Other' : '';
+  }
+}
+
 function enforceMinCategories(categories, minCount = 5) {
   try {
     if (!Array.isArray(categories)) return;
@@ -7413,9 +7445,14 @@ function __cosine(a, b) {
   return dot / denom;
 }
 async function __embed(text) {
-  const key = `e:${text.slice(0,512)}`;
-  if (__embeddingCache.has(key)) return __embeddingCache.get(key);
   const cleaned = String(text || '').slice(0, 2000);
+  // Simple hash to avoid collisions on common prefixes
+  let h = 5381;
+  for (let i = 0; i < cleaned.length; i++) {
+    h = ((h << 5) + h) ^ cleaned.charCodeAt(i);
+  }
+  const key = `e:${cleaned.length}:${(h >>> 0).toString(16)}`;
+  if (__embeddingCache.has(key)) return __embeddingCache.get(key);
   const resp = await openai.embeddings.create({
     model: 'text-embedding-3-small',
     input: cleaned
@@ -7430,6 +7467,78 @@ function __extractEmailAddress(header) {
     const m = s.match(/<?([A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})>?/i);
     return m ? String(m[1]).toLowerCase() : s.toLowerCase();
   } catch { return String(header || '').toLowerCase(); }
+}
+
+/**
+ * Helpers for category-name rules:
+ * - __escapeRegExp: escape string for regex
+ * - __countOccurrencesInsensitive: count case-insensitive occurrences of a literal in text
+ * - __extractDisplayName: extract display name from "From" header (fallback to email local-part)
+ * - __levenshteinSimilarity: normalized similarity in [0,1]
+ */
+function __escapeRegExp(s) {
+  return String(s || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function __countOccurrencesInsensitive(haystack, needle) {
+  try {
+    const h = String(haystack || '');
+    const n = String(needle || '').trim();
+    if (!n) return 0;
+    const re = new RegExp(__escapeRegExp(n), 'gi');
+    const m = h.match(re);
+    return m ? m.length : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function __extractDisplayName(header) {
+  try {
+    const s = String(header || '');
+    // Remove email addresses
+    const noEmail = s
+      .replace(/<?([A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})>?/gi, '')
+      .replace(/[<>"']/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (noEmail) return noEmail;
+    // Fallback: use local part of email
+    const addr = __extractEmailAddress(s);
+    const local = String(addr || '').split('@')[0] || '';
+    return local.replace(/[._-]+/g, ' ').trim();
+  } catch {
+    return String(header || '').trim();
+  }
+}
+
+function __levenshteinSimilarity(a, b) {
+  try {
+    const s1 = String(a || '').toLowerCase().trim();
+    const s2 = String(b || '').toLowerCase().trim();
+    if (!s1 && !s2) return 1;
+    if (!s1 || !s2) return 0;
+    const n = s1.length;
+    const m = s2.length;
+    const dp = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0));
+    for (let i = 0; i <= n; i++) dp[i][0] = i;
+    for (let j = 0; j <= m; j++) dp[0][j] = j;
+    for (let i = 1; i <= n; i++) {
+      for (let j = 1; j <= m; j++) {
+        const cost = s1[i - 1] === s2[j - 1] ? 0 : 1;
+        dp[i][j] = Math.min(
+          dp[i - 1][j] + 1,      // deletion
+          dp[i][j - 1] + 1,      // insertion
+          dp[i - 1][j - 1] + cost // substitution
+        );
+      }
+    }
+    const dist = dp[n][m];
+    const maxLen = Math.max(n, m) || 1;
+    return 1 - dist / maxLen;
+  } catch {
+    return 0;
+  }
 }
 function __getCategoriesList() {
   let categoriesX = loadCategoriesList();
@@ -7469,7 +7578,7 @@ app.post('/api/suggest-categories', async (req, res) => {
 
     if (stage === 'all') {
       try {
-        const categoriesList = categoriesNoOther;
+        const categoriesList = categoriesNoOther.slice().sort((a, b) => String(a).localeCompare(String(b)));
         const summariesMap = loadCategorySummaries() || {};
         const examplesByCat = {};
         const EXAMPLES_PER_CAT = 8;
@@ -7497,7 +7606,15 @@ app.post('/api/suggest-categories', async (req, res) => {
         // Build subjects/bodies per category
         const perCatSubjects = {};
         for (const name of categoriesList) {
-          perCatSubjects[name] = (byCat.get(name) || []).map(e => e.subject || '').filter(Boolean);
+          const subs = (byCat.get(name) || []).map(e => e.subject || '').filter(Boolean);
+          const seenSub = new Set();
+          const uniqSubs = subs.filter(s => {
+            const k = String(s).toLowerCase();
+            if (seenSub.has(k)) return false;
+            seenSub.add(k);
+            return true;
+          });
+          perCatSubjects[name] = uniqSubs.slice(0, 100);
         }
         const perCatBodies = {};
         for (const name of categoriesList) {
@@ -7507,6 +7624,7 @@ app.post('/api/suggest-categories', async (req, res) => {
         }
 
         const choicesAll = {};
+        const reasonsAll = {};
 
         for (const em of emails) {
           const id = String(em.id || '');
@@ -7516,30 +7634,28 @@ app.post('/api/suggest-categories', async (req, res) => {
           const bodyText = String(em.body || em.snippet || '');
           const fromHeader = String(em.from || '');
 
-          // 1) similarity (average cosine)
+          // 1) similarity (average of top-K nearest neighbors to reduce generic-bucket bias)
           let simPick = 'Other';
           let bestScore = -1;
+          let simRank = [];
           try {
             const v = await __embed(`${subjectText}\n${bodyText}`);
+            const TOP_K = 10;
+            const MIN_SAMPLES = 3; // skip categories with too few examples
             for (const name of categoriesList) {
               const vecs = catVecs.get(name) || [];
-              if (!vecs.length) continue;
-              let sum = 0;
-              for (const dv of vecs) sum += __cosimize ? __cosimize(v, dv) : __cosine(v, dv);
-              // fallback if __cosimize not defined
+              if (!vecs.length || vecs.length < MIN_SAMPLES) continue;
+              const sims = [];
+              for (const dv of vecs) sims.push(__cosine(v, dv));
+              sims.sort((a, b) => b - a);
+              const k = Math.min(TOP_K, sims.length);
+              let sumTop = 0;
+              for (let i = 0; i < k; i++) sumTop += sims[i];
+              const avgTop = sumTop / k;
+              simRank.push({ name, avg: avgTop, n: vecs.length });
+              if (avgTop > bestScore) { bestScore = avgTop; simPick = name; }
             }
-          } catch {}
-          // recompute similarity with defined __cosine
-          try {
-            const v = await __embed(`${subjectText}\n${bodyText}`);
-            for (const name of categoriesList) {
-              const vecs = catVecs.get(name) || [];
-              if (!vecs.length) continue;
-              let sum = 0;
-              for (const dv of vecs) sum += __cosine(v, dv);
-              const avg = sum / vecs.length;
-              if (avg > bestScore) { bestScore = avg; simPick = name; }
-            }
+            simRank.sort((a, b) => b.avg - a.avg);
           } catch {}
 
           // 2) sender affinity (categories that already have this sender)
@@ -7554,19 +7670,45 @@ app.post('/api/suggest-categories', async (req, res) => {
             }
             if (cnt >= 1) senderCats.push(name);
           }
-          // 3) OpenAI subject vs ALL DB subjects
-          let subjPick = 'Other';
+          // 3) OpenAI subject vs ALL DB subjects (ALLOW "Other")
+          let subjPick = '';
           try {
-            const SYSTEM = `Choose the single best category for an email based on its subject, from among the provided category names. Return strictly valid JSON: {"category":"<name>"}; use "Other" only if none fit.`;
+            // Build a focused shortlist to reduce bias (top-K by similarity + sender affinity + high-volume categories)
+            const MAX_SHORTLIST = 10;
+            const countsByCat = categoriesList
+              .map(name => ({ name, n: (byCat.get(name) || []).length, hasSummary: !!(summariesMap[name] && summariesMap[name].length) }));
+            // simRank was computed above; prefer top similarity categories
+            const fromSimTop = simRank.slice(0, 8).map(x => x.name);
+            const shortlistSet = new Set();
+            [...fromSimTop, ...senderCats].forEach(n => {
+              if (categoriesList.includes(n)) shortlistSet.add(n);
+            });
+            // Pad shortlist with highest-volume categories, then those with summaries
+            countsByCat
+              .sort((a,b) => (b.n - a.n) || (b.hasSummary - a.hasSummary) || a.name.localeCompare(b.name))
+              .forEach(({name}) => { if (shortlistSet.size < MAX_SHORTLIST) shortlistSet.add(name); });
+            // Fallback to entire list if somehow empty
+            const allowedNamesArr = (shortlistSet.size ? Array.from(shortlistSet) : categoriesList).slice(0, MAX_SHORTLIST);
+            allowedNamesArr.push('Other');
+            const allowedNamesJson = JSON.stringify(allowedNamesArr);
+            const SYSTEM = `Choose the single best category for an email based on its subject.
+You MUST return EXACTLY ONE of the names in this JSON array (no synonyms, do not invent): ${allowedNamesJson}.
+If none fit reasonably, return "Other".
+Evaluate each category independently; do not bias toward the given order.
+Return strictly valid JSON: {"category":"<one_of_those_names_or_Other>"}.`;
             const USER = `CATEGORIES WITH SUBJECT EXAMPLES:
 ${JSON.stringify(perCatSubjects, null, 2)}
+
+ALLOWED CATEGORY NAMES (JSON):
+${allowedNamesJson}
 
 EMAIL SUBJECT:
 ${subjectText || 'No Subject'}
 
-Return only JSON.`;
+Return only JSON with a field "category" that equals EXACTLY one of the allowed names.`;
             const completion = await openai.chat.completions.create({
               model: 'o3',
+              temperature: 0,
               messages: [
                 { role: 'system', content: SYSTEM },
                 { role: 'user', content: USER }
@@ -7580,23 +7722,76 @@ Return only JSON.`;
               const m = raw.match(/\{[\s\S]*\}/);
               if (m) { try { parsed = JSON.parse(m[0]); } catch {} }
             }
-            const catRaw = parsed && typeof parsed.category === 'string' ? parsed.category : 'Other';
-            subjPick = categoriesList.find(c => c.toLowerCase() === String(catRaw).toLowerCase()) || 'Other';
+            const catRaw = parsed && typeof parsed.category === 'string' ? parsed.category : '';
+            let mapped = __strictMapToCategory(catRaw, categoriesX);
+            subjPick = mapped || 'Other';
+
+            // Fallback retry with gpt-4o-mini if unmapped/empty
+            if (!subjPick) {
+              try {
+                const completion2 = await openai.chat.completions.create({
+                  model: 'gpt-4o-mini',
+                  temperature: 0,
+                  messages: [
+                    { role: 'system', content: SYSTEM },
+                    { role: 'user', content: USER }
+                  ],
+                  max_completion_tokens: 60,
+                  response_format: { type: 'json_object' }
+                });
+                const raw2 = completion2.choices?.[0]?.message?.content || '';
+                let parsed2 = null;
+                try { parsed2 = JSON.parse(raw2); } catch {
+                  const m2 = raw2.match(/\{[\s\S]*\}/);
+                  if (m2) { try { parsed2 = JSON.parse(m2[0]); } catch {} }
+                }
+                const catRaw2 = parsed2 && typeof parsed2.category === 'string' ? parsed2.category : '';
+                let mapped2 = __strictMapToCategory(catRaw2, categoriesX);
+                if (mapped2 && String(mapped2).toLowerCase() !== 'other') {
+                  subjPick = mapped2;
+                } else {
+                  try { console.log(`  (3) debug: subject model unmapped; raw="${(raw || '').slice(0,200)}" retryRaw="${(raw2 || '').slice(0,200)}"`); } catch(_){}
+                }
+              } catch(_) {}
+            }
           } catch {}
 
-          // 4) OpenAI body vs top few bodies per category
-          let bodyPick = 'Other';
+          // 4) OpenAI body vs top few bodies per category (ALLOW "Other")
+          let bodyPick = '';
           try {
-            const SYSTEM = `Choose the single best category for an email based on body content, from the provided categories with example bodies. Return strictly valid JSON: {"category":"<name>"}; use "Other" if uncertain.`;
+            // Build a focused shortlist to reduce bias (top-K by similarity + sender affinity + high-volume categories)
+            const MAX_SHORTLIST = 10;
+            const countsByCat_body = categoriesList
+              .map(name => ({ name, n: (byCat.get(name) || []).length, hasSummary: !!(summariesMap[name] && summariesMap[name].length) }));
+            const fromSimTop_body = simRank.slice(0, 8).map(x => x.name);
+            const shortlistSet_body = new Set();
+            [...fromSimTop_body, ...senderCats].forEach(n => {
+              if (categoriesList.includes(n)) shortlistSet_body.add(n);
+            });
+            countsByCat_body
+              .sort((a,b) => (b.n - a.n) || (b.hasSummary - a.hasSummary) || a.name.localeCompare(b.name))
+              .forEach(({name}) => { if (shortlistSet_body.size < MAX_SHORTLIST) shortlistSet_body.add(name); });
+            const allowedNamesArr = (shortlistSet_body.size ? Array.from(shortlistSet_body) : categoriesList).slice(0, MAX_SHORTLIST);
+            allowedNamesArr.push('Other');
+            const allowedNamesJson = JSON.stringify(allowedNamesArr);
+            const SYSTEM = `Choose the single best category for an email based on body content.
+You MUST return EXACTLY ONE of the names in this JSON array (no synonyms, do not invent): ${allowedNamesJson}.
+If none fit reasonably, return "Other".
+Evaluate each category independently; do not bias toward the given order.
+Return strictly valid JSON: {"category":"<one_of_those_names_or_Other>"}.`;
             const USER = `CATEGORIES WITH EXAMPLE BODIES:
 ${JSON.stringify(perCatBodies, null, 2)}
+
+ALLOWED CATEGORY NAMES (JSON):
+${allowedNamesJson}
 
 EMAIL BODY:
 ${bodyText.slice(0, 1000)}
 
-Return only JSON.`;
+Return only JSON with a field "category" that equals EXACTLY one of the allowed names.`;
             const completion = await openai.chat.completions.create({
               model: 'o3',
+              temperature: 0,
               messages: [
                 { role: 'system', content: SYSTEM },
                 { role: 'user', content: USER }
@@ -7610,25 +7805,77 @@ Return only JSON.`;
               const m = raw.match(/\{[\s\S]*\}/);
               if (m) { try { parsed = JSON.parse(m[0]); } catch {} }
             }
-            const catRaw = parsed && typeof parsed.category === 'string' ? parsed.category : 'Other';
-            bodyPick = categoriesList.find(c => c.toLowerCase() === String(catRaw).toLowerCase()) || 'Other';
+            const catRaw = parsed && typeof parsed.category === 'string' ? parsed.category : '';
+            let mapped = __strictMapToCategory(catRaw, categoriesX);
+            bodyPick = mapped || 'Other';
+
+            // Fallback retry with gpt-4o-mini if unmapped/empty
+            if (!bodyPick) {
+              try {
+                const completion2 = await openai.chat.completions.create({
+                  model: 'gpt-4o-mini',
+                  temperature: 0,
+                  messages: [
+                    { role: 'system', content: SYSTEM },
+                    { role: 'user', content: USER }
+                  ],
+                  max_completion_tokens: 60,
+                  response_format: { type: 'json_object' }
+                });
+                const raw2 = completion2.choices?.[0]?.message?.content || '';
+                let parsed2 = null;
+                try { parsed2 = JSON.parse(raw2); } catch {
+                  const m2 = raw2.match(/\{[\s\S]*\}/);
+                  if (m2) { try { parsed2 = JSON.parse(m2[0]); } catch {} }
+                }
+                const catRaw2 = parsed2 && typeof parsed2.category === 'string' ? parsed2.category : '';
+                let mapped2 = __strictMapToCategory(catRaw2, categoriesX);
+                if (mapped2 && String(mapped2).toLowerCase() !== 'other') {
+                  bodyPick = mapped2;
+                } else {
+                  try { console.log(`  (4) debug: body model unmapped; raw="${(raw || '').slice(0,200)}" retryRaw="${(raw2 || '').slice(0,200)}"`); } catch(_){}
+                }
+              } catch(_) {}
+            }
           } catch {}
 
-          // 5) OpenAI body vs category summaries
-          let summaryPick = 'Other';
+          // 5) OpenAI body vs category summaries (ALLOW "Other")
+          let summaryPick = '';
           try {
-            const chooserContext = categoriesList.map(name => ({
+            const chooserContext = categoriesX.map(name => ({
               name,
               summary: summariesMap[name] || '',
               examples: (examplesByCat[name] || []).slice(0, 5)
             }));
+            // Build a focused shortlist prioritizing categories with summaries, then similarity, then volume
+            const MAX_SHORTLIST_SUM = 10;
+            const countsByCat_sum = categoriesList
+              .map(name => ({ name, n: (byCat.get(name) || []).length, hasSummary: !!(summariesMap[name] && summariesMap[name].length) }));
+            const fromSimTop_sum = simRank.slice(0, 8).map(x => x.name);
+            const shortlistSet_sum = new Set();
+            // Prefer those with summaries first
+            countsByCat_sum
+              .sort((a,b) => (b.hasSummary - a.hasSummary) || (b.n - a.n) || a.name.localeCompare(b.name))
+              .forEach(({name}) => { if (shortlistSet_sum.size < MAX_SHORTLIST_SUM) shortlistSet_sum.add(name); });
+            // Ensure similarity top picks and sender affinity are included
+            [...fromSimTop_sum, ...senderCats].forEach(n => {
+              if (shortlistSet_sum.size < MAX_SHORTLIST_SUM && categoriesList.includes(n)) shortlistSet_sum.add(n);
+            });
+            const allowedNamesArr = (shortlistSet_sum.size ? Array.from(shortlistSet_sum) : categoriesList).slice(0, MAX_SHORTLIST_SUM);
+            allowedNamesArr.push('Other');
+            const allowedNamesJson = JSON.stringify(allowedNamesArr);
             const SYSTEM2 = `Choose the single best category for an email from a provided list of categories.
 - Use the category definitions and examples.
 - Prefer high-precision matches over vague ones.
-- If none fit reasonably, answer "Other".
-Return strictly valid JSON only: {"category":"<name>"}.`;
+- You MUST choose EXACTLY one of the names in this JSON array (no synonyms): ${allowedNamesJson}.
+- If none fit reasonably, return "Other".
+- Evaluate each category independently; do not bias toward the given order.
+Return strictly valid JSON only: {"category":"<one_of_those_names_or_Other>"}.`;
             const USER2 = `CATEGORIES (with summaries and examples):
 ${JSON.stringify(chooserContext, null, 2)}
+
+ALLOWED CATEGORY NAMES (JSON):
+${allowedNamesJson}
 
 EMAIL:
 Subject: ${subjectText || 'No Subject'}
@@ -7636,9 +7883,10 @@ From: ${fromHeader || 'Unknown Sender'}
 Body:
 ${bodyText.slice(0, 1200)}
 
-Return only JSON.`;
+Return only JSON with a field "category" that equals EXACTLY one of the allowed names.`;
             const resp2 = await openai.chat.completions.create({
               model: 'o3',
+              temperature: 0,
               messages: [
                 { role: 'system', content: SYSTEM2 },
                 { role: 'user', content: USER2 }
@@ -7652,38 +7900,339 @@ Return only JSON.`;
               const m = raw2.match(/\{[\s\S]*\}/);
               if (m) { try { parsed2 = JSON.parse(m[0]); } catch {} }
             }
-            const catRaw2 = parsed2 && typeof parsed2.category === 'string' ? parsed2.category : 'Other';
-            summaryPick = categoriesList.find(c => c.toLowerCase() === String(catRaw2).toLowerCase()) || 'Other';
+            const catRaw2 = parsed2 && typeof parsed2.category === 'string' ? parsed2.category : '';
+            let mapped2 = __strictMapToCategory(catRaw2, categoriesX);
+            summaryPick = mapped2 || 'Other';
+
+            // Fallback retry with gpt-4o-mini if unmapped/empty
+            if (!summaryPick) {
+              try {
+                const resp3 = await openai.chat.completions.create({
+                  model: 'gpt-4o-mini',
+                  temperature: 0,
+                  messages: [
+                    { role: 'system', content: SYSTEM2 },
+                    { role: 'user', content: USER2 }
+                  ],
+                  max_completion_tokens: 60,
+                  response_format: { type: 'json_object' }
+                });
+                const raw3 = resp3.choices?.[0]?.message?.content || '';
+                let parsed3 = null;
+                try { parsed3 = JSON.parse(raw3); } catch {
+                  const m3 = raw3.match(/\{[\s\S]*\}/);
+                  if (m3) { try { parsed3 = JSON.parse(m3[0]); } catch {} }
+                }
+                const catRaw3 = parsed3 && typeof parsed3.category === 'string' ? parsed3.category : '';
+                let mapped3 = __strictMapToCategory(catRaw3, categoriesX);
+                if (mapped3 && String(mapped3).toLowerCase() !== 'other') {
+                  summaryPick = mapped3;
+                } else {
+                  try { console.log(`  (5) debug: summary model unmapped; raw="${(raw2 || '').slice(0,200)}" retryRaw="${(raw3 || '').slice(0,200)}"`); } catch(_){}
+                }
+              } catch(_) {}
+            }
           } catch {}
 
           // Log per email in the requested order
+        try {
+          const subjLog = String(subjectText || '').slice(0, 120);
+          console.log(`[SuggestCategories ${__reqId}] Subject: "${subjLog}"`);
+          console.log(`  (1) similarity -> ${simPick}`);
+          console.log(`  (1a) top similarity avg -> ${simRank.slice(0,3).map(x => x.name + ':' + (Number.isFinite(x.avg)?x.avg.toFixed(2):'n/a') + ' (n=' + (x.n||0) + ')').join(', ') || '(n/a)'}`);
+          console.log(`  (2) sender -> ${senderCats.join(', ') || '(none)'}`);
+          console.log(`  (3) subject (OpenAI vs ALL subjects) -> ${subjPick || '(none)'}`);
+          console.log(`  (4) body (OpenAI vs top bodies) -> ${bodyPick || '(none)'}`);
+          console.log(`  (5) summaries (OpenAI vs category summaries) -> ${summaryPick || '(none)'}`);
+
+          // (6) Subject contains category name
+          const subjLcForLog = String(subjectText || '').toLowerCase();
+          const containsCats = categoriesList.filter(c => {
+            const cLc = String(c || '').toLowerCase();
+            return cLc && cLc !== 'other' && subjLcForLog.includes(cLc);
+          });
+          console.log(`  (6) subject contains category name -> ${containsCats.length ? containsCats.join(', ') : '(none)'}`);
+
+          // (7) Body mentions category name (>2 occurrences)
+          const bodyStrForLog = String(bodyText || '');
+          const freqCats = [];
+          for (const c of categoriesList) {
+            const count = __countOccurrencesInsensitive(bodyStrForLog, c);
+            if (count > 2) freqCats.push(`${c}(${count})`);
+          }
+          console.log(`  (7) body mentions category (>2) -> ${freqCats.length ? freqCats.join(', ') : '(none)'}`);
+
+          // (8) Sender display name ≈ category name (>=0.85 or exact)
+          const dispForLog = __extractDisplayName(fromHeader || '');
+          const dispLc2 = String(dispForLog || '').toLowerCase();
+          const senderAddrLc2 = String(__extractEmailAddress(fromHeader || '') || '').toLowerCase();
+          const nameCats = [];
+          for (const c of categoriesList) {
+            const cLc = String(c || '').toLowerCase();
+            if (!cLc || cLc === 'other') continue;
+            const sim = __levenshteinSimilarity(dispForLog, c);
+            if (dispLc2 === cLc || senderAddrLc2 === cLc || sim >= 0.85) {
+              if (dispLc2 === cLc || senderAddrLc2 === cLc) {
+                nameCats.push(`${c}(exact)`);
+              } else {
+                nameCats.push(`${c}(sim ${sim.toFixed(2)})`);
+              }
+            }
+          }
+          console.log(`  (8) sender name ≈ category -> ${nameCats.length ? nameCats.join(', ') : '(none)'}`);
+        } catch (_) {}
+
+          // Aggregate choices (exclude Other, preserve order, unique) and capture reasons per category
+          // IMPORTANT: Order suggestions to match the intended 8-step ranking:
+          // 0) Semantic similarity (avg top-K per category)
+          // 1) Sender affinity (categories that already contain this sender)
+          // 2) Subject-based OpenAI vs ALL subjects
+          // 3) Body-based OpenAI vs category bodies
+          // 4) Body vs category summaries
+          // 5) Subject contains category name
+          // 6) Body contains category name (frequency > 2)
+          // 7) Sender’s display name equals/fuzzy-matches a category name
+          const ordered = [];
+          // Accumulate multiple rule signals per category to synthesize a reason
+          const reasonsByCat = new Map(); // name -> string[]
+          const push = (n, reason) => {
+            const name = String(n || '').trim();
+            if (!name) return;
+            if (!ordered.includes(name)) {
+              ordered.push(name);
+            }
+            if (reason) {
+              const arr = reasonsByCat.get(name) || [];
+              arr.push(String(reason));
+              reasonsByCat.set(name, arr);
+            }
+          };
+
+          // 0) Semantic similarity FIRST
           try {
-            const subjLog = String(subjectText || '').slice(0, 120);
-            console.log(`[SuggestCategories ${__reqId}] Subject: "${subjLog}"`);
-            console.log(`  (1) similarity -> ${simPick}`);
-            console.log(`  (2) sender -> ${senderCats.join(', ') || '(none)'}`);
-            console.log(`  (3) subject (OpenAI vs ALL subjects) -> ${subjPick}`);
-            console.log(`  (4) body (OpenAI vs top bodies) -> ${bodyPick}`);
-            console.log(`  (5) summaries (OpenAI vs category summaries) -> ${summaryPick}`);
+            const vForSim = await __embed(`${subjectText}\n${bodyText}`);
+            const vecsForCat = catVecs.get(simPick) || [];
+            const arrForCat = (byCat.get(simPick) || []).slice(0, 60);
+            let topIdx = -1, topSim = -1;
+            for (let i = 0; i < vecsForCat.length; i++) {
+              const s = __cosine(vForSim, vecsForCat[i]);
+              if (s > topSim) { topSim = s; topIdx = i; }
+            }
+            // Do not generate a nonsensical reason like "similarity to Other"
+            if (String(simPick).toLowerCase() !== 'other') {
+              let reasonSim = `Semantic similarity to “${simPick}” (avg cos ${Number.isFinite(bestScore) ? bestScore.toFixed(2) : 'n/a'})`;
+              if (topIdx >= 0 && arrForCat[topIdx]) {
+                const ex = arrForCat[topIdx];
+                const exSubj = String(ex.subject || 'No Subject');
+                const exFrom = String(ex.originalFrom || ex.from || 'Unknown Sender');
+                reasonSim += `. Closest example: “${exSubj}” from ${exFrom} (cos ${Number.isFinite(topSim) ? topSim.toFixed(2) : 'n/a'})`;
+              }
+              push(simPick, reasonSim + ' (rule: semantic similarity)');
+            }
+          } catch (_) {
+            if (String(simPick).toLowerCase() !== 'other') {
+              push(simPick, `Semantic similarity to “${simPick}” (rule: semantic similarity)`);
+            }
+          }
+
+          // 1) Sender affinity (counts where available)
+          try {
+            const sender = __extractEmailAddress(fromHeader || '');
+            const senderCounts = {};
+            for (const name of categoriesList) {
+              const items = byCat.get(name) || [];
+              let cnt = 0;
+              for (const e of items) {
+                const o = __extractEmailAddress(e.originalFrom || e.from || '');
+                if (o && (o === sender)) cnt++;
+              }
+              if (cnt >= 1) senderCounts[name] = cnt;
+            }
+            senderCats.forEach(catName => {
+              const cnt = senderCounts[catName] || 1;
+              push(catName, `Sender appears ${cnt}× in this category historically (rule: sender affinity)`);
+            });
+          } catch (_) {
+            senderCats.forEach(catName => push(catName, 'Sender appears in this category historically (rule: sender affinity)'));
+          }
+
+          // Model consensus: only include a model pick if at least two of the three agree on the same non-Other category
+          let __consensus = '';
+          try {
+            const __vals = [subjPick, bodyPick, summaryPick].filter(n => n && String(n).toLowerCase() !== 'other');
+            const __counts = new Map();
+            __vals.forEach(n => __counts.set(n, (__counts.get(n) || 0) + 1));
+            let bestName = '';
+            let bestCnt = 0;
+            __counts.forEach((cnt, name) => { if (cnt > bestCnt) { bestCnt = cnt; bestName = name; } });
+            if (bestCnt >= 2) __consensus = bestName;
+          } catch(_) {}
+
+          if (__consensus) {
+            if (subjPick === __consensus) {
+              push(subjPick, `Model-based subject match to “${subjPick}” (rule: subject model pick)`);
+            }
+            if (bodyPick === __consensus) {
+              push(bodyPick, `Model-based body match to “${bodyPick}” (rule: body model pick)`);
+            }
+            if (summaryPick === __consensus) {
+              push(summaryPick, `Matches category summary for “${summaryPick}” (rule: summary match)`);
+            }
+          }
+
+          let keywordSubjectHit = false;
+          // 5) Subject contains category name (phrase or token-based match)
+          try {
+            const subj = String(subjectText || '');
+            const subjLc = subj.toLowerCase();
+
+            // Utility: tokenize a category name into meaningful tokens (≥3 chars), excluding common stopwords
+            const stop = new Set([
+              'the','a','an','and','or','of','in','on','at','to','for','from','by','with','about','as','is','it','this','that',
+              'be','are','was','were','will','shall','would','should','could','can','do','does','did','has','have','had',
+              'i','you','he','she','we','they','them','me','my','your','our','their','his','her','re','fw','fwd'
+            ]);
+            const catTokens = (name) => {
+              return String(name || '')
+                .toLowerCase()
+                .replace(/[^a-z0-9\s]/g, ' ')
+                .split(/\s+/)
+                .filter(t => t && t.length >= 3 && !stop.has(t));
+            };
+            const wordBoundaryRe = (s) => {
+              const esc = s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+              return new RegExp(`\\b${esc}\\b`, 'i');
+            };
+
+            for (const cname of categoriesList) {
+              const c = String(cname || '').trim();
+              const cLc = c.toLowerCase();
+              if (!c || cLc === 'other') continue;
+
+              // Exact phrase (case-insensitive) – looser than word-boundary because names may include punctuation
+              const phraseHit = subjLc.includes(cLc);
+
+              // Token-based: require at least two tokens for multi-word names, or one token for single-word names
+              const toks = catTokens(c);
+              let tokenHits = [];
+              if (toks.length >= 2) {
+                tokenHits = toks.filter(t => wordBoundaryRe(t).test(subj));
+              } else if (toks.length === 1) {
+                tokenHits = wordBoundaryRe(toks[0]).test(subj) ? [toks[0]] : [];
+              }
+
+              // Consider a match if the full phrase appears OR at least one token from the category name appears
+              if (phraseHit || tokenHits.length >= 1) {
+                const detail = phraseHit
+                  ? `Subject contains “${c}”`
+                  : `Subject contains ${tokenHits.slice(0,3).map(t => `“${t}”`).join(', ')}`;
+                keywordSubjectHit = true;
+                push(cname, `${detail} (rule: subject keyword match)`);
+              }
+            }
           } catch (_) {}
 
-          // Aggregate choices (exclude Other, preserve order, unique)
-          const ordered = [];
-          const push = (n) => {
-            const name = String(n || '').trim();
-            if (!name || name.toLowerCase() === 'other') return;
-            if (!ordered.includes(name)) ordered.push(name);
-          };
-          push(simPick);
-          senderCats.forEach(push);
-          push(subjPick);
-          push(bodyPick);
-          push(summaryPick);
+          let keywordBodyHit = false;
+          // 6) Body mentions category name (phrase frequency OR token presence)
+          try {
+            const bodyStr = String(bodyText || '');
+            const bodyLc = bodyStr.toLowerCase();
+
+            const stop = new Set([
+              'the','a','an','and','or','of','in','on','at','to','for','from','by','with','about','as','is','it','this','that',
+              'be','are','was','were','will','shall','would','should','could','can','do','does','did','has','have','had',
+              'i','you','he','she','we','they','them','me','my','your','our','their','his','her','re','fw','fwd'
+            ]);
+            const catTokens = (name) => {
+              return String(name || '')
+                .toLowerCase()
+                .replace(/[^a-z0-9\s]/g, ' ')
+                .split(/\s+/)
+                .filter(t => t && t.length >= 3 && !stop.has(t));
+            };
+            const wordBoundaryRe = (s) => {
+              const esc = s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+              return new RegExp(`\\b${esc}\\b`, 'i');
+            };
+
+            for (const cname of categoriesList) {
+              const c = String(cname || '').trim();
+              const cLc = c.toLowerCase();
+              if (!c || cLc === 'other') continue;
+
+              // Phrase frequency (as before)
+              const phraseCount = __countOccurrencesInsensitive(bodyStr, c);
+
+              // Token-based presence: require ≥2 distinct tokens (for multi-token names) or ≥1 for single-token names
+              const toks = catTokens(c);
+              const tokenHits = toks.filter(t => wordBoundaryRe(t).test(bodyStr));
+
+              // Consider a match if at least one token from the category name appears in the body text
+              const tokenRuleHit = tokenHits.length >= 1;
+
+              if (phraseCount > 2 || tokenRuleHit) {
+                const detail = phraseCount > 2
+                  ? `Body mentions “${c}” ${phraseCount} times`
+                  : `Body contains ${tokenHits.slice(0,3).map(t => `“${t}”`).join(', ')}`;
+                keywordBodyHit = true;
+                push(cname, `${detail} (rule: body keyword match)`);
+              }
+            }
+          } catch (_) {}
+
+          // 7) Sender display name equals/fuzzy-matches category name (>= 0.85)
+          try {
+            const disp = __extractDisplayName(fromHeader || '');
+            const dispLc = String(disp || '').toLowerCase();
+            const senderAddrLc = String(sender || '').toLowerCase();
+            for (const cname of categoriesList) {
+              const cLc = String(cname || '').toLowerCase();
+              if (!cLc || cLc === 'other') continue;
+              const sim = __levenshteinSimilarity(disp, cname);
+              if (dispLc === cLc || senderAddrLc === cLc || sim >= 0.85) {
+                const why = (dispLc === cLc || senderAddrLc === cLc)
+                  ? `Sender matches “${cname}” (rule: sender exact match)`
+                  : `Sender “${disp}” ~ “${cname}” (sim ${sim.toFixed(2)}) (rule: sender fuzzy match)`;
+                push(cname, why);
+              }
+            }
+          } catch (_) {}
+
+          // If we have no strong non-model signals, allow "Other" as the top suggestion
+          // Strong signals = (semantic similarity above threshold) OR (sender affinity) OR (any keyword hits)
+          try {
+            const strongSim = (String(simPick).toLowerCase() !== 'other') && Number.isFinite(bestScore) && (bestScore >= 0.40);
+            const strongSender = Array.isArray(senderCats) && senderCats.length > 0;
+            const strongKeyword = !!(keywordSubjectHit || keywordBodyHit);
+            const strongSignal = strongSim || strongSender || strongKeyword;
+            if (!strongSignal) {
+              if (!ordered.includes('Other')) {
+                ordered.unshift('Other');
+              }
+            }
+          } catch(_) {}
+          // Build one-sentence reasons per category from accumulated signals
+          const reasonsForId = {};
+          ordered.forEach((catName) => {
+            const arrRaw = reasonsByCat.get(catName) || [];
+            const seen = new Set();
+            const uniq = arrRaw.filter(r => {
+              const k = String(r || '').trim().toLowerCase();
+              if (!k || seen.has(k)) return false;
+              seen.add(k);
+              return true;
+            });
+            const parts = uniq.slice(0, 3);
+            let sentence = parts.join('; ');
+            if (sentence && !/[.?!]$/.test(sentence)) sentence += '.';
+            reasonsForId[catName] = sentence || 'Suggested by heuristic/model signals.';
+          });
 
           choicesAll[id] = ordered;
+          reasonsAll[id] = reasonsForId;
         }
 
-        return res.json({ success: true, stage: 'all', choices: choicesAll });
+        return res.json({ success: true, stage: 'all', choices: choicesAll, reasons: reasonsAll });
       } catch (e) {
         console.error('all stage failed:', e);
         return res.json({ success: true, stage: 'all', choices: {} });
@@ -7759,7 +8308,7 @@ Return only JSON.`;
               if (m) { try { parsed = JSON.parse(m[0]); } catch {} }
             }
             const catRaw = parsed && typeof parsed.category === 'string' ? parsed.category : 'Other';
-            picked = matchToCurrentCategory(catRaw, categoriesX) || 'Other';
+            picked = __strictMapToCategory(catRaw, categoriesX) || 'Other';
           } catch (_) {
             // fall back to keyword mapping
             const kw = keywordCategorizeUnreplied(em.subject || '', em.body || em.snippet || '', em.from || '');
@@ -7803,13 +8352,19 @@ Return only JSON.`;
         let bestScore = -1;
         try {
           const v = await __embed(txt);
+          const TOP_K = 10;
+          const MIN_SAMPLES = 3;
           for (const name of categoriesX) {
             const vecs = catVecs.get(name) || [];
-            if (!vecs.length) continue;
-            let sum = 0;
-            for (const dv of vecs) sum += __cosine(v, dv);
-            const avg = sum / vecs.length;
-            if (avg > bestScore) { bestScore = avg; best = name; }
+            if (!vecs.length || vecs.length < MIN_SAMPLES) continue;
+            const sims = [];
+            for (const dv of vecs) sims.push(__cosine(v, dv));
+            sims.sort((a, b) => b - a);
+            const k = Math.min(TOP_K, sims.length);
+            let sumTop = 0;
+            for (let i = 0; i < k; i++) sumTop += sims[i];
+            const avgTop = sumTop / k;
+            if (avgTop > bestScore) { bestScore = avgTop; best = name; }
           }
         } catch {}
         choices[id] = best ? [best] : ['Other'];
@@ -8116,7 +8671,7 @@ Return only JSON.`;
             if (m) { try { parsed = JSON.parse(m[0]); } catch {} }
           }
           const catRaw = parsed && typeof parsed.category === 'string' ? parsed.category : 'Other';
-          picked = matchToCurrentCategory(catRaw, categoriesX) || 'Other';
+          picked = __strictMapToCategory(catRaw, categoriesX) || 'Other';
         } catch {}
         choices[id] = [picked];
       }
@@ -8168,7 +8723,7 @@ Return only JSON.`;
             if (m) { try { parsed = JSON.parse(m[0]); } catch {} }
           }
           const catRaw = parsed && typeof parsed.category === 'string' ? parsed.category : 'Other';
-          picked = matchToCurrentCategory(catRaw, categoriesX) || 'Other';
+          picked = __strictMapToCategory(catRaw, categoriesX) || 'Other';
         } catch {}
         choices[id] = [picked];
       }
@@ -8202,6 +8757,261 @@ Return only JSON.`;
  * - Ranks using OpenAI embeddings (if available) + keyword hits as fallback/booster
  * - Does not mutate any data; returns up to "limit" results (default 10)
  */
+/**
+ * Lightweight TF-IDF Nearest-Centroid Classifier for category suggestions
+ * - Trains on labeled response emails (per current user)
+ * - Predicts best category for new emails
+ * - Returns a justification string and logs predictions to the terminal
+ */
+const __clfCacheByUser = {}; // { [userKey]: { model, trainedAt } }
+
+function __clfTokenize(text) {
+  try {
+    return String(text || '')
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, ' ')
+      .split(/\s+/)
+      .filter(w => w && w.length >= 2);
+  } catch {
+    return [];
+  }
+}
+
+function __l2NormalizeSparse(vec) {
+  // vec: Map<string, number>
+  let sumSq = 0;
+  for (const v of vec.values()) sumSq += v * v;
+  const norm = Math.sqrt(sumSq) || 1;
+  for (const [k, v] of vec.entries()) vec.set(k, v / norm);
+  return vec;
+}
+
+function __cosineSparse(a, b) {
+  // a,b: Map<string, number>
+  let dot = 0;
+  // iterate over smaller map for speed
+  const small = a.size <= b.size ? a : b;
+  const large = a.size <= b.size ? b : a;
+  for (const [k, v] of small.entries()) {
+    const w = large.get(k);
+    if (w) dot += v * w;
+  }
+  return dot;
+}
+
+function __buildTfidf(docTokensList) {
+  // docTokensList: Array<Set<string>> of unique tokens per doc (for DF)
+  const N = docTokensList.length || 1;
+  const df = new Map(); // term -> doc freq
+  for (const toks of docTokensList) {
+    for (const t of toks) {
+      df.set(t, (df.get(t) || 0) + 1);
+    }
+  }
+  const idf = new Map();
+  for (const [t, dfi] of df.entries()) {
+    // smoothed IDF
+    idf.set(t, Math.log((1 + N) / (1 + dfi)) + 1);
+  }
+  return idf;
+}
+
+function __vectorizeWithIdf(text, idf) {
+  const toks = __clfTokenize(text);
+  if (!toks.length) return new Map();
+  const tf = new Map(); // term -> count
+  for (const t of toks) tf.set(t, (tf.get(t) || 0) + 1);
+
+  const vec = new Map();
+  for (const [t, cnt] of tf.entries()) {
+    const iw = idf.get(t);
+    if (!iw) continue; // ignore OOV terms
+    // log-tf weighting
+    const w = (1 + Math.log(cnt)) * iw;
+    vec.set(t, w);
+  }
+  return __l2NormalizeSparse(vec);
+}
+
+async function __trainClassifierForUser(userEmail) {
+  try {
+    const userKey = String(userEmail || CURRENT_USER_EMAIL || '').toLowerCase();
+    const responses = loadResponseEmails() || [];
+
+    // Group training docs by category; text = subject + snippet + body
+    const byCat = new Map(); // name -> Array<string>
+    for (const e of responses) {
+      const name = String(e?.category || '').trim();
+      if (!name) continue;
+      const text = `${e.subject || ''}\n${e.snippet || ''}\n${e.body || ''}`;
+      if (!byCat.has(name)) byCat.set(name, []);
+      byCat.get(name).push(text);
+    }
+
+    // Filter out categories with too few examples
+    const MIN_DOCS = 2;
+    const cats = [];
+    for (const [name, docs] of byCat.entries()) {
+      if (Array.isArray(docs) && docs.length >= MIN_DOCS) {
+        cats.push({ name, docs });
+      }
+    }
+    if (!cats.length) {
+      // fallback: allow even singletons to avoid empty model
+      for (const [name, docs] of byCat.entries()) {
+        if (Array.isArray(docs) && docs.length >= 1) {
+          cats.push({ name, docs });
+        }
+      }
+    }
+    if (!cats.length) {
+      __clfCacheByUser[userKey] = { model: null, trainedAt: Date.now() };
+      return { model: null, stats: { docCount: 0, categories: 0, vocabSize: 0 } };
+    }
+
+    // Build IDF over all docs
+    const allDocSets = [];
+    for (const { docs } of cats) {
+      for (const d of docs) {
+        const set = new Set(__clfTokenize(d));
+        allDocSets.push(set);
+      }
+    }
+    const idf = __buildTfidf(allDocSets);
+
+    // Build category centroids (sum of normalized tf-idf vectors per doc, then normalize)
+    const centroids = new Map(); // name -> Map<term, weight>
+    for (const { name, docs } of cats) {
+      const acc = new Map();
+      for (const d of docs) {
+        const v = __vectorizeWithIdf(d, idf);
+        for (const [t, w] of v.entries()) {
+          acc.set(t, (acc.get(t) || 0) + w);
+        }
+      }
+      __l2NormalizeSparse(acc);
+      centroids.set(name, acc);
+    }
+
+    const model = {
+      idf,
+      centroids,  // Map<string, Map<string, number>>
+      docCount: allDocSets.length,
+      categories: cats.map(c => c.name),
+      vocabSize: idf.size
+    };
+    __clfCacheByUser[userKey] = { model, trainedAt: Date.now() };
+
+    console.log(`[Classifier] Trained for ${userKey}: docs=${model.docCount}, categories=${model.categories.length}, vocab=${model.vocabSize}`);
+    return { model, stats: { docCount: model.docCount, categories: model.categories.length, vocabSize: model.vocabSize } };
+  } catch (e) {
+    console.error('Classifier training failed:', e?.message || e);
+    return { model: null, stats: { docCount: 0, categories: 0, vocabSize: 0 } };
+  }
+}
+
+function __ensureClassifierForUserSync() {
+  // Synchronous accessor; caller should have ensured training already, but fall back if missing
+  const key = String(CURRENT_USER_EMAIL || '').toLowerCase();
+  return (__clfCacheByUser[key] && __clfCacheByUser[key].model) || null;
+}
+
+/**
+ * POST /api/classifier/suggest
+ * body: { emails: [{ id, subject, body, from }] }
+ * returns: { success: true, predictions: { [id]: { category, score, reason } }, stats }
+ * - Trains (or reuses cached) model per current user
+ * - Maps predicted label to current categories list X (matchToCurrentCategory)
+ * - Logs each prediction to terminal
+ */
+app.post('/api/classifier/suggest', async (req, res) => {
+  try {
+    const emails = Array.isArray(req.body?.emails) ? req.body.emails : [];
+    const userKey = String(CURRENT_USER_EMAIL || '').toLowerCase();
+
+    // Train or reuse cached model
+    let model = __ensureClassifierForUserSync();
+    if (!model) {
+      const trained = await __trainClassifierForUser(userKey);
+      model = trained.model;
+    }
+    if (!model || !model.centroids || model.centroids.size === 0) {
+      return res.json({
+        success: true,
+        predictions: {},
+        stats: { docCount: 0, categories: 0, vocabSize: 0 },
+        mode: 'classifier-unavailable'
+      });
+    }
+
+    // Categories list X for mapping
+    const categoriesX = __getCategoriesList();
+    const predictions = {};
+
+    for (const em of emails) {
+      const id = String(em?.id || '').trim();
+      if (!id) continue;
+      const subject = String(em?.subject || '');
+      const body = String(em?.body || '');
+      const from = String(em?.from || '');
+      const text = `${subject}\n${body}\n${from}`;
+
+      const v = __vectorizeWithIdf(text, model.idf);
+      let best = '';
+      let bestScore = -1;
+      let bestCentroid = null;
+
+      for (const [name, centroid] of model.centroids.entries()) {
+        const s = __cosineSparse(v, centroid);
+        if (s > bestScore) {
+          bestScore = s;
+          best = name;
+          bestCentroid = centroid;
+        }
+      }
+
+      // Map to current categories
+      const mapped = best ? (matchToCurrentCategory(best, categoriesX) || best) : 'Other';
+
+      // Build justification: top shared terms contributing to similarity
+      const shared = [];
+      for (const [t, w] of v.entries()) {
+        if (bestCentroid && bestCentroid.has(t)) {
+          // product indicates contribution to dot
+          shared.push({ t, contrib: w * bestCentroid.get(t) });
+        }
+      }
+      shared.sort((a, b) => b.contrib - a.contrib);
+      const topTerms = shared.slice(0, 4).map(x => x.t);
+      const reason = topTerms.length
+        ? `Classifier TF-IDF: top terms ${topTerms.map(x => `“${x}”`).join(', ')} matched ${mapped} (cos ${Number.isFinite(bestScore) ? bestScore.toFixed(2) : 'n/a'}).`
+        : `Classifier TF-IDF match to ${mapped} (cos ${Number.isFinite(bestScore) ? bestScore.toFixed(2) : 'n/a'}).`;
+
+      // Terminal log per email/thread
+      try {
+        const subjLog = subject ? subject.slice(0, 120) : '(No Subject)';
+        console.log(`[Classifier] "${subjLog}" -> ${mapped} (cos=${Number.isFinite(bestScore) ? bestScore.toFixed(2) : 'n/a'})`);
+      } catch (_) {}
+
+      predictions[id] = {
+        category: mapped || 'Other',
+        score: Number.isFinite(bestScore) ? bestScore : 0,
+        reason
+      };
+    }
+
+    return res.json({
+      success: true,
+      predictions,
+      stats: { docCount: model.docCount, categories: model.categories.length, vocabSize: model.vocabSize },
+      mode: 'classifier'
+    });
+  } catch (e) {
+    console.error('Classifier suggestion failed:', e?.message || e);
+    return res.status(500).json({ success: false, error: 'Classifier suggestion failed' });
+  }
+});
+
 app.post('/api/search-emails', async (req, res) => {
   try {
     const { query, limit } = req.body || {};

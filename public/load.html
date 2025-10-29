@@ -187,6 +187,7 @@
     .chip.predicted{
       background: var(--predicted);
       border-color:#e5d88b;
+      cursor:pointer;
     }
 
     /* Suggested categories (yellow pills) */
@@ -246,6 +247,38 @@
     .suggestions .opt.active{
       background:#e8f0fe;
       outline:1px solid #c7d2fe;
+    }
+
+    /* Popover for suggested category reasons */
+    .chip-reason-popover{
+      position:absolute;
+      z-index:1600;
+      background:#fff;
+      border:1px solid #e0e0e0;
+      border-radius:8px;
+      box-shadow:0 8px 24px rgba(0,0,0,0.18);
+      max-width:340px;
+      min-width:220px;
+      padding:10px 12px;
+      color:#202124;
+      font-size:12px;
+    }
+    .chip-reason-popover .reason{
+      color:#3c4043;
+      line-height:1.4;
+      margin-bottom:8px;
+      white-space:normal;
+      word-wrap:break-word;
+    }
+    .chip-reason-popover .actions{
+      display:flex;
+      gap:8px;
+      justify-content:flex-end;
+    }
+    .chip-reason-popover .btn{
+      padding:6px 10px;
+      font-size:12px;
+      border-radius:6px;
     }
 
     .right-top{
@@ -399,6 +432,8 @@
   let countRequested = 0;
   let existingIds = new Set(); // ids already in DB (unreplied + responses)
   let existingSubjectKeys = new Set(); // normalized subjects already in DB (responses + unreplied)
+  // UI singleton for chip reason popover
+  let __chipReasonPopover = null;
 
   // Utilities
   function showOverlay(title, msg){
@@ -410,7 +445,7 @@
     document.getElementById('overlay').style.display = 'none';
   }
   function escapeHtml(s){
-    return String(s||'')
+    return String(s ?? '')
       .replace(/&/g,'&')
       .replace(/</g,'<')
       .replace(/>/g,'>')
@@ -547,37 +582,15 @@
         __predicted: true
       }));
 
-      // Update status and overlay, then auto-categorize using server AI (semantic + summaries/examples)
+      // Update status and overlay; new classifier-based path first
+      // 1) Pre-train and suggest with the classifier (server logs predictions to terminal)
+      await runClassifierSuggestions(loadItems);
+
+      // 2) Then run the existing multi-rule suggestion pipeline
       document.getElementById('leftStatus').textContent = 'Categorizing...';
-      showOverlay('Categorizing', 'Analyzing emails and assigning categories...');
-      try {
-        const payload = {
-          emails: loadItems.map(e => ({
-            id: e.id,
-            subject: e.subject || '',
-            body: e.body || e.snippet || '',
-            from: e.from || '',
-            category: 'Other'
-          })),
-          categories
-        };
-        const catResp = await fetch('/api/ai-enhanced-categorize', {
-          method:'POST',
-          headers:{'Content-Type':'application/json'},
-          body: JSON.stringify(payload)
-        });
-        const catData = await catResp.json().catch(()=> ({}));
-        if (catResp.ok && catData && catData.success && catData.assignments) {
-          const map = catData.assignments || {};
-          loadItems = loadItems.map(it => ({
-            ...it,
-            category: map[it.id] || it.category || 'Other',
-            __predicted: true
-          }));
-        }
-      } catch (e) {
-        console.warn('AI-enhanced categorize failed, keeping defaults:', e);
-      }
+      showOverlay('Rule-based & AI Suggestions', 'Analyzing emails and computing multi-rule suggestions…');
+      // Keep loadItems.category as 'Other' and __predicted=true; computeLoadMoreCategorySuggestions
+      // will set suggestions and auto-promote primary from the first non-Other suggestion when appropriate.
 
       await computeLoadMoreCategorySuggestions(loadItems);
       renderList();
@@ -647,6 +660,7 @@
   }
 
   function selectItem(id){
+    closeChipReasonPopover();
     selectedId = id;
     renderList();
     renderDetail();
@@ -746,6 +760,12 @@
       const chip = document.createElement('span');
       chip.className = 'chip' + (it.__predicted ? ' predicted' : '');
       chip.innerHTML = `<span>${escapeHtml(primaryName)}</span> <span class="x" title="Remove category">×</span>`;
+      // clicking anywhere on the primary chip except the X shows reason popover
+      chip.onclick = (ev) => {
+        if (ev && ev.target && ev.target.closest && ev.target.closest('.x')) return;
+        ev.stopPropagation();
+        openSuggestionReason(id, primaryName, chip);
+      };
       chip.querySelector('.x').onclick = (ev) => {
         ev.stopPropagation();
         // removing primary allows empty; user can add their own
@@ -779,16 +799,29 @@
       const s = document.createElement('span');
       s.className = 'chip predicted';
       s.innerHTML = `<span>${escapeHtml(name)}</span> <span class="x" title="Dismiss suggestion">×</span>`;
-      // clicking label applies this category
-      s.querySelector('span:first-child').onclick = (ev) => {
+      // clicking anywhere on the chip except the X shows reason popover with option to Apply
+      s.onclick = (ev) => {
+        // Ignore click if it was on the X
+        if (ev && ev.target && ev.target.closest && ev.target.closest('.x')) return;
         ev.stopPropagation();
-        commitCategory(id, name);
+        openSuggestionReason(id, name, s);
       };
       // clicking × removes the suggestion chip (case-insensitive)
       s.querySelector('.x').onclick = (ev) => {
         ev.stopPropagation();
         const removeLc = String(name || '').trim().toLowerCase();
         it.suggestedCategories = (it.suggestedCategories || []).filter(c => String(c || '').trim().toLowerCase() !== removeLc);
+        // Also remove stored reason if present
+        try {
+          if (it.suggestedReasons && typeof it.suggestedReasons === 'object') {
+            Object.keys(it.suggestedReasons).forEach(k => {
+              if (String(k || '').trim().toLowerCase() === removeLc) {
+                delete it.suggestedReasons[k];
+              }
+            });
+          }
+        } catch(_){}
+        closeChipReasonPopover();
         refreshItemUI(id);
       };
       host.appendChild(s);
@@ -846,6 +879,7 @@
       options = [];
       activeIndex = -1;
       sugg.style.display = 'none';
+      closeChipReasonPopover();
     }
 
     input.addEventListener('input', () => {
@@ -904,6 +938,108 @@
     }catch(_){}
   }
 
+  // Reason popover helpers
+  function ensureChipReasonPopover(){
+    if (__chipReasonPopover && document.body.contains(__chipReasonPopover)) return __chipReasonPopover;
+    const el = document.createElement('div');
+    el.id = 'chipReasonPopover';
+    el.className = 'chip-reason-popover';
+    el.style.display = 'none';
+    document.body.appendChild(el);
+    __chipReasonPopover = el;
+    return el;
+  }
+  function closeChipReasonPopover(){
+    if (__chipReasonPopover) {
+      __chipReasonPopover.style.display = 'none';
+      __chipReasonPopover.innerHTML = '';
+    }
+    // Remove any document-level listeners installed by openSuggestionReason
+    document.removeEventListener('click', __onChipReasonDocClick, true);
+    window.removeEventListener('scroll', __onChipReasonScroll, true);
+    window.removeEventListener('resize', __onChipReasonScroll, true);
+  }
+  function __onChipReasonDocClick(ev){
+    try{
+      const pop = __chipReasonPopover;
+      if (!pop) return;
+      if (pop.style.display === 'none') return;
+      const t = ev.target;
+      if (t === pop || (t.closest && t.closest('#chipReasonPopover'))) return;
+      // If clicking on any predicted chip label, ignore here; their handler manages toggling
+      if (t.closest && t.closest('.chip.predicted')) return;
+      closeChipReasonPopover();
+    }catch(_){}
+  }
+  function __onChipReasonScroll(){
+    // On scroll/resize, just close to avoid stale positioning
+    closeChipReasonPopover();
+  }
+  function getSuggestionReasonForItem(it, name){
+    try{
+      if (!it || !name) return '';
+      const map = (it.suggestedReasons && typeof it.suggestedReasons === 'object') ? it.suggestedReasons : {};
+      // Exact key
+      if (Object.prototype.hasOwnProperty.call(map, name)) return String(map[name] || '');
+      // Case-insensitive fallback
+      const nl = String(name || '').toLowerCase();
+      for (const k of Object.keys(map)) {
+        if (String(k || '').toLowerCase() === nl) return String(map[k] || '');
+      }
+      return '';
+    }catch(_){ return ''; }
+  }
+  function openSuggestionReason(emailId, catName, anchorEl){
+    try{
+      const it = loadItems.find(x => String(x.id) === String(emailId));
+      const reasonRaw = getSuggestionReasonForItem(it, catName);
+      const reason = reasonRaw ? reasonRaw : `Suggested by heuristic/model signals for “${catName}”.`;
+
+      const pop = ensureChipReasonPopover();
+      // Build content
+      pop.innerHTML = `
+        <div class="reason">${escapeHtml(reason)}</div>
+        <div class="actions">
+          <button class="btn btn-secondary" id="chipReasonCloseBtn">Close</button>
+        </div>
+      `;
+      // Wire actions
+      const closeBtn = pop.querySelector('#chipReasonCloseBtn');
+      if (closeBtn) {
+        closeBtn.onclick = (ev) => { ev.stopPropagation(); closeChipReasonPopover(); };
+      }
+
+      // Position near the chip
+      const r = anchorEl.getBoundingClientRect();
+      const scrollX = window.scrollX || document.documentElement.scrollLeft || 0;
+      const scrollY = window.scrollY || document.documentElement.scrollTop || 0;
+      pop.style.display = 'block';
+      // Default below
+      let top = r.bottom + 8 + scrollY;
+      let left = r.left + scrollX;
+      // Ensure within viewport width
+      const popW = Math.min(340, Math.max(220, r.width + 80));
+      pop.style.width = popW + 'px';
+      const vw = (window.innerWidth || document.documentElement.clientWidth || 900);
+      if (left + popW + 12 > vw + scrollX) {
+        left = Math.max(8 + scrollX, vw + scrollX - popW - 12);
+      }
+      // If not enough space below, show above
+      const vh = (window.innerHeight || document.documentElement.clientHeight || 600);
+      const popH = 110; // approx; fine for one sentence
+      if (r.bottom + 8 + popH > vh) {
+        top = r.top - popH - 8 + scrollY;
+      }
+      pop.style.top = `${top}px`;
+      pop.style.left = `${left}px`;
+
+      // Install outside-click and scroll listeners
+      document.addEventListener('click', __onChipReasonDocClick, true);
+      window.addEventListener('scroll', __onChipReasonScroll, true);
+      window.addEventListener('resize', __onChipReasonScroll, true);
+    } catch(_){}
+  }
+
   async function commitCategory(id, name){
     const it = loadItems.find(x => x.id === id);
     if (!it) return;
@@ -930,6 +1066,72 @@
     it.category = n;
     it.__predicted = false; // user changed => no longer predicted
     refreshItemUI(id);
+  }
+
+  // Run classifier-based suggestions (pre-train on labeled emails, then predict)
+  async function runClassifierSuggestions(items){
+    try{
+      if (!Array.isArray(items) || !items.length) return;
+
+      // Show two-step status in the overlay
+      showOverlay('Pre-training Classifier', 'Learning from labeled emails (response history)…');
+      await new Promise(r => setTimeout(r, 150)); // brief tick so UI paints
+
+      // Switch to suggestion status
+      document.getElementById('ovTitle').textContent = 'Classifier Suggestions';
+      document.getElementById('ovMsg').textContent = 'Suggesting categories using the classifier…';
+
+      const minimal = items.map(e => ({
+        id: String(e.id || ''),
+        subject: String(e.subject || ''),
+        body: typeof e.body === 'string' ? e.body : (e.snippet || ''),
+        from: String(e.from || '')
+      })).filter(x => x.id);
+
+      const resp = await fetch('/api/classifier/suggest', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ emails: minimal })
+      });
+      const data = await resp.json().catch(()=> ({}));
+
+      if (!resp.ok || !data || data.success !== true || !data.predictions) {
+        return; // silent no-op if unavailable
+      }
+
+      // Merge predictions as an additional suggestion pathway
+      const preds = data.predictions || {};
+      items.forEach(it => {
+        const p = preds[String(it.id)] || null;
+        if (!p || !p.category) return;
+        const name = String(p.category || '').trim();
+        if (!name) return;
+
+        // initialize structures
+        if (!Array.isArray(it.suggestedCategories)) it.suggestedCategories = [];
+        if (!it.suggestedReasons || typeof it.suggestedReasons !== 'object') it.suggestedReasons = {};
+
+        // Unshift classifier pick to make it prominent, but keep unique ordering
+        const existsIdx = it.suggestedCategories.findIndex(c => String(c || '').trim().toLowerCase() === name.toLowerCase());
+        if (existsIdx === -1) {
+          it.suggestedCategories.unshift(name);
+        } else if (existsIdx > 0) {
+          // Move existing to front to reflect classifier confidence
+          it.suggestedCategories.splice(existsIdx, 1);
+          it.suggestedCategories.unshift(name);
+        }
+
+        // Store justification for popup
+        const reason = String(p.reason || '').trim();
+        if (reason) {
+          it.suggestedReasons[name] = reason;
+        } else {
+          it.suggestedReasons[name] = `Classifier TF-IDF match to “${name}”.`;
+        }
+      });
+    } catch(_){
+      // ignore classifier errors and proceed with other suggestion paths
+    }
   }
 
   // Suggestions aggregator for Load More items (subject/body similarity + others)
@@ -986,6 +1188,7 @@
         });
         const data = await resp.json().catch(()=>({}));
         if (resp.ok && data && data.success === true && data.choices) {
+          const reasonsById = (data.reasons && typeof data.reasons === 'object') ? data.reasons : {};
           Object.keys(data.choices || {}).forEach(id => {
             const raw = Array.isArray(data.choices[id]) ? data.choices[id] : [];
             // Deduplicate while preserving order
@@ -1004,6 +1207,8 @@
             const it = items.find(e => String(e.id) === String(id));
             if (it) {
               it.suggestedCategories = finalList;
+              const rr = reasonsById[id];
+              it.suggestedReasons = rr && typeof rr === 'object' ? rr : {};
             }
           });
           // If every item received at least one non-"Other" suggestion from server, we're done.
