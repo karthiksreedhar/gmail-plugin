@@ -1128,6 +1128,12 @@
         } else {
           it.suggestedReasons[name] = `Classifier TF-IDF match to “${name}”.`;
         }
+        // Persist classifier pick and reason so later pipelines can't overwrite/lose it
+        try {
+          const storedReason = it.suggestedReasons[name];
+          it.__classifierPick = name;
+          it.__classifierReason = storedReason;
+        } catch (_) {}
       });
     } catch(_){
       // ignore classifier errors and proceed with other suggestion paths
@@ -1206,9 +1212,21 @@
             const finalList = nonOther.length ? nonOther : (unique.every(c => String(c).toLowerCase() === 'other') ? ['Other'] : []);
             const it = items.find(e => String(e.id) === String(id));
             if (it) {
-              it.suggestedCategories = finalList;
+              const prevList = Array.isArray(it.suggestedCategories) ? it.suggestedCategories : [];
+              // Merge preserving order; keep any prior suggestions (e.g., classifier) first
+              const merged = [...prevList];
+              (finalList || []).forEach(c => {
+                const lc = String(c || '').trim().toLowerCase();
+                if (!lc) return;
+                if (!merged.some(x => String(x || '').trim().toLowerCase() === lc)) {
+                  merged.push(String(c || '').trim());
+                }
+              });
+              it.suggestedCategories = merged;
+
+              const prevReasons = (it.suggestedReasons && typeof it.suggestedReasons === 'object') ? it.suggestedReasons : {};
               const rr = reasonsById[id];
-              it.suggestedReasons = rr && typeof rr === 'object' ? rr : {};
+              it.suggestedReasons = Object.assign({}, prevReasons, (rr && typeof rr === 'object' ? rr : {}));
             }
           });
           // If every item received at least one non-"Other" suggestion from server, we're done.
@@ -1280,12 +1298,45 @@
         }
         const arr = Array.from(per.entries()).map(([name, meta]) => ({ name, ...meta }));
         arr.sort((a,b) => (b.count - a.count) || (a.firstIx - b.firstIx) || a.name.localeCompare(b.name));
-        it.suggestedCategories = arr.map(x => x.name);
+        const nextList = arr.map(x => x.name);
+        const prevList = Array.isArray(it.suggestedCategories) ? it.suggestedCategories : [];
+        const merged = [...prevList];
+        nextList.forEach(c => {
+          const lc = String(c || '').trim().toLowerCase();
+          if (!lc) return;
+          if (!merged.some(x => String(x || '').trim().toLowerCase() === lc)) {
+            merged.push(String(c || '').trim());
+          }
+        });
+        it.suggestedCategories = merged;
       });
 
       // Final normalization across all items to enforce "no Other when non-Other exists"
       items.forEach(it => {
         it.suggestedCategories = normalizeSuggestionsList(it.suggestedCategories || []);
+      });
+      // Ensure classifier pick is present and prioritized, with preserved reason
+      items.forEach(it => {
+        try {
+          const pick = String(it.__classifierPick || '').trim();
+          if (!pick) return;
+          const lc = pick.toLowerCase();
+          const list = Array.isArray(it.suggestedCategories) ? it.suggestedCategories.slice() : [];
+          const idx = list.findIndex(c => String(c || '').trim().toLowerCase() === lc);
+          if (idx === -1) {
+            list.unshift(pick);
+          } else if (idx > 0) {
+            list.splice(idx, 1);
+            list.unshift(pick);
+          }
+          it.suggestedCategories = normalizeSuggestionsList(list);
+          if (!it.suggestedReasons || typeof it.suggestedReasons !== 'object') it.suggestedReasons = {};
+          if (it.__classifierReason && !it.suggestedReasons[pick]) {
+            it.suggestedReasons[pick] = String(it.__classifierReason);
+          } else if (!it.suggestedReasons[pick]) {
+            it.suggestedReasons[pick] = 'Suggested by classifier (TF-IDF).';
+          }
+        } catch(_) {}
       });
       // Plan B1: auto-promote primary from "Other" to first non-Other suggestion when still predicted
       items.forEach(it => {

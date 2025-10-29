@@ -8990,7 +8990,8 @@ app.post('/api/classifier/suggest', async (req, res) => {
       // Terminal log per email/thread
       try {
         const subjLog = subject ? subject.slice(0, 120) : '(No Subject)';
-        console.log(`[Classifier] "${subjLog}" -> ${mapped} (cos=${Number.isFinite(bestScore) ? bestScore.toFixed(2) : 'n/a'})`);
+        const termsLog = (topTerms && topTerms.length) ? topTerms.slice(0,3).join(', ') : '';
+        console.log(`  (9) classifier -> ${mapped} | subject="${subjLog}" | cos=${Number.isFinite(bestScore) ? bestScore.toFixed(2) : 'n/a'}${termsLog ? ' | terms=' + termsLog : ''}`);
       } catch (_) {}
 
       predictions[id] = {
