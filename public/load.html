@@ -979,12 +979,41 @@
     try{
       if (!it || !name) return '';
       const map = (it.suggestedReasons && typeof it.suggestedReasons === 'object') ? it.suggestedReasons : {};
-      // Exact key
-      if (Object.prototype.hasOwnProperty.call(map, name)) return String(map[name] || '');
+      // Prefer exact key first
+      if (Object.prototype.hasOwnProperty.call(map, name)) {
+        const v = map[name];
+        if (Array.isArray(v)) {
+          // Deduplicate and join
+          const seen = new Set();
+          const uniq = v.map(x => String(x || '').trim()).filter(s => {
+            const k = s.toLowerCase();
+            if (!k) return false;
+            if (seen.has(k)) return false;
+            seen.add(k);
+            return true;
+          });
+          return uniq.join(' • ');
+        }
+        return String(v || '');
+      }
       // Case-insensitive fallback
       const nl = String(name || '').toLowerCase();
       for (const k of Object.keys(map)) {
-        if (String(k || '').toLowerCase() === nl) return String(map[k] || '');
+        if (String(k || '').toLowerCase() === nl) {
+          const v = map[k];
+          if (Array.isArray(v)) {
+            const seen = new Set();
+            const uniq = v.map(x => String(x || '').trim()).filter(s => {
+              const kk = s.toLowerCase();
+              if (!kk) return false;
+              if (seen.has(kk)) return false;
+              seen.add(kk);
+              return true;
+            });
+            return uniq.join(' • ');
+          }
+          return String(v || '');
+        }
       }
       return '';
     }catch(_){ return ''; }
@@ -1121,18 +1150,29 @@
           it.suggestedCategories.unshift(name);
         }
 
-        // Store justification for popup
-        const reason = String(p.reason || '').trim();
-        if (reason) {
-          it.suggestedReasons[name] = reason;
-        } else {
-          it.suggestedReasons[name] = `Classifier TF-IDF match to “${name}”.`;
-        }
+        // Store justification for popup (merge so multiple sources accumulate)
+        const reason = String(p.reason || '').trim() || `Classifier TF-IDF match to “${name}”.`;
+        try {
+          const cur = it.suggestedReasons[name];
+          if (Array.isArray(cur)) {
+            if (!cur.some(r => String(r || '').trim().toLowerCase() === reason.toLowerCase())) {
+              cur.push(reason);
+            }
+            it.suggestedReasons[name] = cur;
+          } else if (typeof cur === 'string' && cur.trim()) {
+            if (cur.trim().toLowerCase() !== reason.toLowerCase()) {
+              it.suggestedReasons[name] = [cur, reason];
+            } else {
+              it.suggestedReasons[name] = cur;
+            }
+          } else {
+            it.suggestedReasons[name] = reason;
+          }
+        } catch(_) {}
         // Persist classifier pick and reason so later pipelines can't overwrite/lose it
         try {
-          const storedReason = it.suggestedReasons[name];
           it.__classifierPick = name;
-          it.__classifierReason = storedReason;
+          it.__classifierReason = reason;
         } catch (_) {}
       });
     } catch(_){
@@ -1224,9 +1264,28 @@
               });
               it.suggestedCategories = merged;
 
+              // Deep-merge reasons so multiple sources show up together
               const prevReasons = (it.suggestedReasons && typeof it.suggestedReasons === 'object') ? it.suggestedReasons : {};
-              const rr = reasonsById[id];
-              it.suggestedReasons = Object.assign({}, prevReasons, (rr && typeof rr === 'object' ? rr : {}));
+              const rr = (reasonsById[id] && typeof reasonsById[id] === 'object') ? reasonsById[id] : {};
+              const mergedReasons = { ...prevReasons };
+              Object.keys(rr).forEach(catKey => {
+                const incoming = rr[catKey];
+                const incomingList = Array.isArray(incoming) ? incoming : [incoming];
+                const exist = mergedReasons[catKey];
+                const existList = Array.isArray(exist) ? exist : (exist ? [exist] : []);
+                const out = [];
+                const seen = new Set();
+                [...existList, ...incomingList].forEach(txt => {
+                  const s = String(txt || '').trim();
+                  if (!s) return;
+                  const k = s.toLowerCase();
+                  if (seen.has(k)) return;
+                  seen.add(k);
+                  out.push(s);
+                });
+                mergedReasons[catKey] = out.length <= 1 ? (out[0] || '') : out;
+              });
+              it.suggestedReasons = mergedReasons;
             }
           });
           // If every item received at least one non-"Other" suggestion from server, we're done.
@@ -1331,10 +1390,21 @@
           }
           it.suggestedCategories = normalizeSuggestionsList(list);
           if (!it.suggestedReasons || typeof it.suggestedReasons !== 'object') it.suggestedReasons = {};
-          if (it.__classifierReason && !it.suggestedReasons[pick]) {
-            it.suggestedReasons[pick] = String(it.__classifierReason);
-          } else if (!it.suggestedReasons[pick]) {
-            it.suggestedReasons[pick] = 'Suggested by classifier (TF-IDF).';
+          const clsReason = String(it.__classifierReason || 'Suggested by classifier (TF-IDF).');
+          const cur = it.suggestedReasons[pick];
+          if (Array.isArray(cur)) {
+            if (!cur.some(r => String(r || '').trim().toLowerCase() === clsReason.toLowerCase())) {
+              cur.push(clsReason);
+            }
+            it.suggestedReasons[pick] = cur;
+          } else if (typeof cur === 'string' && cur.trim()) {
+            if (cur.trim().toLowerCase() !== clsReason.toLowerCase()) {
+              it.suggestedReasons[pick] = [cur, clsReason];
+            } else {
+              it.suggestedReasons[pick] = cur;
+            }
+          } else {
+            it.suggestedReasons[pick] = clsReason;
           }
         } catch(_) {}
       });
