@@ -2,12 +2,15 @@ User: ks4190@columbia.edu
 Train size: 194 | Test size: 49
 Accuracy (strict multi-label containment): 55.10% (27/49)
 Correctly assigned tags: 31/59
-Extra Tags Suggested: 18
+Extra Tags Suggested: 22
 Emails completely correct (exact match): 27
-Emails mostly correct (<=1 total tag error): 31
-Emails almost correct (<=2 total tag error): 43
-Emails somewhat correct (<=3 total tag error): 49
-Emails Assigned Correctly Other than Extra Tags: 0
+
+
+
+
+
+
+
 
 Details per test email:
 -----------------------
