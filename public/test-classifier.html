@@ -65,7 +65,7 @@
       padding:10px; border-radius:8px;
     }
     .metric-title{font-size:12px; color:var(--muted); margin-bottom:4px}
-    .metric-value{font-size:18px; font-weight:700}
+    .metric-value{font-size:28px; font-weight:700}
 
     .controls{
       margin-top:16px; display:flex; flex-direction:column; gap:8px;
@@ -76,6 +76,7 @@
     }
     .pill-toggle.active{background:#e8f0fe; border-color:#c6dafc; color:#1a73e8}
     .small{font-size:12px; color:var(--muted)}
+    .controls .info-note{font-size:16px}
 
     .content{
       flex:1; overflow:auto; padding:16px;
@@ -104,7 +105,7 @@
     .row-title{font-size:12px; color:var(--muted); margin-right:6px}
 
     .tag-pill{
-      display:inline-block; padding:4px 8px; border-radius:12px; font-size:12px; font-weight:600; cursor:pointer; user-select:none;
+      display:inline-block; padding:6px 12px; border-radius:14px; font-size:14px; font-weight:600; cursor:pointer; user-select:none;
       border:1px solid rgba(0,0,0,0.06);
     }
     .tag-correct{ background:var(--pill-green-bg); color:var(--pill-green-fg); }
@@ -192,8 +193,8 @@
           <span class="tag-pill tag-incorrect">Incorrect</span>
           <span class="tag-pill tag-missing">Missing</span>
         </div>
-        <div class="small">
-          Click a tag to see reasons (cosine similarity, shared terms).
+        <div class="small info-note">
+          Click a tag to see reasons.
         </div>
       </div>
     </aside>
