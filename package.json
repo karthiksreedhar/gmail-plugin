@@ -5,7 +5,11 @@
   "main": "index.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "node server.js"
+    "dev": "node server.js",
+    "eval:classifier": "node scripts/evaluate-classifier.js",
+    "eval:classifier-simple": "node scripts/evaluate-classifier-simple.js",
+    "eval:classifier-no-similarity": "node scripts/evaluate-classifier-no-similarity.js",
+    "eval:classifier-limited": "node scripts/evaluate-classifier-limited.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^0.5.0",

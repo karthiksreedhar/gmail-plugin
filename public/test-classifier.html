@@ -162,6 +162,15 @@
     .message-body{padding:12px; white-space:pre-wrap; line-height:1.6; color:#333}
     .response-badge{display:inline-block; background:#d2b48c; color:#fff; padding:2px 8px; border-radius:12px; font-size:11px; font-weight:700; text-transform:uppercase; margin-left:8px}
 
+    /* In-pane thread view (no reply) */
+    .thread-view{flex:1; background:#fff; overflow:auto; border-left:1px solid var(--border)}
+    .thread-header{position:sticky; top:0; background:#fff; border-bottom:1px solid var(--border); padding:12px 16px; display:flex; align-items:center; justify-content:space-between; z-index:5}
+    .thread-title{font-size:16px; font-weight:700; color:#202124; margin-left:8px}
+    .thread-header-left{display:flex; align-items:center; gap:8px}
+    .back-thread-btn{background:#f1f3f4; color:#202124; border:1px solid #dadce0; padding:6px 10px; border-radius:20px; cursor:pointer; font-size:12px}
+    .back-thread-btn:hover{background:#e8eaed}
+    .thread-body{padding:12px 16px 24px 16px}
+
     /* Loading overlay note */
     .lnote{color:#777; font-size:12px; margin-top:6px}
   </style>
@@ -217,12 +226,15 @@
       </div>
     </aside>
 
-    <main class="content">
-      <div class="section-title">Test Emails</div>
-      <div id="testList"></div>
+    <main class="content" id="contentRoot">
+      <div id="listsContainer">
+        <div class="section-title">Test Emails</div>
+        <div id="testList"></div>
 
-      <div class="section-title">Training Emails</div>
-      <div id="trainList"></div>
+        <div class="section-title">Training Emails</div>
+        <div id="trainList"></div>
+      </div>
+      <div id="threadPane" class="thread-view" style="display:none;"></div>
     </main>
   </div>
 
@@ -323,31 +335,52 @@
       document.getElementById('reasonsModal').style.display = 'none';
     }
 
-    // Email Thread modal (match main UI behavior)
+    // Email Thread in-pane (no reply)
     async function openThread(emailId, subject){
       try{
-        const titleEl = document.getElementById('threadTitle');
-        const bodyEl = document.getElementById('threadBody');
-        if (titleEl) titleEl.textContent = subject || 'Email Thread';
-        if (bodyEl) bodyEl.innerHTML = '<div class="small">Loading thread...</div>';
-        document.getElementById('threadModal').style.display = 'flex';
+        const lists = document.getElementById('listsContainer');
+        const pane = document.getElementById('threadPane');
+        if (lists) lists.style.display = 'none';
+        if (pane){
+          const safeSubject = subject || 'Email Thread';
+          pane.style.display = 'block';
+          pane.innerHTML = `
+            <div class="thread-header">
+              <div class="thread-header-left">
+                <button class="back-thread-btn" onclick="backToLists()">← Back</button>
+                <div class="thread-title">${esc(safeSubject)}</div>
+              </div>
+            </div>
+            <div class="thread-body" id="threadBodyPane">
+              <div class="small">Loading thread...</div>
+            </div>
+          `;
+        }
         const resp = await fetch('/api/email-thread/' + encodeURIComponent(emailId));
         const data = await resp.json().catch(()=> ({}));
         if (resp.ok && data && Array.isArray(data.messages)){
-          renderThreadMessages(data.messages);
+          renderThreadInPane(subject, data.messages);
         }else{
+          const bodyEl = document.getElementById('threadBodyPane');
           if (bodyEl) bodyEl.innerHTML = '<div class="small">Failed to load thread.</div>';
         }
       }catch(_){
-        const bodyEl = document.getElementById('threadBody');
+        const bodyEl = document.getElementById('threadBodyPane');
         if (bodyEl) bodyEl.innerHTML = '<div class="small">Error loading thread.</div>';
       }
     }
-    function closeThread(){
-      document.getElementById('threadModal').style.display = 'none';
+    function backToLists(){
+      const pane = document.getElementById('threadPane');
+      const lists = document.getElementById('listsContainer');
+      if (pane){ pane.style.display = 'none'; pane.innerHTML = ''; }
+      if (lists){ lists.style.display = 'block'; }
     }
-    function renderThreadMessages(messages){
-      const bodyEl = document.getElementById('threadBody');
+    function renderThreadInPane(subject, messages){
+      const pane = document.getElementById('threadPane');
+      if (!pane) return;
+      const safeSubject = subject || 'Email Thread';
+      // keep header, rebuild body
+      const bodyEl = document.getElementById('threadBodyPane');
       if (!bodyEl) return;
       bodyEl.innerHTML = '';
       (messages || []).forEach(m=>{
