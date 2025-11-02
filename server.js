@@ -85,7 +85,7 @@ const seedProgressByUser = {};
 function getSeedProgressForUser(email) {
   const key = String(email || CURRENT_USER_EMAIL || '').toLowerCase();
   if (!seedProgressByUser[key]) {
-    seedProgressByUser[key] = { active: false, total: 200, processed: 0, startedAt: 0, finishedAt: 0 };
+    seedProgressByUser[key] = { active: false, total: 400, processed: 0, startedAt: 0, finishedAt: 0 };
   }
   return seedProgressByUser[key];
 }
@@ -3340,13 +3340,13 @@ app.get('/api/seed-categories/list', async (req, res) => {
 const __seedUserKey = String(CURRENT_USER_EMAIL || '').toLowerCase();
 const __seedProgress = getSeedProgressForUser(__seedUserKey);
 __seedProgress.active = true;
-__seedProgress.total = 200;
+__seedProgress.total = 400;
 __seedProgress.processed = 0;
 __seedProgress.startedAt = Date.now();
 __seedProgress.finishedAt = 0;
     // Fetch more than needed to allow dedup by subject
 const TARGET = 50;
-const LIMIT = 200;
+const LIMIT = 400;
 
     // Ensure Gmail API is ready
     if (!gmail) {
@@ -3508,9 +3508,9 @@ app.get('/api/seed-categories/progress', (req, res) => {
   try {
     const key = String(CURRENT_USER_EMAIL || '').toLowerCase();
     const p = getSeedProgressForUser(key);
-    return res.json({ success: true, active: !!p.active, processed: Number(p.processed) || 0, total: Number(p.total) || 200, startedAt: p.startedAt || 0, finishedAt: p.finishedAt || 0 });
+    return res.json({ success: true, active: !!p.active, processed: Number(p.processed) || 0, total: Number(p.total) || 400, startedAt: p.startedAt || 0, finishedAt: p.finishedAt || 0 });
   } catch (e) {
-    return res.json({ success: true, active: false, processed: 0, total: 200 });
+    return res.json({ success: true, active: false, processed: 0, total: 400 });
   }
 });
 
@@ -7577,6 +7577,327 @@ app.post('/api/suggest-categories', async (req, res) => {
     const choices = {}; // { id: [cat1, cat2...] ordered by preference }
 
     if (stage === 'all') {
+      try {
+        // LIMITED CLASSIFIER for Load More (server-side)
+        // Steps:
+        // 1) Sender prior (only most frequent category for this sender)
+        // 2) Sender name equals a category
+        // 3) Keyword rule: subject >=1 or body >=2 occurrences of category name
+        // 4) OpenAI best-of (single category among allowed)
+        // 5) TF-IDF (only if steps 1–4 produced NO suggestions)
+        // 6) Embeddings average similarity (only if still NO suggestions after 1–5)
+        // Constraints:
+        // - "Other" only when it is the sole suggestion
+        // - At most 2 suggestions per email
+
+        const categoriesX = __getCategoriesList();
+        const categoriesNoOtherX = categoriesX.filter(n => String(n).toLowerCase() !== 'other');
+        const byCatX = __groupDbByCategory();
+        const responsesX = loadResponseEmails() || [];
+
+        // Helpers
+        const normKey = (s) => normalizeKey(s);
+        const escapeRegExp = (s) => String(s || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const parseFromHeader = (fromStr) => {
+          const emailKey = __extractEmailAddress(fromStr || '');
+          const nameKey = normKey(__extractDisplayName(fromStr || ''));
+          const rawKey = normKey(fromStr || '');
+          return { emailKey, nameKey, rawKey };
+        };
+        const countOccurrencesNormalized = (haystack, needle) => {
+          if (!haystack || !needle) return 0;
+          const h = normKey(haystack);
+          const n = normKey(needle);
+          if (!n) return 0;
+          const re = new RegExp(`\\b${escapeRegExp(n)}\\b`, 'g');
+          const m = h.match(re);
+          return m ? m.length : 0;
+        };
+        const capToTwo = (arr) => {
+          const out = [];
+          for (const c of arr) {
+            const k = String(c || '').trim();
+            if (!k) continue;
+            if (!out.includes(k)) out.push(k);
+            if (out.length === 2) break;
+          }
+          return out;
+        };
+
+        // Build sender index: key -> Map(category -> count)
+        const senderIndex = new Map();
+        for (const e of responsesX) {
+          const parts = parseFromHeader(e.originalFrom || e.from || '');
+          const keys = [];
+          if (parts.emailKey) keys.push(`email:${parts.emailKey}`);
+          if (parts.nameKey) keys.push(`name:${parts.nameKey}`);
+          if (parts.rawKey) keys.push(`raw:${parts.rawKey}`);
+
+          const cats = (() => {
+            const arr = [];
+            const seen = new Set();
+            const all = [
+              String(e.category || '').trim(),
+              ...((Array.isArray(e.categories) ? e.categories : []).map(c => String(c || '').trim()))
+            ].filter(Boolean);
+            for (const c of all) {
+              const k = c.toLowerCase();
+              if (!k || seen.has(k)) continue;
+              seen.add(k);
+              arr.push(c);
+            }
+            return arr;
+          })();
+
+          for (const k of keys) {
+            if (!senderIndex.has(k)) senderIndex.set(k, new Map());
+            const counter = senderIndex.get(k);
+            for (const c of cats) {
+              counter.set(c, (counter.get(c) || 0) + 1);
+            }
+          }
+        }
+
+        // OpenAI helper for best-of single category among allowed
+        async function chooseCategoryOpenAI(email, categories) {
+          const allowed = Array.isArray(categories) ? categories.slice(0, 48) : [];
+          if (!allowed.map(s => String(s || '').toLowerCase()).includes('other')) {
+            allowed.push('Other');
+          }
+          const allowedJson = JSON.stringify(allowed);
+          const SYSTEM = `You are an assistant that classifies emails into categories.
+You MUST choose exactly one category name from the provided list. Do not invent names or synonyms.
+Return strictly valid JSON of the form: {"category":"<one of the allowed names>"}.
+Evaluate fit carefully using sender, subject, and body.`;
+          const USER = `ALLOWED CATEGORY NAMES (JSON):
+${allowedJson}
+
+EMAIL:
+From: ${email.from}
+Subject: ${email.subject}
+Body:
+${String(email.body || '').slice(0, 1400)}
+
+Return ONLY JSON matching {"category":"<name>"} with the category chosen from the allowed list.`;
+
+          try {
+            const resp = await openai.chat.completions.create({
+              model: 'o3',
+              messages: [
+                { role: 'system', content: SYSTEM },
+                { role: 'user', content: USER }
+              ],
+              max_completion_tokens: 120,
+              response_format: { type: 'json_object' }
+            });
+            const raw = resp.choices?.[0]?.message?.content || '';
+            let parsed = null;
+            try { parsed = JSON.parse(raw); } catch {
+              const m = raw.match(/\{[\s\S]*\}/);
+              if (m) { try { parsed = JSON.parse(m[0]); } catch {} }
+            }
+            const catRaw = parsed && typeof parsed.category === 'string' ? parsed.category : '';
+            const mapped = __strictMapToCategory(catRaw, categoriesX);
+            return { category: mapped || 'Other', raw: catRaw };
+          } catch (_) {
+            return { category: 'Other', raw: '' };
+          }
+        }
+
+        // TF-IDF via cached classifier model
+        async function bestByTfidf(email) {
+          // Ensure model exists
+          let model = __ensureClassifierForUserSync();
+          if (!model) {
+            const trained = await __trainClassifierForUser(CURRENT_USER_EMAIL);
+            model = trained.model;
+          }
+          if (!model || !model.centroids || model.centroids.size === 0) {
+            return { cat: '', score: 0 };
+          }
+          const text = `${email.subject || ''}\n${email.body || ''}\n${email.from || ''}`;
+          const v = __vectorizeWithIdf(text, model.idf);
+          let best = { cat: '', score: 0 };
+          for (const [name, centroid] of model.centroids.entries()) {
+            const s = __cosineSparse(v, centroid);
+            if (s > best.score) best = { cat: name, score: s };
+          }
+          return best;
+        }
+
+        // Step 6: embeddings-average across categories (only if no suggestions yet)
+        async function bestByAvgEmbedding(email) {
+          const testText = `${email.subject || ''}\n${email.body || ''}`;
+          let testVec = [];
+          try {
+            testVec = await __embed(testText.slice(0, 2000));
+          } catch (_) {
+            return { cat: '' };
+          }
+          let best = { cat: '', score: -1 };
+          for (const c of categoriesX) {
+            const arr = (byCatX.get(c) || []);
+            if (!arr.length) continue;
+            let sum = 0;
+            let count = 0;
+            for (const e of arr) {
+              const txt = `${e.subject || ''}\n${e.snippet || ''}\n${e.body || ''}`;
+              try {
+                const v = await __embed(txt.slice(0, 2000));
+                const s = __cosine(testVec, v);
+                sum += s;
+                count++;
+              } catch (_) {}
+            }
+            const avg = count ? (sum / count) : 0;
+            if (avg > best.score) best = { cat: c, score: avg };
+          }
+          return best;
+        }
+
+        const choicesAll = {};
+        const reasonsAll = {};
+
+        for (const em of emails) {
+          const id = String(em.id || '');
+          if (!id) continue;
+
+          const subjectText = String(em.subject || '');
+          const bodyText = String(em.body || em.snippet || '');
+          const fromHeader = String(em.from || '');
+          const parts = parseFromHeader(fromHeader);
+
+          // Candidate aggregator
+          const cand = new Map(); // cat -> { score, reasons: string[] }
+          const bump = (cat, pts, reason) => {
+            const name = String(cat || '').trim();
+            if (!name) return;
+            if (!cand.has(name)) cand.set(name, { score: 0, reasons: [] });
+            const o = cand.get(name);
+            o.score += pts;
+            if (reason) o.reasons.push(String(reason));
+          };
+
+          // Step 1: sender prior (only single most frequent category across email/name/raw keys)
+          const senderKeys = [];
+          if (parts.emailKey) senderKeys.push(`email:${parts.emailKey}`);
+          if (parts.nameKey) senderKeys.push(`name:${parts.nameKey}`);
+          senderKeys.push(`raw:${parts.rawKey}`);
+
+          const bySenderCounts = new Map();
+          for (const k of senderKeys) {
+            const counter = senderIndex.get(k);
+            if (counter) {
+              for (const [cat, cnt] of counter.entries()) {
+                bySenderCounts.set(cat, (bySenderCounts.get(cat) || 0) + cnt);
+              }
+            }
+          }
+          let priorBestCat = '';
+          let priorBestCount = 0;
+          for (const [cat, cnt] of bySenderCounts.entries()) {
+            if (cnt > priorBestCount) { priorBestCount = cnt; priorBestCat = cat; }
+          }
+          if (priorBestCat) {
+            bump(priorBestCat, 2.0, `Sender prior: most frequent "${priorBestCat}" (count=${priorBestCount})`);
+          }
+
+          // Step 2: sender name equals a category
+          if (parts.nameKey) {
+            const normMap = new Map(categoriesX.map(c => [normKey(c), c]));
+            const match = normMap.get(parts.nameKey);
+            if (match) bump(match, 3.0, `Sender name matches category "${match}"`);
+          }
+
+          // Step 3: keyword rule
+          for (const c of categoriesX) {
+            const subjCount = countOccurrencesNormalized(subjectText, c);
+            const bodyCount = countOccurrencesNormalized(bodyText, c);
+            if (subjCount >= 1 || bodyCount >= 2) {
+              bump(c, 1.5 + 0.2 * subjCount + 0.1 * bodyCount, `Keyword rule: "${c}" in subject x${subjCount} body x${bodyCount}`);
+            }
+          }
+
+          // Step 4: LLM best-of (single pick)
+          try {
+            const { category: picked, raw } = await chooseCategoryOpenAI(
+              { from: fromHeader, subject: subjectText, body: bodyText },
+              categoriesX
+            );
+            bump(picked, 3.5, raw ? `LLM best-of chose "${raw}" mapped to "${picked}"` : `LLM best-of chose "${picked}"`);
+          } catch (_) {}
+
+          // Step 5: TF-IDF ONLY if no candidates from steps 1–4
+          const hasPreTfidf = cand.size > 0;
+          if (!hasPreTfidf) {
+            try {
+              const tf = await bestByTfidf({ from: fromHeader, subject: subjectText, body: bodyText });
+              if (tf.cat) {
+                bump(tf.cat, 2.5 * Math.max(0.2, Math.min(1, tf.score || 0)), `TF-IDF top match "${tf.cat}" (sim=${Number.isFinite(tf.score) ? tf.score.toFixed(3) : 'n/a'})`);
+              }
+            } catch (_) {}
+          } else {
+            // Defensive: scrub any TF-IDF-only candidates/reasons if they somehow got added (shouldn't happen)
+            for (const [cat, v] of Array.from(cand.entries())) {
+              const arr = Array.isArray(v.reasons) ? v.reasons : [];
+              const nonTfidf = arr.filter(r => !/^TF-IDF top match\b/.test(String(r || '')));
+              if (nonTfidf.length === 0) {
+                cand.delete(cat);
+              } else if (nonTfidf.length !== arr.length) {
+                v.reasons = nonTfidf;
+              }
+            }
+          }
+
+          // Accumulate final suggestions by score
+          const scored = Array.from(cand.entries())
+            .map(([cat, v]) => ({ cat, score: v.score, reasons: v.reasons }))
+            .sort((a, b) => b.score - a.score);
+          let suggestions = scored.map(x => x.cat);
+
+          // Step 6: If NO suggestions yet, do embeddings-average across categories
+          if (suggestions.length === 0) {
+            try {
+              const best = await bestByAvgEmbedding({ from: fromHeader, subject: subjectText, body: bodyText });
+              if (best.cat) {
+                suggestions = [best.cat];
+                if (!cand.has(best.cat)) cand.set(best.cat, { score: 0, reasons: [] });
+                cand.get(best.cat).reasons.push(`Embeddings: highest avg similarity "${best.cat}"`);
+              }
+            } catch (_) {}
+          }
+
+          // Enforce: "Other" only if sole suggestion; cap to 2
+          if (suggestions.some(c => normKey(c) !== 'other')) {
+            suggestions = suggestions.filter(c => normKey(c) !== 'other');
+          }
+          suggestions = capToTwo(suggestions);
+
+          // Build reasons mapping per category (single sentence)
+          const reasonsMap = {};
+          for (const s of suggestions) {
+            const arrRaw = (cand.get(s)?.reasons || []).map(String);
+            const seen = new Set();
+            const uniq = arrRaw.filter(r => {
+              const k = r.trim().toLowerCase();
+              if (!k || seen.has(k)) return false;
+              seen.add(k);
+              return true;
+            });
+            const parts = uniq.slice(0, 3);
+            let sentence = parts.join('; ');
+            if (sentence && !/[.?!]$/.test(sentence)) sentence += '.';
+            reasonsMap[s] = sentence || 'Suggested by limited classifier signals.';
+          }
+
+          choicesAll[id] = suggestions;
+          reasonsAll[id] = reasonsMap;
+        }
+
+        return res.json({ success: true, stage: 'all', choices: choicesAll, reasons: reasonsAll });
+      } catch (e) {
+        console.error('Limited classifier (stage=all) failed, falling back to legacy pipeline:', e?.message || e);
+      }
       try {
         const categoriesList = categoriesNoOther.slice().sort((a, b) => String(a).localeCompare(String(b)));
         const summariesMap = loadCategorySummaries() || {};
