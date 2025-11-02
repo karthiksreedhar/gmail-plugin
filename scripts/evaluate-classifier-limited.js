@@ -388,7 +388,7 @@ function writeReport(reportPath, summary, rows) {
 // Classifier (steps 1-6)
 // -----------------------------
 function buildSenderIndex(train) {
-  // Map senderKey (email if available, else normalized name/full) -> Set(categories)
+  // Map senderKey -> Map(category -> count) based on training labels
   const map = new Map();
   for (const e of train) {
     const parts = parseFromParts(e.from);
@@ -399,9 +399,11 @@ function buildSenderIndex(train) {
 
     const cats = Array.isArray(e.actualCats) ? e.actualCats : [];
     for (const k of keys) {
-      if (!map.has(k)) map.set(k, new Set());
-      const set = map.get(k);
-      for (const c of cats) set.add(c);
+      if (!map.has(k)) map.set(k, new Map());
+      const counter = map.get(k);
+      for (const c of cats) {
+        counter.set(c, (counter.get(c) || 0) + 1);
+      }
     }
   }
   return map;
@@ -513,18 +515,29 @@ async function classifyLimited(email, ctx) {
 
   const parts = parseFromParts(email.from);
 
-  // Step 1: sender/participants prior
+  // Step 1: sender/participants prior (only suggest the single most frequent category)
   const senderKeys = [];
   if (parts.emailKey) senderKeys.push(`email:${parts.emailKey}`);
   if (parts.nameKey) senderKeys.push(`name:${parts.nameKey}`);
   senderKeys.push(`raw:${normalizeKey(email.from)}`);
-  const bySenderCats = new Set();
+  // Aggregate category frequencies across matching sender keys
+  const bySenderCounts = new Map();
   for (const k of senderKeys) {
-    const set = senderIndex.get(k);
-    if (set) for (const cat of set) bySenderCats.add(cat);
+    const counter = senderIndex.get(k);
+    if (counter) {
+      for (const [cat, cnt] of counter.entries()) {
+        bySenderCounts.set(cat, (bySenderCounts.get(cat) || 0) + cnt);
+      }
+    }
   }
-  for (const c of bySenderCats) {
-    bump(c, 2.0, `Sender prior: previously labeled in "${c}"`);
+  // Pick only the most frequent category for this sender
+  let priorBestCat = '';
+  let priorBestCount = 0;
+  for (const [cat, cnt] of bySenderCounts.entries()) {
+    if (cnt > priorBestCount) { priorBestCount = cnt; priorBestCat = cat; }
+  }
+  if (priorBestCat) {
+    bump(priorBestCat, 2.0, `Sender prior: most frequent "${priorBestCat}" (count=${priorBestCount})`);
   }
 
   // Step 2: sender name equals a category
