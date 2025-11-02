@@ -112,7 +112,9 @@
     .tag-incorrect{ background:var(--pill-red-bg); color:var(--pill-red-fg); text-decoration: line-through; }
     .tag-missing{ background:var(--pill-orange-bg); color:var(--pill-orange-fg); }
 
-    .legend{display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin:8px 0}
+    .legend{display:flex; flex-direction:column; gap:6px; margin:8px 0}
+    .legend-title{font-size:12px; color:var(--muted)}
+    .legend-tags{display:flex; gap:8px; align-items:center; flex-wrap:nowrap}
     .legend .tag-pill{cursor:default}
 
     .loading-overlay{
@@ -148,6 +150,20 @@
     ul.reasons{margin:0; padding-left:20px}
     ul.reasons li{margin-bottom:8px; color:#444; font-size:14px}
     .link{color:var(--link); text-decoration:underline; cursor:pointer}
+
+    /* Thread modal styles to match main UI look */
+    .thread-message{border:1px solid #eee; border-radius:8px; margin-bottom:12px; overflow:hidden; background:#fff}
+    .thread-message.response{border-left:4px solid #d2b48c}
+    .thread-message.original{border-left:4px solid #999}
+    .message-header{background:#f5f3f0; padding:12px; border-bottom:1px solid var(--border)}
+    .message-from{font-weight:700; color:#333; margin-bottom:4px}
+    .message-to{color:#666; font-size:12px; margin-bottom:4px}
+    .message-date{color:#999; font-size:12px}
+    .message-body{padding:12px; white-space:pre-wrap; line-height:1.6; color:#333}
+    .response-badge{display:inline-block; background:#d2b48c; color:#fff; padding:2px 8px; border-radius:12px; font-size:11px; font-weight:700; text-transform:uppercase; margin-left:8px}
+
+    /* Loading overlay note */
+    .lnote{color:#777; font-size:12px; margin-top:6px}
   </style>
 </head>
 <body>
@@ -188,10 +204,12 @@
           <button class="pill-toggle" data-filter="train">Train Only</button>
         </div>
         <div class="legend">
-          <span class="row-title">Legend:</span>
-          <span class="tag-pill tag-correct">Correct</span>
-          <span class="tag-pill tag-incorrect">Incorrect</span>
-          <span class="tag-pill tag-missing">Missing</span>
+          <div class="legend-title">Legend</div>
+          <div class="legend-tags">
+            <span class="tag-pill tag-correct">Correct</span>
+            <span class="tag-pill tag-incorrect">Incorrect</span>
+            <span class="tag-pill tag-missing">Missing</span>
+          </div>
         </div>
         <div class="small info-note">
           Click a tag to see reasons.
@@ -214,6 +232,20 @@
       <div class="spinner"></div>
       <div class="ltitle" id="loadingTitle">Running Classifier</div>
       <div class="lsub" id="loadingSub">Training on 80% and evaluating on 20%…</div>
+      <div class="lnote">Progress displayed in terminal</div>
+    </div>
+  </div>
+
+  <!-- Thread modal -->
+  <div class="modal" id="threadModal">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3 class="modal-title" id="threadTitle">Email Thread</h3>
+        <button class="close-btn" onclick="closeThread()">×</button>
+      </div>
+      <div class="modal-body" id="threadBody">
+        <div class="small">Loading thread...</div>
+      </div>
     </div>
   </div>
 
@@ -291,6 +323,49 @@
       document.getElementById('reasonsModal').style.display = 'none';
     }
 
+    // Email Thread modal (match main UI behavior)
+    async function openThread(emailId, subject){
+      try{
+        const titleEl = document.getElementById('threadTitle');
+        const bodyEl = document.getElementById('threadBody');
+        if (titleEl) titleEl.textContent = subject || 'Email Thread';
+        if (bodyEl) bodyEl.innerHTML = '<div class="small">Loading thread...</div>';
+        document.getElementById('threadModal').style.display = 'flex';
+        const resp = await fetch('/api/email-thread/' + encodeURIComponent(emailId));
+        const data = await resp.json().catch(()=> ({}));
+        if (resp.ok && data && Array.isArray(data.messages)){
+          renderThreadMessages(data.messages);
+        }else{
+          if (bodyEl) bodyEl.innerHTML = '<div class="small">Failed to load thread.</div>';
+        }
+      }catch(_){
+        const bodyEl = document.getElementById('threadBody');
+        if (bodyEl) bodyEl.innerHTML = '<div class="small">Error loading thread.</div>';
+      }
+    }
+    function closeThread(){
+      document.getElementById('threadModal').style.display = 'none';
+    }
+    function renderThreadMessages(messages){
+      const bodyEl = document.getElementById('threadBody');
+      if (!bodyEl) return;
+      bodyEl.innerHTML = '';
+      (messages || []).forEach(m=>{
+        const toList = Array.isArray(m.to) ? m.to.join(', ') : (m.to || '');
+        const div = document.createElement('div');
+        div.className = 'thread-message ' + (m.isResponse ? 'response' : 'original');
+        div.innerHTML = `
+          <div class="message-header">
+            <div class="message-from">${esc(m.from || '')} ${m.isResponse ? '<span class="response-badge">Your Response</span>' : ''}</div>
+            <div class="message-to">To: ${esc(toList)}</div>
+            <div class="message-date">${new Date(m.date).toLocaleString()}</div>
+          </div>
+          <div class="message-body">${esc(m.body || '')}</div>
+        `;
+        bodyEl.appendChild(div);
+      });
+    }
+
     // Renderers
     function renderMetrics(){
       const m = state.metrics || {accuracy:0, totalTest:0, correctlyAssignedTags:0, extraTagsSuggested:0, exactMatchEmails:0};
@@ -313,7 +388,8 @@
     function attachTagHandlers(container, email){
       const pills = container.querySelectorAll('.tag-pill');
       pills.forEach(p=>{
-        p.addEventListener('click', ()=>{
+        p.addEventListener('click', (ev)=>{
+          ev.stopPropagation();
           const tagName = p.getAttribute('data-tag') || '';
           const found = (email.suggested || []).find(t => t.name === tagName);
           if (found){
@@ -373,6 +449,10 @@
         host.appendChild(card);
         const sugRow = card.querySelector('.sug-row');
         attachTagHandlers(sugRow, e);
+        // Click card to open email thread (same behavior as main UI)
+        card.addEventListener('click', ()=>{
+          openThread(e.id, e.subject || 'Email Thread');
+        });
       });
     }
 
