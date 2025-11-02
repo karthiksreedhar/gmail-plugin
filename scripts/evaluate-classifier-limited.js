@@ -552,10 +552,29 @@ async function classifyLimited(email, ctx) {
     bump(picked, 3.5, raw ? `LLM best-of chose "${raw}" mapped to "${picked}"` : `LLM best-of chose "${picked}"`);
   }
 
-  // Step 5: TF-IDF
-  const tf = tfidfModel.bestByTfidf(email);
-  if (tf.cat) {
-    bump(tf.cat, 2.5 * Math.max(0.2, Math.min(1, tf.score)), `TF-IDF top match "${tf.cat}" (sim=${tf.score.toFixed(3)})`);
+  // Step 5: TF-IDF (only if there are absolutely NO suggestions from steps 1–4)
+  // Treat any candidate (including "Other") as a prior suggestion; TF-IDF acts only as a last-resort fallback.
+  const preRuleHasCandidates = cand.size > 0;
+  if (!preRuleHasCandidates) {
+    const tf = tfidfModel.bestByTfidf(email);
+    if (tf.cat) {
+      bump(tf.cat, 2.5 * Math.max(0.2, Math.min(1, tf.score)), `TF-IDF top match "${tf.cat}" (sim=${tf.score.toFixed(3)})`);
+    }
+  }
+  // If any pre-rule candidates existed, scrub TF-IDF-only candidates and remove TF-IDF reasons
+  // so TF-IDF cannot influence suggestions/reasons once steps 1–4 have already suggested something.
+  if (preRuleHasCandidates) {
+    for (const [cat, v] of Array.from(cand.entries())) {
+      const reasonsArr = Array.isArray(v.reasons) ? v.reasons : [];
+      const nonTfidfReasons = reasonsArr.filter(r => !/^TF-IDF top match\b/.test(String(r || '')));
+      if (nonTfidfReasons.length === 0) {
+        // Candidate was TF-IDF-only; drop entirely
+        cand.delete(cat);
+      } else if (nonTfidfReasons.length !== reasonsArr.length) {
+        // Remove TF-IDF reason text
+        v.reasons = nonTfidfReasons;
+      }
+    }
   }
 
   // Accumulate final suggestions (top-2 by score). Do not include "Other" if any other exists.
@@ -566,9 +585,9 @@ async function classifyLimited(email, ctx) {
   const nonOtherCats = scoredCats.filter(c => normalizeKey(c) !== 'other');
   let suggestions = capToTwo(nonOtherCats.length ? nonOtherCats : scoredCats);
 
-  // Step 6: If only one suggestion, do semantic average sim across categories via embeddings
+  // Step 6: If there are no suggestions, do semantic average sim across categories via embeddings
   let step6Cat = '';
-  if (suggestions.length === 1 && openai.apiKey) {
+  if (suggestions.length === 0 && openai.apiKey) {
     await ensureTrainEmbeddings(); // lazily materialize once
     const testVec = await embedText(textOfEmail(email));
     let best = { cat: '', score: -1 };
@@ -588,14 +607,8 @@ async function classifyLimited(email, ctx) {
     }
     step6Cat = best.cat || '';
     if (step6Cat) {
-      // If current single suggestion is "Other", replace it with the best category.
-      if (normalizeKey(suggestions[0]) === 'other') {
-        suggestions = [step6Cat];
-      } else if (!suggestions.includes(step6Cat)) {
-        // Otherwise include as second suggestion.
-        suggestions = capToTwo([suggestions[0], step6Cat]);
-      }
-      // Record reason for whichever suggestion came from step 6
+      // No suggestions exist yet; seed with the best embedding match
+      suggestions = [step6Cat];
       if (!cand.has(step6Cat)) cand.set(step6Cat, { score: 0, reasons: [] });
       cand.get(step6Cat).reasons.push(`Embeddings: highest avg similarity "${step6Cat}"`);
     }
