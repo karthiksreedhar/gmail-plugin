@@ -334,7 +334,13 @@
       }
       state.test.forEach(e=>{
         const gt = Array.isArray(e.groundTruth) ? e.groundTruth : [];
-        const suggested = Array.isArray(e.suggested) ? e.suggested : [];
+        let suggested = Array.isArray(e.suggested) ? e.suggested : [];
+        // Enforce client-side too: never show "Other" alongside real suggestions; never show "Other" as a missing tag
+        const hasNonOther = suggested.some(t => String(t?.name || '').trim().toLowerCase() !== 'other' && t.status !== 'missing');
+        if (hasNonOther) {
+          suggested = suggested.filter(t => String(t?.name || '').trim().toLowerCase() !== 'other');
+        }
+        suggested = suggested.filter(t => !(t.status === 'missing' && String(t?.name || '').trim().toLowerCase() === 'other'));
         // Build missing tags list for display (status === 'missing' already included in suggested array in backend)
         const subject = esc(e.subject || 'No Subject');
         const from = esc(e.from || 'Unknown Sender');

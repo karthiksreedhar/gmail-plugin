@@ -9539,7 +9539,19 @@ app.post('/api/test-classifier/run', async (req, res) => {
         error: 'OPENAI_API_KEY is required to run the Limited Classifier (steps 4 and 6). Please set it in .env and restart the server.'
       });
     }
-    const raw = loadResponseEmails() || [];
+    // Load the same set of emails as the main UI (apply the same validation and hidden filters)
+    const rawAll = loadResponseEmails() || [];
+    const hiddenListTC = loadHiddenThreads();
+    const hiddenResponseIdsTC = new Set((hiddenListTC || []).flatMap(h => (h.responseIds || [])));
+    // Match /api/response-emails validation: require id, subject, from, body; exclude hidden
+    const raw = rawAll.filter(e =>
+      e &&
+      e.id &&
+      e.subject &&
+      e.from &&
+      e.body &&
+      !hiddenResponseIdsTC.has(e.id)
+    );
     // Normalize and prepare emails with categories array (DO NOT remap ground truth labels)
     const currList = __getCategoriesList();
     const labeled = raw.map(e => {
@@ -9597,10 +9609,17 @@ app.post('/api/test-classifier/run', async (req, res) => {
       }
       return a;
     }
+    console.log(`Loaded ${labeled.length} labeled emails; using ${currList.length} categories.`);
     const shuffled = __shuffleSeeded(labeled, SEED);
     const trainSize = Math.max(1, Math.floor(shuffled.length * 0.8));
     const train = shuffled.slice(0, trainSize);
     const test = shuffled.slice(trainSize);
+    // Status logs matching scripts/evaluate-classifier-limited.js
+    console.log('\n=== Evaluate Limited Classifier (multi-signal with constraints) ===');
+    console.log(`User: ${CURRENT_USER_EMAIL}`);
+    console.log(`Split: 80% train / 20% test | Seed: 42`);
+    console.log('');
+    console.log(`Train size: ${train.length} | Test size: ${test.length}`);
 
     // Train centroid model on train
     const model = __buildCentroidModelFromEmails(train);
@@ -9723,14 +9742,23 @@ app.post('/api/test-classifier/run', async (req, res) => {
       let embeddingsReady = false;
       async function ensureTrainEmbeddings() {
         if (embeddingsReady) return;
+        console.log('Computing embeddings for train set (for step 6)...');
+        let embedded = 0;
         for (const e of train) {
           try {
             const txt = `${e.subject || ''}\n${e.snippet || ''}\n${e.body || ''}`;
             const vec = await __embed(txt.slice(0, 2000));
             trainEmbeddings.set(e.id, vec);
-          } catch (_) {}
+          } catch (_) {
+            // leave missing if failed
+          }
+          embedded++;
+          if (embedded % 25 === 0 || embedded === train.length) {
+            console.log(`  Embedded ${embedded}/${train.length}...`);
+          }
         }
         embeddingsReady = true;
+        console.log('Train embeddings ready.');
       }
 
       async function chooseCategoryOpenAI(email, allowed) {
@@ -9913,8 +9941,13 @@ Return ONLY JSON matching {"category":"<name>"} with the category chosen from th
       let correctlyAssignedTags = 0;
       let incorrectlyAssignedTags = 0;
       let completeCorrectEmails = 0;
+      // Additional metrics to mirror evaluate-classifier-limited.js logs
+      let mostlyCorrectEmails = 0;
+      let almostCorrectEmails = 0;
+      let somewhatCorrectEmails = 0;
+      let emailsCorrectExceptExtras = 0;
 
-      const testOut = await Promise.all(test.map(async (te) => {
+      const testOut = await Promise.all(test.map(async (te, i) => {
         const actualCats = Array.isArray(te.categories) ? te.categories : (te.category ? [te.category] : []);
         const email = { from: te.from, subject: te.subject, body: te.body || te.snippet || '' };
         const { suggestions, reasons } = await classifyLimited(email);
@@ -9939,7 +9972,20 @@ Return ONLY JSON matching {"category":"<name>"} with the category chosen from th
         if (ok) {
           completeCorrectEmails++;
           correctEmailsStrict++;
+        } else if (missing.length === 0 && extra.length > 0) {
+          // Matches "Emails Assigned Correctly Other than Extra Tags"
+          emailsCorrectExceptExtras++;
         }
+        const totalErr = (missing.length + extra.length);
+        if (totalErr <= 1) mostlyCorrectEmails++;
+        if (totalErr <= 2) almostCorrectEmails++;
+        if (totalErr <= 3) somewhatCorrectEmails++;
+
+        // Per-email progress log (match script format)
+        try {
+          const subj = (te.subject || 'No Subject').slice(0, 120);
+          console.log(`[${i + 1}/${test.length}] ${subj} | actual=[${(actualCats || []).join(', ')}] | suggested=[${(suggested || []).join(', ')}] | missing=${missing.length} extra=${extra.length}${ok ? ' | OK' : ''}`);
+        } catch (_) {}
 
         // Build UI payload: predicted suggestions first, then missing (orange)
         const suggestedOut = [];
@@ -9952,6 +9998,8 @@ Return ONLY JSON matching {"category":"<name>"} with the category chosen from th
           });
         }
         for (const miss of missing) {
+          // Do not display "Other" as a missing tag to avoid confusion in UI
+          if (normalizeKey(miss) === 'other') continue;
           suggestedOut.push({
             name: miss,
             status: 'missing',
@@ -9971,6 +10019,11 @@ Return ONLY JSON matching {"category":"<name>"} with the category chosen from th
       }));
 
       const accuracyStrict = test.length ? (correctEmailsStrict / test.length) : 0;
+      // Summary logs mirroring the script output
+      console.log('');
+      console.log(`Accuracy (strict multi-label containment): ${(accuracyStrict * 100).toFixed(2)}% (${correctEmailsStrict}/${test.length})`);
+      console.log(`Tags: correct ${correctlyAssignedTags}/${totalActualTags}, incorrect (extras) ${incorrectlyAssignedTags}`);
+      console.log(`Emails: complete ${completeCorrectEmails}, mostly ${mostlyCorrectEmails}, almost ${almostCorrectEmails}, somewhat ${somewhatCorrectEmails}, correct-except-extras ${emailsCorrectExceptExtras}`);
 
       const trainOut = train.map(tr => ({
         id: tr.id,
