@@ -1102,13 +1102,13 @@
     try{
       if (!Array.isArray(items) || !items.length) return;
 
-      // Show two-step status in the overlay
-      showOverlay('Pre-training Classifier', 'Learning from labeled emails (response history)…');
+      // Show two-step status in the overlay (consistent with v3 eval)
+      showOverlay('Classifier V3', 'Batching emails and computing contenders/picks…');
       await new Promise(r => setTimeout(r, 150)); // brief tick so UI paints
 
       // Switch to suggestion status
-      document.getElementById('ovTitle').textContent = 'Classifier Suggestions';
-      document.getElementById('ovMsg').textContent = 'Suggesting categories using the classifier…';
+      document.getElementById('ovTitle').textContent = 'Classifier V3 Suggestions';
+      document.getElementById('ovMsg').textContent = 'Suggesting categories using the V3 classifier…';
 
       const minimal = items.map(e => ({
         id: String(e.id || ''),
@@ -1117,63 +1117,101 @@
         from: String(e.from || '')
       })).filter(x => x.id);
 
-      const resp = await fetch('/api/classifier/suggest', {
+      // Use EXACT same classifier as evaluate-classifier-v3
+      const resp = await fetch('/api/classifier-v3/suggest-batch', {
         method: 'POST',
         headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({ emails: minimal })
+        body: JSON.stringify({ emails: minimal, maxPerCat: 30 })
       });
       const data = await resp.json().catch(()=> ({}));
-
-      if (!resp.ok || !data || data.success !== true || !data.predictions) {
+      if (!resp.ok || !data || data.success !== true || !data.results) {
         return; // silent no-op if unavailable
       }
 
-      // Merge predictions as an additional suggestion pathway
-      const preds = data.predictions || {};
+      const results = data.results || {};
       items.forEach(it => {
-        const p = preds[String(it.id)] || null;
-        if (!p || !p.category) return;
-        const name = String(p.category || '').trim();
-        if (!name) return;
+        const r = results[String(it.id)] || null;
+        if (!r) return;
 
-        // initialize structures
+        // Initialize structures
         if (!Array.isArray(it.suggestedCategories)) it.suggestedCategories = [];
         if (!it.suggestedReasons || typeof it.suggestedReasons !== 'object') it.suggestedReasons = {};
 
-        // Unshift classifier pick to make it prominent, but keep unique ordering
-        const existsIdx = it.suggestedCategories.findIndex(c => String(c || '').trim().toLowerCase() === name.toLowerCase());
-        if (existsIdx === -1) {
-          it.suggestedCategories.unshift(name);
-        } else if (existsIdx > 0) {
-          // Move existing to front to reflect classifier confidence
-          it.suggestedCategories.splice(existsIdx, 1);
-          it.suggestedCategories.unshift(name);
-        }
+        // Per V3: primary suggestion derived from contenders/pick with fallbacks on server.
+        // The API already returns "suggestion" which encodes the V3 decision logic.
+        const suggestion = String(r.suggestion || '').trim();
+        const contenders = Array.isArray(r.contenders) ? r.contenders.map(c => String(c || '').trim()).filter(Boolean) : [];
+        const rationales = (r.rationales && typeof r.rationales === 'object') ? r.rationales : {};
 
-        // Store justification for popup (merge so multiple sources accumulate)
-        const reason = String(p.reason || '').trim() || `Classifier TF-IDF match to “${name}”.`;
-        try {
-          const cur = it.suggestedReasons[name];
-          if (Array.isArray(cur)) {
-            if (!cur.some(r => String(r || '').trim().toLowerCase() === reason.toLowerCase())) {
-              cur.push(reason);
-            }
-            it.suggestedReasons[name] = cur;
-          } else if (typeof cur === 'string' && cur.trim()) {
-            if (cur.trim().toLowerCase() !== reason.toLowerCase()) {
-              it.suggestedReasons[name] = [cur, reason];
-            } else {
-              it.suggestedReasons[name] = cur;
-            }
-          } else {
-            it.suggestedReasons[name] = reason;
+        // Build list: suggestion first, then remaining contenders (unique, preserve order)
+        const merged = [];
+        const pushUnique = (name) => {
+          const n = String(name || '').trim();
+          if (!n) return;
+          const k = n.toLowerCase();
+          if (!merged.some(x => String(x || '').trim().toLowerCase() === k)) {
+            merged.push(n);
           }
-        } catch(_) {}
-        // Persist classifier pick and reason so later pipelines can't overwrite/lose it
+        };
+        if (suggestion) pushUnique(suggestion);
+        contenders.forEach(pushUnique);
+
+        // Merge with any existing suggestions, but keep V3 suggestions first
+        const prev = Array.isArray(it.suggestedCategories) ? it.suggestedCategories : [];
+        prev.forEach(pushUnique);
+
+        // Normalize: drop "Other" when non-Other exists; keep ["Other"] if that's the only entry
+        const finalList = normalizeSuggestionsList(merged);
+
+        it.suggestedCategories = finalList;
+
+        // Store reasons: use rationales map where available
         try {
-          it.__classifierPick = name;
-          it.__classifierReason = reason;
-        } catch (_) {}
+          const reasonForSuggestion =
+            (suggestion && rationales[suggestion]) ||
+            (suggestion ? `Classifier V3 pick for “${suggestion}”.` : '');
+          if (suggestion) {
+            const cur = it.suggestedReasons[suggestion];
+            if (Array.isArray(cur)) {
+              if (reasonForSuggestion && !cur.some(rtxt => String(rtxt || '').trim().toLowerCase() === reasonForSuggestion.toLowerCase())) {
+                cur.push(reasonForSuggestion);
+              }
+              it.suggestedReasons[suggestion] = cur;
+            } else if (typeof cur === 'string' && cur.trim()) {
+              if (reasonForSuggestion && cur.trim().toLowerCase() !== reasonForSuggestion.toLowerCase()) {
+                it.suggestedReasons[suggestion] = [cur, reasonForSuggestion];
+              }
+            } else if (reasonForSuggestion) {
+              it.suggestedReasons[suggestion] = reasonForSuggestion;
+            }
+          }
+          // Add reasons for other contenders if present
+          Object.keys(rationales).forEach(cat => {
+            const txt = rationales[cat];
+            if (!txt) return;
+            const existing = it.suggestedReasons[cat];
+            if (Array.isArray(existing)) {
+              if (!existing.some(rtxt => String(rtxt || '').trim().toLowerCase() === String(txt).trim().toLowerCase())) {
+                existing.push(txt);
+              }
+              it.suggestedReasons[cat] = existing;
+            } else if (typeof existing === 'string' && existing.trim()) {
+              if (existing.trim().toLowerCase() !== String(txt).trim().toLowerCase()) {
+                it.suggestedReasons[cat] = [existing, txt];
+              }
+            } else {
+              it.suggestedReasons[cat] = txt;
+            }
+          });
+        } catch(_) {}
+
+        // Persist pick for downstream ordering safeguards
+        try {
+          it.__classifierPick = suggestion || (finalList[0] || '');
+          it.__classifierReason =
+            (suggestion && (rationales[suggestion] || 'Classifier V3 pick.')) ||
+            (finalList[0] ? (it.suggestedReasons[finalList[0]] || 'Classifier V3 pick.') : '');
+        } catch(_) {}
       });
     } catch(_){
       // ignore classifier errors and proceed with other suggestion paths

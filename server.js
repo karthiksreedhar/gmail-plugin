@@ -10054,6 +10054,453 @@ Return ONLY JSON matching {"category":"<name>"} with the category chosen from th
 });
 
 // Serve the main HTML file
+/**
+ * Classifier V3 (batched) helpers and endpoints
+ * - EXACTLY mirrors scripts/evaluate-classifier-v3.js behavior:
+ *   1) One batched OpenAI call returns contenders[] and pick per email
+ *   2) If contenders.length===1, suggest that category
+ *   3) If contenders.length>1, use provided pick
+ *   4) If contenders.length===0, fallback: sender-majority, else keyword search (subject≥1 or body≥3; score=3*subject+body)
+ */
+
+// Build per-category training rows from response emails
+function __v3BuildCategoryRows() {
+  const byCat = new Map(); // name -> rows[]
+  const responses = loadResponseEmails() || [];
+  for (const e of responses) {
+    const name = String(e?.category || '').trim();
+    if (!name) continue;
+    if (!byCat.has(name)) byCat.set(name, []);
+    byCat.get(name).push({
+      id: e.id,
+      subject: e.subject || 'No Subject',
+      from: e.originalFrom || e.from || 'Unknown Sender',
+      body: e.body || e.snippet || ''
+    });
+  }
+  return byCat;
+}
+
+// OpenAI batched labeling: returns { [id]: { contenders, pick, rationales } }
+async function __v3OpenAIBatchLabel(newEmails, categories, perCatRows, summariesMap, guidelinesMap, maxPerCat = 30) {
+  const bundles = [];
+  for (const c of categories) {
+    const rows = (perCatRows.get(c) || []).slice(0, maxPerCat).map((r, i) => ({
+      i: i + 1,
+      subject: String(r.subject || '').slice(0, 180),
+      body: String(r.body || '').slice(0, 550)
+    }));
+    bundles.push({
+      category: c,
+      meta: {
+        summary: summariesMap?.[c] || '',
+        guideline: guidelinesMap?.[c] || ''
+      },
+      examples: rows
+    });
+  }
+  const allowedJson = JSON.stringify(categories, null, 2);
+  const bundlesJson = JSON.stringify(bundles, null, 2);
+  const items = newEmails.map(e => ({
+    id: String(e.id || ''),
+    from: String(e.from || ''),
+    subject: String(e.subject || '').slice(0, 200),
+    body: String(e.body || '').slice(0, 1400)
+  }));
+  const itemsJson = JSON.stringify(items, null, 2);
+
+  const SYSTEM = `You are an email categorization assistant.
+Given ALLOWED CATEGORIES with brief examples and meta, and a LIST of NEW EMAILS,
+for EACH new email decide:
+  - contenders: the set of category names from ALLOWED CATEGORIES that plausibly fit,
+  - pick: if contenders has more than one entry, choose the single best category.
+Rules:
+- Only use names from ALLOWED CATEGORIES. Do not invent categories or synonyms.
+- If no category fits, return an empty contenders array and an empty pick.
+- Keep output compact JSON.`;
+  const USER = `ALLOWED CATEGORIES (JSON):
+${allowedJson}
+
+CATEGORY BUNDLES (JSON):
+${bundlesJson}
+
+NEW EMAILS (JSON):
+${itemsJson}
+
+Return ONLY strictly valid JSON of the form:
+{
+  "results": {
+    "<emailId>": {
+      "contenders": ["Category A", "Category B", ...],
+      "pick": "Category A",
+      "rationales": { "Category A": "why...", "Category B": "why..." }
+    }
+  }
+}`;
+
+  try {
+    const resp = await openai.chat.completions.create({
+      model: 'o3',
+      messages: [
+        { role: 'system', content: SYSTEM },
+        { role: 'user', content: USER }
+      ],
+      max_completion_tokens: 2000,
+      response_format: { type: 'json_object' }
+    });
+    const raw = resp.choices?.[0]?.message?.content || '';
+    let parsed = null;
+    try { parsed = JSON.parse(raw); } catch {
+      const m = raw.match(/\{[\s\S]*\}/);
+      if (m) { try { parsed = JSON.parse(m[0]); } catch {} }
+    }
+    const results = parsed && parsed.results && typeof parsed.results === 'object' ? parsed.results : {};
+    return results;
+  } catch (_) {
+    return {};
+  }
+}
+
+function __v3SenderMajorityFallback(email, categories, perCatRows) {
+  try {
+    const counts = new Map();
+    categories.forEach(c => counts.set(c, 0));
+    const senderLc = String(email.from || '').toLowerCase();
+    for (const c of categories) {
+      const rows = perCatRows.get(c) || [];
+      let cnt = counts.get(c) || 0;
+      for (const r of rows) {
+        const fromLc = String(r.from || '').toLowerCase();
+        const bodyLc = String(r.body || '').toLowerCase();
+        if ((fromLc && senderLc && fromLc.includes(senderLc)) || (bodyLc && senderLc && bodyLc.includes(senderLc))) {
+          cnt++;
+        }
+      }
+      counts.set(c, cnt);
+    }
+    let best = '';
+    let bestCnt = 0;
+    for (const [c, cnt] of counts.entries()) {
+      if (cnt > bestCnt) { best = c; bestCnt = cnt; }
+    }
+    return (best && bestCnt > 0) ? best : '';
+  } catch {
+    return '';
+  }
+}
+
+function __v3KeywordFallback(email, categories) {
+  try {
+    let best = '';
+    let bestScore = -1;
+    for (const c of categories) {
+      const subjCount = __countOccurrencesInsensitive(email.subject || '', c);
+      const bodyCount = __countOccurrencesInsensitive(email.body || '', c);
+      const isCandidate = (subjCount >= 1) || (bodyCount >= 3);
+      if (!isCandidate) continue;
+      const score = subjCount * 3 + bodyCount;
+      if (score > bestScore) {
+        bestScore = score;
+        best = c;
+      }
+    }
+    return best || '';
+  } catch {
+    return '';
+  }
+}
+
+// POST /api/classifier-v3/suggest-batch
+// Input: { emails: [{id, subject, body, from}], maxPerCat?: number }
+// Output: { success: true, results: { [id]: { contenders, pick, rationales, suggestion } } }
+app.post('/api/classifier-v3/suggest-batch', async (req, res) => {
+  try {
+    const input = Array.isArray(req.body?.emails) ? req.body.emails : [];
+    const MAX = Math.max(1, Math.min(200, Number(req.body?.maxPerCat) || 30));
+
+    // Categories X (authoritative) and per-category rows/meta
+    const categoriesX = __getCategoriesList();
+    const perCatRows = __v3BuildCategoryRows();
+    const summaries = loadCategorySummaries() || {};
+    const guidelinesPayload = loadEmailData(getCurrentUserPaths().CATEGORY_GUIDELINES_PATH) || {};
+    const guidelinesMap = (guidelinesPayload && Array.isArray(guidelinesPayload.categories))
+      ? Object.fromEntries(guidelinesPayload.categories.map(c => [c.name, c.notes || '']))
+      : {};
+
+    // Batched LLM decision
+    const results = await __v3OpenAIBatchLabel(
+      input.map(e => ({ id: e.id, subject: e.subject, body: e.body, from: e.from })),
+      categoriesX,
+      perCatRows,
+      summaries,
+      guidelinesMap,
+      MAX
+    );
+
+    // Fill in suggestions per the V3 fallback
+    const out = {};
+    for (const e of input) {
+      const id = String(e.id || '');
+      if (!id) continue;
+      const r = results?.[id] || {};
+      const contenders = Array.isArray(r.contenders) ? r.contenders.filter(Boolean) : [];
+      const rationales = (r.rationales && typeof r.rationales === 'object') ? r.rationales : {};
+      const pickRaw = typeof r.pick === 'string' ? r.pick : '';
+
+      let suggestion = '';
+      if (contenders.length === 1) {
+        suggestion = matchToCurrentCategory(contenders[0], categoriesX) || contenders[0] || '';
+      } else if (contenders.length > 1) {
+        const mappedPick = pickRaw ? matchToCurrentCategory(pickRaw, categoriesX) : '';
+        suggestion = mappedPick || matchToCurrentCategory(contenders[0], categoriesX) || contenders[0] || '';
+      } else {
+        // Fallbacks
+        const sb = __v3SenderMajorityFallback(e, categoriesX, perCatRows);
+        if (sb) {
+          suggestion = sb;
+        } else {
+          const kw = __v3KeywordFallback(e, categoriesX) || 'Other';
+          suggestion = matchToCurrentCategory(kw, categoriesX) || kw;
+        }
+      }
+      out[id] = { contenders, pick: pickRaw || '', rationales, suggestion };
+    }
+
+    return res.json({ success: true, results: out });
+  } catch (err) {
+    console.error('classifier-v3/suggest-batch failed:', err);
+    return res.status(500).json({ success: false, error: 'Failed to run classifier v3 batch' });
+  }
+});
+
+// POST /api/test-classifier/run-v3
+// Runs the V3 batched classifier on a deterministic 80/20 split and returns metrics + rows (like the existing UI expects)
+app.post('/api/test-classifier/run-v3', async (req, res) => {
+  try {
+    if (!process.env.OPENAI_API_KEY) {
+      return res.status(400).json({ success: false, error: 'OPENAI_API_KEY is required for classifier v3.' });
+    }
+
+    // Load labeled ground truth emails (like the evaluator scripts do)
+    const rawAll = loadResponseEmails() || [];
+    const hiddenListTC = loadHiddenThreads();
+    const hiddenResponseIdsTC = new Set((hiddenListTC || []).flatMap(h => (h.responseIds || [])));
+    // Match UI validation: require id, subject, from, body; exclude hidden
+    const labeled = (rawAll || []).filter(e =>
+      e && e.id && e.subject && e.from && e.body && !hiddenResponseIdsTC.has(e.id)
+    ).map(e => {
+      const catsArr = Array.isArray(e.categories)
+        ? e.categories.map(c => String(c || '').trim()).filter(Boolean)
+        : (e.category ? [String(e.category).trim()] : []);
+      // case-insensitive unique
+      const seen = new Set(); const uniq = [];
+      for (const c of catsArr) {
+        const k = c.toLowerCase();
+        if (!k || seen.has(k)) continue;
+        seen.add(k); uniq.push(c);
+      }
+      return {
+        id: e.id,
+        subject: e.subject || 'No Subject',
+        from: e.originalFrom || e.from || 'Unknown Sender',
+        date: e.date || new Date().toISOString(),
+        body: e.body || '',
+        snippet: e.snippet || (e.body ? String(e.body).slice(0, 120) + (e.body.length > 120 ? '...' : '') : ''),
+        categories: uniq
+      };
+    });
+
+    if (!labeled.length) {
+      return res.json({
+        success: true,
+        metrics: { totalTest: 0, accuracy: 0, correctlyAssignedTags: 0, extraTagsSuggested: 0, exactMatchEmails: 0 },
+        test: { emails: [] },
+        train: { emails: [] }
+      });
+    }
+
+    // Deterministic 80/20 split (seeded exactly)
+    function __shuffleSeeded(arr, seed) {
+      function mulberry32(a) {
+        return function () {
+          let t = (a += 0x6D2B79F5) | 0;
+          t = Math.imul(t ^ (t >>> 15), t | 1);
+          t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+          return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+        };
+      }
+      const rnd = mulberry32(42);
+      const a = (arr || []).slice();
+      for (let i = a.length - 1; i > 0; i--) {
+        const j = Math.floor(rnd() * (i + 1));
+        [a[i], a[j]] = [a[j], a[i]];
+      }
+      return a;
+    }
+    const shuffled = __shuffleSeeded(labeled, 42);
+    const trainSize = Math.max(1, Math.floor(shuffled.length * 0.8));
+    const train = shuffled.slice(0, trainSize);
+    const test = shuffled.slice(trainSize);
+
+    // Prepare V3 context
+    const categoriesX = __getCategoriesList();
+    const perCatRows = __v3BuildCategoryRows();
+    const summaries = loadCategorySummaries() || {};
+    const guidelinesPayload = loadEmailData(getCurrentUserPaths().CATEGORY_GUIDELINES_PATH) || {};
+    const guidelinesMap = (guidelinesPayload && Array.isArray(guidelinesPayload.categories))
+      ? Object.fromEntries(guidelinesPayload.categories.map(c => [c.name, c.notes || '']))
+      : {};
+
+    // Run in batches
+    const BATCH = 12;
+    console.log('\n=== Evaluate Classifier V3 (batched) — UI request ===');
+    console.log(`User: ${CURRENT_USER_EMAIL}`);
+    console.log('Split: 80% train / 20% test | Seed: 42');
+    console.log('Per-category example cap: 30 | Batch size: 12');
+    console.log(`Loaded ${labeled.length} labeled emails; using ${categoriesX.length} categories.`);
+    console.log(`Train size: ${train.length} | Test size: ${test.length}`);
+    const totalBatches = Math.max(1, Math.ceil(test.length / BATCH));
+    console.log(`Total batches: ${totalBatches}`);
+    const results = {};
+    for (let i = 0; i < test.length; i += BATCH) {
+      const batch = test.slice(i, i + BATCH).map(e => ({
+        id: e.id,
+        subject: e.subject,
+        body: e.body || e.snippet || '',
+        from: e.from
+      }));
+      console.log(`Doing batch ${Math.floor(i / BATCH) + 1}/${totalBatches} (${batch.length} emails)...`);
+      const r = await __v3OpenAIBatchLabel(batch, categoriesX, perCatRows, summaries, guidelinesMap, 30);
+      // Per-email progress logging (mirrors CLI script style)
+      try {
+        if (r && typeof r === 'object') {
+          batch.forEach((be, j) => {
+            const te = test.find(x => String(x.id) === String(be.id));
+            const gt = Array.isArray(te?.categories) ? te.categories : (te?.category ? [te.category] : []);
+            const rr = r[be.id] || {};
+            const contenders = Array.isArray(rr.contenders) ? rr.contenders.filter(Boolean) : [];
+            const pickRaw = typeof rr.pick === 'string' ? rr.pick : '';
+            let suggestion = '';
+            if (contenders.length === 1) {
+              suggestion = matchToCurrentCategory(contenders[0], categoriesX) || contenders[0] || '';
+            } else if (contenders.length > 1) {
+              const mappedPick = pickRaw ? matchToCurrentCategory(pickRaw, categoriesX) : '';
+              suggestion = mappedPick || matchToCurrentCategory(contenders[0], categoriesX) || contenders[0] || '';
+            } else {
+              const sb = __v3SenderMajorityFallback({ from: be.from, body: be.body, subject: be.subject }, categoriesX, perCatRows);
+              if (sb) suggestion = sb;
+              else {
+                const kw = __v3KeywordFallback({ subject: be.subject, body: be.body }, categoriesX) || 'Other';
+                suggestion = matchToCurrentCategory(kw, categoriesX) || kw;
+              }
+            }
+            const suggestedArr = suggestion ? [suggestion] : [];
+            const actualNorm = new Set(gt.map(normalizeKey));
+            const sugNorm = new Set(suggestedArr.map(normalizeKey));
+            const missing = gt.filter(a => !sugNorm.has(normalizeKey(a)));
+            const extra = suggestedArr.filter(s => !actualNorm.has(normalizeKey(s)));
+            const subjLog = (be.subject || 'No Subject').slice(0, 120);
+            console.log(`[${i + j + 1}/${test.length}] ${subjLog} | actual=[${gt.join(', ')}] | suggested=[${suggestedArr.join(', ')}] | missing=${missing.length} extra=${extra.length}${(missing.length === 0 && extra.length === 0) ? ' | OK' : ''}`);
+          });
+        }
+      } catch (_){}
+      Object.assign(results, r || {});
+    }
+
+    // Compute rows and metrics
+    let correctlyAssignedTags = 0;
+    let extraTagsSuggested = 0;
+    let exactMatchEmails = 0;
+
+    const testRows = test.map(te => {
+      const gt = Array.isArray(te.categories) ? te.categories : (te.category ? [te.category] : []);
+      const r = results?.[te.id] || {};
+      const contenders = Array.isArray(r.contenders) ? r.contenders.filter(Boolean) : [];
+      const rationales = (r.rationales && typeof r.rationales === 'object') ? r.rationales : {};
+      const pickRaw = typeof r.pick === 'string' ? r.pick : '';
+
+      // Suggestion per V3 spec
+      let suggestion = '';
+      if (contenders.length === 1) {
+        suggestion = matchToCurrentCategory(contenders[0], categoriesX) || contenders[0] || '';
+      } else if (contenders.length > 1) {
+        const mappedPick = pickRaw ? matchToCurrentCategory(pickRaw, categoriesX) : '';
+        suggestion = mappedPick || matchToCurrentCategory(contenders[0], categoriesX) || contenders[0] || '';
+      } else {
+        const sb = __v3SenderMajorityFallback({ from: te.from, body: te.body, subject: te.subject }, categoriesX, perCatRows);
+        if (sb) suggestion = sb;
+        else {
+          const kw = __v3KeywordFallback({ subject: te.subject, body: te.body }, categoriesX) || 'Other';
+          suggestion = matchToCurrentCategory(kw, categoriesX) || kw;
+        }
+      }
+
+      const suggested = suggestion ? [suggestion] : [];
+      const gtNorm = new Set(gt.map(c => normalizeKey(c)));
+      const sugNorm = new Set(suggested.map(c => normalizeKey(c)));
+      const missing = gt.filter(a => !sugNorm.has(normalizeKey(a)));
+      const extra = suggested.filter(s => !gtNorm.has(normalizeKey(s)));
+
+      // metrics
+      gtNorm.forEach(a => { if (sugNorm.has(a)) correctlyAssignedTags++; });
+      extraTagsSuggested += extra.length;
+      if (missing.length === 0 && extra.length === 0) exactMatchEmails++;
+
+      // Compose UI tags: suggested ones (correct/incorrect) then missing ones
+      const suggestedOut = [];
+      for (const cat of suggested) {
+        const isCorrect = gtNorm.has(normalizeKey(cat));
+        const reasons = Array.isArray(rationales[cat]) ? rationales[cat] : (rationales[cat] ? [rationales[cat]] : []);
+        suggestedOut.push({ name: cat, status: isCorrect ? 'correct' : 'incorrect', reasons });
+      }
+      for (const miss of missing) {
+        if (normalizeKey(miss) === 'other') continue;
+        suggestedOut.push({ name: miss, status: 'missing', reasons: ['Present in ground truth but not among suggestions'] });
+      }
+
+      return {
+        id: te.id,
+        subject: te.subject,
+        from: te.from,
+        date: te.date,
+        snippet: te.snippet,
+        groundTruth: gt,
+        suggested: suggestedOut
+      };
+    });
+
+    const accuracy = test.length ? (exactMatchEmails / test.length) : 0;
+
+    const trainRows = train.map(tr => ({
+      id: tr.id,
+      subject: tr.subject,
+      from: tr.from,
+      date: tr.date,
+      snippet: tr.snippet,
+      categories: Array.isArray(tr.categories) ? tr.categories : (tr.category ? [tr.category] : [])
+    }));
+
+    console.log('');
+    console.log(`Accuracy (strict multi-label containment): ${(accuracy * 100).toFixed(2)}% (${exactMatchEmails}/${test.length})`);
+    console.log(`Tags: correct ${correctlyAssignedTags} extra ${extraTagsSuggested}`);
+    return res.json({
+      success: true,
+      metrics: {
+        totalTest: test.length,
+        accuracy: Number(accuracy.toFixed(4)),
+        correctlyAssignedTags,
+        extraTagsSuggested,
+        exactMatchEmails
+      },
+      test: { emails: testRows },
+      train: { emails: trainRows }
+    });
+  } catch (err) {
+    console.error('test-classifier/run-v3 failed:', err);
+    return res.status(500).json({ success: false, error: 'Failed to run classifier v3 test' });
+  }
+});
+
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
