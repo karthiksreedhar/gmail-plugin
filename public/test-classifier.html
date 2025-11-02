@@ -1,0 +1,456 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Classifier Evaluation</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <style>
+    :root{
+      --tan:#d2b48c;
+      --border:#e0e0e0;
+      --text:#202124;
+      --muted:#5f6368;
+      --bg:#ffffff;
+      --pill-green-bg:#e6f4ea;
+      --pill-green-fg:#137333;
+      --pill-red-bg:#fdecea;
+      --pill-red-fg:#c62828;
+      --pill-orange-bg:#fff4e5;
+      --pill-orange-fg:#ef6c00;
+      --highlight:#FFF9CC;
+      --link:#1a73e8;
+    }
+    *{box-sizing:border-box}
+    body{
+      margin:0; padding:0;
+      font-family: 'Google Sans','Roboto',Arial,sans-serif;
+      color:var(--text);
+      background:var(--bg);
+      height:100vh;
+      display:flex;
+      flex-direction:column;
+    }
+    .header{
+      background:var(--tan);
+      padding:12px 16px;
+      border-bottom:1px solid var(--border);
+      display:flex; align-items:center; justify-content:space-between;
+    }
+    .header h1{
+      margin:0; font-size:20px; font-weight:600; color:#000;
+    }
+    .header-actions{display:flex; gap:8px; align-items:center}
+    .btn{
+      border:none; border-radius:6px; padding:8px 12px; cursor:pointer;
+      font-size:14px; font-weight:500; color:#fff; background:#667eea;
+    }
+    .btn:hover{background:#5a67d8}
+    .btn-secondary{background:#6c757d}
+    .btn-secondary:hover{background:#5a6268}
+    .btn-danger{background:#dc3545}
+    .btn-danger:hover{background:#c82333}
+
+    .main{
+      flex:1; min-height:0; display:flex; overflow:hidden;
+    }
+    .sidebar{
+      width:320px; border-right:1px solid var(--border);
+      padding:16px; overflow:auto; background:#f8f7f5;
+    }
+    .metrics{
+      display:flex; flex-direction:column; gap:10px;
+    }
+    .metric{
+      border:1px solid var(--border); background:#fff; border-left:4px solid #c19a6b;
+      padding:10px; border-radius:8px;
+    }
+    .metric-title{font-size:12px; color:var(--muted); margin-bottom:4px}
+    .metric-value{font-size:18px; font-weight:700}
+
+    .controls{
+      margin-top:16px; display:flex; flex-direction:column; gap:8px;
+    }
+    .filter-row{display:flex; gap:8px; flex-wrap:wrap}
+    .pill-toggle{
+      padding:6px 10px; border:1px solid var(--border); border-radius:16px; font-size:12px; cursor:pointer; background:#fff; color:#333;
+    }
+    .pill-toggle.active{background:#e8f0fe; border-color:#c6dafc; color:#1a73e8}
+    .small{font-size:12px; color:var(--muted)}
+
+    .content{
+      flex:1; overflow:auto; padding:16px;
+      display:flex; flex-direction:column; gap:12px;
+    }
+
+    .section-title{
+      font-size:13px; color:#8b4513; font-weight:700; text-transform:uppercase; letter-spacing:.3px;
+      border-bottom:1px solid var(--border); padding-bottom:6px; margin-top:8px;
+    }
+
+    .email-card{
+      border:1px solid var(--border); border-radius:8px; background:#fff;
+      padding:12px;
+    }
+    .email-card.test{ background:var(--highlight); }
+    .email-header{
+      display:flex; align-items:center; gap:8px; justify-content:space-between;
+      margin-bottom:6px;
+    }
+    .email-from{font-weight:600; color:#333; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+    .email-date{font-size:12px; color:var(--muted); white-space:nowrap}
+    .email-subject{font-size:14px; color:#1f1f1f; margin-bottom:6px; font-weight:500}
+    .email-snippet{font-size:13px; color:#555; margin-bottom:8px; white-space:pre-wrap}
+    .row{display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:6px}
+    .row-title{font-size:12px; color:var(--muted); margin-right:6px}
+
+    .tag-pill{
+      display:inline-block; padding:4px 8px; border-radius:12px; font-size:12px; font-weight:600; cursor:pointer; user-select:none;
+      border:1px solid rgba(0,0,0,0.06);
+    }
+    .tag-correct{ background:var(--pill-green-bg); color:var(--pill-green-fg); }
+    .tag-incorrect{ background:var(--pill-red-bg); color:var(--pill-red-fg); text-decoration: line-through; }
+    .tag-missing{ background:var(--pill-orange-bg); color:var(--pill-orange-fg); }
+
+    .legend{display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin:8px 0}
+    .legend .tag-pill{cursor:default}
+
+    .loading-overlay{
+      position:fixed; inset:0; background:rgba(0,0,0,0.6);
+      display:none; align-items:center; justify-content:center; z-index:3000;
+    }
+    .loading-card{
+      background:#fff; border-radius:12px; padding:24px; width:92%; max-width:420px; text-align:center;
+      box-shadow:0 8px 32px rgba(0,0,0,0.3);
+    }
+    .spinner{
+      width:40px; height:40px; border:4px solid #f3f3f3; border-top:4px solid #4285f4; border-radius:50%;
+      margin:0 auto 12px; animation:spin 1s linear infinite;
+    }
+    @keyframes spin{0%{transform:rotate(0)}100%{transform:rotate(360deg)}}
+    .ltitle{font-weight:700; margin:6px 0 2px}
+    .lsub{color:#666; font-size:14px}
+
+    .modal{
+      position:fixed; inset:0; display:none; align-items:center; justify-content:center; z-index:3500; background:rgba(0,0,0,0.6);
+    }
+    .modal-card{
+      background:#fff; border-radius:10px; width:92%; max-width:640px; max-height:80vh; overflow:auto;
+      box-shadow:0 8px 32px rgba(0,0,0,0.3);
+    }
+    .modal-header{
+      padding:12px 16px; border-bottom:1px solid var(--border); display:flex; align-items:center; justify-content:space-between;
+      background:linear-gradient(135deg, #f8f6f3 0%, #f0ede8 100%);
+    }
+    .modal-body{padding:16px}
+    .modal-title{margin:0; font-size:16px; font-weight:700; color:#8b4513}
+    .close-btn{border:none; background:none; font-size:20px; cursor:pointer}
+    ul.reasons{margin:0; padding-left:20px}
+    ul.reasons li{margin-bottom:8px; color:#444; font-size:14px}
+    .link{color:var(--link); text-decoration:underline; cursor:pointer}
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>Classifier Evaluation</h1>
+    <div class="header-actions">
+      <button class="btn btn-secondary" id="closeBtn" title="Back to main page">Close</button>
+    </div>
+  </div>
+
+  <div class="main">
+    <aside class="sidebar">
+      <div class="metrics">
+        <div class="metric">
+          <div class="metric-title">Classifier Accuracy (Strict exact match)</div>
+          <div class="metric-value" id="m-accuracy">-</div>
+          <div class="small">on <span id="m-total">0</span> test emails</div>
+        </div>
+        <div class="metric">
+          <div class="metric-title">Correctly Assigned Tags</div>
+          <div class="metric-value" id="m-correct-tags">-</div>
+        </div>
+        <div class="metric">
+          <div class="metric-title">Extra Tags Suggested</div>
+          <div class="metric-value" id="m-extra-tags">-</div>
+        </div>
+        <div class="metric">
+          <div class="metric-title">Emails Completely Correct</div>
+          <div class="metric-value" id="m-exact">-</div>
+        </div>
+      </div>
+
+      <div class="controls">
+        <div class="section-title">View</div>
+        <div class="filter-row">
+          <button class="pill-toggle active" data-filter="both">Both</button>
+          <button class="pill-toggle" data-filter="test">Test Only</button>
+          <button class="pill-toggle" data-filter="train">Train Only</button>
+        </div>
+        <div class="legend">
+          <span class="row-title">Legend:</span>
+          <span class="tag-pill tag-correct">Correct</span>
+          <span class="tag-pill tag-incorrect">Incorrect</span>
+          <span class="tag-pill tag-missing">Missing</span>
+        </div>
+        <div class="small">
+          Click a tag to see reasons (cosine similarity, shared terms).
+        </div>
+      </div>
+    </aside>
+
+    <main class="content">
+      <div class="section-title">Test Emails</div>
+      <div id="testList"></div>
+
+      <div class="section-title">Training Emails</div>
+      <div id="trainList"></div>
+    </main>
+  </div>
+
+  <!-- Loading overlay -->
+  <div class="loading-overlay" id="loading">
+    <div class="loading-card">
+      <div class="spinner"></div>
+      <div class="ltitle" id="loadingTitle">Running Classifier</div>
+      <div class="lsub" id="loadingSub">Training on 80% and evaluating on 20%…</div>
+    </div>
+  </div>
+
+  <!-- Reasons modal -->
+  <div class="modal" id="reasonsModal">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3 class="modal-title" id="reasonsTitle">Reasons</h3>
+        <button class="close-btn" onclick="closeReasons()">×</button>
+      </div>
+      <div class="modal-body">
+        <ul class="reasons" id="reasonsList"></ul>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const state = {
+      metrics: null,
+      test: [],
+      train: [],
+      filter: 'both'
+    };
+
+    // UI helpers
+    function showLoading(title, sub){
+      const el = document.getElementById('loading');
+      document.getElementById('loadingTitle').textContent = title || 'Running Classifier';
+      document.getElementById('loadingSub').textContent = sub || 'Training on 80% and evaluating on 20%…';
+      el.style.display = 'flex';
+    }
+    function hideLoading(){
+      const el = document.getElementById('loading');
+      el.style.display = 'none';
+    }
+    function formatDate(iso){
+      try{
+        const d = new Date(iso);
+        const now = new Date();
+        const diff = (now - d) / (1000*60*60*24);
+        if (diff < 1) return 'Today';
+        if (diff < 2) return 'Yesterday';
+        return d.toLocaleDateString('en-US',{month:'short',day:'numeric'});
+      }catch(_){ return iso || ''; }
+    }
+    function esc(s){
+      return String(s || '')
+        .replace(/&/g,'&')
+        .replace(/</g,'<')
+        .replace(/>/g,'>')
+        .replace(/"/g,'"')
+        .replace(/'/g,'&#39;');
+    }
+
+    // Modal for reasons
+    function openReasons(title, reasons){
+      document.getElementById('reasonsTitle').textContent = title || 'Reasons';
+      const ul = document.getElementById('reasonsList');
+      ul.innerHTML = '';
+      const arr = Array.isArray(reasons) ? reasons : [];
+      if (!arr.length){
+        const li = document.createElement('li');
+        li.textContent = 'No reasons provided.';
+        ul.appendChild(li);
+      } else {
+        arr.forEach(r=>{
+          const li = document.createElement('li');
+          li.textContent = r;
+          ul.appendChild(li);
+        });
+      }
+      document.getElementById('reasonsModal').style.display = 'flex';
+    }
+    function closeReasons(){
+      document.getElementById('reasonsModal').style.display = 'none';
+    }
+
+    // Renderers
+    function renderMetrics(){
+      const m = state.metrics || {accuracy:0, totalTest:0, correctlyAssignedTags:0, extraTagsSuggested:0, exactMatchEmails:0};
+      document.getElementById('m-accuracy').textContent = (m.accuracy*100).toFixed(1) + '%';
+      document.getElementById('m-total').textContent = m.totalTest || 0;
+      document.getElementById('m-correct-tags').textContent = m.correctlyAssignedTags || 0;
+      document.getElementById('m-extra-tags').textContent = m.extraTagsSuggested || 0;
+      document.getElementById('m-exact').textContent = m.exactMatchEmails || 0;
+    }
+
+    function tagPillHTML(tag){
+      const status = tag.status || 'correct';
+      let cls = 'tag-correct';
+      if (status === 'incorrect') cls = 'tag-incorrect';
+      else if (status === 'missing') cls = 'tag-missing';
+      const title = status === 'correct' ? 'Correct' : (status === 'incorrect' ? 'Incorrect' : 'Missing');
+      return `<span class="tag-pill ${cls}" title="${esc(title)}" data-tag="${esc(tag.name)}">${esc(tag.name)}</span>`;
+    }
+
+    function attachTagHandlers(container, email){
+      const pills = container.querySelectorAll('.tag-pill');
+      pills.forEach(p=>{
+        p.addEventListener('click', ()=>{
+          const tagName = p.getAttribute('data-tag') || '';
+          const found = (email.suggested || []).find(t => t.name === tagName);
+          if (found){
+            openReasons(`Why "${tagName}"?`, Array.isArray(found.reasons) ? found.reasons : []);
+          }else{
+            // If it's a missing tag (not in suggested array), show basic reason
+            openReasons(`Missing "${tagName}"`, ['This tag is present in the ground truth but was not among the top suggestions.']);
+          }
+        });
+      });
+    }
+
+    function renderTestList(){
+      const host = document.getElementById('testList');
+      host.innerHTML = '';
+      if (state.filter === 'train'){ host.innerHTML = '<div class="small">Hidden by filter.</div>'; return; }
+      if (!state.test.length){
+        host.innerHTML = '<div class="small">No test emails.</div>'; return;
+      }
+      state.test.forEach(e=>{
+        const gt = Array.isArray(e.groundTruth) ? e.groundTruth : [];
+        const suggested = Array.isArray(e.suggested) ? e.suggested : [];
+        // Build missing tags list for display (status === 'missing' already included in suggested array in backend)
+        const subject = esc(e.subject || 'No Subject');
+        const from = esc(e.from || 'Unknown Sender');
+        const date = formatDate(e.date);
+        const snippet = esc(e.snippet || '');
+        const gtHtml = gt.map(n => `<span class="tag-pill" style="background:#eef2ff;color:#1a73e8;border-color:#c6dafc;cursor:default;">${esc(n)}</span>`).join(' ');
+        const sugHtml = suggested.map(tag => tagPillHTML(tag)).join(' ');
+
+        const card = document.createElement('div');
+        card.className = 'email-card test';
+        card.innerHTML = `
+          <div class="email-header">
+            <div class="email-from">${from}</div>
+            <div class="email-date">${date}</div>
+          </div>
+          <div class="email-subject">${subject}</div>
+          <div class="email-snippet">${snippet}</div>
+
+          <div class="row">
+            <span class="row-title">Ground Truth:</span>
+            <div>${gtHtml || '<span class="small">None</span>'}</div>
+          </div>
+
+          <div class="row">
+            <span class="row-title">Suggested:</span>
+            <div class="sug-row">${sugHtml || '<span class="small">None</span>'}</div>
+          </div>
+        `;
+        host.appendChild(card);
+        const sugRow = card.querySelector('.sug-row');
+        attachTagHandlers(sugRow, e);
+      });
+    }
+
+    function renderTrainList(){
+      const host = document.getElementById('trainList');
+      host.innerHTML = '';
+      if (state.filter === 'test'){ host.innerHTML = '<div class="small">Hidden by filter.</div>'; return; }
+      if (!state.train.length){
+        host.innerHTML = '<div class="small">No training emails.</div>'; return;
+      }
+      state.train.forEach(e=>{
+        const cats = Array.isArray(e.categories) ? e.categories : [];
+        const subject = esc(e.subject || 'No Subject');
+        const from = esc(e.from || 'Unknown Sender');
+        const date = formatDate(e.date);
+        const snippet = esc(e.snippet || '');
+        const catsHtml = cats.map(n => `<span class="tag-pill" style="background:#f1f3f4;color:#333;cursor:default;">${esc(n)}</span>`).join(' ');
+
+        const card = document.createElement('div');
+        card.className = 'email-card';
+        card.innerHTML = `
+          <div class="email-header">
+            <div class="email-from">${from}</div>
+            <div class="email-date">${date}</div>
+          </div>
+          <div class="email-subject">${subject}</div>
+          <div class="email-snippet">${snippet}</div>
+          <div class="row">
+            <span class="row-title">Categories:</span>
+            <div>${catsHtml || '<span class="small">None</span>'}</div>
+          </div>
+        `;
+        host.appendChild(card);
+      });
+    }
+
+    function setFilter(f){
+      state.filter = f;
+      document.querySelectorAll('.pill-toggle').forEach(btn=>{
+        btn.classList.toggle('active', btn.getAttribute('data-filter') === f);
+      });
+      renderTestList();
+      renderTrainList();
+    }
+
+    // Data fetch
+    async function runEvaluation(){
+      try{
+        showLoading('Running Classifier','Training on 80% and evaluating on 20%…');
+        const resp = await fetch('/api/test-classifier/run', { method:'POST' });
+        const data = await resp.json();
+        if (!resp.ok || !data || data.success === false){
+          hideLoading();
+          document.getElementById('testList').innerHTML = '<div class="small">Failed to run classifier test.</div>';
+          document.getElementById('trainList').innerHTML = '';
+          return;
+        }
+        state.metrics = data.metrics || null;
+        state.test = (data.test && Array.isArray(data.test.emails)) ? data.test.emails : [];
+        state.train = (data.train && Array.isArray(data.train.emails)) ? data.train.emails : [];
+        hideLoading();
+        renderMetrics();
+        renderTestList();
+        renderTrainList();
+      }catch(e){
+        hideLoading();
+        document.getElementById('testList').innerHTML = '<div class="small">Error running test.</div>';
+        document.getElementById('trainList').innerHTML = '';
+      }
+    }
+
+    // Events
+    document.getElementById('closeBtn').addEventListener('click', ()=>{ window.location.href = '/'; });
+    document.querySelectorAll('.pill-toggle').forEach(btn=>{
+      btn.addEventListener('click', ()=>{
+        setFilter(btn.getAttribute('data-filter'));
+      });
+    });
+
+    // Start
+    document.addEventListener('DOMContentLoaded', ()=>{
+      // If navigated from main page, a loading overlay may be visible — hide just in case
+      hideLoading();
+      runEvaluation();
+    });
+  </script>
+</body>
+</html>

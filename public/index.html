@@ -2563,6 +2563,7 @@
             <div style="flex:1; display:flex; justify-content:center; gap:12px;">
                 <button class="refresh-btn" onclick="window.location.href='/seed.html'" title="Seed initial categories from important inbox">Seed Categories</button>
                 <button class="generate-btn" onclick="promptAndGoLoadMore()" title="Load more important emails">Load More</button>
+                <button class="generate-btn" onclick="openTestClassifier()" title="Run classifier evaluation on labeled emails">Test Classifier</button>
             </div>
             <div class="header-buttons">
                 <button class="view-saved-generations-btn" onclick="showViewSavedGenerationsModal()">View Saved Generations</button>
@@ -14261,6 +14262,21 @@ async function renderEmailNotesPreview(el, emailId) {
         function promptAndGoLoadMore() {
             // Open system-styled modal instead of native browser prompt
             showLoadMorePromptModal();
+        }
+
+        // Launch classifier evaluation UI with a descriptive loading popup
+        function openTestClassifier() {
+            try {
+                showLoadingOverlay(
+                    'Running Classifier',
+                    'Training on 80% of labeled emails and evaluating on 20%… This may take a few seconds.',
+                    false
+                );
+            } catch (_) {}
+            // Navigate to the evaluation UI where the run executes and results are displayed
+            setTimeout(() => {
+                window.location.href = '/test-classifier.html';
+            }, 350);
         }
 
         function ensureLoadMorePromptModal() {

@@ -9415,6 +9415,591 @@ app.post('/api/search-emails', async (req, res) => {
   }
 });
 
+/**
+ * Train/Test classifier evaluation with TF-IDF nearest-centroid model
+ * POST /api/test-classifier/run
+ * Returns:
+ * {
+ *   success: true,
+ *   metrics: {
+ *     totalTest, accuracy, correctlyAssignedTags, extraTagsSuggested, exactMatchEmails
+ *   },
+ *   test: { emails: [ { id, subject, from, date, snippet, groundTruth: string[], suggested: [ { name, status: 'correct'|'incorrect'|'missing', reasons: string[] } ] } ] },
+ *   train: { emails: [ { id, subject, from, date, snippet, categories: string[] } ] }
+ * }
+ */
+function __trainTestSplit(arr, testRatio = 0.2) {
+  const copy = (arr || []).slice();
+  // Fisher–Yates shuffle
+  for (let i = copy.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [copy[i], copy[j]] = [copy[j], copy[i]];
+  }
+  const testCount = Math.max(1, Math.floor(copy.length * testRatio));
+  const test = copy.slice(0, testCount);
+  const train = copy.slice(testCount);
+  return { train, test };
+}
+
+function __buildCentroidModelFromEmails(emails) {
+  try {
+    // Group docs by category
+    const byCat = new Map();
+    for (const e of (emails || [])) {
+      const text = `${e.subject || ''}\n${e.snippet || ''}\n${e.body || ''}`;
+      const cats = Array.isArray(e.categories) && e.categories.length ? e.categories : (e.category ? [e.category] : []);
+      const primary = cats && cats.length ? cats[0] : '';
+      const label = String(primary || '').trim();
+      if (!label) continue;
+      if (!byCat.has(label)) byCat.set(label, []);
+      byCat.get(label).push(text);
+    }
+
+    if (byCat.size === 0) {
+      return { idf: new Map(), centroids: new Map(), docCount: 0, categories: [], vocabSize: 0 };
+    }
+
+    // Build IDF over all docs
+    const allDocSets = [];
+    for (const docs of byCat.values()) {
+      for (const d of docs) {
+        const set = new Set(__clfTokenize(d));
+        allDocSets.push(set);
+      }
+    }
+    const idf = __buildTfidf(allDocSets);
+
+    // Build centroids
+    const centroids = new Map();
+    for (const [name, docs] of byCat.entries()) {
+      const acc = new Map();
+      for (const d of docs) {
+        const v = __vectorizeWithIdf(d, idf);
+        for (const [t, w] of v.entries()) {
+          acc.set(t, (acc.get(t) || 0) + w);
+        }
+      }
+      __l2NormalizeSparse(acc);
+      centroids.set(name, acc);
+    }
+
+    return {
+      idf,
+      centroids,
+      docCount: allDocSets.length,
+      categories: Array.from(centroids.keys()),
+      vocabSize: idf.size
+    };
+  } catch (e) {
+    console.warn('buildCentroidModel failed:', e?.message || e);
+    return { idf: new Map(), centroids: new Map(), docCount: 0, categories: [], vocabSize: 0 };
+  }
+}
+
+function __predictTopKCategories(model, text, topK = 3) {
+  try {
+    const v = __vectorizeWithIdf(text || '', model.idf || new Map());
+    const scores = [];
+    for (const [name, centroid] of (model.centroids || new Map()).entries()) {
+      const s = __cosineSparse(v, centroid);
+      scores.push({ name, score: Number.isFinite(s) ? s : 0 });
+    }
+    scores.sort((a, b) => b.score - a.score);
+    return scores.slice(0, Math.max(1, topK));
+  } catch {
+    return [];
+  }
+}
+
+function __topSharedTermsForCategory(model, text, catName, limit = 4) {
+  try {
+    const v = __vectorizeWithIdf(text || '', model.idf || new Map());
+    const centroid = (model.centroids || new Map()).get(catName);
+    if (!centroid) return [];
+    const shared = [];
+    for (const [t, w] of v.entries()) {
+      if (centroid.has(t)) {
+        shared.push({ t, contrib: w * centroid.get(t) });
+      }
+    }
+    shared.sort((a, b) => b.contrib - a.contrib);
+    return shared.slice(0, limit).map(x => x.t);
+  } catch {
+    return [];
+  }
+}
+
+app.post('/api/test-classifier/run', async (req, res) => {
+  try {
+    // Load labeled emails (response-emails.json)
+    // Enforce parity with scripts/evaluate-classifier-limited.js: require OPENAI_API_KEY
+    if (!process.env.OPENAI_API_KEY) {
+      return res.status(400).json({
+        success: false,
+        error: 'OPENAI_API_KEY is required to run the Limited Classifier (steps 4 and 6). Please set it in .env and restart the server.'
+      });
+    }
+    const raw = loadResponseEmails() || [];
+    // Normalize and prepare emails with categories array (DO NOT remap ground truth labels)
+    const currList = __getCategoriesList();
+    const labeled = raw.map(e => {
+      const arr = Array.isArray(e?.categories)
+        ? e.categories.map(c => String(c || '').trim()).filter(Boolean)
+        : (e?.category ? [String(e.category).trim()] : []);
+      // Case-insensitive de-dup preserving order
+      const seen = new Set();
+      const catsUniq = [];
+      (arr || []).forEach(c => {
+        const k = c.toLowerCase();
+        if (k && !seen.has(k)) {
+          seen.add(k);
+          catsUniq.push(c);
+        }
+      });
+      const primary = catsUniq[0] || '';
+      return {
+        id: e.id,
+        subject: e.subject || 'No Subject',
+        from: e.originalFrom || e.from || 'Unknown Sender',
+        date: e.date || new Date().toISOString(),
+        body: e.body || '',
+        snippet: e.snippet || (e.body ? String(e.body).slice(0, 120) + (String(e.body).length > 120 ? '...' : '') : ''),
+        category: primary,
+        categories: catsUniq
+      };
+    }).filter(e => e.id && e.categories && e.categories.length);
+
+    if (!labeled.length) {
+      return res.json({
+        success: true,
+        metrics: { totalTest: 0, accuracy: 0, correctlyAssignedTags: 0, extraTagsSuggested: 0, exactMatchEmails: 0 },
+        test: { emails: [] },
+        train: { emails: [] }
+      });
+    }
+
+    // Split into train/test using deterministic seeded shuffle to mirror scripts/evaluate-classifier-limited.js
+    const SEED = 42;
+    function __shuffleSeeded(arr, seed) {
+      function mulberry32(a) {
+        return function () {
+          let t = (a += 0x6D2B79F5) | 0;
+          t = Math.imul(t ^ (t >>> 15), t | 1);
+          t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+          return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+        };
+      }
+      const rnd = mulberry32(Math.floor(seed) || 42);
+      const a = (arr || []).slice();
+      for (let i = a.length - 1; i > 0; i--) {
+        const j = Math.floor(rnd() * (i + 1));
+        [a[i], a[j]] = [a[j], a[i]];
+      }
+      return a;
+    }
+    const shuffled = __shuffleSeeded(labeled, SEED);
+    const trainSize = Math.max(1, Math.floor(shuffled.length * 0.8));
+    const train = shuffled.slice(0, trainSize);
+    const test = shuffled.slice(trainSize);
+
+    // Train centroid model on train
+    const model = __buildCentroidModelFromEmails(train);
+
+    // Limited classifier evaluation (mirror of scripts/evaluate-classifier-limited.js)
+    const USE_LIMITED = true;
+    if (USE_LIMITED) {
+      // Helpers (local scope)
+      function parseFromParts(fromStr) {
+        const s = String(fromStr || '');
+        const emailMatch = s.match(/<([^>]+)>/);
+        const email = (emailMatch ? emailMatch[1] : (s.includes('@') ? s : '')).trim().toLowerCase();
+        let name = s;
+        if (emailMatch) {
+          name = s.slice(0, emailMatch.index).trim();
+        } else {
+          name = s.replace(/[^<\s]*@[^>\s]*/g, '').trim();
+        }
+        name = name.replace(/^"+|"+$/g, '').trim();
+        return {
+          emailKey: email,
+          nameKey: normalizeKey(name)
+        };
+      }
+      function countOccurrencesNormalized(haystack, needle) {
+        try {
+          const h = String(haystack || '');
+          const n = String(needle || '').trim();
+          if (!n) return 0;
+          const re = new RegExp(`\\b${__escapeRegExp(normalizeKey(n))}\\b`, 'g');
+          const m = normalizeKey(h).match(re);
+          return m ? m.length : 0;
+        } catch {
+          return 0;
+        }
+      }
+      // Categories set X for this run
+      const categories = currList.slice();
+
+      // Build sender index from train
+      const senderIndex = new Map(); // key -> Map(cat -> count)
+      for (const e of train) {
+        const parts = parseFromParts(e.from || 'Unknown Sender');
+        const keys = [];
+        if (parts.emailKey) keys.push(`email:${parts.emailKey}`);
+        if (parts.nameKey) keys.push(`name:${parts.nameKey}`);
+        keys.push(`raw:${normalizeKey(e.from || '')}`);
+        const cats = Array.isArray(e.categories) ? e.categories : (e.category ? [e.category] : []);
+        for (const k of keys) {
+          if (!senderIndex.has(k)) senderIndex.set(k, new Map());
+          const counter = senderIndex.get(k);
+          (cats || []).forEach(c => {
+            counter.set(c, (counter.get(c) || 0) + 1);
+          });
+        }
+      }
+
+      // Build TF-IDF model over train (multi-label centroids)
+      function buildTfidfModel(trainRows, cats) {
+        // Build IDF using tokens from all train docs
+        const docs = trainRows.map(r => `${r.subject || ''}\n${r.snippet || ''}\n${r.body || ''}`);
+        const docSets = docs.map(txt => new Set(__clfTokenize(txt)));
+        const idf = __buildTfidf(docSets);
+        // Category centroids: average vector across docs containing that category
+        const catSum = new Map();   // cat -> Map(term -> weight)
+        const catCount = new Map(); // cat -> number of docs
+        const catSet = new Set(cats);
+        for (let i = 0; i < trainRows.length; i++) {
+          const r = trainRows[i];
+          const text = `${r.subject || ''}\n${r.snippet || ''}\n${r.body || ''}`;
+          const v = __vectorizeWithIdf(text, idf);
+          const labels = Array.isArray(r.categories) ? r.categories : (r.category ? [r.category] : []);
+          for (const c of (labels || [])) {
+            if (!catSet.has(c)) continue;
+            if (!catSum.has(c)) catSum.set(c, new Map());
+            if (!catCount.has(c)) catCount.set(c, 0);
+            catCount.set(c, (catCount.get(c) || 0) + 1);
+            const acc = catSum.get(c);
+            for (const [t, w] of v.entries()) {
+              acc.set(t, (acc.get(t) || 0) + w);
+            }
+          }
+        }
+        const centroids = new Map();
+        for (const c of cats) {
+          const sum = catSum.get(c);
+          const n = catCount.get(c) || 0;
+          const avg = new Map();
+          if (sum && n) {
+            for (const [t, w] of sum.entries()) {
+              avg.set(t, w / n);
+            }
+          }
+          centroids.set(c, avg);
+        }
+        function bestByTfidf(email) {
+          const v = __vectorizeWithIdf(`${email.subject || ''}\n${email.body || ''}`, idf);
+          let best = { cat: '', score: 0 };
+          for (const c of cats) {
+            const centroid = centroids.get(c) || new Map();
+            const s = __cosineSparse(v, centroid);
+            if (s > best.score) best = { cat: c, score: s };
+          }
+          return best;
+        }
+        return { bestByTfidf };
+      }
+      const tfidfModel = buildTfidfModel(train, categories);
+
+      // Step 6 context: train embeddings (lazy)
+      const categoryToTrainRows = new Map();
+      categories.forEach(c => categoryToTrainRows.set(c, []));
+      for (const e of train) {
+        const labs = Array.isArray(e.categories) ? e.categories : (e.category ? [e.category] : []);
+        (labs || []).forEach(c => {
+          if (categoryToTrainRows.has(c)) categoryToTrainRows.get(c).push(e);
+        });
+      }
+      const trainEmbeddings = new Map(); // id -> vector
+      let embeddingsReady = false;
+      async function ensureTrainEmbeddings() {
+        if (embeddingsReady) return;
+        for (const e of train) {
+          try {
+            const txt = `${e.subject || ''}\n${e.snippet || ''}\n${e.body || ''}`;
+            const vec = await __embed(txt.slice(0, 2000));
+            trainEmbeddings.set(e.id, vec);
+          } catch (_) {}
+        }
+        embeddingsReady = true;
+      }
+
+      async function chooseCategoryOpenAI(email, allowed) {
+        const names = Array.isArray(allowed) ? allowed.slice(0, 48) : [];
+        if (!names.map(n => String(n || '').toLowerCase()).includes('other')) {
+          names.push('Other');
+        }
+        const allowedJson = JSON.stringify(names);
+        const SYSTEM = `You are an assistant that classifies emails into categories.
+You MUST choose exactly one category name from the provided list. Do not invent names or synonyms.
+Return strictly valid JSON of the form: {"category":"<one of the allowed names>"}.
+Evaluate fit carefully using sender, subject, and body.`;
+        const USER = `ALLOWED CATEGORY NAMES (JSON):
+${allowedJson}
+
+EMAIL:
+From: ${email.from}
+Subject: ${email.subject}
+Body:
+${String(email.body || '').slice(0, 1400)}
+
+Return ONLY JSON matching {"category":"<name>"} with the category chosen from the allowed list.`;
+        try {
+          const resp = await openai.chat.completions.create({
+            model: 'o3',
+            messages: [
+              { role: 'system', content: SYSTEM },
+              { role: 'user', content: USER }
+            ],
+            max_completion_tokens: 120,
+            response_format: { type: 'json_object' }
+          });
+          const raw = resp.choices?.[0]?.message?.content || '';
+          let parsed = null;
+          try { parsed = JSON.parse(raw); } catch {
+            const m = raw.match(/\{[\s\S]*\}/);
+            if (m) { try { parsed = JSON.parse(m[0]); } catch {} }
+          }
+          const catRaw = parsed && typeof parsed.category === 'string' ? parsed.category : '';
+          const mapped = __strictMapToCategory(catRaw, categories) || matchToCurrentCategory(catRaw, categories) || 'Other';
+          return { category: mapped, raw: catRaw };
+        } catch (_) {
+          return { category: 'Other', raw: '' };
+        }
+      }
+
+      async function classifyLimited(email) {
+        // candidates: cat -> { score, reasons[] }
+        const cand = new Map();
+        const bump = (cat, pts, reason) => {
+          const name = String(cat || '').trim();
+          if (!name) return;
+          if (!cand.has(name)) cand.set(name, { score: 0, reasons: [] });
+          const o = cand.get(name);
+          o.score += pts;
+          if (reason) o.reasons.push(String(reason));
+        };
+
+        const parts = parseFromParts(email.from || '');
+
+        // Step 1: sender prior (single most frequent)
+        const senderKeys = [];
+        if (parts.emailKey) senderKeys.push(`email:${parts.emailKey}`);
+        if (parts.nameKey) senderKeys.push(`name:${parts.nameKey}`);
+        senderKeys.push(`raw:${normalizeKey(email.from || '')}`);
+        const bySenderCounts = new Map();
+        for (const k of senderKeys) {
+          const counter = senderIndex.get(k);
+          if (counter) {
+            for (const [cat, cnt] of counter.entries()) {
+              bySenderCounts.set(cat, (bySenderCounts.get(cat) || 0) + cnt);
+            }
+          }
+        }
+        let priorBestCat = '';
+        let priorBestCount = 0;
+        for (const [cat, cnt] of bySenderCounts.entries()) {
+          if (cnt > priorBestCount) { priorBestCount = cnt; priorBestCat = cat; }
+        }
+        if (priorBestCat) {
+          bump(priorBestCat, 2.0, `Sender prior: most frequent "${priorBestCat}" (count=${priorBestCount})`);
+        }
+
+        // Step 2: sender name equals a category
+        if (parts.nameKey) {
+          const nameMap = new Map(categories.map(c => [normalizeKey(c), c]));
+          const match = nameMap.get(parts.nameKey);
+          if (match) bump(match, 3.0, `Sender name matches category "${match}"`);
+        }
+
+        // Step 3: keyword rule (subject >=1 or body >=2)
+        for (const c of categories) {
+          const subjCount = countOccurrencesNormalized(email.subject || '', c);
+          const bodyCount = countOccurrencesNormalized(email.body || '', c);
+          if (subjCount >= 1 || bodyCount >= 2) {
+            bump(c, 1.5 + 0.2 * subjCount + 0.1 * bodyCount, `Keyword rule: "${c}" in subject x${subjCount} body x${bodyCount}`);
+          }
+        }
+
+        // Step 4: OpenAI best-of
+        if (process.env.OPENAI_API_KEY) {
+          const { category: picked, raw } = await chooseCategoryOpenAI(
+            { from: email.from, subject: email.subject, body: email.body },
+            categories
+          );
+          bump(picked, 3.5, raw ? `LLM best-of chose "${raw}" mapped to "${picked}"` : `LLM best-of chose "${picked}"`);
+        }
+
+        // Step 5: TF-IDF only if steps 1-4 produced NO candidates
+        const preRuleHasCandidates = cand.size > 0;
+        if (!preRuleHasCandidates) {
+          const tf = tfidfModel.bestByTfidf(email);
+          if (tf.cat) {
+            bump(tf.cat, 2.5 * Math.max(0.2, Math.min(1, tf.score || 0)), `TF-IDF top match "${tf.cat}" (sim=${Number.isFinite(tf.score) ? tf.score.toFixed(3) : 'n/a'})`);
+          }
+        }
+        // Scrub TF-IDF-only if pre-rule candidates existed
+        if (preRuleHasCandidates) {
+          for (const [cat, v] of Array.from(cand.entries())) {
+            const arr = Array.isArray(v.reasons) ? v.reasons : [];
+            const nonTfidf = arr.filter(r => !/^TF-IDF top match\b/.test(String(r || '')));
+            if (nonTfidf.length === 0) {
+              cand.delete(cat);
+            } else if (nonTfidf.length !== arr.length) {
+              v.reasons = nonTfidf;
+            }
+          }
+        }
+
+        // Aggregate final suggestions (max 2, drop "Other" if any non-Other present)
+        const scored = Array.from(cand.entries())
+          .map(([cat, v]) => ({ cat, score: v.score, reasons: v.reasons }))
+          .sort((a, b) => b.score - a.score);
+        let suggestions = scored.map(x => x.cat);
+        const nonOther = suggestions.filter(c => normalizeKey(c) !== 'other');
+        suggestions = (nonOther.length ? nonOther : suggestions).filter(Boolean).slice(0, 2);
+
+        // Step 6: if still NO suggestions, use embeddings average similarity to seed one
+        if (suggestions.length === 0 && process.env.OPENAI_API_KEY) {
+          await ensureTrainEmbeddings();
+          const testVec = await __embed(`${email.subject || ''}\n${email.body || ''}`.slice(0, 2000));
+          let best = { cat: '', score: -1 };
+          for (const c of categories) {
+            const rows = categoryToTrainRows.get(c) || [];
+            if (!rows.length) continue;
+            let sum = 0, count = 0;
+            for (const r of rows) {
+              const emb = trainEmbeddings.get(r.id);
+              if (!emb) continue;
+              sum += __cosine(testVec, emb);
+              count++;
+            }
+            const avg = count ? (sum / count) : 0;
+            if (avg > best.score) best = { cat: c, score: avg };
+          }
+          if (best.cat) {
+            suggestions = [best.cat];
+            if (!cand.has(best.cat)) cand.set(best.cat, { score: 0, reasons: [] });
+            cand.get(best.cat).reasons.push(`Embeddings: highest avg similarity "${best.cat}"`);
+          }
+        }
+
+        // Final enforcement: drop "Other" if any non-Other exists; cap to 2
+        if (suggestions.some(c => normalizeKey(c) !== 'other')) {
+          suggestions = suggestions.filter(c => normalizeKey(c) !== 'other').slice(0, 2);
+        } else {
+          suggestions = suggestions.slice(0, 2);
+        }
+
+        const reasons = {};
+        suggestions.forEach(s => { reasons[s] = cand.get(s)?.reasons || []; });
+        return { suggestions, reasons };
+      }
+
+      // Metrics (strict, as in the script)
+      // Precompute train embeddings up-front to mirror script timing and behavior
+      await ensureTrainEmbeddings();
+      let correctEmailsStrict = 0;
+      let totalActualTags = 0;
+      let correctlyAssignedTags = 0;
+      let incorrectlyAssignedTags = 0;
+      let completeCorrectEmails = 0;
+
+      const testOut = await Promise.all(test.map(async (te) => {
+        const actualCats = Array.isArray(te.categories) ? te.categories : (te.category ? [te.category] : []);
+        const email = { from: te.from, subject: te.subject, body: te.body || te.snippet || '' };
+        const { suggestions, reasons } = await classifyLimited(email);
+        // Map and then strictly drop "Other" when any non-Other exists (UI should never show "Other" alongside real tags)
+        const suggestedRaw = suggestions.map(s => matchToCurrentCategory(s, categories) || s);
+        const hasNonOtherSuggestion = suggestedRaw.some(cat => normalizeKey(cat) !== 'other');
+        const suggested = hasNonOtherSuggestion ? suggestedRaw.filter(cat => normalizeKey(cat) !== 'other') : suggestedRaw;
+
+        const actualNorm = new Set((actualCats || []).map(c => normalizeKey(c)));
+        const suggNorm = new Set((suggested || []).map(c => normalizeKey(c)));
+
+        const missing = (actualCats || []).filter(a => !suggNorm.has(normalizeKey(a)));
+        const extra = (suggested || []).filter(s => !actualNorm.has(normalizeKey(s)));
+
+        totalActualTags += actualNorm.size;
+        for (const a of actualNorm) {
+          if (suggNorm.has(a)) correctlyAssignedTags++;
+        }
+        incorrectlyAssignedTags += extra.length;
+
+        const ok = (missing.length === 0 && extra.length === 0);
+        if (ok) {
+          completeCorrectEmails++;
+          correctEmailsStrict++;
+        }
+
+        // Build UI payload: predicted suggestions first, then missing (orange)
+        const suggestedOut = [];
+        for (const cat of suggested) {
+          const isCorrect = actualNorm.has(normalizeKey(cat));
+          suggestedOut.push({
+            name: cat,
+            status: isCorrect ? 'correct' : 'incorrect',
+            reasons: Array.isArray(reasons[cat]) ? reasons[cat] : []
+          });
+        }
+        for (const miss of missing) {
+          suggestedOut.push({
+            name: miss,
+            status: 'missing',
+            reasons: ['Present in ground truth but not among top suggestions']
+          });
+        }
+
+        return {
+          id: te.id,
+          subject: te.subject,
+          from: te.from,
+          date: te.date,
+          snippet: te.snippet,
+          groundTruth: actualCats || [],
+          suggested: suggestedOut
+        };
+      }));
+
+      const accuracyStrict = test.length ? (correctEmailsStrict / test.length) : 0;
+
+      const trainOut = train.map(tr => ({
+        id: tr.id,
+        subject: tr.subject,
+        from: tr.from,
+        date: tr.date,
+        snippet: tr.snippet,
+        categories: Array.isArray(tr.categories) ? tr.categories : (tr.category ? [tr.category] : [])
+      }));
+
+      return res.json({
+        success: true,
+        metrics: {
+          totalTest: test.length,
+          accuracy: Number.isFinite(accuracyStrict) ? Number(accuracyStrict.toFixed(4)) : 0,
+          correctlyAssignedTags,
+          extraTagsSuggested: incorrectlyAssignedTags,
+          exactMatchEmails: completeCorrectEmails
+        },
+        test: { emails: testOut },
+        train: { emails: trainOut }
+      });
+    }
+  } catch (e) {
+    console.error('/api/test-classifier/run failed:', e);
+    return res.status(500).json({ success: false, error: 'Failed to run classifier test' });
+  }
+});
+
 // Serve the main HTML file
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
