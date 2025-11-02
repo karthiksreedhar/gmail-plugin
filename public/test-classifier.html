@@ -173,6 +173,17 @@
 
     /* Loading overlay note */
     .lnote{color:#777; font-size:12px; margin-top:6px}
+
+    /* Sidebar extras */
+    .sidebar-divider{border-top:1px solid var(--border); margin:12px 0;}
+    .steps-title{font-size:12px; color:var(--muted); margin:6px 0 4px;}
+    .steps-list{margin:0; padding-left:16px; color:#555; font-size:12px; line-height:1.4;}
+    .steps-list.numbered{list-style:decimal; padding-left:20px;}
+    .steps-list li{margin:4px 0;}
+    .steps-list .muted{color:#777; font-size:11.5px; margin-top:2px;}
+    /* Clickable test email cards: mirror main UI hover affordance */
+    .email-card.test{cursor:pointer; transition: transform .05s ease, box-shadow .1s ease;}
+    .email-card.test:hover{transform: translateY(-1px); box-shadow: 0 4px 12px rgba(0,0,0,0.1);}
   </style>
 </head>
 <body>
@@ -223,6 +234,37 @@
         <div class="small info-note">
           Click a tag to see reasons.
         </div>
+      </div>
+
+      <div class="sidebar-divider"></div>
+      <div class="steps">
+        <div class="steps-title">Classification pipeline</div>
+        <ol class="steps-list numbered">
+          <li>
+            Deterministic rules
+            <div class="muted">Match saved guidelines/keywords to categories (strong signals come first).</div>
+          </li>
+          <li>
+            Sender & domain affinity
+            <div class="muted">Prefer categories frequently associated with the sender or email domain.</div>
+          </li>
+          <li>
+            Subject nearest‑neighbor
+            <div class="muted">Find closest subjects in labeled data to infer likely categories.</div>
+          </li>
+          <li>
+            Body nearest‑neighbor
+            <div class="muted">Compare email bodies to top labeled examples using OpenAI API semantic similarity (embeddings) for additional signals.</div>
+          </li>
+          <li>
+            Semantic search (fallback)
+            <div class="muted">Runs only if steps 1–4 produced no non‑Other suggestion; fills any remaining slots up to the 2‑suggestion cap.</div>
+          </li>
+          <li>
+            Finalize & limits
+            <div class="muted">Max 2 suggestions. If any non‑Other exists, drop “Other”. If still none, suggest “Other”. Exact‑match emails are counted as “Completely Correct”.</div>
+          </li>
+        </ol>
       </div>
     </aside>
 
