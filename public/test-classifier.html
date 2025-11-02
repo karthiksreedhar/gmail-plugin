@@ -204,7 +204,7 @@
         </div>
         <div class="metric">
           <div class="metric-title">Correctly Assigned Tags</div>
-          <div class="metric-value" id="m-correct-tags">-</div>
+          <div class="metric-value"><span id="m-correct-tags">-</span> / <span id="m-total-tags">-</span></div>
         </div>
         <div class="metric">
           <div class="metric-title">Extra Tags Suggested</div>
@@ -212,7 +212,7 @@
         </div>
         <div class="metric">
           <div class="metric-title">Emails Completely Correct</div>
-          <div class="metric-value" id="m-exact">-</div>
+          <div class="metric-value"><span id="m-exact">-</span> / <span id="m-total-exact">-</span></div>
         </div>
       </div>
 
@@ -250,7 +250,7 @@
           </li>
           <li>
             Subject nearest‑neighbor
-            <div class="muted">Find closest subjects in labeled data to infer likely categories.</div>
+            <div class="muted">Find closest subjects in labeled data using TF‑IDF/cosine similarity (no OpenAI API) to infer likely categories.</div>
           </li>
           <li>
             Body nearest‑neighbor
@@ -265,6 +265,11 @@
             <div class="muted">Max 2 suggestions. If any non‑Other exists, drop “Other”. If still none, suggest “Other”. Exact‑match emails are counted as “Completely Correct”.</div>
           </li>
         </ol>
+        <div class="steps-title">Timing notes</div>
+        <ul class="steps-list">
+          <li>TF‑IDF subject matching (step 3) runs before body embeddings (step 4).</li>
+          <li>OpenAI embeddings are used only in step 4; step 5 (semantic fallback) runs only if steps 1–4 yield no non‑Other.</li>
+        </ul>
       </div>
     </aside>
 
@@ -444,11 +449,23 @@
     // Renderers
     function renderMetrics(){
       const m = state.metrics || {accuracy:0, totalTest:0, correctlyAssignedTags:0, extraTagsSuggested:0, exactMatchEmails:0};
+      const totalEmails = m.totalTest || (Array.isArray(state.test) ? state.test.length : 0);
+      const totalTags = (Array.isArray(state.test) ? state.test : []).reduce((sum, e) => {
+        return sum + (Array.isArray(e.groundTruth) ? e.groundTruth.length : 0);
+      }, 0);
+
       document.getElementById('m-accuracy').textContent = (m.accuracy*100).toFixed(1) + '%';
-      document.getElementById('m-total').textContent = m.totalTest || 0;
+      document.getElementById('m-total').textContent = totalEmails;
+
       document.getElementById('m-correct-tags').textContent = m.correctlyAssignedTags || 0;
+      const totalTagsEl = document.getElementById('m-total-tags');
+      if (totalTagsEl) totalTagsEl.textContent = totalTags || 0;
+
       document.getElementById('m-extra-tags').textContent = m.extraTagsSuggested || 0;
+
       document.getElementById('m-exact').textContent = m.exactMatchEmails || 0;
+      const totalExactEl = document.getElementById('m-total-exact');
+      if (totalExactEl) totalExactEl.textContent = totalEmails || 0;
     }
 
     function tagPillHTML(tag){
