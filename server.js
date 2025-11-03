@@ -10159,6 +10159,10 @@ Return ONLY JSON matching {"category":"<name>"} with the category chosen from th
 
         const reasons = {};
         suggestions.forEach(s => { reasons[s] = cand.get(s)?.reasons || []; });
+        // Log each categorized email for Test Classifier (Limited) with contenders (suggestions)
+        try {
+          console.log(`[TestClassifier][Limited] "${email.subject || 'No Subject'}" | from=${email.from || 'Unknown Sender'} | predicted=${suggestions[0] || ''} | contenders=[${suggestions.join(', ')}]`);
+        } catch (_) {}
         return { suggestions, reasons };
       }
 
@@ -10499,7 +10503,47 @@ app.post('/api/classifier-v3/suggest-batch', async (req, res) => {
           suggestion = matchToCurrentCategory(kw, categoriesX) || kw;
         }
       }
-      out[id] = { contenders, pick: pickRaw || '', rationales, suggestion };
+      // Choose explanation: prefer original LLM rationale for the chosen category; otherwise use fallback API
+      let explanation = '';
+      if (suggestion) {
+        // 1) exact rationale key match
+        if (typeof rationales?.[suggestion] === 'string' && rationales[suggestion].trim()) {
+          explanation = rationales[suggestion].trim();
+        } else {
+          // 2) map rationale keys to current categories and compare after mapping
+          try {
+            const keys = (rationales && typeof rationales === 'object') ? Object.keys(rationales) : [];
+            for (const k of keys) {
+              const mappedKey = matchToCurrentCategory(k, categoriesX) || k;
+              if (String(mappedKey).toLowerCase() === String(suggestion).toLowerCase()) {
+                const val = rationales[k];
+                if (typeof val === 'string' && val.trim()) {
+                  explanation = val.trim();
+                  break;
+                }
+              }
+            }
+          } catch (_) {}
+          // 3) final fallback: call local explanation endpoint
+          if (!explanation) {
+            try {
+              const resp = await fetch(`http://localhost:${PORT}/api/explain-category-assignment`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ email: e, category: suggestion })
+              });
+              const j = await resp.json().catch(() => ({}));
+              if (j && j.explanation) explanation = String(j.explanation).trim();
+            } catch (_) {}
+          }
+        }
+      }
+
+      out[id] = { contenders, pick: pickRaw || '', rationales, suggestion, explanation };
+      // Log each categorized email for Load More (V3) with contenders
+      try {
+        console.log(`[ClassifierV3][LoadMore] "${e.subject || 'No Subject'}" | from=${e.from || 'Unknown Sender'} | suggestion=${suggestion || ''} | contenders=[${(contenders || []).join(', ')}]`);
+      } catch (_) {}
     }
 
     return res.json({ success: true, results: out });
@@ -10605,12 +10649,50 @@ app.post('/api/classifier-v4/suggest-batch', async (req, res) => {
         }
       }
 
+      // Choose explanation for V4: prefer LLM rationale for the chosen category; fallback to local explain endpoint
+      let explanation = '';
+      if (suggestion) {
+        if (typeof rationales?.[suggestion] === 'string' && rationales[suggestion].trim()) {
+          explanation = rationales[suggestion].trim();
+        } else {
+          try {
+            const keys = (rationales && typeof rationales === 'object') ? Object.keys(rationales) : [];
+            for (const k of keys) {
+              const mappedKey = matchToCurrentCategory(k, categoriesX) || k;
+              if (String(mappedKey).toLowerCase() === String(suggestion).toLowerCase()) {
+                const val = rationales[k];
+                if (typeof val === 'string' && val.trim()) {
+                  explanation = val.trim();
+                  break;
+                }
+              }
+            }
+          } catch (_) {}
+          if (!explanation) {
+            try {
+              const resp = await fetch(`http://localhost:${PORT}/api/explain-category-assignment`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ email: e, category: suggestion })
+              });
+              const j = await resp.json().catch(() => ({}));
+              if (j && j.explanation) explanation = String(j.explanation).trim();
+            } catch (_) {}
+          }
+        }
+      }
+
       out[id] = {
         contenders: llmContenders, // keep LLM-set for parity
         pick: pickRaw || '',
         rationales,
-        suggestion
+        suggestion,
+        explanation
       };
+      // Log each categorized email for Load More (V4) with contenders
+      try {
+        console.log(`[ClassifierV4][LoadMore] "${e.subject || 'No Subject'}" | from=${e.from || 'Unknown Sender'} | suggestion=${suggestion || ''} | contenders=[${(llmContenders || []).join(', ')}]`);
+      } catch (_) {}
     }
 
     return res.json({ success: true, results: out });
@@ -11082,6 +11164,140 @@ app.post('/api/test-classifier/run-v3', async (req, res) => {
   } catch (err) {
     console.error('test-classifier/run-v3 failed:', err);
     return res.status(500).json({ success: false, error: 'Failed to run classifier v3 test' });
+  }
+});
+
+/**
+ * Fallback justification generator for UI when a suggested category lacks a reason.
+ * POST /api/explain-category-assignment
+ * body: { email: { id, subject, body, snippet?, from }, category: string }
+ * returns: { success: true, category, explanation, context: { examplesUsed, usedSummary, senderMatchesInCategory } }
+ */
+app.post('/api/explain-category-assignment', async (req, res) => {
+  try {
+    const payload = req.body || {};
+    const email = payload.email || {};
+    const requestedCategory = String(payload.category || '').trim();
+
+    // Authoritative category list X
+    let categoriesX = loadCategoriesList();
+    if (!Array.isArray(categoriesX) || categoriesX.length === 0) {
+      categoriesX = getCurrentCategoriesFromResponses();
+      if (!Array.isArray(categoriesX) || categoriesX.length === 0) {
+        categoriesX = CANONICAL_CATEGORIES.slice();
+      }
+    }
+
+    // Map requested to current list
+    const category = matchToCurrentCategory(requestedCategory, categoriesX) || requestedCategory || 'Other';
+
+    // Gather context: examples and saved summary
+    const responses = loadResponseEmails() || [];
+    const examples = responses
+      .filter(r => String(r.category || '').toLowerCase() === String(category).toLowerCase())
+      .slice(0, 12);
+
+    const summaries = loadCategorySummaries() || {};
+    const summary = summaries[category] || '';
+
+    const subj = String(email.subject || '');
+    const body = String(email.body || email.snippet || '');
+    const from = String(email.from || '');
+
+    // Local helpers (self-contained)
+    const extractEmailAddr = (s) => {
+      try {
+        const m = String(s || '').match(/<?([A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})>?/i);
+        return m ? m[1].toLowerCase() : String(s || '').toLowerCase();
+      } catch { return String(s || '').toLowerCase(); }
+    };
+    const toTokens = (s) => String(s || '')
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, ' ')
+      .split(/\s+/)
+      .filter(Boolean);
+
+    // Sender frequency within this category
+    const emailAddr = extractEmailAddr(from);
+    const senderCount = examples.reduce((acc, r) => {
+      const orig = extractEmailAddr(r.originalFrom || r.from || '');
+      return acc + (orig && emailAddr && orig === emailAddr ? 1 : 0);
+    }, 0);
+
+    // Token overlap cues with category name
+    const catTokens = toTokens(category).filter(w => w.length >= 3);
+    const emailTokens = new Set(toTokens(subj + ' ' + body));
+    const catHits = catTokens.filter(t => emailTokens.has(t));
+
+    // Sample similar subjects to cite
+    const sampleSubjects = examples.slice(0, 3).map(r => r.subject || 'No Subject');
+
+    // Build deterministic heuristic explanation
+    let heuristic = `Placed in “${category}”`;
+    const reasons = [];
+    if (catHits.length) {
+      reasons.push(`the email mentions ${catHits.slice(0, 3).map(t => '“' + t + '”').join(', ')}`);
+    }
+    if (senderCount > 0) {
+      reasons.push(`you have ${senderCount} prior email${senderCount > 1 ? 's' : ''} from this sender in this category`);
+    }
+    if (sampleSubjects.length) {
+      reasons.push(`similar past items include: ${sampleSubjects.map(s => '“' + s + '”').join('; ')}`);
+    }
+    if (summary) {
+      reasons.push('this aligns with the saved category summary');
+    }
+    if (reasons.length) {
+      heuristic += ` because ${reasons.join('; ')}.`;
+    } else {
+      heuristic += '.';
+    }
+
+    // Try OpenAI for a concise, polished explanation; fall back to heuristic if anything fails
+    let explanation = heuristic;
+    if (process.env.OPENAI_API_KEY) {
+      try {
+        const SYSTEM = 'You produce a concise, one or two sentence explanation of why an email fits a given category. Be specific, reference concrete cues (subject terms, sender patterns, similarities to prior examples), and avoid generic wording. Output plain text only.';
+        const USER = `CATEGORY: ${category}
+${summary ? `CATEGORY SUMMARY:\n${summary}\n\n` : ''}EMAIL:
+From: ${from}
+Subject: ${subj}
+Body: ${body.slice(0, 1000)}
+
+PRIOR EXAMPLES IN THIS CATEGORY (subject | from | snippet):
+${examples.map((r, i) => `${i + 1}) ${r.subject || 'No Subject'} | ${r.originalFrom || r.from || 'Unknown Sender'} | ${(r.snippet || String(r.body || '').slice(0, 140))}`).join('\n').slice(0, 2500)}
+
+Provide a one or two sentence justification only.`;
+
+        const completion = await openai.chat.completions.create({
+          model: 'o3',
+          messages: [
+            { role: 'system', content: SYSTEM },
+            { role: 'user', content: USER }
+          ],
+          max_completion_tokens: 180
+        });
+        const txt = (completion.choices?.[0]?.message?.content || '').trim();
+        if (txt) explanation = txt;
+      } catch (_) {
+        // keep heuristic
+        explanation = heuristic;
+      }
+    }
+
+    return res.json({
+      success: true,
+      category,
+      explanation,
+      context: {
+        examplesUsed: examples.length,
+        usedSummary: !!summary,
+        senderMatchesInCategory: senderCount
+      }
+    });
+  } catch (e) {
+    console.error('explain-category-assignment failed:', e);
+    return res.status(500).json({ success: false, error: 'Failed to generate explanation' });
   }
 });
 
