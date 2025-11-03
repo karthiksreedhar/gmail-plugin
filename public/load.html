@@ -1,220 +1,109 @@
-<![CDATA[<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Load More</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <style>
     :root{
       --tan:#d2b48c;
-      --tan-darker:#c19a6b;
-      --bg:#ffffff;
       --border:#e0e0e0;
       --text:#202124;
       --muted:#5f6368;
-      --accent:#4285f4;
-      --green:#28a745;
-      --red:#dc3545;
-      --violet:#6f42c1;
-      --shadow:0 1px 3px rgba(0,0,0,0.1);
-      --chip-bg:#fafafa;
-      --predicted:#FFF9CC; /* highlight predicted categories */
+      --bg:#ffffff;
+      --highlight:#FFF9CC;
+      --link:#1a73e8;
+      --predicted:#FFF9CC;
+      --sticky:#f5f5f5;
     }
     *{box-sizing:border-box}
-    html,body{
-      margin:0;
-      padding:0;
-      height:100%;
-      background:var(--bg);
-      color:var(--text);
+    body{
+      margin:0; padding:0;
       font-family: 'Google Sans','Roboto',Arial,sans-serif;
+      color:var(--text);
+      background:var(--bg);
+      height:100vh;
+      display:flex;
+      flex-direction:column;
     }
     .header{
-      height:64px;
-      background: var(--tan);
+      background:var(--tan);
+      padding:12px 16px;
       border-bottom:1px solid var(--border);
-      display:flex;
-      align-items:center;
-      justify-content:space-between;
-      padding:0 16px;
-      position:sticky;
-      top:0;
-      z-index:1000;
-      box-shadow: var(--shadow);
+      display:flex; align-items:center; justify-content:space-between;
     }
-    .hdr-left{
-      display:flex;
-      align-items:center;
-      gap:10px;
+    .header h1{
+      margin:0; font-size:20px; font-weight:600; color:#000;
     }
-    .hdr-left h1{
-      font-size:20px;
-      font-weight:600;
-      color:#000;
-      margin:0;
-    }
-    .hdr-right{
-      display:flex;
-      align-items:center;
-      gap:8px;
-    }
+    .header-actions{display:flex; gap:8px; align-items:center}
     .btn{
-      padding:10px 14px;
-      border:none;
-      border-radius:6px;
-      font-weight:600;
-      font-size:14px;
-      cursor:pointer;
-      transition:opacity .15s ease;
+      border:none; border-radius:6px; padding:8px 12px; cursor:pointer;
+      font-size:14px; font-weight:500; color:#fff; background:#667eea;
     }
-    .btn:disabled{opacity:.6;cursor:not-allowed}
-    .btn-primary{background:var(--green);color:#fff;}
-    .btn-secondary{background:#f8f9fa;color:#6c757d;border:1px solid #dee2e6;}
-    .btn-danger{background:var(--red);color:#fff;}
-    .btn:hover{opacity:.9}
+    .btn:hover{background:#5a67d8}
+    .btn-secondary{background:#6c757d}
+    .btn-secondary:hover{background:#5a6268}
+    .btn-danger{background:#dc3545}
+    .btn-danger:hover{background:#c82333}
 
-    .layout{
-      display:flex;
-      height:calc(100vh - 64px);
-      min-height:400px;
+    .main{
+      flex:1; min-height:0; display:flex; overflow:auto;
     }
-    .pane-left{
-      flex:1 1 50%;
-      border-right:1px solid var(--border);
-      display:flex;
-      flex-direction:column;
-      overflow:hidden;
-      background:#f5f0e8;
+    .content{
+      flex:1; overflow:auto; padding:16px 24px;
+      display:flex; flex-direction:column; gap:12px;
+      max-width:none; margin:0;
+      width:100%;
     }
-    .pane-right{
-      flex:1 1 50%;
-      min-width:0;
-      display:flex;
-      flex-direction:column;
-      overflow:hidden;
+    .section-title{
+      font-size:13px; color:#8b4513; font-weight:700; text-transform:uppercase; letter-spacing:.3px;
+      border-bottom:1px solid var(--border); padding-bottom:6px; margin-top:8px;
     }
+    .email-card{
+      border:1px solid var(--border); border-radius:8px; background:#fff;
+      padding:12px;
+      transition: transform .05s ease, box-shadow .1s ease;
+      cursor:pointer;
+    }
+    .email-card:hover{transform: translateY(-1px); box-shadow: 0 4px 12px rgba(0,0,0,0.08);}
+    .email-card.predicted{ background:var(--highlight); }
+    .email-header{
+      display:flex; align-items:center; gap:8px; justify-content:space-between;
+      margin-bottom:6px;
+    }
+    .email-from{font-weight:600; color:#333; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+    .email-date{font-size:12px; color:var(--muted); white-space:nowrap}
+    .email-subject{font-size:14px; color:#1f1f1f; margin-bottom:6px; font-weight:500}
+    .email-snippet{font-size:13px; color:#555; margin-bottom:8px; white-space:pre-wrap}
+    .row{display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:6px}
+    .row-title{font-size:12px; color:var(--muted); margin-right:6px}
 
-    .left-top{
-      padding:10px 12px;
-      border-bottom:1px solid var(--border);
-      display:flex;
-      align-items:center;
-      justify-content:space-between;
+    .tag-pill{
+      display:inline-block; padding:6px 12px; border-radius:14px; font-size:14px; font-weight:600; user-select:none;
+      border:1px solid rgba(0,0,0,0.06); background: var(--predicted); color:#5f6368;
     }
-    .left-top .stat{
-      color:var(--muted);
-      font-size:13px;
-    }
-    .list{
-      overflow:auto;
-      padding:8px;
-      gap:8px;
-      display:flex;
-      flex-direction:column;
-      height:100%;
-    }
-    .item{
-      border:1px solid var(--border);
-      border-radius:8px;
-      background:#fff;
-      padding:10px;
-      cursor:pointer;
-      transition:background .12s ease, box-shadow .12s ease;
-      display:flex;
-      gap:10px;
-      align-items:flex-start;
-    }
-    .item:hover{background:#fafafa; box-shadow: var(--shadow);}
-    .item.active{outline:2px solid var(--tan-darker); outline-offset:-2px;}
-    .it-body{flex:1 1 auto; min-width:0;}
-    .it-row{
-      display:flex;
-      align-items:center;
-      gap:8px;
-      justify-content:space-between;
-    }
-    .it-subj{
-      font-weight:600;
-      font-size:14px;
-      color:#333;
-      overflow:hidden;
-      text-overflow:ellipsis;
-      white-space:nowrap;
-    }
-    .it-meta{
-      font-size:12px;
-      color:var(--muted);
-      margin-top:4px;
-      overflow:hidden;
-      text-overflow:ellipsis;
-      white-space:nowrap;
-    }
-    .it-actions{
-      display:flex;
-      align-items:center;
-      gap:6px;
-      flex-wrap:wrap;
-    }
-    .hide-btn, .approve-btn{
-      background:#f1f3f4;
-      color:#444;
-      border:1px solid #ddd;
-      border-radius:6px;
-      padding:6px 10px;
-      cursor:pointer;
-      font-size:12px;
-    }
+    .sug-item{display:inline-flex; align-items:center; gap:6px; margin-right:8px}
+    .sug-reason{font-size:12px; color:var(--muted)}
+    .chips-row{display:flex; align-items:center; gap:8px; flex-wrap:wrap; width:100%}
+    .tag-x{display:inline-block; margin-left:6px; cursor:pointer; font-weight:700; color:#666;}
+    .tag-x:hover{color:#333}
+    .tag-extra{ background:#fff; color:#333; }
+    .chips-row{display:flex; align-items:center; gap:8px; flex-wrap:wrap; width:100%}
+    .tag-x{display:inline-block; margin-left:6px; cursor:pointer; font-weight:700; color:#666;}
+    .tag-x:hover{color:#333}
 
-    .chips{
-      display:flex;
-      align-items:center;
-      flex-wrap:wrap;
-      gap:6px;
-      margin-top:8px;
+    .actions{
+      display:flex; gap:8px; align-items:center; margin-top:8px;
     }
-    .chip{
-      display:inline-flex;
-      align-items:center;
-      gap:6px;
-      padding:6px 10px;
-      border-radius:999px;
-      border:1px solid #ddd;
-      background:var(--chip-bg);
-      color:#333;
-      font-size:13px;
-      user-select:none;
+    .act-btn{
+      background:#f1f3f4; color:#444; border:1px solid #ddd; border-radius:6px; padding:6px 10px; cursor:pointer; font-size:12px;
     }
-    .chip.predicted{
-      background: var(--predicted);
-      border-color:#e5d88b;
-      cursor:pointer;
-    }
+    .act-btn.primary{ background:#5a67d8; color:#fff; border-color:#4c51bf; }
 
-    /* Suggested categories (yellow pills) */
-    .sugg-row{
-      margin-top:6px;
-      display:flex;
-      flex-wrap:wrap;
-      gap:6px;
-    }
-    .sugg-pill{
-      display:inline-block;
-      padding:4px 8px;
-      border-radius:12px;
-      font-size:12px;
-      font-weight:500;
-      background: var(--predicted);
-      border:1px solid #e5d88b;
-      color:#5f6368;
-      user-select:none;
-    }
-    .chip .x{
-      font-weight:700;
-      cursor:pointer;
-    }
+    /* Add Category input */
     .chip-input{
-      min-width:120px;
-      max-width:200px;
+      min-width:180px;
+      max-width:260px;
       padding:6px 10px;
       border-radius:999px;
       border:1px dashed #bbb;
@@ -241,1478 +130,460 @@
       cursor:pointer;
       font-size:13px;
     }
-    .suggestions .opt:hover{
-      background:#f1f3f4;
-    }
-    .suggestions .opt.active{
-      background:#e8f0fe;
-      outline:1px solid #c7d2fe;
-    }
+    .suggestions .opt:hover{ background:#f1f3f4; }
+    .suggestions .opt.active{ background:#e8f0fe; outline:1px solid #c7d2fe; }
 
-    /* Popover for suggested category reasons */
-    .chip-reason-popover{
-      position:absolute;
-      z-index:1600;
-      background:#fff;
-      border:1px solid #e0e0e0;
+    /* Sticky note */
+    .sticky-note{
+      background: var(--sticky);
+      border: 1px solid #e0e0e0;
       border-radius:8px;
-      box-shadow:0 8px 24px rgba(0,0,0,0.18);
-      max-width:340px;
-      min-width:220px;
-      padding:10px 12px;
-      color:#202124;
-      font-size:12px;
+      padding:10px;
+      margin-top:8px;
     }
-    .chip-reason-popover .reason{
-      color:#3c4043;
-      line-height:1.4;
-      margin-bottom:8px;
-      white-space:normal;
-      word-wrap:break-word;
+    .sticky-row{
+      display:flex; gap:8px; align-items:flex-start; flex-wrap:wrap;
     }
-    .chip-reason-popover .actions{
-      display:flex;
-      gap:8px;
-      justify-content:flex-end;
+    .sticky-text{
+      flex:1; min-width:220px; max-width:100%;
+      padding:8px; border:1px solid #dadce0; border-radius:6px; font-size:13px; background:#fff;
     }
-    .chip-reason-popover .btn{
-      padding:6px 10px;
-      font-size:12px;
-      border-radius:6px;
+    .sticky-btn{
+      background:#ffd54f; color:#5d4037; border:1px solid #fbc02d; border-radius:6px; padding:6px 10px; cursor:pointer; font-size:12px;
     }
+    .sticky-btn:hover{ background:#ffca28; }
+    .sticky-status{ font-size:12px; color:#6d4c41; }
 
-    .right-top{
-      padding:10px 16px;
-      border-bottom:1px solid var(--border);
-      background:#fff;
-      display:flex;
-      align-items:center;
-      justify-content:space-between;
-      gap:12px;
-      flex-wrap:wrap;
-    }
-    .right-top .title{
-      font-weight:600;
-      color:#333;
-      overflow:hidden;
-      text-overflow:ellipsis;
-      white-space:nowrap;
-    }
-    .viewer{
-      flex:1 1 auto;
-      overflow:auto;
-      padding:14px;
-      background:#fff;
-    }
-    .message{
-      border:1px solid #eee;
-      border-left:4px solid #999;
-      border-radius:8px;
-      overflow:hidden;
-      margin-bottom:12px;
-      background:#fff;
-    }
-    .message.response{border-left-color: var(--tan-darker);}
-    .msg-h{
-      background:#f8f6f2;
-      padding:10px 12px;
-      border-bottom:1px solid #eee;
-      font-size:12px;
-      color:#444;
-    }
-    .msg-b{
-      padding:12px;
-      white-space:pre-wrap;
-      line-height:1.5;
-      color:#222;
-      font-size:14px;
-    }
+    /* Thread view matching test-classifier */
+    .thread-view{flex:1; background:#fff; overflow:auto; border-left:1px solid var(--border)}
+    .thread-header{position:sticky; top:0; background:#fff; border-bottom:1px solid var(--border); padding:12px 16px; display:flex; align-items:center; justify-content:space-between; z-index:5}
+    .thread-title{font-size:16px; font-weight:700; color:#202124; margin-left:8px}
+    .thread-header-left{display:flex; align-items:center; gap:8px}
+    .back-thread-btn{background:#f1f3f4; color:#202124; border:1px solid #dadce0; padding:6px 10px; border-radius:20px; cursor:pointer; font-size:12px}
+    .back-thread-btn:hover{background:#e8eaed}
+    .thread-body{padding:12px 16px 24px 16px}
+    .thread-message{border:1px solid #eee; border-radius:8px; margin-bottom:12px; overflow:hidden; background:#fff}
+    .thread-message.response{border-left:4px solid #d2b48c}
+    .thread-message.original{border-left:4px solid #999}
+    .message-header{background:#f5f3f0; padding:12px; border-bottom:1px solid var(--border)}
+    .message-from{font-weight:700; color:#333; margin-bottom:4px}
+    .message-to{color:#666; font-size:12px; margin-bottom:4px}
+    .message-date{color:#999; font-size:12px}
+    .message-body{padding:12px; white-space:pre-wrap; line-height:1.6; color:#333}
 
+    /* Loading overlay */
     .loading-overlay{
-      position:fixed; inset:0;
-      background: rgba(0,0,0,0.5);
-      display:none;
-      align-items:center;
-      justify-content:center;
-      z-index:2000;
+      position:fixed; inset:0; background:rgba(0,0,0,0.6);
+      display:none; align-items:center; justify-content:center; z-index:3000;
     }
     .loading-card{
-      background:#fff; padding:18px 22px; border-radius:10px; min-width:260px; max-width:420px; text-align:center;
-      box-shadow:0 8px 24px rgba(0,0,0,0.25);
+      background:#fff; border-radius:12px; padding:24px; width:92%; max-width:420px; text-align:center;
+      box-shadow:0 8px 32px rgba(0,0,0,0.3);
     }
     .spinner{
-      width:36px; height:36px; border:4px solid #f3f3f3; border-top:4px solid var(--accent); border-radius:50%;
-      margin: 0 auto 12px auto;
-      animation:spin 1s linear infinite;
+      width:40px; height:40px; border:4px solid #f3f3f3; border-top:4px solid #4285f4; border-radius:50%;
+      margin:0 auto 12px; animation:spin 1s linear infinite;
     }
-    .overlay-title{font-weight:700; color:#333; margin-bottom:6px;}
-    .overlay-msg{color:#666; font-size:13px;}
-    @keyframes spin {
-      0% {transform:rotate(0)} 100% {transform:rotate(360deg)}
-    }
-
-    .empty{
-      color:#666; font-style:italic; text-align:center; padding:24px;
-    }
-
-    .cat-pill{
-      display:inline-block;
-      padding:4px 8px;
-      border-radius:12px;
-      font-size:12px;
-      font-weight:500;
-      border:1px solid #e0e0e0;
-      background:#fff;
-    }
+    @keyframes spin{0%{transform:rotate(0)}100%{transform:rotate(360deg)}}
+    .ltitle{font-weight:700; margin:6px 0 2px}
+    .lsub{color:#666; font-size:14px}
+    .lnote{color:#777; font-size:12px; margin-top:6px}
   </style>
 </head>
 <body>
   <div class="header">
-    <div class="hdr-left">
-      <h1>Load More</h1>
-      <span id="countStat" class="stat"></span>
-    </div>
-    <div class="hdr-right">
-      <button id="cancelBtn" class="btn btn-secondary" title="Return to main page">Cancel</button>
-      <button id="saveChangesBtn" class="btn btn-secondary" title="Save approved items and return">Save Changes</button>
-      <button id="approveAllBtn" class="btn btn-primary" title="Approve all listed items to database">Approve All</button>
+    <h1>Load More</h1>
+    <div class="header-actions">
+      <button class="btn btn-secondary" id="cancelBtn" title="Back to main page">Cancel</button>
+      <button class="btn btn-secondary" id="saveChangesBtn" title="Save approved items and return">Save Changes</button>
+      <button class="btn" id="approveAllBtn" title="Approve all listed items to database">Approve All</button>
     </div>
   </div>
 
-  <div class="layout">
-    <aside class="pane-left">
-      <div class="left-top">
-        <div class="stat" id="leftTitle">Requested: <span id="requestedCount">0</span></div>
-        <div id="leftStatus" class="stat"></div>
-      </div>
-      <div id="list" class="list">
-        <div class="empty">Loading emails...</div>
-      </div>
-    </aside>
-
-    <section class="pane-right">
-      <div class="right-top">
-        <div id="detailTitle" class="title">Select an item</div>
-        <div id="detailMeta" style="display:flex; align-items:center; gap:8px;">
-          <span id="detailCategoryPill" class="cat-pill" style="display:none;"></span>
-          <button id="approveBtn" class="btn btn-primary" style="display:none; padding:8px 12px;">Approve</button>
+  <div class="main">
+    <main class="content" id="contentRoot">
+      <div id="listsContainer">
+        <div style="display:flex; align-items:center; justify-content:space-between;">
+          <div class="section-title">Inbox Emails</div>
+          <div class="small" id="statusStat" style="color:#5f6368;"></div>
         </div>
+        <div id="emailList"></div>
       </div>
-
-      <div id="emailNotesSection" style="padding:10px 16px; border-bottom:1px solid #e9ecef; background:#fff; display:none;">
-        <div style="font-weight:600; color:#333; margin-bottom:6px;">Email Notes</div>
-        <div id="emailNotesList" style="max-height:140px; overflow:auto; border:1px solid #e9ecef; border-radius:6px; padding:8px; background:#fff;">
-          <div class="empty">No notes yet.</div>
-        </div>
-        <div style="display:flex; gap:8px; align-items:flex-start; margin-top:8px;">
-          <textarea id="emailNotesInput" rows="2" placeholder="Add a note..." style="flex:1; padding:8px; border:1px solid #ddd; border-radius:6px; font-size:13px;"></textarea>
-          <button class="btn btn-secondary" id="emailNotesAddBtn">Add</button>
-        </div>
-      </div>
-
-      <div id="viewer" class="viewer">
-        <div class="empty">Nothing selected.</div>
-      </div>
-    </section>
+      <div id="threadPane" class="thread-view" style="display:none;"></div>
+    </main>
   </div>
 
-  <div id="overlay" class="loading-overlay">
+  <!-- Loading overlay -->
+  <div class="loading-overlay" id="loading">
     <div class="loading-card">
       <div class="spinner"></div>
-      <div id="ovTitle" class="overlay-title">Loading</div>
-      <div id="ovMsg" class="overlay-msg">Please wait...</div>
+      <div class="ltitle" id="loadingTitle">Loading</div>
+      <div class="lsub" id="loadingSub">Fetching and classifying…</div>
+      <div class="lnote">Progress displayed in terminal</div>
     </div>
   </div>
 
-<script>
-  // State
-  let loadItems = []; // [{id, subject, from, date, snippet, body, category, __predicted:true/false}]
-  let categories = []; // authoritative categories
-  let selectedId = '';
-  let countRequested = 0;
-  let existingIds = new Set(); // ids already in DB (unreplied + responses)
-  let existingSubjectKeys = new Set(); // normalized subjects already in DB (responses + unreplied)
-  // UI singleton for chip reason popover
-  let __chipReasonPopover = null;
+  <!-- Missing categories overlay -->
+  <div class="loading-overlay" id="missingOverlay" style="display:none;">
+    <div class="loading-card">
+      <div class="ltitle">Missing Categories</div>
+      <div class="lsub">Add a category for these emails before approving:</div>
+      <div id="missingList" style="text-align:left; max-height:240px; overflow:auto; margin-top:8px; font-size:13px; color:#333;"></div>
+      <button class="btn btn-secondary" id="missingCloseBtn" style="margin-top:12px;">Close</button>
+    </div>
+  </div>
 
-  // Utilities
-  function showOverlay(title, msg){
-    document.getElementById('ovTitle').textContent = title || 'Loading';
-    document.getElementById('ovMsg').textContent = msg || 'Please wait...';
-    document.getElementById('overlay').style.display = 'flex';
-  }
-  function hideOverlay(){
-    document.getElementById('overlay').style.display = 'none';
-  }
-  function escapeHtml(s){
-    return String(s ?? '')
-      .replace(/&/g,'&')
-      .replace(/</g,'<')
-      .replace(/>/g,'>')
-      .replace(/"/g,'"')
-      .replace(/'/g,'&#39;');
-  }
-  function fmtDate(s){
-    const d = new Date(s || Date.now());
-    if (Number.isNaN(+d)) return '';
-    const now = new Date();
-    const diff = (now - d) / 86400000;
-    if (diff < 1) return 'Today';
-    if (diff < 2) return 'Yesterday';
-    if (diff < 7) return `${Math.floor(diff)} days ago`;
-    return d.toLocaleDateString('en-US', {month:'short', day:'numeric'});
-  }
+  <script>
+    // State
+    let loadItems = []; // [{id, subject, from, date, snippet, body, category, __predicted, __classifierReason}]
+    let categories = []; // authoritative categories
+    let countRequested = 0;
 
-  function normSubject(s){
-    try{
-      return String(s || '').toLowerCase().replace(/^re:\s*/i,'').trim();
-    }catch(_){ return ''; }
-  }
-
-  function getQueryCount() {
-    const p = new URLSearchParams(window.location.search);
-    const raw = p.get('count');
-    if (!raw) return 0;
-    const n = parseInt(raw, 10);
-    if (!Number.isFinite(n)) return 0;
-    return Math.max(1, Math.min(50, n));
-  }
-
-  async function loadInitial(){
-    try{
-      countRequested = getQueryCount();
-      if (!countRequested) {
-        // Ask user if count missing
-        const v = prompt('How many emails would you like to load? (1-50)', '10') || '10';
-        const n = parseInt(v, 10);
-        countRequested = (Number.isFinite(n) ? Math.max(1, Math.min(50, n)) : 10);
-        const u = new URL(window.location.href);
-        u.searchParams.set('count', String(countRequested));
-        window.history.replaceState({}, '', u.toString());
-      }
-      document.getElementById('requestedCount').textContent = countRequested;
-
-      // Load auth categories
-      try {
-        const r = await fetch('/api/current-categories');
-        const d = await r.json();
-        categories = Array.isArray(d.categories) ? d.categories : [];
-      } catch(_){ categories = []; }
-
-      // Build existing id and subject/from pairs sets (unreplied + responses)
-      existingIds = new Set();
-      existingSubjectKeys = new Set();
-      try {
-        const r1 = await fetch('/api/unreplied-emails'); const d1 = await r1.json();
-        const r2 = await fetch('/api/response-emails'); const d2 = await r2.json();
-        const add = (arr) => {
-          (Array.isArray(arr) ? arr : []).forEach(e => {
-            if (e && e.id) existingIds.add(e.id);
-            const sk = normSubject(e && e.subject);
-            const fromLc = String((e && (e.originalFrom || e.from)) || '').toLowerCase();
-            if (sk) existingSubjectKeys.add(`${sk}|${fromLc}`);
-          });
-        };
-        add(d1.emails);
-        add(d2.emails);
-      } catch(_){}
-
-      // Fetch more emails (overfetch to allow dedup)
-      document.getElementById('leftStatus').textContent = 'Loading...';
-      showOverlay('Fetching Emails', 'Retrieving from Gmail inbox...');
-      let rawEmails = [];
-      try {
-        const overfetch = Math.min(countRequested * 3, 100);
-        const r = await fetch('/api/fetch-more-emails', {
-          method:'POST',
-          headers:{'Content-Type':'application/json'},
-          body: JSON.stringify({ maxResults: overfetch })
-        });
-        const d = await r.json();
-        if (r.status === 401 && d && d.needsAuth) {
-          hideOverlay();
-          document.getElementById('list').innerHTML = `
-            <div class="empty">
-              Gmail authentication required.<br/>
-              <button style="margin-top:8px;" class="btn btn-secondary" onclick="startAuth()">Authenticate</button>
-            </div>`;
-          return;
-        }
-        rawEmails = Array.isArray(d.emails) ? d.emails : [];
-      } catch (e) {
-        console.error(e);
-        hideOverlay();
-        document.getElementById('list').innerHTML = '<div class="empty">Failed to fetch emails.</div>';
-        return;
-      }
-
-      // Deduplicate against DB by id and by normalized subject/from; then take requested count
-      const uniq = [];
-      const seen = new Set();
-      const seenSubjPairs = new Set();
-      for (const e of rawEmails) {
-        if (!e || !e.id) continue;
-        const subjKey = normSubject(e.subject);
-        const fromLc = String(e.from || '').toLowerCase();
-        const pairKey = `${subjKey}|${fromLc}`;
-        if (existingIds.has(e.id)) continue; // skip already in DB by id
-        if (seen.has(e.id)) continue;
-        // skip if DB already contains same normalized subject/from pair
-        if (subjKey && existingSubjectKeys.has(pairKey)) continue;
-        // skip duplicates within this batch by subject/from too
-        if (subjKey && seenSubjPairs.has(pairKey)) continue;
-        seen.add(e.id);
-        if (subjKey) seenSubjPairs.add(pairKey);
-        uniq.push(e);
-        if (uniq.length >= countRequested) break;
-      }
-
-      // If not enough, accept remaining until we reach countRequested (best-effort) ignoring seen DB duplicates
-      // (Already handled via break; leave as-is)
-
-      loadItems = uniq.map(e => ({
-        id: e.id,
-        subject: e.subject || 'No Subject',
-        from: e.from || 'Unknown Sender',
-        date: e.date || new Date().toISOString(),
-        snippet: e.snippet || (e.body ? String(e.body).slice(0, 100) + (e.body.length > 100 ? '...' : '') : ''),
-        body: e.body || '',
-        category: 'Other',
-        categories: [], // additional categories (multi-category support)
-        __predicted: true
-      }));
-
-      // Update status and overlay; new classifier-based path first
-      // 1) Pre-train and suggest with the classifier (server logs predictions to terminal)
-      await runClassifierSuggestions(loadItems);
-
-      // 2) Use V3 single-pick results only (no multi-rule aggregation)
-      document.getElementById('leftStatus').textContent = 'Categorized';
-      renderList();
-      if (loadItems.length) selectItem(loadItems[0].id);
-      document.getElementById('countStat').textContent = loadItems.length ? `(${loadItems.length})` : '';
-      hideOverlay();
-    } catch (e) {
-      console.error('Load initial failed:', e);
-      hideOverlay();
-      document.getElementById('list').innerHTML = '<div class="empty">Failed to load emails.</div>';
+    // UI helpers
+    function showLoading(title, sub){
+      const el = document.getElementById('loading');
+      document.getElementById('loadingTitle').textContent = title || 'Loading';
+      document.getElementById('loadingSub').textContent = sub || 'Please wait…';
+      el.style.display = 'flex';
     }
-  }
+    function hideLoading(){ document.getElementById('loading').style.display = 'none'; }
 
-  function renderList(){
-    const host = document.getElementById('list');
-    if (!loadItems.length){
-      host.innerHTML = '<div class="empty">No items found.</div>';
-      return;
+    // Missing primary category popup
+    function showMissingOverlay(items){
+      try{
+        const overlay = document.getElementById('missingOverlay');
+        const list = document.getElementById('missingList');
+        if (!overlay || !list) { alert('Please add a category before approving.'); return; }
+        const rows = (items || []).map(it => {
+          const subj = esc(it.subject || 'No Subject');
+          const from = esc(it.from || 'Unknown Sender');
+          const date = esc(fmtDate(it.date));
+          return `<div style="padding:6px 0; border-bottom:1px solid #eee;">
+            <div style="font-weight:600; color:#333;">${subj}</div>
+            <div style="font-size:12px; color:#666;">From: ${from} • ${date}</div>
+          </div>`;
+        }).join('');
+        list.innerHTML = rows || '<div class="small" style="color:#666;">No items.</div>';
+        overlay.style.display = 'flex';
+      }catch(_){
+        alert('Please add a category before approving.');
+      }
     }
-    host.innerHTML = '';
-    loadItems.forEach((it) => {
-      const div = document.createElement('div');
-      div.className = 'item' + (selectedId===it.id ? ' active':'');
-      div.onclick = (ev) => {
-        // Ignore clicks/typing inside the Add Category input or its suggestions popover
-        if (
-          ev &&
-          ev.target &&
-          ev.target.classList &&
-          (ev.target.classList.contains('chip-input') ||
-            (ev.target.closest && ev.target.closest('.suggestions')))
-        ) {
-          return;
+    function hideMissingOverlay(){
+      const overlay = document.getElementById('missingOverlay');
+      if (overlay) overlay.style.display = 'none';
+    }
+    function fmtDate(iso){
+      try{
+        const d = new Date(iso);
+        const now = new Date();
+        const diff = (now - d) / (1000*60*60*24);
+        if (diff < 1) return 'Today';
+        if (diff < 2) return 'Yesterday';
+        return d.toLocaleDateString('en-US',{month:'short',day:'numeric'});
+      }catch(_){ return iso || ''; }
+    }
+    function esc(s){
+      return String(s || '')
+        .replace(/&/g,'&')
+        .replace(/</g,'<')
+        .replace(/>/g,'>')
+        .replace(/"/g,'"')
+        .replace(/'/g,'&#39;');
+    }
+
+    // Thread open (matches test-classifier behavior)
+    async function openThread(emailId, subject){
+      try{
+        const lists = document.getElementById('listsContainer');
+        const pane = document.getElementById('threadPane');
+        if (lists) lists.style.display = 'none';
+        if (pane){
+          const safeSubject = subject || 'Email Thread';
+          pane.style.display = 'block';
+          pane.innerHTML = `
+            <div class="thread-header">
+              <div class="thread-header-left">
+                <button class="back-thread-btn" onclick="backToLists()">← Back</button>
+                <div class="thread-title">${esc(safeSubject)}</div>
+              </div>
+            </div>
+            <div class="thread-body" id="threadBodyPane">
+              <div class="small">Loading thread...</div>
+            </div>
+          `;
         }
-        selectItem(it.id);
-      };
-
-      const actionsHtml = `
-        <div class="it-actions">
-          <button class="approve-btn" title="Approve to database" onclick="event.stopPropagation(); approveOne('${it.id}')">Approve</button>
-          <button class="hide-btn" title="Hide this item" onclick="event.stopPropagation(); hideOne('${it.id}')">Hide</button>
-          <button class="hide-btn" title="Save as Other" onclick="event.stopPropagation(); approveOther('${it.id}')">Other</button>
-        </div>
-      `;
-
-      // Build suggestions row inline with chips (handled in renderChipsEditorForItem)
-      const suggHtml = '';
-
-      div.innerHTML = `
-        <div class="it-body">
-          <div class="it-row">
-            <div class="it-subj" title="${escapeHtml(it.subject||'No Subject')}">${escapeHtml(it.subject||'No Subject')}</div>
-            ${actionsHtml}
+        const resp = await fetch('/api/gmail-thread-by-message/' + encodeURIComponent(emailId));
+        const data = await resp.json().catch(()=> ({}));
+        if (resp.ok && data && Array.isArray(data.messages)){
+          renderThreadInPane(subject, data.messages);
+        }else{
+          const bodyEl = document.getElementById('threadBodyPane');
+          if (bodyEl) bodyEl.innerHTML = '<div class="small">Failed to load thread.</div>';
+        }
+      }catch(_){
+        const bodyEl = document.getElementById('threadBodyPane');
+        if (bodyEl) bodyEl.innerHTML = '<div class="small">Error loading thread.</div>';
+      }
+    }
+    function backToLists(){
+      const pane = document.getElementById('threadPane');
+      const lists = document.getElementById('listsContainer');
+      if (pane){ pane.style.display = 'none'; pane.innerHTML = ''; }
+      if (lists){ lists.style.display = 'block'; }
+    }
+    function renderThreadInPane(subject, messages){
+      const bodyEl = document.getElementById('threadBodyPane');
+      if (!bodyEl) return;
+      bodyEl.innerHTML = '';
+      (messages || []).forEach(m=>{
+        const toList = Array.isArray(m.to) ? m.to.join(', ') : (m.to || '');
+        const div = document.createElement('div');
+        div.className = 'thread-message ' + (m.isResponse ? 'response' : 'original');
+        div.innerHTML = `
+          <div class="message-header">
+            <div class="message-from">${esc(m.from || '')}</div>
+            <div class="message-to">To: ${esc(toList)}</div>
+            <div class="message-date">${new Date(m.date).toLocaleString()}</div>
           </div>
-          <div class="it-meta">${escapeHtml(it.from||'Unknown Sender')} • ${fmtDate(it.date)}</div>
-          <div class="chips" data-item="${it.id}"></div>
-          ${suggHtml}
-        </div>
-      `;
-
-      const chipsHost = div.querySelector('.chips');
-      renderChipsEditorForItem(it.id, chipsHost);
-
-      host.appendChild(div);
-    });
-  }
-
-  function selectItem(id){
-    closeChipReasonPopover();
-    selectedId = id;
-    renderList();
-    renderDetail();
-  }
-
-  async function renderDetail(){
-    const it = loadItems.find(x => x.id === selectedId);
-    const titleEl = document.getElementById('detailTitle');
-    const metaPill = document.getElementById('detailCategoryPill');
-    const approveBtn = document.getElementById('approveBtn');
-    const notesSection = document.getElementById('emailNotesSection');
-
-    if (!it){
-      titleEl.textContent = 'Select an item';
-      metaPill.style.display = 'none';
-      approveBtn.style.display = 'none';
-      notesSection.style.display = 'none';
-      document.getElementById('viewer').innerHTML = '<div class="empty">Nothing selected.</div>';
-      return;
-    }
-
-    titleEl.textContent = it.subject || 'No Subject';
-    const hasPrimary = !!(it.category && String(it.category).trim());
-    if (hasPrimary) {
-      metaPill.textContent = it.category;
-      metaPill.style.display = 'inline-block';
-    } else {
-      metaPill.style.display = 'none';
-    }
-    approveBtn.style.display = 'inline-block';
-    approveBtn.onclick = () => approveOne(it.id);
-
-    // Load notes
-    notesSection.style.display = 'block';
-    await loadEmailNotes(selectedId);
-
-    // Try to load full thread so messages render in separate boxes
-    const viewer = document.getElementById('viewer');
-    viewer.innerHTML = '<div class="empty">Loading...</div>';
-    let rendered = false;
-    try {
-      if (it.id) {
-        const r = await fetch(`/api/gmail-thread-by-message/${encodeURIComponent(it.id)}`);
-        const d = await r.json();
-        if (r.ok && d && d.success && Array.isArray(d.messages) && d.messages.length) {
-          viewer.innerHTML = '';
-          d.messages.forEach(m => {
-            const card = document.createElement('div');
-            card.className = 'message' + (m.isResponse ? ' response' : '');
-            const header = document.createElement('div');
-            header.className = 'msg-h';
-            header.innerHTML = `<strong>${escapeHtml(m.from||'')}</strong> • ${new Date(m.date||Date.now()).toLocaleString()}<br/>To: ${escapeHtml(Array.isArray(m.to)? m.to.join(', '):(m.to||''))}`;
-            const body = document.createElement('div');
-            body.className = 'msg-b';
-            body.textContent = m.body || '';
-            card.appendChild(header);
-            card.appendChild(body);
-            viewer.appendChild(card);
-          });
-          rendered = true;
-        }
-      }
-    } catch(_) {}
-
-    if (!rendered) {
-      const text = it.body || it.snippet || 'No content available';
-      const card = document.createElement('div');
-      card.className = 'message';
-      const header = document.createElement('div');
-      header.className = 'msg-h';
-      header.innerHTML = `<strong>${escapeHtml(it.from||'')}</strong> • ${new Date(it.date||Date.now()).toLocaleString()}`;
-      const body = document.createElement('div');
-      body.className = 'msg-b';
-      body.textContent = text || '';
-      card.appendChild(header);
-      card.appendChild(body);
-      viewer.innerHTML = '';
-      viewer.appendChild(card);
-    }
-  }
-
-  // Category chips editor (single category primary with suggested highlight)
-  function renderChipsEditorForItem(id, host){
-    host.innerHTML = '';
-    const it = loadItems.find(x => x.id === id);
-    if (!it) return;
-    // Normalize suggestions and auto-promote primary (Plan B1) when predicted and non-Other suggestions exist
-    const suggs = normalizeSuggestionsList(it.suggestedCategories || []);
-    if (String(it.category || 'Other').trim().toLowerCase() === 'other' && it.__predicted === true) {
-      const firstNonOther = suggs.find(c => String(c || '').trim().toLowerCase() !== 'other');
-      if (firstNonOther) {
-        it.category = String(firstNonOther).trim();
-      }
-    }
-    const primaryName = (it.category || '').trim();
-    if (primaryName) {
-      const chip = document.createElement('span');
-      chip.className = 'chip' + (it.__predicted ? ' predicted' : '');
-      chip.innerHTML = `<span>${escapeHtml(primaryName)}</span> <span class="x" title="Remove category">×</span>`;
-      // inline reason next to primary (no popover)
-      const __reason = String(it.__classifierReason || '').trim();
-      chip.querySelector('.x').onclick = (ev) => {
-        ev.stopPropagation();
-        // removing primary allows empty; user can add their own
-        it.category = '';
-        it.__predicted = false;
-        refreshItemUI(id);
-      };
-      host.appendChild(chip);
-      if (__reason) {
-        const rs = document.createElement('span');
-        rs.className = 'small';
-        rs.style.marginLeft = '6px';
-        rs.textContent = __reason;
-        host.appendChild(rs);
-      }
-    }
-
-
-
-    // input + suggestions (choose from categories)
-    const wrapper = document.createElement('div');
-    wrapper.style.position = 'relative';
-    wrapper.style.flexBasis = '100%';
-    wrapper.style.marginTop = '6px';
-    const input = document.createElement('input');
-    input.className = 'chip-input';
-    input.setAttribute('placeholder', 'Add Category…');
-    wrapper.appendChild(input);
-    const sugg = document.createElement('div');
-    sugg.className = 'suggestions';
-    wrapper.appendChild(sugg);
-
-    let last = '';
-    let options = [];
-    let activeIndex = -1;
-
-    function renderOptions() {
-      if (!options.length) {
-        sugg.style.display = 'none';
-        sugg.innerHTML = '';
-        return;
-      }
-      sugg.innerHTML = options.map((o, i) => `<div class="opt${i===activeIndex ? ' active' : ''}">${escapeHtml(o)}</div>`).join('');
-      positionSuggestionsUnder(input, sugg);
-      sugg.style.display = 'block';
-      Array.from(sugg.querySelectorAll('.opt')).forEach((el, i) => {
-        el.onmouseenter = () => { activeIndex = i; updateActive(); };
-        el.onclick = (ev) => {
-          ev.stopPropagation();
-          chooseOption(options[i]);
-        };
+          <div class="message-body">${esc(m.body || '')}</div>
+        `;
+        bodyEl.appendChild(div);
       });
     }
 
-    function updateActive() {
-      const nodes = sugg.querySelectorAll('.opt');
-      nodes.forEach((el, i) => {
-        if (i === activeIndex) el.classList.add('active'); else el.classList.remove('active');
-      });
-      const node = nodes[activeIndex];
-      if (node && typeof node.scrollIntoView === 'function') {
-        node.scrollIntoView({ block: 'nearest' });
-      }
-    }
-
-    function chooseOption(name) {
+    function tagPillHTML(name){
       const n = String(name || '').trim();
-      if (!n) return;
-      addExtraCategory(id, n);
-      input.value = '';
-      options = [];
-      activeIndex = -1;
-      sugg.style.display = 'none';
-      closeChipReasonPopover();
+      if (!n) return '';
+      return `<span class="tag-pill" data-tag="${esc(n)}">${esc(n)}</span>`;
     }
 
-    input.addEventListener('input', () => {
-      const v = (input.value || '').trim();
-      if (v === last) return;
-      last = v;
-      if (!v) {
-        options = [];
-        activeIndex = -1;
-        sugg.style.display = 'none';
-        sugg.innerHTML = '';
-        return;
-      }
-      const next = (categories || [])
-        .filter(c => c.toLowerCase().includes(v.toLowerCase()))
-        .slice(0, 8);
-      options = next;
-      activeIndex = -1;
-      renderOptions();
-    });
-
-    input.addEventListener('keydown', async (ev) => {
-      if (ev.key === 'ArrowDown' && options.length) {
-        ev.preventDefault();
-        activeIndex = (activeIndex + 1) % options.length;
-        updateActive();
-      } else if (ev.key === 'ArrowUp' && options.length) {
-        ev.preventDefault();
-        activeIndex = (activeIndex <= 0 ? options.length - 1 : activeIndex - 1);
-        updateActive();
-      } else if (ev.key === 'Enter') {
-        ev.preventDefault();
-        if (options.length && activeIndex >= 0) {
-          chooseOption(options[activeIndex]);
-        } else {
-          const v = (input.value || '').trim();
-          if (v) chooseOption(v);
-        }
-      } else if (ev.key === 'Escape') {
-        sugg.style.display = 'none';
-        options = [];
-        activeIndex = -1;
-      }
-    });
-
-    host.appendChild(wrapper);
-
-    // render additional categories (extras) — moved below suggested tag and Add Category input
-    if (!Array.isArray(it.categories)) it.categories = [];
-    const primaryLc = (it.category || '').trim().toLowerCase();
-    it.categories.forEach(extra => {
-      if (String(extra || '').trim().toLowerCase() === primaryLc) return;
-      const ec = document.createElement('span');
-      ec.className = 'chip';
-      ec.innerHTML = `<span>${escapeHtml(extra)}</span> <span class="x" title="Remove category">×</span>`;
-      ec.querySelector('.x').onclick = (ev) => {
-        ev.stopPropagation();
-        it.categories = it.categories.filter(c => c.toLowerCase() !== String(extra).toLowerCase());
-        refreshItemUI(id);
-      };
-      host.appendChild(ec);
-    });
-  }
-
-  function positionSuggestionsUnder(input, sugg){
-    try{
-      const top = input.offsetTop + input.offsetHeight + 4;
-      const left = input.offsetLeft;
-      sugg.style.top = top + 'px';
-      sugg.style.left = left + 'px';
-      sugg.style.minWidth = input.offsetWidth + 'px';
-    }catch(_){}
-  }
-
-  // Reason popover helpers
-  function ensureChipReasonPopover(){
-    if (__chipReasonPopover && document.body.contains(__chipReasonPopover)) return __chipReasonPopover;
-    const el = document.createElement('div');
-    el.id = 'chipReasonPopover';
-    el.className = 'chip-reason-popover';
-    el.style.display = 'none';
-    document.body.appendChild(el);
-    __chipReasonPopover = el;
-    return el;
-  }
-  function closeChipReasonPopover(){
-    if (__chipReasonPopover) {
-      __chipReasonPopover.style.display = 'none';
-      __chipReasonPopover.innerHTML = '';
+    function positionSuggestionsUnder(input, sugg){
+      try{
+        const top = input.offsetTop + input.offsetHeight + 4;
+        const left = input.offsetLeft;
+        sugg.style.top = top + 'px';
+        sugg.style.left = left + 'px';
+        sugg.style.minWidth = input.offsetWidth + 'px';
+      }catch(_){}
     }
-    // Remove any document-level listeners installed by openSuggestionReason
-    document.removeEventListener('click', __onChipReasonDocClick, true);
-    window.removeEventListener('scroll', __onChipReasonScroll, true);
-    window.removeEventListener('resize', __onChipReasonScroll, true);
-  }
-  function __onChipReasonDocClick(ev){
-    try{
-      const pop = __chipReasonPopover;
-      if (!pop) return;
-      if (pop.style.display === 'none') return;
-      const t = ev.target;
-      if (t === pop || (t.closest && t.closest('#chipReasonPopover'))) return;
-      // If clicking on any predicted chip label, ignore here; their handler manages toggling
-      if (t.closest && t.closest('.chip.predicted')) return;
-      closeChipReasonPopover();
-    }catch(_){}
-  }
-  function __onChipReasonScroll(){
-    // On scroll/resize, just close to avoid stale positioning
-    closeChipReasonPopover();
-  }
-  function getSuggestionReasonForItem(it, name){
-    try{
-      if (!it || !name) return '';
-      const map = (it.suggestedReasons && typeof it.suggestedReasons === 'object') ? it.suggestedReasons : {};
-      // Prefer exact key first
-      if (Object.prototype.hasOwnProperty.call(map, name)) {
-        const v = map[name];
-        if (Array.isArray(v)) {
-          // Deduplicate and join
-          const seen = new Set();
-          const uniq = v.map(x => String(x || '').trim()).filter(s => {
-            const k = s.toLowerCase();
-            if (!k) return false;
-            if (seen.has(k)) return false;
-            seen.add(k);
-            return true;
-          });
-          return uniq.join(' • ');
-        }
-        return String(v || '');
-      }
-      // Case-insensitive fallback
-      const nl = String(name || '').toLowerCase();
-      for (const k of Object.keys(map)) {
-        if (String(k || '').toLowerCase() === nl) {
-          const v = map[k];
-          if (Array.isArray(v)) {
-            const seen = new Set();
-            const uniq = v.map(x => String(x || '').trim()).filter(s => {
-              const kk = s.toLowerCase();
-              if (!kk) return false;
-              if (seen.has(kk)) return false;
-              seen.add(kk);
-              return true;
-            });
-            return uniq.join(' • ');
-          }
-          return String(v || '');
-        }
-      }
-      return '';
-    }catch(_){ return ''; }
-  }
-  function openSuggestionReason(emailId, catName, anchorEl){
-    try{
-      const it = loadItems.find(x => String(x.id) === String(emailId));
-      const reasonRaw = getSuggestionReasonForItem(it, catName);
-      const reason = reasonRaw ? reasonRaw : `Suggested by heuristic/model signals for “${catName}”.`;
 
-      const pop = ensureChipReasonPopover();
-      // Build content
-      pop.innerHTML = `
-        <div class="reason">${escapeHtml(reason)}</div>
-        <div class="actions">
-          <button class="btn btn-secondary" id="chipReasonCloseBtn">Close</button>
-        </div>
-      `;
-      // Wire actions
-      const closeBtn = pop.querySelector('#chipReasonCloseBtn');
-      if (closeBtn) {
-        closeBtn.onclick = (ev) => { ev.stopPropagation(); closeChipReasonPopover(); };
-      }
-
-      // Position near the chip
-      const r = anchorEl.getBoundingClientRect();
-      const scrollX = window.scrollX || document.documentElement.scrollLeft || 0;
-      const scrollY = window.scrollY || document.documentElement.scrollTop || 0;
-      pop.style.display = 'block';
-      // Default below
-      let top = r.bottom + 8 + scrollY;
-      let left = r.left + scrollX;
-      // Ensure within viewport width
-      const popW = Math.min(340, Math.max(220, r.width + 80));
-      pop.style.width = popW + 'px';
-      const vw = (window.innerWidth || document.documentElement.clientWidth || 900);
-      if (left + popW + 12 > vw + scrollX) {
-        left = Math.max(8 + scrollX, vw + scrollX - popW - 12);
-      }
-      // If not enough space below, show above
-      const vh = (window.innerHeight || document.documentElement.clientHeight || 600);
-      const popH = 110; // approx; fine for one sentence
-      if (r.bottom + 8 + popH > vh) {
-        top = r.top - popH - 8 + scrollY;
-      }
-      pop.style.top = `${top}px`;
-      pop.style.left = `${left}px`;
-
-      // Install outside-click and scroll listeners
-      document.addEventListener('click', __onChipReasonDocClick, true);
-      window.addEventListener('scroll', __onChipReasonScroll, true);
-      window.addEventListener('resize', __onChipReasonScroll, true);
-    } catch(_){}
-  }
-
-  async function commitCategory(id, name){
-    const it = loadItems.find(x => x.id === id);
-    if (!it) return;
-    const n = (name || '').trim();
-    if (!n) return;
-
-    // Add unseen category to master list
-    const exists = (categories || []).some(c => c.toLowerCase() === n.toLowerCase());
-    if (!exists) {
+    async function addInlineNote(emailId){
       try {
-        const res = await fetch('/api/categories/add', {
+        const ta = document.getElementById(`note-${emailId}`);
+        if (!ta) return;
+        const text = (ta.value || '').trim();
+        if (!text) return;
+        const r = await fetch(`/api/email-notes/${encodeURIComponent(emailId)}`, {
           method:'POST', headers:{'Content-Type':'application/json'},
-          body: JSON.stringify({ name: n })
+          body: JSON.stringify({ text })
         });
-        const data = await res.json();
-        if (res.ok && data && data.success){
-          categories = Array.isArray(data.categories) ? data.categories : categories;
+        const d = await r.json().catch(()=> ({}));
+        const statusEl = document.getElementById(`note-status-${emailId}`);
+        if (r.ok && d && d.success){
+          ta.value = '';
+          if (statusEl){ statusEl.textContent = 'Saved'; setTimeout(()=> statusEl.textContent = '', 1500); }
+          loadNotesList(emailId);
+        } else {
+          if (statusEl){ statusEl.textContent = 'Failed to save'; setTimeout(()=> statusEl.textContent = '', 1500); }
         }
-      } catch (e) {
-        console.error('Failed to add category', e);
-      }
+      } catch(_){}
     }
 
-    it.category = n;
-    it.__predicted = false; // user changed => no longer predicted
-    refreshItemUI(id);
-  }
+    // Notes list loader and delete
+    async function loadNotesList(emailId){
+      try {
+        const listEl = document.getElementById(`notes-list-${emailId}`);
+        if (!listEl) return;
+        listEl.innerHTML = '';
+        const r = await fetch(`/api/email-notes/${encodeURIComponent(emailId)}`);
+        const d = await r.json().catch(()=> ({}));
+        const notes = Array.isArray(d.notes) ? d.notes : [];
+        if (!notes.length) {
+          listEl.innerHTML = '<div class="small" style="color:#6d4c41;">No notes yet.</div>';
+          return;
+        }
+        listEl.innerHTML = notes.map(n => {
+          const ts = new Date(n.updatedAt || n.createdAt || Date.now());
+          const when = isNaN(ts) ? '' : ts.toLocaleString();
+          const safe = esc(n.text || '');
+          return `
+            <div style="display:flex; align-items:flex-start; gap:8px;">
+              <div style="flex:1; border:1px solid #e9ecef; border-radius:6px; padding:8px; background:#fff;">
+                <div style="font-size:12px; color:#666; margin-bottom:4px;">${when}</div>
+                <div style="white-space:pre-wrap; font-size:13px; color:#333;">${safe}</div>
+              </div>
+              <button class="sticky-btn" title="Delete" onclick="deleteNote('${emailId}','${n.id}')">Delete</button>
+            </div>
+          `;
+        }).join('');
+      } catch(_){}
+    }
+    async function deleteNote(emailId, noteId){
+      try{
+        await fetch(`/api/email-notes/${encodeURIComponent(emailId)}/${encodeURIComponent(noteId)}`, {
+          method:'DELETE'
+        });
+        loadNotesList(emailId);
+      }catch(_){}
+    }
 
-  // Run classifier-based suggestions (pre-train on labeled emails, then predict)
-  async function runClassifierSuggestions(items){
-    try{
-      if (!Array.isArray(items) || !items.length) return;
-
-      // Show two-step status in the overlay (consistent with v3 eval)
-      showOverlay('Classifier V3', 'Batching emails and computing contenders/picks…');
-      await new Promise(r => setTimeout(r, 150)); // brief tick so UI paints
-
-      // Switch to suggestion status
-      document.getElementById('ovTitle').textContent = 'Classifier V3 Suggestions';
-      document.getElementById('ovMsg').textContent = 'Suggesting categories using the V3 classifier…';
-
-      const minimal = items.map(e => ({
-        id: String(e.id || ''),
-        subject: String(e.subject || ''),
-        body: typeof e.body === 'string' ? e.body : (e.snippet || ''),
-        from: String(e.from || '')
-      })).filter(x => x.id);
-
-      // Use EXACT same classifier as evaluate-classifier-v3
-      const resp = await fetch('/api/classifier-v3/suggest-batch', {
-        method: 'POST',
-        headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({ emails: minimal, maxPerCat: 30 })
-      });
-      const data = await resp.json().catch(()=> ({}));
-      if (!resp.ok || !data || data.success !== true || !data.results) {
-        return; // silent no-op if unavailable
+    function renderEmailList(){
+      const host = document.getElementById('emailList');
+      host.innerHTML = '';
+      if (!loadItems.length){
+        host.innerHTML = '<div class="small" style="color:#777;">No emails.</div>'; return;
       }
+      loadItems.forEach(e=>{
+        const subject = esc(e.subject || 'No Subject');
+        const from = esc(e.from || 'Unknown Sender');
+        const date = fmtDate(e.date);
+        const snippet = esc(e.snippet || '');
+        const pill = tagPillHTML(e.category);
+        const reason = esc(String(e.__classifierReason || '').trim());
 
-      const results = data.results || {};
-      items.forEach(it => {
-        const r = results[String(it.id)] || null;
-        if (!r) return;
+        const card = document.createElement('div');
+        card.className = 'email-card';
+        const extrasHtml = Array.isArray(e.categories) ? e.categories.map((name, idx) => {
+          const safe = esc(name || '');
+          return `<span class="sug-item"><span class="tag-pill tag-extra" data-extra="${idx}">${safe}<span class="tag-x" data-rm-extra="${idx}" title="Remove">×</span></span></span>`;
+        }).join(' ') : '';
+        card.innerHTML = `
+          <div class="email-header">
+            <div class="email-from">${from}</div>
+            <div style="display:flex; align-items:center; gap:8px;">
+              <div class="email-date">${date}</div>
+              <div class="actions" onclick="event.stopPropagation();">
+                <button class="act-btn primary" onclick="approveOne('${e.id}')">Approve</button>
+                <button class="act-btn" onclick="hideOne('${e.id}')">Hide</button>
+                <button class="act-btn" onclick="approveOther('${e.id}')">Other</button>
+              </div>
+            </div>
+          </div>
+          <div class="email-subject">${subject}</div>
+          <div class="email-snippet">${snippet}</div>
 
-        // Initialize structures
-        if (!Array.isArray(it.suggestedCategories)) it.suggestedCategories = [];
-        if (!it.suggestedReasons || typeof it.suggestedReasons !== 'object') it.suggestedReasons = {};
+          <div class="row">
+            <span class="row-title">Suggested:</span>
+            <div class="sug-row" id="sug-${e.id}">
+              <span class="sug-item">
+                ${e.category ? `<span class="tag-pill" data-tag="${esc(e.category)}">${esc(e.category)}<span class="tag-x" id="rm-sug-${e.id}" title="Remove">×</span></span>` : ''}
+                ${reason ? `<span class="sug-reason">${reason}</span>` : ''}
+              </span>
+            </div>
+          </div>
 
-        // Per V3: primary suggestion derived from contenders/pick with fallbacks on server.
-        // The API already returns "suggestion" which encodes the V3 decision logic.
-        const suggestion = String(r.suggestion || '').trim();
-        const contenders = Array.isArray(r.contenders) ? r.contenders.map(c => String(c || '').trim()).filter(Boolean) : [];
-        const rationales = (r.rationales && typeof r.rationales === 'object') ? r.rationales : {};
+          <div class="row chips-row" style="position:relative;">
+            <div class="sug-row" id="extras-${e.id}">
+              ${extrasHtml}
+              <input class="chip-input" id="addcat-${e.id}" placeholder="Add Category…" onclick="event.stopPropagation();" />
+              <div class="suggestions" id="sugpop-${e.id}"></div>
+            </div>
+          </div>
 
-        // Build list: suggestion first, then remaining contenders (unique, preserve order)
-        const merged = [];
-        const pushUnique = (name) => {
+          <div class="sticky-note" onclick="event.stopPropagation();">
+            <div style="font-weight:600; color:#5d4037; margin-bottom:6px;">Notes</div>
+            <div id="notes-list-${e.id}" class="sticky-row" style="width:100%; flex-direction:column; gap:6px;"></div>
+            <div class="sticky-row">
+              <textarea id="note-${e.id}" rows="2" class="sticky-text" placeholder="Add a note..."></textarea>
+              <button class="sticky-btn" onclick="addInlineNote('${e.id}')">Add</button>
+              <div id="note-status-${e.id}" class="sticky-status"></div>
+            </div>
+          </div>
+
+        `;
+        // Open thread on card click
+        card.addEventListener('click', ()=> openThread(e.id, e.subject || 'Email Thread'));
+
+        // Wire Add Category autocomplete
+        const input = card.querySelector(`#addcat-${e.id}`);
+        const sugg = card.querySelector(`#sugpop-${e.id}`);
+        let options = []; let activeIndex = -1; let last = '';
+        function renderOptions(){
+          if (!options.length){ sugg.style.display='none'; sugg.innerHTML=''; return; }
+          sugg.innerHTML = options.map((o,i)=>`<div class="opt${i===activeIndex?' active':''}">${esc(o)}</div>`).join('');
+          positionSuggestionsUnder(input, sugg);
+          sugg.style.display='block';
+          Array.from(sugg.querySelectorAll('.opt')).forEach((el,i)=>{
+            el.onmouseenter = ()=>{ activeIndex=i; updateActive(); };
+            el.onclick = (ev)=>{ ev.stopPropagation(); chooseOption(options[i]); };
+          });
+        }
+        function updateActive(){
+          const nodes = sugg.querySelectorAll('.opt');
+          nodes.forEach((el,i)=>{ if(i===activeIndex) el.classList.add('active'); else el.classList.remove('active'); });
+          const node = nodes[activeIndex]; if (node && node.scrollIntoView) node.scrollIntoView({block:'nearest'});
+        }
+        function chooseOption(name){
           const n = String(name || '').trim();
           if (!n) return;
-          const k = n.toLowerCase();
-          if (!merged.some(x => String(x || '').trim().toLowerCase() === k)) {
-            merged.push(n);
-          }
-        };
-        if (suggestion) pushUnique(suggestion);
-        contenders.forEach(pushUnique);
-
-        // Merge with any existing suggestions, but keep V3 suggestions first
-        const prev = Array.isArray(it.suggestedCategories) ? it.suggestedCategories : [];
-        prev.forEach(pushUnique);
-
-        // Normalize: drop "Other" when non-Other exists; keep ["Other"] if that's the only entry
-        const finalList = normalizeSuggestionsList(merged);
-
-        it.suggestedCategories = finalList;
-
-        // Store reasons: use rationales map where available
-        try {
-          const reasonForSuggestion =
-            (suggestion && rationales[suggestion]) ||
-            (suggestion ? `Classifier V3 pick for “${suggestion}”.` : '');
-          if (suggestion) {
-            const cur = it.suggestedReasons[suggestion];
-            if (Array.isArray(cur)) {
-              if (reasonForSuggestion && !cur.some(rtxt => String(rtxt || '').trim().toLowerCase() === reasonForSuggestion.toLowerCase())) {
-                cur.push(reasonForSuggestion);
-              }
-              it.suggestedReasons[suggestion] = cur;
-            } else if (typeof cur === 'string' && cur.trim()) {
-              if (reasonForSuggestion && cur.trim().toLowerCase() !== reasonForSuggestion.toLowerCase()) {
-                it.suggestedReasons[suggestion] = [cur, reasonForSuggestion];
-              }
-            } else if (reasonForSuggestion) {
-              it.suggestedReasons[suggestion] = reasonForSuggestion;
-            }
-          }
-          // Add reasons for other contenders if present
-          Object.keys(rationales).forEach(cat => {
-            const txt = rationales[cat];
-            if (!txt) return;
-            const existing = it.suggestedReasons[cat];
-            if (Array.isArray(existing)) {
-              if (!existing.some(rtxt => String(rtxt || '').trim().toLowerCase() === String(txt).trim().toLowerCase())) {
-                existing.push(txt);
-              }
-              it.suggestedReasons[cat] = existing;
-            } else if (typeof existing === 'string' && existing.trim()) {
-              if (existing.trim().toLowerCase() !== String(txt).trim().toLowerCase()) {
-                it.suggestedReasons[cat] = [existing, txt];
-              }
-            } else {
-              it.suggestedReasons[cat] = txt;
-            }
-          });
-        } catch(_) {}
-
-        // Persist pick for downstream ordering safeguards
-        try {
-          it.__classifierPick = suggestion || (finalList[0] || '');
-          it.__classifierReason =
-            (suggestion && (rationales[suggestion] || 'Classifier V3 pick.')) ||
-            (finalList[0] ? (it.suggestedReasons[finalList[0]] || 'Classifier V3 pick.') : '');
-          // Enforce single-pick behavior (align with Test Classifier): set primary to V3 pick and clear multi-suggestions
-          const finalPick = (suggestion || finalList[0] || 'Other');
-          it.category = String(finalPick || 'Other').trim();
-          it.__predicted = true;
-          it.suggestedCategories = [];
-        } catch(_) {}
-      });
-    } catch(_){
-      // ignore classifier errors and proceed with other suggestion paths
-    }
-  }
-
-  // Suggestions aggregator for Load More items (subject/body similarity + others)
-  // Add a new extra category (keeps primary unchanged)
-  async function addExtraCategory(id, name){
-    const it = loadItems.find(x => x.id === id);
-    if (!it) return;
-    if (!Array.isArray(it.categories)) it.categories = [];
-    const n = (name || '').trim();
-    if (!n) return;
-
-    // Add unseen category to master list
-    const exists = (categories || []).some(c => c.toLowerCase() === n.toLowerCase());
-    if (!exists) {
-      try {
-        const res = await fetch('/api/categories/add', {
-          method:'POST', headers:{'Content-Type':'application/json'},
-          body: JSON.stringify({ name: n })
+          if (!Array.isArray(e.categories)) e.categories = [];
+          const exists = e.categories.some(c => String(c).toLowerCase() === n.toLowerCase());
+          if (!exists) e.categories.push(n);
+          input.value=''; options=[]; activeIndex=-1; sugg.style.display='none';
+          renderEmailList();
+        }
+        input.addEventListener('input', ()=>{
+          const v = (input.value||'').trim();
+          if (v===last){ return; } last=v;
+          if (!v){ options=[]; activeIndex=-1; sugg.style.display='none'; sugg.innerHTML=''; return; }
+          options = (categories||[]).filter(c => c.toLowerCase().includes(v.toLowerCase())).slice(0,8);
+          activeIndex=-1; renderOptions();
         });
-        const data = await res.json();
-        if (res.ok && data && data.success){
-          categories = Array.isArray(data.categories) ? data.categories : categories;
-        }
-      } catch (e) { console.error('Failed to add category', e); }
-    }
-
-    // Avoid duplicates (case-insensitive)
-    if (!it.categories.some(c => String(c).toLowerCase() === n.toLowerCase())) {
-      it.categories.push(n);
-      it.__predicted = false;
-      refreshItemUI(id);
-    }
-  }
-
-  async function computeLoadMoreCategorySuggestions(items){
-    try{
-      if (!Array.isArray(items) || !items.length) return;
-      const minimal = items.map(e => ({
-        id: String(e.id || ''),
-        subject: String(e.subject || ''),
-        body: typeof e.body === 'string' ? e.body : (e.snippet || ''),
-        from: String(e.from || '')
-      })).filter(x => x.id);
-      // By default, run fallback aggregation on all items; this may be narrowed after "all" stage
-      let targets = minimal;
-
-      // Try unified server-side "all" stage first. This runs the 5-step pipeline,
-      // excludes "Other" from consideration, and logs results per email on the server.
-      try {
-        const resp = await fetch('/api/suggest-categories', {
-          method:'POST',
-          headers:{'Content-Type':'application/json'},
-          body: JSON.stringify({ emails: minimal, stage: 'all' })
+        input.addEventListener('keydown', (ev)=>{
+          if (ev.key==='ArrowDown' && options.length){ ev.preventDefault(); activeIndex=(activeIndex+1)%options.length; updateActive(); }
+          else if (ev.key==='ArrowUp' && options.length){ ev.preventDefault(); activeIndex=(activeIndex<=0?options.length-1:activeIndex-1); updateActive(); }
+          else if (ev.key==='Enter'){ ev.preventDefault(); if (options.length && activeIndex>=0) chooseOption(options[activeIndex]); else if (input.value.trim()) chooseOption(input.value.trim()); }
+          else if (ev.key==='Escape'){ sugg.style.display='none'; options=[]; activeIndex=-1; }
         });
-        const data = await resp.json().catch(()=>({}));
-        if (resp.ok && data && data.success === true && data.choices) {
-          const reasonsById = (data.reasons && typeof data.reasons === 'object') ? data.reasons : {};
-          Object.keys(data.choices || {}).forEach(id => {
-            const raw = Array.isArray(data.choices[id]) ? data.choices[id] : [];
-            // Deduplicate while preserving order
-            const seen = new Set();
-            const unique = raw.filter(c => {
-              const s = String(c || '').trim();
-              if (!s) return false;
-              const key = s.toLowerCase();
-              if (seen.has(key)) return false;
-              seen.add(key);
-              return true;
-            });
-            // If any non-"Other" exists, drop "Other" entirely from suggestions
-            const nonOther = unique.filter(c => String(c).toLowerCase() !== 'other');
-            const finalList = nonOther.length ? nonOther : (unique.every(c => String(c).toLowerCase() === 'other') ? ['Other'] : []);
-            const it = items.find(e => String(e.id) === String(id));
-            if (it) {
-              const prevList = Array.isArray(it.suggestedCategories) ? it.suggestedCategories : [];
-              // Merge preserving order; keep any prior suggestions (e.g., classifier) first
-              const merged = [...prevList];
-              (finalList || []).forEach(c => {
-                const lc = String(c || '').trim().toLowerCase();
-                if (!lc) return;
-                if (!merged.some(x => String(x || '').trim().toLowerCase() === lc)) {
-                  merged.push(String(c || '').trim());
-                }
-              });
-              it.suggestedCategories = merged;
 
-              // Deep-merge reasons so multiple sources show up together
-              const prevReasons = (it.suggestedReasons && typeof it.suggestedReasons === 'object') ? it.suggestedReasons : {};
-              const rr = (reasonsById[id] && typeof reasonsById[id] === 'object') ? reasonsById[id] : {};
-              const mergedReasons = { ...prevReasons };
-              Object.keys(rr).forEach(catKey => {
-                const incoming = rr[catKey];
-                const incomingList = Array.isArray(incoming) ? incoming : [incoming];
-                const exist = mergedReasons[catKey];
-                const existList = Array.isArray(exist) ? exist : (exist ? [exist] : []);
-                const out = [];
-                const seen = new Set();
-                [...existList, ...incomingList].forEach(txt => {
-                  const s = String(txt || '').trim();
-                  if (!s) return;
-                  const k = s.toLowerCase();
-                  if (seen.has(k)) return;
-                  seen.add(k);
-                  out.push(s);
-                });
-                mergedReasons[catKey] = out.length <= 1 ? (out[0] || '') : out;
-              });
-              it.suggestedReasons = mergedReasons;
-            }
-          });
-          // If every item received at least one non-"Other" suggestion from server, we're done.
-          // Otherwise, fall back for only the items that still have empty suggestions so we can
-          // detect the "only Other" case and surface ["Other"] when appropriate.
-          const pendingIds = new Set();
-          items.forEach(e => {
-            if (!Array.isArray(e.suggestedCategories) || e.suggestedCategories.length === 0) {
-              pendingIds.add(String(e.id));
-            }
-          });
-          if (pendingIds.size === 0) {
-            return; // done
-          }
-          targets = minimal.filter(m => pendingIds.has(String(m.id)));
+        // Remove suggested tag (X)
+        const rmSug = card.querySelector(`#rm-sug-${e.id}`);
+        if (rmSug){
+          rmSug.onclick = (ev) => {
+            ev.stopPropagation();
+            e.category = '';
+            e.__classifierReason = '';
+            renderEmailList();
+          };
         }
-      } catch(_) {
-        // fall through to client-side fallback aggregator
-      }
-
-      // Fallback: multi-stage aggregator (tracks "Other" visibility and only returns "Other"
-      // if no non-Other suggestions appear across all stages)
-      const stageOrder = ['subject-nn','body-nn','similarity','subject','body','sender'];
-      const agg = new Map(); // id -> Map<cat,{count, firstIx}>
-      const sawOther = new Map(); // id -> boolean (saw "Other" in any stage)
-      targets.forEach(m => { agg.set(m.id, new Map()); sawOther.set(m.id, false); });
-
-      for (let si = 0; si < stageOrder.length; si++){
-        const stage = stageOrder[si];
-        let data = null;
-        try{
-          const resp = await fetch('/api/suggest-categories', {
-            method:'POST',
-            headers:{'Content-Type':'application/json'},
-            body: JSON.stringify({ emails: targets, stage })
-          });
-          data = await resp.json().catch(()=>({}));
-          if (!resp.ok || !data || data.success !== true || !data.choices) continue;
-        }catch(_){ continue; }
-
-        const choices = data.choices || {};
-        Object.keys(choices).forEach(id => {
-          const cats = Array.isArray(choices[id]) ? choices[id] : [];
-          const per = agg.get(id);
-          if (!per) return;
-          cats.forEach(c => {
-            const name = String(c || '').trim();
-            if (!name) return;
-            if (name.toLowerCase() === 'other') { sawOther.set(id, true); return; }
-            if (!per.has(name)) per.set(name, {count:1, firstIx: si});
-            else {
-              const entry = per.get(name);
-              entry.count += 1;
-              if (si < entry.firstIx) entry.firstIx = si;
-              per.set(name, entry);
+        // Remove extra tags (X)
+        Array.from(card.querySelectorAll('[data-rm-extra]')).forEach(el => {
+          el.onclick = (ev) => {
+            ev.stopPropagation();
+            const idx = parseInt(el.getAttribute('data-rm-extra'), 10);
+            if (Array.isArray(e.categories) && idx >= 0 && idx < e.categories.length) {
+              e.categories.splice(idx, 1);
+              renderEmailList();
             }
-          });
+          };
         });
-      }
 
-      // assign sorted suggestions back to only target items
-      targets.forEach(t => {
-        const per = agg.get(t.id);
-        const it = items.find(e => String(e.id) === String(t.id));
-        if (!it) return;
-        if (!per || !per.size){
-          it.suggestedCategories = sawOther.get(t.id) ? ['Other'] : [];
-          return;
-        }
-        const arr = Array.from(per.entries()).map(([name, meta]) => ({ name, ...meta }));
-        arr.sort((a,b) => (b.count - a.count) || (a.firstIx - b.firstIx) || a.name.localeCompare(b.name));
-        const nextList = arr.map(x => x.name);
-        const prevList = Array.isArray(it.suggestedCategories) ? it.suggestedCategories : [];
-        const merged = [...prevList];
-        nextList.forEach(c => {
-          const lc = String(c || '').trim().toLowerCase();
-          if (!lc) return;
-          if (!merged.some(x => String(x || '').trim().toLowerCase() === lc)) {
-            merged.push(String(c || '').trim());
-          }
-        });
-        it.suggestedCategories = merged;
-      });
+        // Load notes list for this email
+        loadNotesList(e.id);
 
-      // Final normalization across all items to enforce "no Other when non-Other exists"
-      items.forEach(it => {
-        it.suggestedCategories = normalizeSuggestionsList(it.suggestedCategories || []);
+        host.appendChild(card);
       });
-      // Ensure classifier pick is present and prioritized, with preserved reason
-      items.forEach(it => {
-        try {
-          const pick = String(it.__classifierPick || '').trim();
-          if (!pick) return;
-          const lc = pick.toLowerCase();
-          const list = Array.isArray(it.suggestedCategories) ? it.suggestedCategories.slice() : [];
-          const idx = list.findIndex(c => String(c || '').trim().toLowerCase() === lc);
-          if (idx === -1) {
-            list.unshift(pick);
-          } else if (idx > 0) {
-            list.splice(idx, 1);
-            list.unshift(pick);
-          }
-          it.suggestedCategories = normalizeSuggestionsList(list);
-          if (!it.suggestedReasons || typeof it.suggestedReasons !== 'object') it.suggestedReasons = {};
-          const clsReason = String(it.__classifierReason || 'Suggested by classifier (TF-IDF).');
-          const cur = it.suggestedReasons[pick];
-          if (Array.isArray(cur)) {
-            if (!cur.some(r => String(r || '').trim().toLowerCase() === clsReason.toLowerCase())) {
-              cur.push(clsReason);
-            }
-            it.suggestedReasons[pick] = cur;
-          } else if (typeof cur === 'string' && cur.trim()) {
-            if (cur.trim().toLowerCase() !== clsReason.toLowerCase()) {
-              it.suggestedReasons[pick] = [cur, clsReason];
-            } else {
-              it.suggestedReasons[pick] = cur;
-            }
-          } else {
-            it.suggestedReasons[pick] = clsReason;
-          }
-        } catch(_) {}
-      });
-      // Plan B1: auto-promote primary from "Other" to first non-Other suggestion when still predicted
-      items.forEach(it => {
-        const sc = Array.isArray(it.suggestedCategories) ? it.suggestedCategories : [];
-        if (String(it.category || 'Other').trim().toLowerCase() === 'other' && it.__predicted === true) {
-          const firstNonOther = sc.find(c => String(c || '').trim().toLowerCase() !== 'other');
-          if (firstNonOther) {
-            it.category = String(firstNonOther).trim();
-          }
-        }
-      });
-    }catch(_){}
-  }
-
-  function refreshItemUI(id){
-    // refresh list row
-    document.querySelectorAll(`.chips[data-item="${cssEscape(id)}"]`).forEach(node => {
-      renderChipsEditorForItem(id, node);
-    });
-    // refresh detail pill if selected
-    if (selectedId === id) {
-      const it = loadItems.find(x => x.id === id);
-      const pill = document.getElementById('detailCategoryPill');
-      if (pill && it) {
-        const hasPrimary = !!(it.category && String(it.category).trim());
-        if (hasPrimary) {
-          pill.textContent = it.category;
-          pill.style.display = 'inline-block';
-        } else {
-          pill.style.display = 'none';
-        }
-      }
     }
-  }
 
-  function cssEscape(s){
-    try { return CSS && CSS.escape ? CSS.escape(s) : String(s).replace(/"/g, '\\"'); } catch { return String(s).replace(/"/g, '\\"'); }
-  }
-
-  // Normalize suggestions:
-  // - Dedupe while preserving order
-  // - If any non-"Other" exists, drop "Other" entirely
-  // - If only "Other" appears, keep a single ["Other"]
-  function normalizeSuggestionsList(list){
-    try{
-      const arr = Array.isArray(list) ? list.map(x => String(x || '').trim()).filter(Boolean) : [];
-      const seen = new Set();
-      const uniq = arr.filter(c => {
-        const k = c.toLowerCase();
-        if (seen.has(k)) return false;
-        seen.add(k);
-        return true;
-      });
-      const nonOther = uniq.filter(c => c.toLowerCase() !== 'other');
-      if (nonOther.length) return nonOther;
-      if (uniq.length && uniq.every(c => c.toLowerCase() === 'other')) return ['Other'];
-      return [];
-    }catch(_){ return []; }
-  }
-
-  async function approveOne(id){
-    const it = loadItems.find(x => x.id === id);
-    if (!it) return;
-    showOverlay('Approving', 'Saving to database...');
-    try {
-        // Build final additional categories:
-        // - union of user-added extras (it.categories) + remaining suggested categories (it.suggestedCategories)
-        // - exclude primary and "Other"
-        // Determine effective primary category at save time:
-        // If current primary is "Other" but we have any non-"Other" suggestions and the value is still predicted (i.e., user hasn't changed it),
-        // promote the first non-"Other" suggestion to avoid saving "Other" by default.
-        const primaryRaw = String(it.category || '').trim();
-        let primary = primaryRaw;
-        const hasNonOtherSuggestion = Array.isArray(it.suggestedCategories) && it.suggestedCategories.some(c => String(c || '').trim().toLowerCase() !== 'other');
-        if (primaryRaw.toLowerCase() === 'other' && hasNonOtherSuggestion && it.__predicted === true) {
-          const firstNonOther = (it.suggestedCategories || []).find(c => String(c || '').trim().toLowerCase() !== 'other');
-          if (firstNonOther) primary = String(firstNonOther).trim();
-        }
-        const extrasA = Array.isArray(it.categories) ? it.categories : [];
-        const extrasB = Array.isArray(it.suggestedCategories) ? it.suggestedCategories : [];
-      const wanted = [];
-      const seen = new Set();
-      const pushIf = (name, isUser = false) => {
-        const n = String(name || '').trim();
-        if (!n) return;
-        const lc = n.toLowerCase();
-        // Allow "Other" only if explicitly user-added; never from suggestions
-        if (lc === 'other' && !isUser) return;
-        if (primary && lc === primary.toLowerCase()) return;
-        if (seen.has(lc)) return;
-        seen.add(lc);
-        wanted.push(n);
-      };
-      extrasA.forEach(n => pushIf(n, true));  // user-added extras
-      extrasB.forEach(n => pushIf(n, false)); // suggestion-derived extras
-
-      // Ensure master category list contains any new category names
-      for (const n of wanted) {
-        if (!categories.some(c => String(c || '').toLowerCase() === n.toLowerCase())) {
-          try {
-            const res = await fetch('/api/categories/add', {
-              method:'POST', headers:{'Content-Type':'application/json'},
-              body: JSON.stringify({ name: n })
-            });
-            const dataAdd = await res.json().catch(() => ({}));
-            if (res.ok && dataAdd && dataAdd.success && Array.isArray(dataAdd.categories)) {
-              categories = dataAdd.categories;
-            }
-          } catch (_) {}
-        }
-      }
-
-      const resp = await fetch('/api/add-approved-email', {
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({
-          email: {
-            id: it.id,
-            subject: it.subject || 'No Subject',
-            from: it.from || 'Unknown Sender',
-            date: it.date || new Date().toISOString(),
-            body: it.body || it.snippet || '',
-            snippet: it.snippet || (it.body ? String(it.body).slice(0, 100) + (it.body.length > 100 ? '...' : '') : ''),
-            category: primary,
-            categories: wanted
-          }
-        })
-      });
-      const data = await resp.json().catch(()=> ({}));
-      hideOverlay();
-      if (!resp.ok || !data || data.success !== true){
-        alert('Failed to approve email.');
-        return;
-      }
-      // Remove approved item locally and refresh UI
-      loadItems = loadItems.filter(x => x.id !== id);
-      if (selectedId === id) selectedId = '';
-      renderList();
-      if (loadItems.length) selectItem(loadItems[0].id);
-      document.getElementById('leftStatus').textContent = `${loadItems.length} remaining`;
-      document.getElementById('countStat').textContent = loadItems.length ? `(${loadItems.length})` : '';
-      if (!loadItems.length) {
-        window.location.href = '/?msg=All Email/Threads processed';
-        return;
-      }
-    } catch (e) {
-      hideOverlay();
-      alert('Failed to approve email.');
-    }
-  }
-
-  // Save to DB as "Other" only (no extra categories)
-  async function approveOther(id){
-    const it = loadItems.find(x => x.id === id);
-    if (!it) return;
-    showOverlay('Saving as Other', 'Persisting to database...');
-    try {
-      // Ensure "Other" exists in master list (best-effort)
-      if (!categories.some(c => String(c || '').toLowerCase() === 'other')) {
-        try {
-          const res = await fetch('/api/categories/add', {
-            method:'POST', headers:{'Content-Type':'application/json'},
-            body: JSON.stringify({ name: 'Other' })
-          });
-          const dataAdd = await res.json().catch(()=> ({}));
-          if (res.ok && dataAdd && dataAdd.success && Array.isArray(dataAdd.categories)) {
-            categories = dataAdd.categories;
-          }
-        } catch(_){}
-      }
-
-      const resp = await fetch('/api/add-approved-email', {
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({
-          email: {
-            id: it.id,
-            subject: it.subject || 'No Subject',
-            from: it.from || 'Unknown Sender',
-            date: it.date || new Date().toISOString(),
-            body: it.body || it.snippet || '',
-            snippet: it.snippet || (it.body ? String(it.body).slice(0, 100) + (it.body.length > 100 ? '...' : '') : ''),
-            category: 'Other',
-            categories: []
-          }
-        })
-      });
-      const data = await resp.json().catch(()=> ({}));
-      hideOverlay();
-      if (!resp.ok || !data || data.success !== true){
-        alert('Failed to save as Other.');
-        return;
-      }
-      // Remove approved item locally and refresh UI
-      loadItems = loadItems.filter(x => x.id !== id);
-      if (selectedId === id) selectedId = '';
-      renderList();
-      if (loadItems.length) selectItem(loadItems[0].id);
-      document.getElementById('leftStatus').textContent = `${loadItems.length} remaining`;
-      document.getElementById('countStat').textContent = loadItems.length ? `(${loadItems.length})` : '';
-      if (!loadItems.length) {
-        window.location.href = '/?msg=All Email/Threads processed';
-        return;
-      }
-    } catch (e) {
-      hideOverlay();
-      alert('Failed to save as Other.');
-    }
-  }
-
-  async function hideOne(id){
-    try {
+    // Actions
+    async function approveOne(id){
       const it = loadItems.find(x => x.id === id);
       if (!it) return;
-      showOverlay('Hiding', 'Removing from view...');
-      await fetch('/api/hidden-inbox/add', {
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ id: it.id, subject: it.subject, date: it.date })
-      });
-      // Remove locally
-      loadItems = loadItems.filter(x => x.id !== id);
-      if (selectedId === id) selectedId = '';
-      renderList();
-      if (loadItems.length) selectItem(loadItems[0].id);
-      document.getElementById('leftStatus').textContent = `${loadItems.length} remaining`;
-      document.getElementById('countStat').textContent = loadItems.length ? `(${loadItems.length})` : '';
-      if (!loadItems.length) {
-        hideOverlay();
-        window.location.href = '/?msg=All Email/Threads processed';
-        return;
+      // Require a category after user deletes suggested: if no primary and no extras, block
+      const extras = Array.isArray(it.categories) ? it.categories.filter(Boolean) : [];
+      if (!it.category || !String(it.category).trim()){
+        if (extras.length === 0){
+          showMissingOverlay([it]);
+          return;
+        }
       }
-      hideOverlay();
-    } catch (e) {
-      hideOverlay();
-      alert('Failed to hide item.');
-    }
-  }
-
-  async function approveAll(){
-    if (!loadItems.length) {
-      window.location.href = '/';
-      return;
-    }
-    showOverlay('Approving All', `Persisting ${loadItems.length} email${loadItems.length===1?'':'s'}...`);
-    let success = 0;
-    for (let i = 0; i < loadItems.length; i++) {
-      const it = loadItems[i];
+      showLoading('Approving', 'Saving to database...');
       try {
-        // Compute final extras for each item (union of user-added + remaining suggestions)
-        // Determine effective primary at save time for each item:
-        // If primary is "Other", non-"Other" suggestions exist, and the value is still predicted (user hasn't changed it),
-        // promote first non-"Other" suggestion to avoid saving "Other" by default.
-        const primaryRaw = String(it.category || '').trim();
-        let primary = primaryRaw;
-        const hasNonOtherSuggestion = Array.isArray(it.suggestedCategories) && it.suggestedCategories.some(c => String(c || '').trim().toLowerCase() !== 'other');
-        if (primaryRaw.toLowerCase() === 'other' && hasNonOtherSuggestion && it.__predicted === true) {
-          const firstNonOther = (it.suggestedCategories || []).find(c => String(c || '').trim().toLowerCase() !== 'other');
-          if (firstNonOther) primary = String(firstNonOther).trim();
-        }
-        const extrasA = Array.isArray(it.categories) ? it.categories : [];
-        const extrasB = Array.isArray(it.suggestedCategories) ? it.suggestedCategories : [];
-        const wanted = [];
-        const seen = new Set();
-        const pushIf = (name, isUser = false) => {
-          const n = String(name || '').trim();
-          if (!n) return;
-          const lc = n.toLowerCase();
-          // Allow "Other" only if explicitly user-added; never from suggestions
-          if (lc === 'other' && !isUser) return;
-          if (primary && lc === primary.toLowerCase()) return;
-          if (seen.has(lc)) return;
-          seen.add(lc);
-          wanted.push(n);
-        };
-        extrasA.forEach(n => pushIf(n, true));  // user-added extras
-        extrasB.forEach(n => pushIf(n, false)); // suggestion-derived extras
-
-        // Ensure master category list contains these names
-        for (const n of wanted) {
-          if (!categories.some(c => String(c || '').toLowerCase() === n.toLowerCase())) {
-            try {
-              const res = await fetch('/api/categories/add', {
-                method:'POST', headers:{'Content-Type':'application/json'},
-                body: JSON.stringify({ name: n })
-              });
-              const dataAdd = await res.json().catch(() => ({}));
-              if (res.ok && dataAdd && dataAdd.success && Array.isArray(dataAdd.categories)) {
-                categories = dataAdd.categories;
-              }
-            } catch (_) {}
-          }
-        }
-
+        // Extras: none from suggestions (single-pick); allow only user-added extras gathered via categories added (if any)
+        // For simplicity, we don't collect extras here from UI chips; user can add with input -> commitCategory sets as primary
         const resp = await fetch('/api/add-approved-email', {
-          method:'POST',
-          headers:{'Content-Type':'application/json'},
+          method:'POST', headers:{'Content-Type':'application/json'},
           body: JSON.stringify({
             email: {
               id: it.id,
@@ -1720,96 +591,284 @@
               from: it.from || 'Unknown Sender',
               date: it.date || new Date().toISOString(),
               body: it.body || it.snippet || '',
-              snippet: it.snippet || (it.body ? String(it.body).slice(0, 100) + (it.body.length > 100 ? '...' : '') : ''),
-              category: primary,
-              categories: wanted
+              snippet: it.snippet || (it.body ? String(it.body).slice(0, 100) + (String(it.body).length > 100 ? '...' : '') : ''),
+              category: it.category || '',
+              categories: Array.isArray(it.categories) ? it.categories : []
             }
           })
         });
         const data = await resp.json().catch(()=> ({}));
-        if (resp.ok && data && data.success) success++;
-      } catch(_){}
+        hideLoading();
+        if (!resp.ok || !data || data.success !== true){ alert('Failed to approve email.'); return; }
+        // Remove from list
+        loadItems = loadItems.filter(x => x.id !== id);
+        renderEmailList();
+        document.getElementById('statusStat').textContent = `${loadItems.length} remaining`;
+        if (!loadItems.length) window.location.href='/?msg=All Email/Threads processed';
+      } catch(_){
+        hideLoading(); alert('Failed to approve email.');
+      }
     }
-    hideOverlay();
-    window.location.href = '/?msg=All Email/Threads processed';
-  }
+    async function approveOther(id){
+      const it = loadItems.find(x => x.id === id);
+      if (!it) return;
+      showLoading('Saving as Other', 'Persisting to database...');
+      try{
+        const resp = await fetch('/api/add-approved-email', {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({
+            email: {
+              id: it.id,
+              subject: it.subject || 'No Subject',
+              from: it.from || 'Unknown Sender',
+              date: it.date || new Date().toISOString(),
+              body: it.body || it.snippet || '',
+              snippet: it.snippet || (it.body ? String(it.body).slice(0, 100) + (String(it.body).length > 100 ? '...' : '') : ''),
+              category: 'Other',
+              categories: []
+            }
+          })
+        });
+        const data = await resp.json().catch(()=> ({}));
+        hideLoading();
+        if (!resp.ok || !data || data.success !== true){ alert('Failed to save as Other.'); return; }
+        loadItems = loadItems.filter(x => x.id !== id);
+        renderEmailList();
+        document.getElementById('statusStat').textContent = `${loadItems.length} remaining`;
+        if (!loadItems.length) window.location.href='/?msg=All Email/Threads processed';
+      }catch(_){ hideLoading(); alert('Failed to save as Other.'); }
+    }
+    async function hideOne(id){
+      try{
+        const it = loadItems.find(x => x.id === id);
+        if (!it) return;
+        showLoading('Hiding', 'Removing from view...');
+        await fetch('/api/hidden-inbox/add', {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ id: it.id, subject: it.subject, date: it.date })
+        });
+        loadItems = loadItems.filter(x => x.id !== id);
+        renderEmailList();
+        document.getElementById('statusStat').textContent = `${loadItems.length} remaining`;
+        hideLoading();
+        if (!loadItems.length) window.location.href='/?msg=All Email/Threads processed';
+      }catch(_){ hideLoading(); alert('Failed to hide item.'); }
+    }
 
-  // Email notes
-  let currentNotesEmailId = '';
-  async function loadEmailNotes(emailId){
-    currentNotesEmailId = emailId || '';
-    const listEl = document.getElementById('emailNotesList');
-    if (listEl) listEl.innerHTML = '<div class="empty">Loading notes...</div>';
-    if (!emailId) return;
-    try {
-      const r = await fetch(`/api/email-notes/${encodeURIComponent(emailId)}`);
-      const d = await r.json();
-      const notes = Array.isArray(d.notes) ? d.notes : [];
-      renderEmailNotes(notes);
-    } catch(_){
-      if (listEl) listEl.innerHTML = '<div class="empty">Failed to load notes.</div>';
+    // Commit: set primary category from input (user override)
+    async function commitCategory(id, name){
+      try{
+        const it = loadItems.find(x => x.id === id);
+        if (!it) return;
+        const n = String(name || '').trim();
+        if (!n) return;
+        // ensure in categories list
+        if (!categories.some(c => String(c).toLowerCase() === n.toLowerCase())){
+          const res = await fetch('/api/categories/add', {
+            method:'POST', headers:{'Content-Type':'application/json'},
+            body: JSON.stringify({ name: n })
+          });
+          const data = await res.json().catch(()=> ({}));
+          if (res.ok && data && data.success && Array.isArray(data.categories)) categories = data.categories;
+        }
+        it.category = n;
+        it.__predicted = false;
+        renderEmailList();
+      }catch(_){}
     }
-  }
-  function renderEmailNotes(notes){
-    const listEl = document.getElementById('emailNotesList');
-    if (!listEl) return;
-    if (!Array.isArray(notes) || notes.length === 0){
-      listEl.innerHTML = '<div class="empty">No notes yet.</div>';
-      return;
+
+    // Load/Classifier (single-pick V3)
+    function normSubject(s){ try{ return String(s || '').toLowerCase().replace(/^re:\s*/i,'').trim(); }catch(_){ return ''; } }
+    function getQueryCount(){
+      const p = new URLSearchParams(window.location.search);
+      const raw = p.get('count'); if (!raw) return 0;
+      const n = parseInt(raw, 10); if (!Number.isFinite(n)) return 0;
+      return Math.max(1, Math.min(50, n));
     }
-    listEl.innerHTML = notes.map(n => {
-      const ts = new Date(n.updatedAt || n.createdAt || Date.now());
-      const when = isNaN(ts) ? '' : ts.toLocaleString();
-      return `
-        <div style="border:1px solid #e9ecef; border-radius:6px; padding:8px; margin-bottom:8px; background:#fff;">
-          <div style="font-size:12px; color:#666; margin-bottom:4px;">${when}</div>
-          <div style="white-space:pre-wrap; font-size:13px; color:#333;">${escapeHtml(n.text || '')}</div>
-        </div>
-      `;
-    }).join('');
-  }
-  async function addEmailNote(){
-    try {
-      const emailId = currentNotesEmailId || '';
-      if (!emailId) return;
-      const input = document.getElementById('emailNotesInput');
-      const text = (input?.value || '').trim();
-      if (!text) return;
-      const r = await fetch(`/api/email-notes/${encodeURIComponent(emailId)}`, {
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ text })
+
+    async function runClassifierSuggestions(items){
+      try{
+        if (!Array.isArray(items) || !items.length) return;
+        showLoading('Classifying', 'Analyzing emails and computing categories…');
+        await new Promise(r => setTimeout(r, 120));
+        const minimal = items.map(e => ({
+          id: String(e.id || ''),
+          subject: String(e.subject || ''),
+          body: typeof e.body === 'string' ? e.body : (e.snippet || ''),
+          from: String(e.from || '')
+        })).filter(x => x.id);
+        const resp = await fetch('/api/classifier-v3/suggest-batch', {
+          method: 'POST', headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({ emails: minimal, maxPerCat: 30 })
+        });
+        const data = await resp.json().catch(()=> ({}));
+        if (!resp.ok || !data || data.success !== true || !data.results) return;
+        const results = data.results || {};
+        items.forEach(it => {
+          const r = results[String(it.id)] || null;
+          if (!r) return;
+          const suggestion = String(r.suggestion || '').trim();
+          const rationales = (r.rationales && typeof r.rationales === 'object') ? r.rationales : {};
+          const reasonForSuggestion = (suggestion && rationales[suggestion]) || '';
+          const finalPick = (suggestion || 'Other');
+          it.category = finalPick;
+          it.__predicted = true;
+          it.__classifierReason = reasonForSuggestion || '';
+        });
+        hideLoading();
+      }catch(_){ hideLoading(); }
+    }
+
+    async function loadInitial(){
+      try{
+        // Count requested
+        countRequested = getQueryCount();
+        if (!countRequested) {
+          const v = prompt('How many emails would you like to load? (1-50)', '10') || '10';
+          const n = parseInt(v, 10);
+          countRequested = (Number.isFinite(n) ? Math.max(1, Math.min(50, n)) : 10);
+          const u = new URL(window.location.href);
+          u.searchParams.set('count', String(countRequested));
+          window.history.replaceState({}, '', u.toString());
+        }
+        document.getElementById('statusStat').textContent = `Requested: ${countRequested}`;
+
+        // Load categories
+        try {
+          const r = await fetch('/api/current-categories');
+          const d = await r.json();
+          categories = Array.isArray(d.categories) ? d.categories : [];
+        } catch(_){ categories = []; }
+
+        // Build existing sets
+        const existingIds = new Set();
+        const existingPairs = new Set();
+        try {
+          const r1 = await fetch('/api/unreplied-emails'); const d1 = await r1.json();
+          const r2 = await fetch('/api/response-emails'); const d2 = await r2.json();
+          const add = (arr) => {
+            (Array.isArray(arr) ? arr : []).forEach(e => {
+              if (e && e.id) existingIds.add(e.id);
+              const sk = normSubject(e && e.subject);
+              const fromLc = String((e && (e.originalFrom || e.from)) || '').toLowerCase();
+              if (sk) existingPairs.add(`${sk}|${fromLc}`);
+            });
+          };
+          add(d1.emails); add(d2.emails);
+        } catch(_){}
+
+        // Fetch inbox
+        showLoading('Fetching Emails', 'Retrieving from Gmail inbox…');
+        let raw = [];
+        try{
+          const overfetch = Math.min(countRequested * 3, 100);
+          const r = await fetch('/api/fetch-more-emails', {
+            method:'POST', headers:{'Content-Type':'application/json'},
+            body: JSON.stringify({ maxResults: overfetch })
+          });
+          const d = await r.json().catch(()=> ({}));
+          if (r.status === 401 && d && d.needsAuth){
+            hideLoading();
+            document.getElementById('emailList').innerHTML = `
+              <div class="small">Gmail authentication required. Go back to the main page to authenticate.</div>
+            `;
+            return;
+          }
+          raw = Array.isArray(d.emails) ? d.emails : [];
+        }catch(_){ raw = []; }
+
+        // Dedup & slice
+        const uniq = [];
+        const seenIds = new Set();
+        const seenPairs = new Set();
+        for (const e of raw) {
+          if (!e || !e.id) continue;
+          const subjKey = normSubject(e.subject);
+          const fromLc = String(e.from || '').toLowerCase();
+          const pairKey = `${subjKey}|${fromLc}`;
+          if (existingIds.has(e.id)) continue;
+          if (seenIds.has(e.id)) continue;
+          if (subjKey && existingPairs.has(pairKey)) continue;
+          if (subjKey && seenPairs.has(pairKey)) continue;
+          seenIds.add(e.id);
+          if (subjKey) seenPairs.add(pairKey);
+          uniq.push(e);
+          if (uniq.length >= countRequested) break;
+        }
+
+        loadItems = uniq.map(e => ({
+          id: e.id,
+          subject: e.subject || 'No Subject',
+          from: e.from || 'Unknown Sender',
+          date: e.date || new Date().toISOString(),
+          snippet: e.snippet || (e.body ? String(e.body).slice(0, 100) + (e.body.length > 100 ? '...' : '') : ''),
+          body: e.body || '',
+          category: 'Other',
+          categories: [],
+          __predicted: true,
+          __classifierReason: ''
+        }));
+
+        // V3 Classifier single-pick
+        await runClassifierSuggestions(loadItems);
+
+        renderEmailList();
+        document.getElementById('statusStat').textContent = `${loadItems.length} loaded`;
+      }catch(_){
+        hideLoading();
+        document.getElementById('emailList').innerHTML = '<div class="small">Failed to load emails.</div>';
+      }
+    }
+
+    // Approve all
+    async function approveAll(){
+      if (!loadItems.length) { window.location.href='/'; return; }
+      // Validate all items: any with no primary and no extras must be addressed
+      const offenders = loadItems.filter(x => {
+        const extras = Array.isArray(x.categories) ? x.categories.filter(Boolean) : [];
+        return (!x.category || !String(x.category).trim()) && extras.length === 0;
       });
-      const d = await r.json();
-      if (!r.ok || !d.success){
-        alert('Failed to add note.');
+      if (offenders.length){
+        showMissingOverlay(offenders);
         return;
       }
-      if (input) input.value = '';
-      await loadEmailNotes(emailId);
-    } catch(_){
-      alert('Failed to add note.');
+      showLoading('Approving All', `Persisting ${loadItems.length} emails…`);
+      let success = 0;
+      for (const it of loadItems.slice()){
+        try{
+          const resp = await fetch('/api/add-approved-email', {
+            method:'POST', headers:{'Content-Type':'application/json'},
+            body: JSON.stringify({
+              email: {
+                id: it.id,
+                subject: it.subject || 'No Subject',
+                from: it.from || 'Unknown Sender',
+                date: it.date || new Date().toISOString(),
+                body: it.body || it.snippet || '',
+                snippet: it.snippet || (it.body ? String(it.body).slice(0, 100) + (String(it.body).length > 100 ? '...' : '') : ''),
+                category: it.category || '',
+                categories: Array.isArray(it.categories) ? it.categories : []
+              }
+            })
+          });
+          const data = await resp.json().catch(()=> ({}));
+          if (resp.ok && data && data.success) success++;
+        }catch(_){}
+      }
+      hideLoading();
+      window.location.href='/?msg=All Email/Threads processed';
     }
-  }
 
-  function startAuth(){
-    // Rely on index.html flow
-    window.location.href = '/';
-  }
+    // Wire header
+    document.getElementById('cancelBtn').addEventListener('click', ()=>{ window.location.href='/'; });
+    document.getElementById('saveChangesBtn').addEventListener('click', ()=>{ window.location.href='/?msg=Changes saved'; });
+    document.getElementById('approveAllBtn').addEventListener('click', approveAll);
+    // Missing overlay close
+    const __missingClose = document.getElementById('missingCloseBtn');
+    if (__missingClose) __missingClose.addEventListener('click', hideMissingOverlay);
 
-  // Wire header buttons
-  document.getElementById('cancelBtn').addEventListener('click', () => {
-    window.location.href = '/';
-  });
-  document.getElementById('saveChangesBtn').addEventListener('click', () => {
-    window.location.href = '/?msg=Changes saved';
-  });
-  document.getElementById('approveAllBtn').addEventListener('click', approveAll);
-  document.getElementById('emailNotesAddBtn').addEventListener('click', addEmailNote);
-
-  // Boot
-  document.addEventListener('DOMContentLoaded', loadInitial);
-</script>
+    // Boot
+    document.addEventListener('DOMContentLoaded', loadInitial);
+  </script>
 </body>
 </html>
-]]>
