@@ -9148,6 +9148,24 @@ async function computeLoadMoreCategorySuggestions(emails) {
             });
             e.suggestedCategories = arr.map(x => x.name);
         });
+
+        // Fire-and-forget logging so the terminal shows contenders per email during Load More
+        try {
+            const payload = (emails || []).map(e => ({
+                id: e?.id || '',
+                subject: e?.subject || '',
+                from: e?.from || '',
+                date: e?.date || '',
+                suggestedCategories: Array.isArray(e?.suggestedCategories) ? e.suggestedCategories : []
+            }));
+            if (payload.length) {
+                fetch('/api/log-loadmore-contenders', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ emails: payload })
+                }).catch(() => {});
+            }
+        } catch (_) {}
     } catch (e) {
         try {
             if (typeof updateLoadingOverlayMessage === 'function') {

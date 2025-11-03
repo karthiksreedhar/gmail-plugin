@@ -140,8 +140,8 @@ function mapToExistingCategory(raw, categories) {
   const byKey = new Map(cats.map(c => [normalizeKey(c), c]));
   if (byKey.has(key)) return byKey.get(key);
 
-  // fallback: first category
-  return cats[0] || '';
+  // fallback: no mapping (let caller decide, typically "Other" or keyword fallback)
+  return '';
 }
 function parseFromParts(fromStr) {
   const s = String(fromStr || '');
@@ -337,10 +337,14 @@ Given ALLOWED CATEGORIES with brief examples and meta, and a LIST of NEW EMAILS,
 for EACH new email decide:
   - contenders: the set of category names from ALLOWED CATEGORIES that plausibly fit,
   - pick: if contenders has more than one entry, choose the single best category.
-Rules:
+Strict rules:
 - Only use names from ALLOWED CATEGORIES. Do not invent categories or synonyms.
-- If no category fits, return an empty contenders array and an empty pick.
-- Keep output compact JSON.`;
+- Do not bias toward the order of categories provided; evaluate each independently.
+- Prefer high precision. Limit contenders to at most 2 per email.
+- If no category clearly fits, return an empty contenders array and an empty pick (do not guess).
+- Do not output "Other" unless it appears in ALLOWED CATEGORIES.
+- Keep output compact JSON only (no prose).
+- If rationales are returned, ensure they are one short sentence per contender.`;
 
   const USER = `ALLOWED CATEGORIES (JSON):
 ${allowedJson}

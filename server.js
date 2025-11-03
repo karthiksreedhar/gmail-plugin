@@ -9512,6 +9512,27 @@ app.post('/api/classifier/suggest', async (req, res) => {
   }
 });
 
+/**
+ * Log aggregated Load More classifier contenders to terminal
+ * POST /api/log-loadmore-contenders
+ * body: { emails: [{ id, subject, from, date, suggestedCategories: string[] }] }
+ */
+app.post('/api/log-loadmore-contenders', (req, res) => {
+  try {
+    const emails = Array.isArray(req.body?.emails) ? req.body.emails : [];
+    for (const e of emails) {
+      const subj = String(e?.subject || 'No Subject');
+      const from = String(e?.from || 'Unknown Sender');
+      const cont = Array.isArray(e?.suggestedCategories) ? e.suggestedCategories.join(', ') : '';
+      console.log(`[LoadMore][Contenders] "${subj}" | from=${from} | contenders=[${cont}]`);
+    }
+    return res.json({ success: true, count: emails.length });
+  } catch (err) {
+    console.error('log-loadmore-contenders failed:', err);
+    return res.status(500).json({ success: false, error: 'Failed to log contenders' });
+  }
+});
+
 app.post('/api/search-emails', async (req, res) => {
   try {
     const { query, limit } = req.body || {};
@@ -10292,10 +10313,14 @@ Given ALLOWED CATEGORIES with brief examples and meta, and a LIST of NEW EMAILS,
 for EACH new email decide:
   - contenders: the set of category names from ALLOWED CATEGORIES that plausibly fit,
   - pick: if contenders has more than one entry, choose the single best category.
-Rules:
+Strict rules:
 - Only use names from ALLOWED CATEGORIES. Do not invent categories or synonyms.
-- If no category fits, return an empty contenders array and an empty pick.
-- Keep output compact JSON.`;
+- Do not bias toward the order of categories provided; evaluate each independently.
+- Prefer high precision. Limit contenders to at most 2 per email.
+- If no category clearly fits, return an empty contenders array and an empty pick (do not guess).
+- Do not output "Other" unless it appears in ALLOWED CATEGORIES.
+- Keep output compact JSON only (no prose).
+- If rationales are returned, ensure they are one short sentence per contender.`;
   const USER = `ALLOWED CATEGORIES (JSON):
 ${allowedJson}
 
@@ -10421,7 +10446,10 @@ app.post('/api/classifier-v3/suggest-batch', async (req, res) => {
       const id = String(e.id || '');
       if (!id) continue;
       const r = results?.[id] || {};
-      const contenders = Array.isArray(r.contenders) ? r.contenders.filter(Boolean) : [];
+      // Exclude "Other" from contenders list entirely
+      const contenders = Array.isArray(r.contenders)
+        ? r.contenders.filter(c => c && normalizeKey(c) !== 'other')
+        : [];
       const rationales = (r.rationales && typeof r.rationales === 'object') ? r.rationales : {};
       const pickRaw = typeof r.pick === 'string' ? r.pick : '';
 
@@ -10491,7 +10519,10 @@ app.post('/api/classifier-v4/suggest-batch', async (req, res) => {
       if (!id) continue;
 
       const r = results?.[id] || {};
-      const llmContenders = Array.isArray(r.contenders) ? r.contenders.filter(Boolean) : [];
+      // Exclude "Other" from contenders list entirely
+      const llmContenders = Array.isArray(r.contenders)
+        ? r.contenders.filter(c => c && normalizeKey(c) !== 'other')
+        : [];
       const rationales = (r.rationales && typeof r.rationales === 'object') ? r.rationales : {};
       const pickRaw = typeof r.pick === 'string' ? r.pick : '';
 
@@ -10505,11 +10536,11 @@ app.post('/api/classifier-v4/suggest-batch', async (req, res) => {
           if (!k || seen.has(k)) continue;
           seen.add(k); arr.push(matchToCurrentCategory(c, categoriesX) || c);
         }
-        if (senderBest && senderBest.cat) {
-          const k2 = normalizeKey(senderBest.cat);
-          if (k2 && !seen.has(k2)) {
+        if (senderBest) {
+          const k2 = normalizeKey(senderBest);
+          if (k2 && k2 !== 'other' && !seen.has(k2)) {
             seen.add(k2);
-            arr.push(matchToCurrentCategory(senderBest.cat, categoriesX) || senderBest.cat);
+            arr.push(matchToCurrentCategory(senderBest, categoriesX) || senderBest);
           }
         }
         return arr;
@@ -10524,10 +10555,10 @@ app.post('/api/classifier-v4/suggest-batch', async (req, res) => {
         if (mappedPick && unionKeys.has(normalizeKey(mappedPick))) {
           suggestion = mappedPick;
           reasonsMap = { [suggestion]: rationales?.[suggestion] || 'LLM best-of from sender-augmented contenders' };
-        } else if (senderBest && senderBest.cat && unionKeys.has(normalizeKey(senderBest.cat))) {
-          const chosen = matchToCurrentCategory(senderBest.cat, categoriesX) || senderBest.cat;
+        } else if (senderBest && unionKeys.has(normalizeKey(senderBest))) {
+          const chosen = matchToCurrentCategory(senderBest, categoriesX) || senderBest;
           suggestion = chosen;
-          reasonsMap = { [suggestion]: `Sender augmentation: highest co-occurrence in training (count=${senderBest.count || 0})` };
+          reasonsMap = { [suggestion]: `Sender augmentation: highest co-occurrence in training` };
         } else {
           suggestion = contendersUnion[0] || '';
           reasonsMap = { [suggestion]: rationales?.[suggestion] || 'Augmented contenders; defaulted to first' };
@@ -10665,7 +10696,10 @@ app.post('/api/test-classifier/run-v4', async (req, res) => {
     const testRows = test.map((te, idx) => {
       const gt = Array.isArray(te.categories) ? te.categories : (te.category ? [te.category] : []);
       const r = resultsAll?.[te.id] || {};
-      const llmContenders = Array.isArray(r.contenders) ? r.contenders.filter(Boolean) : [];
+      // Exclude "Other" from contenders list entirely
+      const llmContenders = Array.isArray(r.contenders)
+        ? r.contenders.filter(c => c && normalizeKey(c) !== 'other')
+        : [];
       const rationales = (r.rationales && typeof r.rationales === 'object') ? r.rationales : {};
       const pickRaw = typeof r.pick === 'string' ? r.pick : '';
 
@@ -10679,11 +10713,11 @@ app.post('/api/test-classifier/run-v4', async (req, res) => {
           if (!k || seen.has(k)) continue;
           seen.add(k); arr.push(matchToCurrentCategory(c, categoriesX) || c);
         }
-        if (senderBest && senderBest.cat) {
-          const k2 = normalizeKey(senderBest.cat);
-          if (!seen.has(k2)) {
+        if (senderBest) {
+          const k2 = normalizeKey(senderBest);
+          if (k2 && k2 !== 'other' && !seen.has(k2)) {
             seen.add(k2);
-            arr.push(matchToCurrentCategory(senderBest.cat, categoriesX) || senderBest.cat);
+            arr.push(matchToCurrentCategory(senderBest, categoriesX) || senderBest);
           }
         }
         return arr;
@@ -10698,10 +10732,10 @@ app.post('/api/test-classifier/run-v4', async (req, res) => {
         if (mappedPick && unionKeys.has(normalizeKey(mappedPick))) {
           suggestion = mappedPick;
           reasonsMap = { [suggestion]: rationales?.[suggestion] || 'LLM best-of from sender-augmented contenders' };
-        } else if (senderBest && senderBest.cat && unionKeys.has(normalizeKey(senderBest.cat))) {
-          const chosen = matchToCurrentCategory(senderBest.cat, categoriesX) || senderBest.cat;
+        } else if (senderBest && unionKeys.has(normalizeKey(senderBest))) {
+          const chosen = matchToCurrentCategory(senderBest, categoriesX) || senderBest;
           suggestion = chosen;
-          reasonsMap = { [suggestion]: `Sender augmentation: highest co-occurrence in training (count=${senderBest.count || 0})` };
+          reasonsMap = { [suggestion]: `Sender augmentation: highest co-occurrence in training` };
         } else {
           suggestion = contendersUnion[0] || '';
           reasonsMap = { [suggestion]: rationales?.[suggestion] || 'Augmented contenders; defaulted to first' };
