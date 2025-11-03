@@ -6116,27 +6116,6 @@
       ]
     },
     {
-      "id": "thread-19a2d8bae60c5b58",
-      "subject": "TEST",
-      "originalFrom": "Karthik Sreedhar <ks4190@columbia.edu>",
-      "from": "ks4190@columbia.edu",
-      "date": "Tue, 28 Oct 2025 21:18:48 -0400",
-      "responseId": "19a2d8bccd7c39f9",
-      "messages": [
-        {
-          "id": "original-19a2d8bccd7c39f9",
-          "from": "Karthik Sreedhar <ks4190@columbia.edu>",
-          "to": [
-            "ks4190@columbia.edu"
-          ],
-          "date": "Tue, 28 Oct 2025 21:18:48 -0400",
-          "subject": "TEST",
-          "body": "Lydia Chilton",
-          "isResponse": false
-        }
-      ]
-    },
-    {
       "id": "thread-19a2d8b731cfeaa0",
       "subject": "Test chilton",
       "originalFrom": "Karthik Sreedhar <ks4190@columbia.edu>",

@@ -156,6 +156,19 @@ function getGmailAuthUrl() {
   });
 }
 
+// Helper: for GET requests, optionally redirect to Gmail auth when missing auth; otherwise return JSON with authUrl
+function gmailAuthRedirectOrJson(req, res, status = 401, message = 'Gmail authentication required') {
+  try {
+    const authUrl = getGmailAuthUrl();
+    if (req && req.method === 'GET' && req.query && String(req.query.redirect) === '1' && authUrl) {
+      return res.redirect(authUrl);
+    }
+    return res.status(status).json({ success: false, needsAuth: true, authUrl: authUrl || null, error: message });
+  } catch (e) {
+    return res.status(status).json({ success: false, needsAuth: true, authUrl: null, error: message });
+  }
+}
+
 // Handle OAuth callback and save tokens
 async function handleGmailAuthCallback(code) {
   try {
@@ -2280,6 +2293,20 @@ app.get('/api/auth', (req, res) => {
   }
 });
 
+// Convenience endpoint: 302 redirect to Gmail OAuth consent
+app.get('/api/auth/start', (req, res) => {
+  try {
+    const authUrl = getGmailAuthUrl();
+    if (!authUrl) {
+      return res.status(500).json({ error: 'Gmail authentication not available' });
+    }
+    return res.redirect(authUrl);
+  } catch (error) {
+    console.error('Error redirecting to auth URL:', error);
+    return res.status(500).json({ error: 'Failed to redirect to authentication URL' });
+  }
+});
+
 app.post('/api/auth/callback', async (req, res) => {
   try {
     const { code } = req.body;
@@ -2381,7 +2408,7 @@ app.get('/oauth2callback', async (req, res) => {
 app.get('/api/gmail-message/:id', async (req, res) => {
   try {
     if (!gmail) {
-      return res.status(401).json({ success: false, needsAuth: true, error: 'Gmail authentication required' });
+      return gmailAuthRedirectOrJson(req, res, 401, 'Gmail authentication required');
     }
     const id = req.params.id;
     if (!id) return res.status(400).json({ success: false, error: 'Message ID is required' });
@@ -2399,7 +2426,7 @@ app.get('/api/gmail-message/:id', async (req, res) => {
 app.get('/api/gmail-thread-by-message/:id', async (req, res) => {
   try {
     if (!gmail) {
-      return res.status(401).json({ success: false, needsAuth: true, error: 'Gmail authentication required' });
+      return gmailAuthRedirectOrJson(req, res, 401, 'Gmail authentication required');
     }
     const msgId = req.params.id;
     if (!msgId) {
@@ -2484,11 +2511,7 @@ app.post('/api/load-email-threads', async (req, res) => {
 
     // Check if Gmail API is available and authenticated
     if (!gmail) {
-      return res.status(401).json({
-        success: false,
-        needsAuth: true,
-        error: 'Gmail authentication required'
-      });
+      return gmailAuthRedirectOrJson(req, res, 401, 'Gmail authentication required');
     }
 
     // Load hidden threads to skip in results
@@ -2900,9 +2923,11 @@ app.post('/api/fetch-more-emails', async (req, res) => {
 
     // Check if Gmail API is available and authenticated
     if (!gmail || !gmailAuth) {
+      const authUrl = getGmailAuthUrl();
       return res.status(401).json({
         success: false,
         needsAuth: true,
+        authUrl: authUrl || null,
         error: 'Gmail authentication required',
         message: 'Please authenticate with Gmail to access your emails'
       });
@@ -2911,9 +2936,11 @@ app.post('/api/fetch-more-emails', async (req, res) => {
     // Check if we have valid credentials
     const paths = getCurrentUserPaths();
     if (!fs.existsSync(paths.TOKENS_PATH)) {
+      const authUrl = getGmailAuthUrl();
       return res.status(401).json({
         success: false,
         needsAuth: true,
+        authUrl: authUrl || null,
         error: 'Gmail authentication required',
         message: 'Please authenticate with Gmail to access your emails'
       });
@@ -3242,9 +3269,11 @@ app.post('/api/fetch-more-emails', async (req, res) => {
       // Check if it's an authentication error
       if (gmailError.code === 401 || gmailError.message?.includes('invalid_grant') || 
           gmailError.message?.includes('No access, refresh token')) {
+        const authUrl = getGmailAuthUrl();
         return res.status(401).json({
           success: false,
           needsAuth: true,
+          authUrl: authUrl || null,
           error: 'Gmail authentication expired',
           message: 'Please re-authenticate with Gmail to access your emails'
         });
@@ -3365,7 +3394,8 @@ const LIMIT = 400;
         p.active = false;
         p.finishedAt = Date.now();
       } catch(_) {}
-      return res.status(500).json({ success: false, error: 'Gmail not authenticated' });
+      const authUrl = getGmailAuthUrl();
+      return res.status(500).json({ success: false, error: 'Gmail not authenticated', needsAuth: true, authUrl: authUrl || null });
     }
 
     // Search Gmail for important inbox messages
@@ -10928,7 +10958,9 @@ app.post('/api/test-classifier/run-v3', async (req, res) => {
             const te = test.find(x => String(x.id) === String(be.id));
             const gt = Array.isArray(te?.categories) ? te.categories : (te?.category ? [te.category] : []);
             const rr = r[be.id] || {};
-            const contenders = Array.isArray(rr.contenders) ? rr.contenders.filter(Boolean) : [];
+            const contenders = Array.isArray(rr.contenders)
+              ? rr.contenders.filter(c => c && normalizeKey(c) !== 'other')
+              : [];
             const pickRaw = typeof rr.pick === 'string' ? rr.pick : '';
             let suggestion = '';
             if (contenders.length === 1) {
@@ -10965,7 +10997,9 @@ app.post('/api/test-classifier/run-v3', async (req, res) => {
     const testRows = test.map(te => {
       const gt = Array.isArray(te.categories) ? te.categories : (te.category ? [te.category] : []);
       const r = results?.[te.id] || {};
-      const contenders = Array.isArray(r.contenders) ? r.contenders.filter(Boolean) : [];
+      const contenders = Array.isArray(r.contenders)
+        ? r.contenders.filter(c => c && normalizeKey(c) !== 'other')
+        : [];
       const rationales = (r.rationales && typeof r.rationales === 'object') ? r.rationales : {};
       const pickRaw = typeof r.pick === 'string' ? r.pick : '';
 

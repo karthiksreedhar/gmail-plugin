@@ -539,15 +539,18 @@ function keywordFallback(email, categories) {
       const subj = (row.subject || 'No Subject').slice(0, 120);
 
       const r = results?.[row.id] || {};
-      const llmContenders = Array.isArray(r.contenders) ? uniqCaseInsensitive(r.contenders) : [];
+      // Exclude "Other" from contenders entirely
+      const llmContenders = Array.isArray(r.contenders)
+        ? uniqCaseInsensitive(r.contenders.filter(c => c && normalizeKey(c) !== 'other'))
+        : [];
       const rationales = (r.rationales && typeof r.rationales === 'object') ? r.rationales : {};
       const pickRaw = typeof r.pick === 'string' ? r.pick : '';
 
       // Sender-based augmentation: compute best sender category from training rows
       const senderBest = bestSenderCategory({ from: row.from, subject: row.subject, body: row.body }, categories, ctx.categoryToTrainRows, ctx.currentUserEmail);
-      // Union contenders with senderBest.cat (if any)
+      // Union contenders with senderBest.cat (if any), but never add "Other"
       let contenders = llmContenders.slice();
-      if (senderBest.cat) {
+      if (senderBest.cat && normalizeKey(senderBest.cat) !== 'other') {
         contenders = uniqCaseInsensitive([...contenders, senderBest.cat]);
       }
 
