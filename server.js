@@ -3535,6 +3535,184 @@ app.post('/api/categories/add', (req, res) => {
 });
 
 /**
+ * List all categories with counts across response-emails and unreplied-emails.
+ * GET /api/categories/all-with-counts
+ * Returns: { success: true, categories: [{ name, count }] }
+ */
+app.get('/api/categories/all-with-counts', (req, res) => {
+  try {
+    const list = loadCategoriesList() || [];
+    const responses = loadResponseEmails() || [];
+    const unreplied = loadUnrepliedEmails() || [];
+
+    const byKey = new Map(); // lc name -> { name, ids: Set }
+    const normAdd = (name, id) => {
+      const raw = String(name || '').trim();
+      if (!raw) return;
+      const key = raw.toLowerCase();
+      if (!byKey.has(key)) byKey.set(key, { name: raw, ids: new Set() });
+      const obj = byKey.get(key);
+      // Prefer preserving canonical casing seen in categories.json when possible
+      if (list.some(c => String(c).toLowerCase() === key)) {
+        const canon = list.find(c => String(c).toLowerCase() === key);
+        if (canon) obj.name = canon;
+      }
+      if (id) obj.ids.add(id);
+    };
+
+    // Seed all saved category names first (zero counts)
+    list.forEach(n => normAdd(n, null));
+
+    // Tally from response emails (primary + additional)
+    for (const e of responses) {
+      const arr = Array.isArray(e?.categories) && e.categories.length ? e.categories : (e?.category ? [e.category] : []);
+      (arr || []).forEach(c => normAdd(c, e.id));
+    }
+
+    // Tally from unreplied emails (primary + additional)
+    for (const e of unreplied) {
+      const arr = Array.isArray(e?.categories) && e.categories.length ? e.categories : (e?.category ? [e.category] : []);
+      (arr || []).forEach(c => normAdd(c, e.id));
+    }
+
+    // Build ordered output: first by categories.json order, then any extras alphabetically
+    const seen = new Set();
+    const out = [];
+    for (const n of list) {
+      const k = String(n).toLowerCase();
+      if (byKey.has(k) && !seen.has(k)) {
+        const obj = byKey.get(k);
+        out.push({ name: obj.name, count: obj.ids ? obj.ids.size : 0 });
+        seen.add(k);
+      }
+    }
+    for (const [k, obj] of byKey.entries()) {
+      if (!seen.has(k)) {
+        out.push({ name: obj.name, count: obj.ids ? obj.ids.size : 0 });
+      }
+    }
+
+    return res.json({ success: true, categories: out });
+  } catch (e) {
+    console.error('categories/all-with-counts failed:', e);
+    return res.status(500).json({ success: false, error: 'Failed to list categories' });
+  }
+});
+
+/**
+ * Delete a category and migrate affected emails to "Other" by default.
+ * DELETE /api/categories/:name
+ * Returns: { success: true, removed, moved: { responses, unreplied }, categories: [...] }
+ */
+app.delete('/api/categories/:name', (req, res) => {
+  try {
+    const raw = String(req.params.name || '').trim();
+    if (!raw) {
+      return res.status(400).json({ success: false, error: 'name is required' });
+    }
+    const targetLc = raw.toLowerCase();
+    const paths = getCurrentUserPaths();
+
+    const responses = loadResponseEmails() || [];
+    const unreplied = loadUnrepliedEmails() || [];
+
+    // Ensure "Other" exists in categories list
+    let catList = loadCategoriesList() || [];
+    if (!catList.some(c => String(c).toLowerCase() === 'other')) {
+      catList = [...catList, 'Other'];
+    }
+
+    // Helper: reassign a record away from the deleted category
+    function reassignEmail(rec) {
+      let changed = false;
+
+      // Primary
+      if (rec.category && String(rec.category).toLowerCase() === targetLc) {
+        rec.category = 'Other';
+        changed = true;
+      }
+
+      // Additional
+      const arr = Array.isArray(rec.categories) ? rec.categories.slice() : [];
+      const filtered = arr.filter(c => String(c || '').toLowerCase() !== targetLc);
+
+      if (filtered.length !== arr.length) {
+        changed = true;
+      }
+
+      // Ensure "Other" appears in multi-categories
+      if (!filtered.some(c => String(c || '').toLowerCase() === 'other')) {
+        filtered.push('Other');
+      }
+
+      // Deduplicate case-insensitively
+      const seen = new Set();
+      const dedup = [];
+      for (const c of filtered) {
+        const k = String(c || '').toLowerCase();
+        if (k && !seen.has(k)) {
+          seen.add(k);
+          dedup.push(c);
+        }
+      }
+      rec.categories = dedup;
+
+      // Ensure primary is set (prefer non-Other); otherwise force "Other"
+      if (!rec.category || String(rec.category).trim() === '') {
+        rec.category = rec.categories.find(c => String(c).toLowerCase() !== 'other') || 'Other';
+        changed = true;
+      }
+
+      return changed;
+    }
+
+    // Apply to responses
+    let movedResponses = 0;
+    for (const r of responses) {
+      if (reassignEmail(r)) movedResponses++;
+    }
+
+    // Apply to unreplied
+    let movedUnreplied = 0;
+    for (const u of unreplied) {
+      if (reassignEmail(u)) movedUnreplied++;
+    }
+
+    // Persist stores
+    if (!fs.existsSync(paths.USER_DATA_DIR)) {
+      fs.mkdirSync(paths.USER_DATA_DIR, { recursive: true });
+    }
+    fs.writeFileSync(paths.RESPONSE_EMAILS_PATH, JSON.stringify({ emails: responses }, null, 2));
+    fs.writeFileSync(paths.UNREPLIED_EMAILS_PATH, JSON.stringify({ emails: unreplied }, null, 2));
+
+    // Update categories list: remove the deleted name, keep "Other"
+    const nextCats = (catList || []).filter(c => String(c).toLowerCase() !== targetLc);
+    saveCategoriesList(nextCats);
+
+    // Optionally remove category summary (best-effort)
+    try {
+      const summaries = loadCategorySummaries() || {};
+      const keys = Object.keys(summaries || {});
+      const foundKey = keys.find(k => String(k).toLowerCase() === targetLc);
+      if (foundKey) {
+        delete summaries[foundKey];
+        saveCategorySummaries(summaries);
+      }
+    } catch (_) {}
+
+    return res.json({
+      success: true,
+      removed: raw,
+      moved: { responses: movedResponses, unreplied: movedUnreplied },
+      categories: nextCats
+    });
+  } catch (e) {
+    console.error('Error deleting category:', e);
+    return res.status(500).json({ success: false, error: 'Failed to delete category' });
+  }
+});
+
+/**
  * Seed Categories: Add all items with categories to DB
  * POST /api/seed-categories/add-all
  * Input: { items: [{ id, subject, from, date, category, tags: { unreplied, thread } }] }
@@ -10273,7 +10451,345 @@ app.post('/api/classifier-v3/suggest-batch', async (req, res) => {
   }
 });
 
-// POST /api/test-classifier/run-v3
+/**
+ * Classifier V4 (batched with sender-augmented contenders and keyword fallback)
+ * - Suggest (batch) endpoint for Load More
+ * - Test run endpoint for Test Classifier page
+ */
+
+// POST /api/classifier-v4/suggest-batch
+// Input: { emails: [{id, subject, body, from}], maxPerCat?: number }
+// Output: { success: true, results: { [id]: { contenders, pick, rationales, suggestion } } }
+app.post('/api/classifier-v4/suggest-batch', async (req, res) => {
+  try {
+    const input = Array.isArray(req.body?.emails) ? req.body.emails : [];
+    const MAX = Math.max(1, Math.min(200, Number(req.body?.maxPerCat) || 30));
+
+    // Authoritative categories X and per-category examples
+    const categoriesX = __getCategoriesList();
+    const perCatRows = __v3BuildCategoryRows();
+    const summaries = loadCategorySummaries() || {};
+    const guidelinesPayload = loadEmailData(getCurrentUserPaths().CATEGORY_GUIDELINES_PATH) || {};
+    const guidelinesMap = (guidelinesPayload && Array.isArray(guidelinesPayload.categories))
+      ? Object.fromEntries(guidelinesPayload.categories.map(c => [c.name, c.notes || '']))
+      : {};
+
+    // One LLM call for the batch (same as v3)
+    const results = await __v3OpenAIBatchLabel(
+      input.map(e => ({ id: e.id, subject: e.subject, body: e.body, from: e.from })),
+      categoriesX,
+      perCatRows,
+      summaries,
+      guidelinesMap,
+      MAX
+    );
+
+    // Build V4 suggestions
+    const out = {};
+    for (const e of input) {
+      const id = String(e.id || '');
+      if (!id) continue;
+
+      const r = results?.[id] || {};
+      const llmContenders = Array.isArray(r.contenders) ? r.contenders.filter(Boolean) : [];
+      const rationales = (r.rationales && typeof r.rationales === 'object') ? r.rationales : {};
+      const pickRaw = typeof r.pick === 'string' ? r.pick : '';
+
+      // V4: sender-augment contenders
+      const senderBest = __v3SenderMajorityFallback(e, categoriesX, perCatRows);
+      const contendersUnion = (() => {
+        const seen = new Set();
+        const arr = [];
+        for (const c of llmContenders) {
+          const k = normalizeKey(c);
+          if (!k || seen.has(k)) continue;
+          seen.add(k); arr.push(matchToCurrentCategory(c, categoriesX) || c);
+        }
+        if (senderBest && senderBest.cat) {
+          const k2 = normalizeKey(senderBest.cat);
+          if (k2 && !seen.has(k2)) {
+            seen.add(k2);
+            arr.push(matchToCurrentCategory(senderBest.cat, categoriesX) || senderBest.cat);
+          }
+        }
+        return arr;
+      })();
+
+      let suggestion = '';
+      let reasonsMap = {};
+
+      if (contendersUnion.length > 0) {
+        const mappedPick = pickRaw ? (matchToCurrentCategory(pickRaw, categoriesX) || '') : '';
+        const unionKeys = new Set(contendersUnion.map(c => normalizeKey(c)));
+        if (mappedPick && unionKeys.has(normalizeKey(mappedPick))) {
+          suggestion = mappedPick;
+          reasonsMap = { [suggestion]: rationales?.[suggestion] || 'LLM best-of from sender-augmented contenders' };
+        } else if (senderBest && senderBest.cat && unionKeys.has(normalizeKey(senderBest.cat))) {
+          const chosen = matchToCurrentCategory(senderBest.cat, categoriesX) || senderBest.cat;
+          suggestion = chosen;
+          reasonsMap = { [suggestion]: `Sender augmentation: highest co-occurrence in training (count=${senderBest.count || 0})` };
+        } else {
+          suggestion = contendersUnion[0] || '';
+          reasonsMap = { [suggestion]: rationales?.[suggestion] || 'Augmented contenders; defaulted to first' };
+        }
+      } else {
+        // No contenders at all - use keyword fallback then "Other"
+        const kw = __v3KeywordFallback(e, categoriesX);
+        if (kw) {
+          suggestion = matchToCurrentCategory(kw, categoriesX) || kw;
+          reasonsMap = { [suggestion]: `Keyword fallback: subject x${__countOccurrencesInsensitive(e.subject || '', suggestion)}, body x${__countOccurrencesInsensitive(e.body || '', suggestion)}` };
+        } else {
+          suggestion = categoriesX.find(c => normalizeKey(c) === 'other') || categoriesX[0] || '';
+          if (suggestion) reasonsMap = { [suggestion]: 'Last-resort default' };
+        }
+      }
+
+      out[id] = {
+        contenders: llmContenders, // keep LLM-set for parity
+        pick: pickRaw || '',
+        rationales,
+        suggestion
+      };
+    }
+
+    return res.json({ success: true, results: out });
+  } catch (err) {
+    console.error('classifier-v4/suggest-batch failed:', err);
+    return res.status(500).json({ success: false, error: 'Failed to run classifier v4 batch' });
+  }
+});
+
+// POST /api/test-classifier/run-v4
+// Runs the V4 batched classifier and returns metrics/rows (shape mirrors v3 endpoint)
+app.post('/api/test-classifier/run-v4', async (req, res) => {
+  try {
+    if (!process.env.OPENAI_API_KEY) {
+      return res.status(400).json({ success: false, error: 'OPENAI_API_KEY is required for classifier v4.' });
+    }
+
+    // Load labeled ground truth (apply same validation/hidden filters as v3)
+    const rawAll = loadResponseEmails() || [];
+    const hiddenList = loadHiddenThreads();
+    const hiddenResponseIds = new Set((hiddenList || []).flatMap(h => (h.responseIds || [])));
+    const labeled = (rawAll || []).filter(e =>
+      e && e.id && e.subject && e.from && e.body && !hiddenResponseIds.has(e.id)
+    ).map(e => {
+      const catsArr = Array.isArray(e.categories)
+        ? e.categories.map(c => String(c || '').trim()).filter(Boolean)
+        : (e.category ? [String(e.category).trim()] : []);
+      const seen = new Set(); const uniq = [];
+      for (const c of catsArr) {
+        const k = c.toLowerCase();
+        if (!k || seen.has(k)) continue;
+        seen.add(k); uniq.push(c);
+      }
+      return {
+        id: e.id,
+        subject: e.subject || 'No Subject',
+        from: e.originalFrom || e.from || 'Unknown Sender',
+        date: e.date || new Date().toISOString(),
+        body: e.body || '',
+        snippet: e.snippet || (e.body ? String(e.body).slice(0, 120) + (e.body.length > 120 ? '...' : '') : ''),
+        categories: uniq
+      };
+    });
+
+    if (!labeled.length) {
+      return res.json({
+        success: true,
+        metrics: { totalTest: 0, accuracy: 0, correctlyAssignedTags: 0, extraTagsSuggested: 0, exactMatchEmails: 0 },
+        test: { emails: [] },
+        train: { emails: [] }
+      });
+    }
+
+    // Deterministic 80/20 split
+    function __shuffleSeeded(arr, seed) {
+      function mulberry32(a) {
+        return function () {
+          let t = (a += 0x6D2B79F5) | 0;
+          t = Math.imul(t ^ (t >>> 15), t | 1);
+          t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+          return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+        };
+      }
+      const rnd = mulberry32(42);
+      const a = (arr || []).slice();
+      for (let i = a.length - 1; i > 0; i--) {
+        const j = Math.floor(rnd() * (i + 1));
+        [a[i], a[j]] = [a[j], a[i]];
+      }
+      return a;
+    }
+    const shuffled = __shuffleSeeded(labeled, 42);
+    const trainSize = Math.max(1, Math.floor(shuffled.length * 0.8));
+    const train = shuffled.slice(0, trainSize);
+    const test = shuffled.slice(trainSize);
+
+    // Context for batched LLM call
+    const categoriesX = __getCategoriesList();
+    const perCatRows = __v3BuildCategoryRows();
+    const summaries = loadCategorySummaries() || {};
+    const guidelinesPayload = loadEmailData(getCurrentUserPaths().CATEGORY_GUIDELINES_PATH) || {};
+    const guidelinesMap = (guidelinesPayload && Array.isArray(guidelinesPayload.categories))
+      ? Object.fromEntries(guidelinesPayload.categories.map(c => [c.name, c.notes || '']))
+      : {};
+
+    console.log('\n=== Evaluate Classifier V4 (batched) — UI request ===');
+    console.log(`User: ${CURRENT_USER_EMAIL}`);
+    console.log('Split: 80% train / 20% test | Seed: 42');
+    console.log('Per-category example cap: 30 | Batch size: 12');
+    console.log(`Loaded ${labeled.length} labeled emails; using ${categoriesX.length} categories.`);
+    console.log(`Train size: ${train.length} | Test size: ${test.length}`);
+
+    // Batched processing
+    const BATCH = 12;
+    const resultsAll = {};
+    for (let i = 0; i < test.length; i += BATCH) {
+      const batch = test.slice(i, i + BATCH).map(e => ({
+        id: e.id,
+        subject: e.subject,
+        body: e.body || e.snippet || '',
+        from: e.from
+      }));
+      console.log(`Doing batch ${Math.floor(i / BATCH) + 1}/${Math.max(1, Math.ceil(test.length / BATCH))} (${batch.length} emails)...`);
+      const r = await __v3OpenAIBatchLabel(batch, categoriesX, perCatRows, summaries, guidelinesMap, 30);
+      Object.assign(resultsAll, r || {});
+    }
+
+    // Metrics
+    let correctlyAssignedTags = 0;
+    let extraTagsSuggested = 0;
+    let exactMatchEmails = 0;
+
+    const testRows = test.map((te, idx) => {
+      const gt = Array.isArray(te.categories) ? te.categories : (te.category ? [te.category] : []);
+      const r = resultsAll?.[te.id] || {};
+      const llmContenders = Array.isArray(r.contenders) ? r.contenders.filter(Boolean) : [];
+      const rationales = (r.rationales && typeof r.rationales === 'object') ? r.rationales : {};
+      const pickRaw = typeof r.pick === 'string' ? r.pick : '';
+
+      // V4 decision
+      const senderBest = __v3SenderMajorityFallback({ from: te.from, body: te.body, subject: te.subject }, categoriesX, perCatRows);
+      const contendersUnion = (() => {
+        const seen = new Set();
+        const arr = [];
+        for (const c of llmContenders) {
+          const k = normalizeKey(c);
+          if (!k || seen.has(k)) continue;
+          seen.add(k); arr.push(matchToCurrentCategory(c, categoriesX) || c);
+        }
+        if (senderBest && senderBest.cat) {
+          const k2 = normalizeKey(senderBest.cat);
+          if (!seen.has(k2)) {
+            seen.add(k2);
+            arr.push(matchToCurrentCategory(senderBest.cat, categoriesX) || senderBest.cat);
+          }
+        }
+        return arr;
+      })();
+
+      let suggestion = '';
+      let reasonsMap = {};
+
+      if (contendersUnion.length > 0) {
+        const mappedPick = pickRaw ? (matchToCurrentCategory(pickRaw, categoriesX) || '') : '';
+        const unionKeys = new Set(contendersUnion.map(c => normalizeKey(c)));
+        if (mappedPick && unionKeys.has(normalizeKey(mappedPick))) {
+          suggestion = mappedPick;
+          reasonsMap = { [suggestion]: rationales?.[suggestion] || 'LLM best-of from sender-augmented contenders' };
+        } else if (senderBest && senderBest.cat && unionKeys.has(normalizeKey(senderBest.cat))) {
+          const chosen = matchToCurrentCategory(senderBest.cat, categoriesX) || senderBest.cat;
+          suggestion = chosen;
+          reasonsMap = { [suggestion]: `Sender augmentation: highest co-occurrence in training (count=${senderBest.count || 0})` };
+        } else {
+          suggestion = contendersUnion[0] || '';
+          reasonsMap = { [suggestion]: rationales?.[suggestion] || 'Augmented contenders; defaulted to first' };
+        }
+      } else {
+        const kw = __v3KeywordFallback({ subject: te.subject, body: te.body }, categoriesX);
+        if (kw) {
+          suggestion = matchToCurrentCategory(kw, categoriesX) || kw;
+          reasonsMap = { [suggestion]: `Keyword fallback: subject x${__countOccurrencesInsensitive(te.subject || '', suggestion)}, body x${__countOccurrencesInsensitive(te.body || '', suggestion)}` };
+        } else {
+          suggestion = categoriesX.find(c => normalizeKey(c) === 'other') || categoriesX[0] || '';
+          if (suggestion) reasonsMap = { [suggestion]: 'Last-resort default' };
+        }
+      }
+
+      // Build UI tags + metrics
+      const suggestedArr = suggestion ? [suggestion] : [];
+      const gtNorm = new Set(gt.map(c => normalizeKey(c)));
+      const sugNorm = new Set(suggestedArr.map(c => normalizeKey(c)));
+      const missing = gt.filter(a => !sugNorm.has(normalizeKey(a)));
+      const extra = suggestedArr.filter(s => !gtNorm.has(normalizeKey(s)));
+
+      gtNorm.forEach(a => { if (sugNorm.has(a)) correctlyAssignedTags++; });
+      extraTagsSuggested += extra.length;
+      if (missing.length === 0 && extra.length === 0) exactMatchEmails++;
+
+      // Log per-email progress
+      try {
+        const subj = (te.subject || 'No Subject').slice(0, 120);
+        console.log(`[${idx + 1}/${test.length}] ${subj} | actual=[${gt.join(', ')}] | suggested=[${suggestedArr.join(', ')}] | missing=${missing.length} extra=${extra.length}${(missing.length === 0 && extra.length === 0) ? ' | OK' : ''}`);
+      } catch (_){}
+
+      const suggestedOut = [];
+      for (const cat of suggestedArr) {
+        const isCorrect = gtNorm.has(normalizeKey(cat));
+        const reasons = reasonsMap[cat] ? [reasonsMap[cat]] : [];
+        suggestedOut.push({ name: cat, status: isCorrect ? 'correct' : 'incorrect', reasons });
+      }
+      for (const miss of missing) {
+        if (normalizeKey(miss) === 'other') continue;
+        suggestedOut.push({ name: miss, status: 'missing', reasons: ['Present in ground truth but not among suggestions'] });
+      }
+
+      return {
+        id: te.id,
+        subject: te.subject,
+        from: te.from,
+        date: te.date,
+        snippet: te.snippet,
+        groundTruth: gt,
+        suggested: suggestedOut
+      };
+    });
+
+    const accuracy = test.length ? (exactMatchEmails / test.length) : 0;
+
+    const trainRows = train.map(tr => ({
+      id: tr.id,
+      subject: tr.subject,
+      from: tr.from,
+      date: tr.date,
+      snippet: tr.snippet,
+      categories: Array.isArray(tr.categories) ? tr.categories : (tr.category ? [tr.category] : [])
+    }));
+
+    console.log('');
+    console.log(`Accuracy (strict multi-label containment): ${(accuracy * 100).toFixed(2)}% (${exactMatchEmails}/${test.length})`);
+    console.log(`Tags: correct ${correctlyAssignedTags} extra ${extraTagsSuggested}`);
+
+    return res.json({
+      success: true,
+      metrics: {
+        totalTest: test.length,
+        accuracy: Number(accuracy.toFixed(4)),
+        correctlyAssignedTags,
+        extraTagsSuggested,
+        exactMatchEmails
+      },
+      test: { emails: testRows },
+      train: { emails: trainRows }
+    });
+  } catch (err) {
+    console.error('test-classifier/run-v4 failed:', err);
+    return res.status(500).json({ success: false, error: 'Failed to run classifier v4 test' });
+  }
+});
+
+ // POST /api/test-classifier/run-v3
 // Runs the V3 batched classifier on a deterministic 80/20 split and returns metrics + rows (like the existing UI expects)
 app.post('/api/test-classifier/run-v3', async (req, res) => {
   try {

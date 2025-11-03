@@ -11460,14 +11460,15 @@ let selectedOtherThreadIds = new Set();
                         <button class="close" onclick="closeCategoriesReviewModal()">&times;</button>
                     </div>
                     <div style="padding: 16px; display: flex; flex-direction: column; gap: 12px; flex: 1 1 auto; min-height: 0;">
-                        <div style="display: flex; gap: 12px; align-items: center; flex-wrap: wrap;">
-                            <button class="select-email-btn" onclick="addNewCategory()">+ Add Category</button>
-                            <button class="select-email-btn" onclick="promptRefreshCategoriesMode()">🔄 Refresh Categories</button>
-                            <button class="select-email-btn" onclick="openCarouselEditing()">Carousel Editing</button>
-                            <button class="select-email-btn" onclick="showSortUnrepliedPrompt()" title="Choose to view current grouping or refresh with keyword sort" style="background:#8b5cf6;">Sort Unreplied</button>
-                            <button class="select-email-btn" onclick="showSummarizeCategoriesModal()" title="Generate or edit summaries for one or more categories" style="background:#17a2b8;">🧠 Summarize Categories</button>
-                            <span style="color:#666; font-size:12px;">Drag emails between categories. Click “Approve & Save” to apply changes.</span>
-                        </div>
+                            <div style="display: flex; gap: 12px; align-items: center; flex-wrap: wrap;">
+                                <button class="select-email-btn" onclick="addNewCategory()">+ Add Category</button>
+                                <button class="select-email-btn" onclick="promptRefreshCategoriesMode()">🔄 Refresh Categories</button>
+                                <button class="select-email-btn" onclick="openCarouselEditing()">Carousel Editing</button>
+                                <button class="select-email-btn" onclick="showSortUnrepliedPrompt()" title="Choose to view current grouping or refresh with keyword sort" style="background:#8b5cf6;">Sort Unreplied</button>
+                                <button class="select-email-btn" onclick="showSummarizeCategoriesModal()" title="Generate or edit summaries for one or more categories" style="background:#17a2b8;">🧠 Summarize Categories</button>
+                                <button class="select-email-btn" onclick="showSeeAllCategoriesModal()" title="View all categories with counts; delete will migrate emails to “Other”" style="background:#0ea5e9;">👁️ See All Categories</button>
+                                <span style="color:#666; font-size:12px;">Drag emails between categories. Click “Approve & Save” to apply changes.</span>
+                            </div>
                         <div id="categoriesEditorContainer" style="flex: 0 0 60vh; height: 60vh; min-height: 0; overflow: hidden;">
                             <div id="categoriesEditor" style="height: 100%; display:flex; gap:12px; overflow-x:auto; overflow-y:hidden; align-items: stretch; padding-bottom:8px;"></div>
                         </div>
@@ -15469,6 +15470,116 @@ function showEmailNotesForContext() {
         showErrorPopup('Failed to open email notes.', 'Open Failed');
     }
 }
+/* ===== See All Categories (counts + delete/migrate) ===== */
+function ensureSeeAllCategoriesModal() {
+    let modal = document.getElementById('seeAllCategoriesModal');
+    if (modal) return modal;
+    modal = document.createElement('div');
+    modal.id = 'seeAllCategoriesModal';
+    modal.className = 'modal';
+    modal.innerHTML = `
+        <div class="modal-content" style="max-width: 640px; max-height: 80vh; display:flex; flex-direction:column;">
+            <div class="modal-header" style="border-bottom: 2px solid #0ea5e9;">
+                <h2 class="modal-title">All Categories</h2>
+                <button class="close" onclick="closeSeeAllCategoriesModal()">&times;</button>
+            </div>
+            <div id="allCategoriesBody" style="padding: 16px; overflow:auto; max-height: 60vh;">
+                <div class="loading">Loading categories…</div>
+            </div>
+            <div style="display:flex; justify-content:center; gap:12px; padding: 12px 16px; border-top:1px solid #e9ecef;">
+                <button class="carousel-btn carousel-btn-cancel" onclick="closeSeeAllCategoriesModal()">Close</button>
+            </div>
+        </div>
+    `;
+    modal.addEventListener('click', (ev) => { if (ev.target === modal) closeSeeAllCategoriesModal(); });
+    document.body.appendChild(modal);
+    return modal;
+}
+function closeSeeAllCategoriesModal() {
+    const modal = document.getElementById('seeAllCategoriesModal');
+    if (modal) modal.style.display = 'none';
+}
+async function showSeeAllCategoriesModal() {
+    const modal = ensureSeeAllCategoriesModal();
+    const body = document.getElementById('allCategoriesBody');
+    if (body) body.innerHTML = '<div class="loading">Loading categories…</div>';
+    modal.style.display = 'block';
+    try {
+        const resp = await fetch('/api/categories/all-with-counts');
+        const data = await resp.json();
+        if (!resp.ok || !data || !Array.isArray(data.categories)) {
+            throw new Error(data.error || 'Failed to load categories');
+        }
+        renderAllCategoriesList(data.categories);
+    } catch (e) {
+        if (body) body.innerHTML = '<div class="error">Failed to load categories. Please try again.</div>';
+        console.error('showSeeAllCategoriesModal failed:', e);
+    }
+}
+function renderAllCategoriesList(list) {
+    const body = document.getElementById('allCategoriesBody');
+    if (!body) return;
+    const items = Array.isArray(list) ? list.slice() : [];
+    if (!items.length) {
+        body.innerHTML = '<div class="no-emails" style="padding:12px;">No categories found.</div>';
+        return;
+    }
+    // Keep "Other" last
+    items.sort((a, b) => {
+        const ao = String(a.name || '').toLowerCase() === 'other' ? 1 : 0;
+        const bo = String(b.name || '').toLowerCase() === 'other' ? 1 : 0;
+        if (ao !== bo) return ao - bo;
+        return String(a.name || '').localeCompare(String(b.name || ''));
+    });
+    const rows = items.map(c => {
+        const name = String(c.name || '');
+        const count = Number.isFinite(c.count) ? c.count : 0;
+        const isOther = name.toLowerCase() === 'other';
+        return `
+            <div style="display:flex; align-items:center; justify-content:space-between; gap:12px; border:1px solid #e9ecef; border-left:4px solid #0ea5e9; border-radius:6px; padding:10px; margin-bottom:8px; background:#fff;">
+                <div style="display:flex; align-items:center; gap:10px; min-width:0;">
+                    <div style="font-weight:600; color:#333; overflow:hidden; text-overflow:ellipsis;">${escapeHtml(name)}</div>
+                    <span class="email-category" style="background:#f1f3f4; color:#333; padding:3px 10px; border-radius:12px; font-size:12px;">${count}</span>
+                </div>
+                <div style="display:flex; gap:8px;">
+                    <button class="refinement-delete-btn" title="${isOther ? 'Cannot delete Other' : 'Delete and migrate emails to “Other”'}" ${isOther ? 'disabled' : ''} onclick="${isOther ? '' : `deleteCategoryAndRefresh('${name.replace(/'/g, "\\'")}')`}">Delete</button>
+                </div>
+            </div>
+        `;
+    }).join('');
+    body.innerHTML = `
+        <div style="color:#666; font-size:13px; margin-bottom:8px;">
+            Deleting a category will migrate its emails to “Other”.
+        </div>
+        ${rows}
+    `;
+}
+function deleteCategoryAndRefresh(name) {
+    showConfirmPopup(
+        `Delete category “${name}”? All its emails will be moved to “Other”.`,
+        async () => {
+            try {
+                const resp = await fetch(`/api/categories/${encodeURIComponent(name)}`, { method: 'DELETE' });
+                const data = await resp.json();
+                if (!resp.ok || !data.success) throw new Error(data.error || 'Delete failed');
+                const movedR = (data.moved && typeof data.moved.responses === 'number') ? data.moved.responses : 0;
+                const movedU = (data.moved && typeof data.moved.unreplied === 'number') ? data.moved.unreplied : 0;
+                showSuccessPopup(`Deleted “${name}”. Migrated ${movedR} responses and ${movedU} unreplied to “Other”.`, 'Category Deleted');
+                // Refresh lists and sidebar
+                try { await loadCurrentCategories(); } catch (_){}
+                try { await loadEmails(); } catch (_){}
+                // Re-fetch category counts list
+                showSeeAllCategoriesModal();
+            } catch (e) {
+                console.error('deleteCategory failed:', e);
+                showErrorPopup('Failed to delete category. Please try again.', 'Delete Failed');
+            }
+        },
+        () => {},
+        'Delete Category'
+    );
+}
+/* ===== End See All Categories ===== */
 </script>
 </body>
 </html>

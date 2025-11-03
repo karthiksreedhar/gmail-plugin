@@ -697,7 +697,7 @@
           body: typeof e.body === 'string' ? e.body : (e.snippet || ''),
           from: String(e.from || '')
         })).filter(x => x.id);
-        const resp = await fetch('/api/classifier-v3/suggest-batch', {
+        const resp = await fetch('/api/classifier-v4/suggest-batch', {
           method: 'POST', headers: {'Content-Type':'application/json'},
           body: JSON.stringify({ emails: minimal, maxPerCat: 30 })
         });

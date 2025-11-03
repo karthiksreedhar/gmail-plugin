@@ -511,7 +511,7 @@
     async function runEvaluation(){
       try{
         showLoading('Running Classifier','Training on 80% and evaluating on 20%…');
-        const resp = await fetch('/api/test-classifier/run-v3', { method:'POST' });
+        const resp = await fetch('/api/test-classifier/run-v4', { method:'POST' });
         const data = await resp.json();
         if (!resp.ok || !data || data.success === false){
           hideLoading();
