@@ -586,16 +586,10 @@
       // 1) Pre-train and suggest with the classifier (server logs predictions to terminal)
       await runClassifierSuggestions(loadItems);
 
-      // 2) Then run the existing multi-rule suggestion pipeline
-      document.getElementById('leftStatus').textContent = 'Categorizing...';
-      showOverlay('Rule-based & AI Suggestions', 'Analyzing emails and computing multi-rule suggestions…');
-      // Keep loadItems.category as 'Other' and __predicted=true; computeLoadMoreCategorySuggestions
-      // will set suggestions and auto-promote primary from the first non-Other suggestion when appropriate.
-
-      await computeLoadMoreCategorySuggestions(loadItems);
+      // 2) Use V3 single-pick results only (no multi-rule aggregation)
+      document.getElementById('leftStatus').textContent = 'Categorized';
       renderList();
       if (loadItems.length) selectItem(loadItems[0].id);
-      document.getElementById('leftStatus').textContent = `${loadItems.length} loaded`;
       document.getElementById('countStat').textContent = loadItems.length ? `(${loadItems.length})` : '';
       hideOverlay();
     } catch (e) {
@@ -760,12 +754,8 @@
       const chip = document.createElement('span');
       chip.className = 'chip' + (it.__predicted ? ' predicted' : '');
       chip.innerHTML = `<span>${escapeHtml(primaryName)}</span> <span class="x" title="Remove category">×</span>`;
-      // clicking anywhere on the primary chip except the X shows reason popover
-      chip.onclick = (ev) => {
-        if (ev && ev.target && ev.target.closest && ev.target.closest('.x')) return;
-        ev.stopPropagation();
-        openSuggestionReason(id, primaryName, chip);
-      };
+      // inline reason next to primary (no popover)
+      const __reason = String(it.__classifierReason || '').trim();
       chip.querySelector('.x').onclick = (ev) => {
         ev.stopPropagation();
         // removing primary allows empty; user can add their own
@@ -774,62 +764,22 @@
         refreshItemUI(id);
       };
       host.appendChild(chip);
+      if (__reason) {
+        const rs = document.createElement('span');
+        rs.className = 'small';
+        rs.style.marginLeft = '6px';
+        rs.textContent = __reason;
+        host.appendChild(rs);
+      }
     }
 
-    // render additional categories (extras)
-    if (!Array.isArray(it.categories)) it.categories = [];
-    const primaryLc = (it.category || '').trim().toLowerCase();
-    it.categories.forEach(extra => {
-      if (String(extra || '').trim().toLowerCase() === primaryLc) return;
-      const ec = document.createElement('span');
-      ec.className = 'chip';
-      ec.innerHTML = `<span>${escapeHtml(extra)}</span> <span class="x" title="Remove category">×</span>`;
-      ec.querySelector('.x').onclick = (ev) => {
-        ev.stopPropagation();
-        it.categories = it.categories.filter(c => c.toLowerCase() !== String(extra).toLowerCase());
-        refreshItemUI(id);
-      };
-      host.appendChild(ec);
-    });
 
-    // inline suggested categories as chips with dismiss (×)
-    // suggs already normalized above
-    const shownSuggs = suggs.filter(c => String(c || '').trim().toLowerCase() !== primaryLc);
-    shownSuggs.forEach((name) => {
-      const s = document.createElement('span');
-      s.className = 'chip predicted';
-      s.innerHTML = `<span>${escapeHtml(name)}</span> <span class="x" title="Dismiss suggestion">×</span>`;
-      // clicking anywhere on the chip except the X shows reason popover with option to Apply
-      s.onclick = (ev) => {
-        // Ignore click if it was on the X
-        if (ev && ev.target && ev.target.closest && ev.target.closest('.x')) return;
-        ev.stopPropagation();
-        openSuggestionReason(id, name, s);
-      };
-      // clicking × removes the suggestion chip (case-insensitive)
-      s.querySelector('.x').onclick = (ev) => {
-        ev.stopPropagation();
-        const removeLc = String(name || '').trim().toLowerCase();
-        it.suggestedCategories = (it.suggestedCategories || []).filter(c => String(c || '').trim().toLowerCase() !== removeLc);
-        // Also remove stored reason if present
-        try {
-          if (it.suggestedReasons && typeof it.suggestedReasons === 'object') {
-            Object.keys(it.suggestedReasons).forEach(k => {
-              if (String(k || '').trim().toLowerCase() === removeLc) {
-                delete it.suggestedReasons[k];
-              }
-            });
-          }
-        } catch(_){}
-        closeChipReasonPopover();
-        refreshItemUI(id);
-      };
-      host.appendChild(s);
-    });
 
     // input + suggestions (choose from categories)
     const wrapper = document.createElement('div');
     wrapper.style.position = 'relative';
+    wrapper.style.flexBasis = '100%';
+    wrapper.style.marginTop = '6px';
     const input = document.createElement('input');
     input.className = 'chip-input';
     input.setAttribute('placeholder', 'Add Category…');
@@ -926,6 +876,22 @@
     });
 
     host.appendChild(wrapper);
+
+    // render additional categories (extras) — moved below suggested tag and Add Category input
+    if (!Array.isArray(it.categories)) it.categories = [];
+    const primaryLc = (it.category || '').trim().toLowerCase();
+    it.categories.forEach(extra => {
+      if (String(extra || '').trim().toLowerCase() === primaryLc) return;
+      const ec = document.createElement('span');
+      ec.className = 'chip';
+      ec.innerHTML = `<span>${escapeHtml(extra)}</span> <span class="x" title="Remove category">×</span>`;
+      ec.querySelector('.x').onclick = (ev) => {
+        ev.stopPropagation();
+        it.categories = it.categories.filter(c => c.toLowerCase() !== String(extra).toLowerCase());
+        refreshItemUI(id);
+      };
+      host.appendChild(ec);
+    });
   }
 
   function positionSuggestionsUnder(input, sugg){
@@ -1211,6 +1177,11 @@
           it.__classifierReason =
             (suggestion && (rationales[suggestion] || 'Classifier V3 pick.')) ||
             (finalList[0] ? (it.suggestedReasons[finalList[0]] || 'Classifier V3 pick.') : '');
+          // Enforce single-pick behavior (align with Test Classifier): set primary to V3 pick and clear multi-suggestions
+          const finalPick = (suggestion || finalList[0] || 'Other');
+          it.category = String(finalPick || 'Other').trim();
+          it.__predicted = true;
+          it.suggestedCategories = [];
         } catch(_) {}
       });
     } catch(_){

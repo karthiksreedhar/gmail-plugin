@@ -103,6 +103,8 @@
     .email-snippet{font-size:13px; color:#555; margin-bottom:8px; white-space:pre-wrap}
     .row{display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:6px}
     .row-title{font-size:12px; color:var(--muted); margin-right:6px}
+    .sug-item{display:inline-flex; align-items:center; gap:6px; margin-right:8px}
+    .sug-reason{font-size:12px; color:var(--muted)}
 
     .tag-pill{
       display:inline-block; padding:6px 12px; border-radius:14px; font-size:14px; font-weight:600; cursor:pointer; user-select:none;
@@ -228,49 +230,11 @@
           <div class="legend-tags">
             <span class="tag-pill tag-correct">Correct</span>
             <span class="tag-pill tag-incorrect">Incorrect</span>
-            <span class="tag-pill tag-missing">Missing</span>
           </div>
-        </div>
-        <div class="small info-note">
-          Click a tag to see reasons.
         </div>
       </div>
 
       <div class="sidebar-divider"></div>
-      <div class="steps">
-        <div class="steps-title">Classification pipeline</div>
-        <ol class="steps-list numbered">
-          <li>
-            Deterministic rules
-            <div class="muted">Match saved guidelines/keywords to categories (strong signals come first).</div>
-          </li>
-          <li>
-            Sender & domain affinity
-            <div class="muted">Prefer categories frequently associated with the sender or email domain.</div>
-          </li>
-          <li>
-            Subject nearest‑neighbor
-            <div class="muted">Find closest subjects in labeled data using TF‑IDF/cosine similarity (no OpenAI API) to infer likely categories.</div>
-          </li>
-          <li>
-            Body nearest‑neighbor
-            <div class="muted">Compare email bodies to top labeled examples using OpenAI API semantic similarity (embeddings) for additional signals.</div>
-          </li>
-          <li>
-            Semantic search (fallback)
-            <div class="muted">Runs only if steps 1–4 produced no non‑Other suggestion; fills any remaining slots up to the 2‑suggestion cap.</div>
-          </li>
-          <li>
-            Finalize & limits
-            <div class="muted">Max 2 suggestions. If any non‑Other exists, drop “Other”. If still none, suggest “Other”. Exact‑match emails are counted as “Completely Correct”.</div>
-          </li>
-        </ol>
-        <div class="steps-title">Timing notes</div>
-        <ul class="steps-list">
-          <li>TF‑IDF subject matching (step 3) runs before body embeddings (step 4).</li>
-          <li>OpenAI embeddings are used only in step 4; step 5 (semantic fallback) runs only if steps 1–4 yield no non‑Other.</li>
-        </ul>
-      </div>
     </aside>
 
     <main class="content" id="contentRoot">
@@ -308,18 +272,6 @@
     </div>
   </div>
 
-  <!-- Reasons modal -->
-  <div class="modal" id="reasonsModal">
-    <div class="modal-card">
-      <div class="modal-header">
-        <h3 class="modal-title" id="reasonsTitle">Reasons</h3>
-        <button class="close-btn" onclick="closeReasons()">×</button>
-      </div>
-      <div class="modal-body">
-        <ul class="reasons" id="reasonsList"></ul>
-      </div>
-    </div>
-  </div>
 
   <script>
     const state = {
@@ -359,28 +311,6 @@
         .replace(/'/g,'&#39;');
     }
 
-    // Modal for reasons
-    function openReasons(title, reasons){
-      document.getElementById('reasonsTitle').textContent = title || 'Reasons';
-      const ul = document.getElementById('reasonsList');
-      ul.innerHTML = '';
-      const arr = Array.isArray(reasons) ? reasons : [];
-      if (!arr.length){
-        const li = document.createElement('li');
-        li.textContent = 'No reasons provided.';
-        ul.appendChild(li);
-      } else {
-        arr.forEach(r=>{
-          const li = document.createElement('li');
-          li.textContent = r;
-          ul.appendChild(li);
-        });
-      }
-      document.getElementById('reasonsModal').style.display = 'flex';
-    }
-    function closeReasons(){
-      document.getElementById('reasonsModal').style.display = 'none';
-    }
 
     // Email Thread in-pane (no reply)
     async function openThread(emailId, subject){
@@ -474,25 +404,9 @@
       if (status === 'incorrect') cls = 'tag-incorrect';
       else if (status === 'missing') cls = 'tag-missing';
       const title = status === 'correct' ? 'Correct' : (status === 'incorrect' ? 'Incorrect' : 'Missing');
-      return `<span class="tag-pill ${cls}" title="${esc(title)}" data-tag="${esc(tag.name)}">${esc(tag.name)}</span>`;
+      return `<span class="tag-pill ${cls}" data-tag="${esc(tag.name)}">${esc(tag.name)}</span>`;
     }
 
-    function attachTagHandlers(container, email){
-      const pills = container.querySelectorAll('.tag-pill');
-      pills.forEach(p=>{
-        p.addEventListener('click', (ev)=>{
-          ev.stopPropagation();
-          const tagName = p.getAttribute('data-tag') || '';
-          const found = (email.suggested || []).find(t => t.name === tagName);
-          if (found){
-            openReasons(`Why "${tagName}"?`, Array.isArray(found.reasons) ? found.reasons : []);
-          }else{
-            // If it's a missing tag (not in suggested array), show basic reason
-            openReasons(`Missing "${tagName}"`, ['This tag is present in the ground truth but was not among the top suggestions.']);
-          }
-        });
-      });
-    }
 
     function renderTestList(){
       const host = document.getElementById('testList');
@@ -504,19 +418,24 @@
       state.test.forEach(e=>{
         const gt = Array.isArray(e.groundTruth) ? e.groundTruth : [];
         let suggested = Array.isArray(e.suggested) ? e.suggested : [];
-        // Enforce client-side too: never show "Other" alongside real suggestions; never show "Other" as a missing tag
-        const hasNonOther = suggested.some(t => String(t?.name || '').trim().toLowerCase() !== 'other' && t.status !== 'missing');
+        // Remove all missing categories from suggested view
+        suggested = suggested.filter(t => t && t.status !== 'missing');
+        // Enforce: never show "Other" alongside real suggestions
+        const hasNonOther = suggested.some(t => String(t?.name || '').trim().toLowerCase() !== 'other');
         if (hasNonOther) {
           suggested = suggested.filter(t => String(t?.name || '').trim().toLowerCase() !== 'other');
         }
-        suggested = suggested.filter(t => !(t.status === 'missing' && String(t?.name || '').trim().toLowerCase() === 'other'));
-        // Build missing tags list for display (status === 'missing' already included in suggested array in backend)
         const subject = esc(e.subject || 'No Subject');
         const from = esc(e.from || 'Unknown Sender');
         const date = formatDate(e.date);
         const snippet = esc(e.snippet || '');
         const gtHtml = gt.map(n => `<span class="tag-pill" style="background:#eef2ff;color:#1a73e8;border-color:#c6dafc;cursor:default;">${esc(n)}</span>`).join(' ');
-        const sugHtml = suggested.map(tag => tagPillHTML(tag)).join(' ');
+        const sugHtml = suggested.map(tag => {
+          const reasonsArr = Array.isArray(tag.reasons) ? tag.reasons : (typeof tag.reasons === 'string' ? [tag.reasons] : []);
+          const reason = reasonsArr && reasonsArr.length ? esc(reasonsArr[0]) : '';
+          const pill = tagPillHTML(tag);
+          return reason ? `<span class="sug-item">${pill}<span class="sug-reason">${reason}</span></span>` : `<span class="sug-item">${pill}</span>`;
+        }).join(' ');
 
         const card = document.createElement('div');
         card.className = 'email-card test';
@@ -539,8 +458,6 @@
           </div>
         `;
         host.appendChild(card);
-        const sugRow = card.querySelector('.sug-row');
-        attachTagHandlers(sugRow, e);
         // Click card to open email thread (same behavior as main UI)
         card.addEventListener('click', ()=>{
           openThread(e.id, e.subject || 'Email Thread');
