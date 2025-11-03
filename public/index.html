@@ -14152,7 +14152,10 @@ function renderEmailNotesListMain(notes) {
         const safeText = escapeHtml(n.text || '');
         return `
             <div style="border:1px solid #e9ecef; border-radius:6px; padding:8px; margin-bottom:8px; background:#fff;">
-                <div style="font-size:12px; color:#666; margin-bottom:4px;">${when}</div>
+                <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:4px;">
+                    <div style="font-size:12px; color:#666;">${when}</div>
+                    <button class="refinement-delete-btn" style="padding:4px 8px; font-size:12px;" title="Delete note" onclick="deleteEmailNoteMain('${n.id}')">🗑️</button>
+                </div>
                 <div style="white-space:pre-wrap; font-size:13px; color:#333;">${safeText}</div>
             </div>
         `;
@@ -14181,6 +14184,38 @@ async function addEmailNoteMain() {
         await loadEmailNotesMain(emailId);
     } catch (e) {
         showErrorPopup('Failed to add note. Please try again.', 'Add Note Failed');
+    }
+}
+
+async function deleteEmailNoteMain(noteId) {
+    try {
+        const emailId = currentEmailNotesId || '';
+        if (!emailId || !noteId) return;
+        const r = await fetch(`/api/email-notes/${encodeURIComponent(emailId)}/${encodeURIComponent(noteId)}`, {
+            method: 'DELETE'
+        });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok || !d.success) {
+            showErrorPopup('Failed to delete note. Please try again.', 'Delete Failed');
+            return;
+        }
+        // Invalidate cache and refresh list
+        try {
+            if (window.__emailNotesCache) {
+                delete window.__emailNotesCache[emailId];
+            }
+        } catch (_) {}
+        await loadEmailNotesMain(emailId);
+        // Refresh any inline previews for this email
+        try {
+            document.querySelectorAll(`.notes-preview[data-email-notes="${emailId}"]`).forEach(el => {
+                renderEmailNotesPreview(el, emailId);
+            });
+            const tnp = document.getElementById('thread-notes-preview');
+            if (tnp) renderEmailNotesPreview(tnp, emailId);
+        } catch (_) {}
+    } catch (e) {
+        showErrorPopup('Failed to delete note. Please try again.', 'Delete Failed');
     }
 }
 

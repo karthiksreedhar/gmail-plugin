@@ -73,21 +73,21 @@
     .btn:hover{opacity:.9}
 
     .layout{
-      display:flex;
+      display:block;
       height:calc(100vh - 64px);
       min-height:400px;
     }
     /* Split the page evenly left/right */
     .pane-left{
-      flex:1 1 50%;
-      border-right:1px solid var(--border);
+      width:100%;
+      border-right:none;
       display:flex;
       flex-direction:column;
       overflow:hidden;
       background:#f5f0e8;
     }
     .pane-right{
-      flex:1 1 50%;
+      width:100%;
       min-width:0;
       display:flex;
       flex-direction:column;
@@ -351,6 +351,27 @@
       font-size:13px;
       text-align:center;
     }
+    /* Inline Notes styling (match load.html) */
+    .sticky-note{
+      background:#f5f5f5;
+      border:1px solid #e0e0e0;
+      border-radius:8px;
+      padding:10px;
+      margin-top:8px;
+    }
+    .sticky-row{
+      display:flex; gap:8px; align-items:flex-start; flex-wrap:wrap;
+    }
+    .sticky-text{
+      flex:1; min-width:220px; max-width:100%;
+      padding:8px; border:1px solid #dadce0; border-radius:6px; font-size:13px; background:#fff;
+    }
+    .sticky-btn{
+      background:#ffd54f; color:#5d4037; border:1px solid #fbc02d; border-radius:6px; padding:6px 10px; cursor:pointer; font-size:12px;
+    }
+    .sticky-btn:hover{ background:#ffca28; }
+    .sticky-status{ font-size:12px; color:#6d4c41; }
+
   </style>
 </head>
 <body>
@@ -377,13 +398,17 @@
       </div>
     </aside>
 
-    <section class="pane-right">
+    <section class="pane-right" style="display:none;">
       <div class="right-top" style="flex-wrap:wrap;">
         <div style="flex:1 1 100%; display:flex; align-items:center; justify-content:space-between; gap:12px;">
-          <div id="detailTitle" class="title">Select an item</div>
-          <div id="detailTags" class="it-actions"><!-- removed unreplied/thread --></div>
+          <div style="display:flex; align-items:center; gap:8px;">
+            <button class="btn btn-secondary" id="seedBackBtn" title="Back">← Back</button>
+            <div id="detailTitle" class="title">Select an item</div>
+          </div>
+          <div id="detailTags" class="it-actions"></div>
         </div>
       </div>
+      <div id="detailCats" style="padding:8px 16px; background:#fff; border-bottom:1px solid var(--border);"></div>
 
       <!-- Email Notes section (per-email) -->
       <div id="emailNotesSection" class="email-notes-section" style="padding:10px 16px; border-bottom:1px solid #e9ecef; background:#fff;">
@@ -427,6 +452,15 @@
     </div>
   </div>
 
+  <!-- Missing categories overlay (Seed) -->
+  <div class="loading-overlay" id="seedMissingOverlay" style="display:none;">
+    <div class="loading-card">
+      <div class="overlay-title">Missing Categories</div>
+      <div class="overlay-msg">Add a category for these emails before adding to database:</div>
+      <div id="seedMissingList" style="text-align:left; max-height:240px; overflow:auto; margin-top:8px; font-size:13px; color:#333;"></div>
+      <button class="btn btn-secondary" id="seedMissingCloseBtn" style="margin-top:12px;">Close</button>
+    </div>
+  </div>
 
 <script>
   // State
@@ -461,6 +495,46 @@
     if (actions) actions.style.display = 'none';
     const spin = document.querySelector('#overlay .spinner');
     if (spin) spin.style.display = '';
+  }
+
+  // Toggle single-column views: list <-> thread
+  function showSeedThread(){
+    const left = document.querySelector('.pane-left');
+    const right = document.querySelector('.pane-right');
+    if (left) left.style.display = 'none';
+    if (right) right.style.display = 'flex';
+  }
+  function showSeedList(){
+    const left = document.querySelector('.pane-left');
+    const right = document.querySelector('.pane-right');
+    if (right) right.style.display = 'none';
+    if (left) left.style.display = 'flex';
+  }
+
+  // Seed Missing categories popup
+  function showSeedMissingOverlay(items){
+    try{
+      const overlay = document.getElementById('seedMissingOverlay');
+      const list = document.getElementById('seedMissingList');
+      if (!overlay || !list) { alert('Please add a category before adding to database.'); return; }
+      const rows = (items || []).map(it => {
+        const subj = escapeHtml(it.subject || 'No Subject');
+        const from = escapeHtml(it.from || 'Unknown Sender');
+        const date = escapeHtml(fmtDate(it.date));
+        return `<div style="padding:6px 0; border-bottom:1px solid #eee;">
+          <div style="font-weight:600; color:#333;">${subj}</div>
+          <div style="font-size:12px; color:#666;">From: ${from} • ${date}</div>
+        </div>`;
+      }).join('');
+      list.innerHTML = rows || '<div class="empty">No items.</div>';
+      overlay.style.display = 'flex';
+    }catch(_){
+      alert('Please add a category before adding to database.');
+    }
+  }
+  function hideSeedMissingOverlay(){
+    const overlay = document.getElementById('seedMissingOverlay');
+    if (overlay) overlay.style.display = 'none';
   }
 
   // Styled inline confirmation dialog (uses overlay)
@@ -695,6 +769,7 @@
         if (ev.target.classList && (ev.target.classList.contains('chip-input') || ev.target.closest('.suggestions'))) {
           return;
         }
+        showSeedThread();
         selectItem(it.id);
       };
 
@@ -715,6 +790,17 @@
           </div>
           <div class="it-meta">${escapeHtml(it.from||'Unknown Sender')} • ${fmtDate(it.date)}</div>
           <div class="chips" data-item="${it.id}"></div>
+
+          <!-- Inline Notes (same pattern as load.html) -->
+          <div class="sticky-note" onclick="event.stopPropagation();">
+            <div style="font-weight:600; color:#5d4037; margin-top:8px; margin-bottom:6px;">Notes</div>
+            <div id="notes-inline-list-${it.id}" class="sticky-row" style="width:100%; flex-direction:column; gap:6px;"></div>
+            <div class="sticky-row">
+              <textarea id="note-inline-${it.id}" rows="2" class="sticky-text" placeholder="Add a note..."></textarea>
+              <button class="sticky-btn" onclick="seedAddInlineNote('${it.id}')">Add</button>
+              <div id="note-inline-status-${it.id}" class="sticky-status"></div>
+            </div>
+          </div>
         </div>
       `;
 
@@ -746,6 +832,8 @@
       renderChipsEditorForItem(it.id, chipsHost);
 
       host.appendChild(div);
+      // Load notes list inline for each item
+      try { seedLoadInlineNotes(it.id); } catch(_) {}
     });
   }
 
@@ -779,6 +867,25 @@
   async function approveOneSeed(it){
     try{
       if (!it || !it.id) return;
+
+      // Build combined selection to validate presence
+      const userSelectedTmp = (selectedCatsById.get(it.id) || [])
+        .map(s => String(s || '').trim())
+        .filter(Boolean);
+      const selTmp = [];
+      const sKeyTmp = senderKeyById.get(it.id);
+      if (sKeyTmp && senderPresenceById.get(it.id)) {
+        const sLabelTmp = (senderLabelByKey.get(sKeyTmp) || '').trim();
+        if (sLabelTmp) selTmp.push(sLabelTmp);
+      }
+      userSelectedTmp.forEach(c => {
+        if (!selTmp.some(x => x.toLowerCase() === c.toLowerCase())) selTmp.push(c);
+      });
+      if (selTmp.length === 0){
+        showSeedMissingOverlay([it]);
+        return;
+      }
+
       showOverlay('Approving', 'Saving to database...');
 
       // Build combined selection for this item: sender suggestion (if present) first, then user-added (de-duped)
@@ -925,6 +1032,16 @@
     }
     document.getElementById('detailTitle').textContent = it.subject || 'No Subject';
     document.getElementById('detailTags').innerHTML = ''; // removed unreplied/thread tags
+    // Render Default Tag + extras row beneath title
+    const dc = document.getElementById('detailCats');
+    if (dc){
+      dc.innerHTML = '';
+      const chips = document.createElement('div');
+      chips.className = 'chips';
+      chips.setAttribute('data-item', it.id);
+      dc.appendChild(chips);
+      renderChipsEditorForItem(it.id, chips);
+    }
     try { await seedLoadEmailNotes(it.id); } catch(_){}
 
     const viewer = document.getElementById('viewer');
@@ -1039,6 +1156,14 @@
     // Render suggested sender chip first (light blue), with inline edit
     const senderKey = senderKeyById.get(id);
     if (senderKey && senderPresenceById.get(id)) {
+      // Label: Default Tag
+      const label = document.createElement('span');
+      label.style.fontSize = '12px';
+      label.style.color = 'var(--muted)';
+      label.style.marginRight = '6px';
+      label.textContent = 'Default Tag:';
+      host.appendChild(label);
+
       const senderLabel = senderLabelByKey.get(senderKey) || '';
       const chip = document.createElement('span');
       chip.className = 'chip chip-sender';
@@ -1373,9 +1498,9 @@
 
     // Inline confirmation (styled overlay) if there are uncategorized emails
     if (skippedCount > 0) {
-      const msg = `${skippedCount} email${skippedCount === 1 ? '' : 's'} have not been categorized and will not be added to database.`;
-      const proceed = await showConfirmDialog('Uncategorized emails', msg, { confirmText: 'Proceed', cancelText: 'Review' });
-      if (!proceed) return;
+      const offenders = allBuilt.filter(r => !isCategorized(r));
+      showSeedMissingOverlay(offenders);
+      return;
     }
 
     if (toAdd.length === 0) {
@@ -1453,11 +1578,77 @@
     });
   }
   document.getElementById('addBtn').addEventListener('click', addAllToDatabase);
+  const _seedMissingClose = document.getElementById('seedMissingCloseBtn');
+  if (_seedMissingClose) _seedMissingClose.addEventListener('click', hideSeedMissingOverlay);
+  // Back button for thread view -> list
+  const _seedBack = document.getElementById('seedBackBtn');
+  if (_seedBack) _seedBack.addEventListener('click', showSeedList);
 
   // Boot
   document.addEventListener('DOMContentLoaded', loadInitial);
 /* ===== Per-email Notes (Seed page) ===== */
 window.__seedCurrentEmailIdNotes = '';
+
+/* Inline notes (left list) — mirrors load.html behavior */
+async function seedAddInlineNote(emailId){
+  try {
+    const ta = document.getElementById(`note-inline-${emailId}`);
+    if (!ta) return;
+    const text = (ta.value || '').trim();
+    if (!text) return;
+    const r = await fetch(`/api/email-notes/${encodeURIComponent(emailId)}`, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ text })
+    });
+    const d = await r.json().catch(()=> ({}));
+    const statusEl = document.getElementById(`note-inline-status-${emailId}`);
+    if (r.ok && d && d.success){
+      ta.value = '';
+      if (statusEl){ statusEl.textContent = 'Saved'; setTimeout(()=> statusEl.textContent = '', 1500); }
+      seedLoadInlineNotes(emailId);
+    } else {
+      if (statusEl){ statusEl.textContent = 'Failed to save'; setTimeout(()=> statusEl.textContent = '', 1500); }
+    }
+  } catch(_){}
+}
+
+async function seedLoadInlineNotes(emailId){
+  try {
+    const listEl = document.getElementById(`notes-inline-list-${emailId}`);
+    if (!listEl) return;
+    listEl.innerHTML = '';
+    const r = await fetch(`/api/email-notes/${encodeURIComponent(emailId)}`);
+    const d = await r.json().catch(()=> ({}));
+    const notes = Array.isArray(d.notes) ? d.notes : [];
+    if (!notes.length) {
+      listEl.innerHTML = '<div class="small" style="color:#6d4c41;">No notes yet.</div>';
+      return;
+    }
+    listEl.innerHTML = notes.map(n => {
+      const ts = new Date(n.updatedAt || n.createdAt || Date.now());
+      const when = isNaN(ts) ? '' : ts.toLocaleString();
+      const safe = escapeHtml(n.text || '');
+      return `
+        <div style="display:flex; align-items:flex-start; gap:8px;">
+          <div style="flex:1; border:1px solid #e9ecef; border-radius:6px; padding:8px; background:#fff;">
+            <div style="font-size:12px; color:#666; margin-bottom:4px;">${when}</div>
+            <div style="white-space:pre-wrap; font-size:13px; color:#333;">${safe}</div>
+          </div>
+          <button class="sticky-btn" title="Delete" onclick="seedDeleteInlineNote('${emailId}','${n.id}')">Delete</button>
+        </div>
+      `;
+    }).join('');
+  } catch(_){}
+}
+
+async function seedDeleteInlineNote(emailId, noteId){
+  try{
+    await fetch(`/api/email-notes/${encodeURIComponent(emailId)}/${encodeURIComponent(noteId)}`, {
+      method:'DELETE'
+    });
+    seedLoadInlineNotes(emailId);
+  }catch(_){}
+}
 
 async function seedLoadEmailNotes(emailId){
   try{
