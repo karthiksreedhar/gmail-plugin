@@ -20,7 +20,7 @@ const PORT = parseInt(process.env.PORT, 10) || 3000;
 // Middleware
 app.use(cors());
 // Increase JSON body size limit to accommodate facet-analysis payloads from the client
-app.use(express.json({ limit: '2mb' }));
+app.use(express.json({ limit: '10mb' }));
 app.use(express.static('public'));
 
 // Current user - can be changed via API (loaded from .env if present)

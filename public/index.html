@@ -2562,8 +2562,8 @@
             </div>
             <div style="flex:1; display:flex; justify-content:center; gap:12px;">
                 <button class="refresh-btn" onclick="window.location.href='/seed.html'" title="Seed initial categories from important inbox">Seed Categories</button>
-                <button class="generate-btn" onclick="promptAndGoLoadMore()" title="Load more important emails">Load More</button>
                 <button class="generate-btn" onclick="openTestClassifier()" title="Run classifier evaluation on labeled emails">Test Classifier</button>
+                <button class="generate-btn" onclick="promptAndGoLoadMore()" title="Load more important emails">Load More</button>
             </div>
             <div class="header-buttons">
                 <button class="view-saved-generations-btn" onclick="showViewSavedGenerationsModal()">View Saved Generations</button>
@@ -12208,6 +12208,77 @@ categoriesState[index].name = newName;
             if (modal) modal.style.display = 'none';
         }
 
+        // Inject a summary section into the Category Notes modal and wire actions
+        function ensureCategoryNotesSummaryInjected(modalEl) {
+            try {
+                const host = modalEl || document.getElementById('categoryNotesModal');
+                if (!host) return;
+                if (host.querySelector('#categorySummaryInNotes')) return;
+
+                const contentBody = host.querySelector('.modal-content > div:nth-child(2)');
+                if (!contentBody) return;
+
+                const container = document.createElement('div');
+                container.id = 'categorySummaryInNotes';
+                container.style.border = '1px solid #e9ecef';
+                container.style.borderLeft = '4px solid #5a67d8';
+                container.style.borderRadius = '8px';
+                container.style.background = '#fff';
+                container.style.padding = '12px';
+                container.style.marginBottom = '8px';
+                container.innerHTML = `
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+                        <div style="font-weight:600; color:#333;">Category Summary</div>
+                    </div>
+                    <div id="categorySummaryText" style="white-space:pre-wrap; font-size:14px; color:#333; margin-bottom:10px;">Loading summary…</div>
+                    <div style="border-top:1px solid #e9ecef; padding-top:10px;">
+                        <div style="font-weight:600; color:#333; margin-bottom:6px;">Q&A</div>
+                        <div id="catNotesChat" style="max-height:220px; overflow:auto; border:1px solid #e9ecef; border-radius:8px; padding:10px; background:#fff; margin-bottom:8px;">
+                            <div style="color:#666; font-style:italic; text-align:center;">Start the conversation by asking a question about this category.</div>
+                        </div>
+                        <div style="display:flex; gap:8px;">
+                            <input id="catNotesQuestionInput" type="text" placeholder="Type your question..." 
+                                   style="flex:1; padding:10px; border:1px solid #ddd; border-radius:6px; font-size:14px;">
+                            <button class="select-email-btn" style="background:#17a2b8;" id="catNotesSendBtn">Send</button>
+                            <button class="select-email-btn" style="background:#6c757d;" id="catNotesResetBtn">Reset</button>
+                        </div>
+                    </div>
+                `;
+
+                // Insert at top of body, above notes toolbar
+                contentBody.insertBefore(container, contentBody.firstChild);
+
+                // Wire inline Q&A controls to existing logic
+                const sendBtn = host.querySelector('#catNotesSendBtn');
+                const resetBtn = host.querySelector('#catNotesResetBtn');
+                const input = host.querySelector('#catNotesQuestionInput');
+                if (sendBtn) sendBtn.onclick = () => { try { askCategoryQuestion(); } catch(_) {} };
+                if (resetBtn) resetBtn.onclick = () => { try { resetCategoryChat(); } catch(_) {} };
+                if (input) {
+                    input.onkeydown = (ev) => {
+                        if (ev.key === 'Enter') {
+                            ev.preventDefault();
+                            try { askCategoryQuestion(); } catch(_) {}
+                        }
+                    };
+                }
+            } catch (e) {}
+        }
+
+        async function loadCategorySummaryIntoNotesModal(category) {
+            try {
+                const resp = await fetch('/api/category-summaries');
+                const data = await resp.json().catch(() => ({}));
+                const summaries = (data && data.summaries) || {};
+                const txt = summaries && typeof summaries[category] === 'string' ? summaries[category] : '(No summary saved)';
+                const node = document.getElementById('categorySummaryText');
+                if (node) node.textContent = txt;
+            } catch (_) {
+                const node = document.getElementById('categorySummaryText');
+                if (node) node.textContent = '(Failed to load summary)';
+            }
+        }
+
         // ===== Category Summaries: selection, generation, editor, and per-category view/QA =====
         function ensureSummarizeCategoriesModal() {
             let modal = document.getElementById('summarizeCategoriesModal');
@@ -12536,7 +12607,7 @@ categoriesState[index].name = newName;
 
         async function askCategoryQuestion() {
             try {
-                const input = document.getElementById('catSummaryQuestionInput');
+                const input = document.getElementById('catSummaryQuestionInput') || document.getElementById('catNotesQuestionInput');
                 const q = input ? String(input.value || '').trim() : '';
                 if (!q) {
                     showErrorPopup('Please enter a question.', 'Missing Question');
@@ -12586,7 +12657,7 @@ categoriesState[index].name = newName;
 
 function renderCategoryChat(scrollToEnd) {
             try {
-                const host = document.getElementById('catSummaryChat');
+                const host = document.getElementById('catSummaryChat') || document.getElementById('catNotesChat');
                 if (!host) return;
                 const cat = __currentSummaryCategory;
                 const chat = (window.__categoryChats && window.__categoryChats[cat]) ? window.__categoryChats[cat] : [];
@@ -12634,10 +12705,19 @@ function resetCategoryChat() {
 
         async function showCategoryNotesModal(category) {
             currentNotesCategory = category;
+            __currentSummaryCategory = category;
             const modal = ensureCategoryNotesModal();
             const titleEl = modal.querySelector('#categoryNotesTitle');
             titleEl.textContent = category;
             modal.style.display = 'block';
+
+            // Ensure a summary section exists and populate it; render chat inline
+            try {
+                ensureCategoryNotesSummaryInjected(modal);
+                await loadCategorySummaryIntoNotesModal(category);
+                renderCategoryChat(true);
+            } catch (_) {}
+
             await loadCategoryNotes(category);
         }
 
