@@ -1359,49 +1359,74 @@ Body: ${emailBody}
 PREVIOUS EMAIL RESPONSES:
 `;
 
-    // Add email responses from JSON data
-    responseEmails.forEach((email, index) => {
-      prompt += `\n--- EMAIL ${index + 1} ---\n`;
-      prompt += `Category: ${email.category}\n`;
-      prompt += `Subject: ${email.subject}\n`;
-      prompt += `From: ${email.originalFrom || 'Unknown'}\n`;
-      prompt += `Your Response: ${email.body}\n\n`;
-    });
-
-    // Add only GENERALIZABLE refinements if they exist
-    if (emailMemory.refinements && emailMemory.refinements.length > 0) {
-      const generalizableRefinements = emailMemory.refinements.filter(refinement => {
-        // Check if refinement has analysis and contains generalizable changes
-        if (refinement.analysis && refinement.analysis.changes) {
-          return refinement.analysis.changes.some(change => change.category === 'GENERALIZABLE');
-        }
-        // If no analysis exists (legacy refinements), include them for backward compatibility
-        return true;
-      });
-
-      if (generalizableRefinements.length > 0) {
-        prompt += `\nPREVIOUS GENERALIZABLE REFINEMENTS (apply these patterns to new responses):\n`;
-        generalizableRefinements.forEach((refinement, index) => {
-          prompt += `\n--- GENERALIZABLE REFINEMENT ${index + 1} ---\n`;
-          prompt += `Refinement Request: ${refinement.prompt}\n`;
-          prompt += `Original Response: ${refinement.originalResponse}\n`;
-          prompt += `Refined Response: ${refinement.refinedResponse}\n`;
-          
-          // Add extracted rules if available
-          if (refinement.analysis && refinement.analysis.changes) {
-            const generalizableChanges = refinement.analysis.changes.filter(change => change.category === 'GENERALIZABLE');
-            if (generalizableChanges.length > 0) {
-              prompt += `Generalizable Rules:\n`;
-              generalizableChanges.forEach(change => {
-                if (change.extractedRule) {
-                  prompt += `- ${change.extractedRule}\n`;
-                }
-              });
-            }
-          }
-          prompt += `\n`;
-        });
+    // Add prior examples with REAL user responses only, preferring same-category; fallback to random subset if none
+    // IMPORTANT: Do not truncate any email bodies. Control context via the number of examples only.
+    const targetCategory = (function () {
+      try {
+        return keywordCategorizeUnreplied(subject || '', emailBody || '', sender || '');
+      } catch (_) {
+        return '';
       }
+    })();
+
+    const isRealUserResponse = (e) => !(e && e.seededOriginalOnly);
+    const sameCatPool = (responseEmails || []).filter(e =>
+      isRealUserResponse(e) &&
+      targetCategory &&
+      String(e.category || '').toLowerCase() === String(targetCategory || '').toLowerCase()
+    );
+    const allPool = (responseEmails || []).filter(e => isRealUserResponse(e));
+
+    // If we have same-category examples with real user responses, use them; otherwise use a randomized subset from all real responses.
+    const baseList = (sameCatPool && sameCatPool.length)
+      ? sameCatPool
+      : (function shuffle(arr) {
+          const a = (arr || []).slice();
+          for (let i = a.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [a[i], a[j]] = [a[j], a[i]];
+          }
+          return a;
+        })(allPool);
+
+    // Soft context budget by character count for examples only (no truncation of individual bodies)
+    // Increase/decrease if needed; this controls the number of included examples, not their content.
+    let exampleCharBudget = 35000;
+    let used = 0;
+    let idx = 0;
+
+    for (const email of baseList) {
+      const block =
+        `\n--- EMAIL ${idx + 1} ---\n` +
+        `Category: ${email.category}\n` +
+        `Subject: ${email.subject}\n` +
+        `From: ${email.originalFrom || 'Unknown'}\n` +
+        `Your Response: ${email.body}\n\n`;
+
+      if (used + block.length > exampleCharBudget) break;
+      prompt += block;
+      used += block.length;
+      idx++;
+    }
+
+    // Include ALL refinements (do not truncate); apply these patterns when relevant
+    if (emailMemory.refinements && emailMemory.refinements.length > 0) {
+      prompt += `\nPREVIOUS REFINEMENTS (apply these patterns to new responses when relevant):\n`;
+      emailMemory.refinements.forEach((refinement, index) => {
+        prompt += `\n--- REFINEMENT ${index + 1} ---\n`;
+        prompt += `Refinement Request: ${refinement.prompt}\n`;
+        prompt += `Original Response: ${refinement.originalResponse}\n`;
+        prompt += `Refined Response: ${refinement.refinedResponse}\n`;
+        if (refinement.analysis && refinement.analysis.changes && refinement.analysis.changes.length) {
+          prompt += `Extracted Rules:\n`;
+          refinement.analysis.changes.forEach(change => {
+            if (change.extractedRule) {
+              prompt += `- ${change.extractedRule}\n`;
+            }
+          });
+        }
+        prompt += `\n`;
+      });
     }
 
     // Add ALL saved generations if they exist
@@ -1415,23 +1440,6 @@ PREVIOUS EMAIL RESPONSES:
       });
     }
 
-    // Include full thread examples when available (appended without changing prior prompt content)
-    try {
-      const fullThreads = loadEmailThreads().filter(t => Array.isArray(t.messages) && t.messages.length > 2);
-      if (fullThreads.length > 0) {
-        prompt += `\nFULL THREAD EXAMPLES (for context; do not quote directly):\n`;
-        fullThreads.slice(0, 3).forEach((t, idx) => {
-          prompt += `\n--- THREAD ${idx + 1} ---\n`;
-          prompt += `Subject: ${t.subject}\n`;
-          (t.messages || []).slice(0, 6).forEach((m, mi) => {
-            const toLine = Array.isArray(m.to) ? m.to.join(', ') : (m.to || '');
-            prompt += `${mi + 1}) From: ${m.from} | To: ${toLine} | Date: ${m.date}\nSubject: ${m.subject}\nBody: ${m.body}\n\n`;
-          });
-        });
-      }
-    } catch (e) {
-      console.warn('Unable to append full thread examples:', e?.message || e);
-    }
 
     // Add additional context if provided
     if (context && context !== 'None') {
