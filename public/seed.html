@@ -16,1416 +16,153 @@
       --accent:#4285f4;
       --green:#28a745;
       --red:#dc3545;
-      --violet:#6f42c1;
       --shadow:0 1px 3px rgba(0,0,0,0.1);
     }
     *{box-sizing:border-box}
-    html,body{
-      margin:0;
-      padding:0;
-      height:100%;
-      background:var(--bg);
-      color:var(--text);
-      font-family: 'Google Sans','Roboto',Arial,sans-serif;
-    }
+    html,body{margin:0;padding:0;height:100%;background:var(--bg);color:var(--text);font-family:'Google Sans','Roboto',Arial,sans-serif;}
     .header{
-      height:64px;
-      background: var(--tan);
-      border-bottom:1px solid var(--border);
-      display:flex;
-      align-items:center;
-      justify-content:space-between;
-      padding:0 16px;
-      position:sticky;
-      top:0;
-      z-index:1000;
-      box-shadow: var(--shadow);
+      height:64px;background:var(--tan);border-bottom:1px solid var(--border);
+      display:flex;align-items:center;justify-content:space-between;padding:0 16px;position:sticky;top:0;z-index:1000;box-shadow:var(--shadow);
     }
-    .hdr-left{
-      display:flex;
-      align-items:center;
-      gap:10px;
-    }
-    .hdr-left h1{
-      font-size:20px;
-      font-weight:600;
-      color:#000;
-      margin:0;
-    }
-    .hdr-right{
-      display:flex;
-      align-items:center;
-      gap:8px;
-    }
-    .btn{
-      padding:10px 14px;
-      border:none;
-      border-radius:6px;
-      font-weight:600;
-      font-size:14px;
-      cursor:pointer;
-      transition:opacity .15s ease;
-    }
+    .hdr-left{display:flex;align-items:center;gap:10px;}
+    .hdr-left h1{font-size:20px;font-weight:600;color:#000;margin:0;}
+    .hdr-right{display:flex;align-items:center;gap:8px;}
+    .btn{padding:10px 14px;border:none;border-radius:6px;font-weight:600;font-size:14px;cursor:pointer;transition:opacity .15s ease;}
     .btn:disabled{opacity:.6;cursor:not-allowed}
     .btn-primary{background:var(--green);color:#fff;}
     .btn-secondary{background:#f8f9fa;color:#6c757d;border:1px solid #dee2e6;}
     .btn-danger{background:var(--red);color:#fff;}
     .btn:hover{opacity:.9}
 
-    .layout{
-      display:block;
-      height:calc(100vh - 64px);
-      min-height:400px;
-    }
-    /* Split the page evenly left/right */
+    .layout{display:flex;gap:0;height:calc(100vh - 64px);min-height:480px;}
     .pane-left{
-      width:100%;
-      border-right:none;
-      display:flex;
-      flex-direction:column;
-      overflow:hidden;
-      background:#f5f0e8;
+      width:340px;min-width:300px;border-right:1px solid var(--border);
+      display:flex;flex-direction:column;overflow:auto;background:#f5f0e8;
     }
-    .pane-right{
-      width:100%;
-      min-width:0;
-      display:flex;
-      flex-direction:column;
-      overflow:hidden;
-    }
+    .left-top{padding:12px;border-bottom:1px solid var(--border);}
+    .left-top h2{margin:0 0 8px 0;font-size:16px;color:#333;}
+    .left-help{color:#5d4037;font-size:12px;line-height:1.4;}
+    .left-body{padding:12px;display:flex;flex-direction:column;gap:10px;}
+    .input-row{display:flex;gap:8px;align-items:center;}
+    .cat-input{flex:1;padding:8px 10px;border:1px solid #d0c4b7;border-radius:6px;background:#fff;font-size:14px;}
+    .add-row{display:flex;align-items:center;gap:8px;margin-top:4px;}
+    .btn-icon{padding:4px 6px;border:1px solid #ddd;border-radius:6px;background:#fff;color:#a33;font-size:12px;line-height:1;cursor:pointer;}
+    .trash-btn{display:inline-flex;align-items:center;justify-content:center;margin:2px 0;}
+    .arrow{font-size:12px;color:#5d4037;user-select:none;}
+    .binder-h{cursor:pointer;}
+    .pill{display:inline-flex;align-items:center;gap:6px;background:#fff;border:1px dashed #cdb79e;color:#5d4037;padding:6px 10px;border-radius:999px;font-size:12px;}
+    .go-bar{display:flex;gap:8px;margin-top:4px;align-items:center;justify-content:space-between;}
+    .go-note{color:#6d4c41;font-size:12px;}
 
-    .left-top{
-      padding:10px 12px;
-      border-bottom:1px solid var(--border);
-      display:flex;
-      align-items:center;
-      justify-content:space-between;
-    }
-    .left-top .stat{
-      color:var(--muted);
-      font-size:13px;
-    }
-    .list{
-      overflow:auto;
-      padding:8px;
-      gap:8px;
-      display:flex;
-      flex-direction:column;
-      height:100%;
-    }
-    .item{
-      border:1px solid var(--border);
-      border-radius:8px;
-      background:#fff;
-      padding:10px;
-      cursor:pointer;
-      transition:background .12s ease, box-shadow .12s ease;
-      display:flex;
-      gap:10px;
-      align-items:flex-start;
-    }
-    .item:hover{background:#fafafa; box-shadow: var(--shadow);}
-    .item.active{outline:2px solid var(--tan-darker); outline-offset:-2px;}
-    .it-body{flex:1 1 auto; min-width:0;}
-    .it-row{
-      display:flex;
-      align-items:center;
-      gap:8px;
-      justify-content:space-between;
-    }
-    .it-subj{
-      font-weight:600;
-      font-size:14px;
-      color:#333;
-      overflow:hidden;
-      text-overflow:ellipsis;
-      white-space:nowrap;
-    }
-    .it-meta{
-      font-size:12px;
-      color:var(--muted);
-      margin-top:4px;
-      overflow:hidden;
-      text-overflow:ellipsis;
-      white-space:nowrap;
-    }
-    .it-actions{
-      display:flex;
-      align-items:center;
-      gap:6px;
-      flex-wrap:wrap;
-    }
-    .hide-btn, .approve-btn{
-      background:#f1f3f4;
-      color:#444;
-      border:1px solid #ddd;
-      border-radius:6px;
-      padding:6px 10px;
-      cursor:pointer;
-      font-size:12px;
-    }
-
-    /* Inline category chips and input (used in list and detail) */
-    .chips{
-      display:flex;
-      align-items:center;
-      flex-wrap:wrap;
-      gap:6px;
-      margin-top:8px;
-    }
-    .chip{
-      display:inline-flex;
-      align-items:center;
-      gap:6px;
-      padding:6px 10px;
-      border-radius:999px;
-      border:1px solid #ddd;
-      background:#fafafa;
-      color:#333;
-      font-size:13px;
-      user-select:none;
-    }
-
-    /* Suggested sender category chip */
-    .chip-sender{
-      background:#e6f2ff;
-      border-color:#b3d4ff;
-      color:#084298;
-    }
-    .chip .x{
-      font-weight:700;
-      cursor:pointer;
-    }
-    .chip-input{
-      min-width:120px;
-      max-width:200px;
-      padding:6px 10px;
-      border-radius:999px;
-      border:1px dashed #bbb;
-      background:#fff;
-      color:#333;
-      font-size:13px;
-      outline:none;
-    }
-    .suggestions{
-      position:absolute;
-      z-index:1200;
-      background:#fff;
-      border:1px solid #e0e0e0;
-      border-radius:6px;
-      box-shadow:0 4px 12px rgba(0,0,0,0.15);
-      padding:6px;
-      display:none;
-      max-height:180px;
-      overflow:auto;
-    }
-    .suggestions .opt{
-      padding:6px 8px;
-      border-radius:4px;
-      cursor:pointer;
-      font-size:13px;
-    }
-    .suggestions .opt:hover{
-      background:#f1f3f4;
-    }
-    .suggestions .opt.active{
-      background:#e8f0fe;
-      outline:1px solid #c7d2fe;
-    }
-
-    .right-top{
-      padding:10px 16px;
-      border-bottom:1px solid var(--border);
-      background:#fff;
-      display:flex;
-      align-items:center;
-      justify-content:space-between;
-      gap:12px;
-    }
-    .right-top .title{
-      font-weight:600;
-      color:#333;
-      overflow:hidden;
-      text-overflow:ellipsis;
-      white-space:nowrap;
-    }
-    .viewer{
-      flex:1 1 auto;
-      overflow:auto;
-      padding:14px;
-      background:#fff;
-    }
-    .message{
-      border:1px solid #eee;
-      border-left:4px solid #999;
-      border-radius:8px;
-      overflow:hidden;
-      margin-bottom:12px;
-      background:#fff;
-    }
+    .pane-right{flex:1;display:flex;flex-direction:column;overflow:auto;background:#fff;}
+    .right-top{padding:10px 12px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;}
+    .right-title{font-weight:600;color:#333;}
+    .binders{padding:12px;display:flex;flex-direction:column;gap:12px;}
+    .binder{border:1px solid var(--border);border-radius:10px;box-shadow:var(--shadow);overflow:hidden;background:#fff;}
+    .binder-h{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;background:#f8f6f2;border-bottom:1px solid #eee;}
+    .binder-name{font-weight:700;color:#5d4037;}
+    .binder-count{color:#6d4c41;font-size:12px;}
+    .binder-b{padding:10px;display:flex;flex-direction:column;gap:8px;}
+    .email-card{border:1px solid #eee;border-radius:8px;padding:10px;display:flex;gap:10px;align-items:flex-start;}
+    .email-card.clickable{cursor:pointer;}
+    .email-card.clickable:hover{background:#fafafa; box-shadow:var(--shadow);}
+    .email-main{flex:1;min-width:0;}
+    .subj{font-weight:600;font-size:14px;color:#333;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+    .meta{font-size:12px;color:var(--muted);margin-top:2px;}
+    .snippet{font-size:13px;color:#333;margin-top:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+    .actions{display:flex;align-items:center;gap:8px;}
+    .small{font-size:12px;color:#666;}
+    .empty{color:#666;font-style:italic;text-align:center;padding:24px;}
+    .select{padding:6px 8px;border:1px solid #ddd;border-radius:6px;font-size:13px;background:#fff;color:#333;}
+    /* Thread view */
+    .thread-header{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-bottom:1px solid var(--border);background:#fff;}
+    .thread-title{font-weight:700;color:#333;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+    .thread-body{padding:12px;display:flex;flex-direction:column;gap:10px;overflow:auto;background:#fff;}
+    .message{border:1px solid #eee;border-left:4px solid #999;border-radius:8px;overflow:hidden;background:#fff;}
     .message.response{border-left-color: var(--tan-darker);}
-    .msg-h{
-      background:#f8f6f2;
-      padding:10px 12px;
-      border-bottom:1px solid #eee;
-      font-size:12px;
-      color:#444;
-    }
-    .msg-b{
-      padding:12px;
-      white-space:pre-wrap;
-      line-height:1.5;
-      color:#222;
-      font-size:14px;
-    }
+    .msg-h{background:#f8f6f2;padding:10px 12px;border-bottom:1px solid #eee;font-size:12px;color:#444;}
+    .msg-b{padding:12px;white-space:pre-wrap;line-height:1.5;color:#222;font-size:14px;}
 
-    .right-bottom{
-      display:none; /* removed bottom category bar per requirement */
-    }
-
-    .loading-overlay{
-      position:fixed; inset:0;
-      background: rgba(0,0,0,0.5);
-      display:none;
-      align-items:center;
-      justify-content:center;
-      z-index:2000;
-    }
-    .loading-card{
-      background:#fff; padding:18px 22px; border-radius:10px; min-width:260px; max-width:420px; text-align:center;
-      box-shadow:0 8px 24px rgba(0,0,0,0.25);
-    }
-    .spinner{
-      width:36px; height:36px; border:4px solid #f3f3f3; border-top:4px solid var(--accent); border-radius:50%;
-      margin: 0 auto 12px auto;
-      animation:spin 1s linear infinite;
-    }
-    .overlay-title{font-weight:700; color:#333; margin-bottom:6px;}
-    .overlay-msg{color:#666; font-size:13px;}
-    @keyframes spin {
-      0% {transform:rotate(0)} 100% {transform:rotate(360deg)}
-    }
-
-    .empty{
-      color:#666; font-style:italic; text-align:center; padding:24px;
-    }
-
-    /* Progress overlay for initial loading */
-    .progress-overlay{
-      position:fixed; inset:0;
-      background:rgba(0,0,0,0.4);
-      display:none;
-      align-items:center;
-      justify-content:center;
-      z-index:2500;
-    }
-    .progress-card{
-      background:#fff;
-      padding:20px 24px;
-      border-radius:10px;
-      min-width:300px;
-      max-width:480px;
-      box-shadow:0 8px 24px rgba(0,0,0,0.25);
-    }
-    .progress-title{
-      font-weight:700;
-      color:#333;
-      margin-bottom:8px;
-      text-align:center;
-    }
-    .progress-bar{
-      height:10px;
-      background:#ececec;
-      border-radius:999px;
-      overflow:hidden;
-    }
-    .progress-bar .fill{
-      height:100%;
-      width:0%;
-      background:var(--accent);
-      transition:width .2s ease;
-    }
-    .progress-text{
-      margin-top:8px;
-      color:#555;
-      font-size:13px;
-      text-align:center;
-    }
-    /* Inline Notes styling (match load.html) */
-    .sticky-note{
-      background:#f5f5f5;
-      border:1px solid #e0e0e0;
-      border-radius:8px;
-      padding:10px;
-      margin-top:8px;
-    }
-    .sticky-row{
-      display:flex; gap:8px; align-items:flex-start; flex-wrap:wrap;
-    }
-    .sticky-text{
-      flex:1; min-width:220px; max-width:100%;
-      padding:8px; border:1px solid #dadce0; border-radius:6px; font-size:13px; background:#fff;
-    }
-    .sticky-btn{
-      background:#ffd54f; color:#5d4037; border:1px solid #fbc02d; border-radius:6px; padding:6px 10px; cursor:pointer; font-size:12px;
-    }
-    .sticky-btn:hover{ background:#ffca28; }
-    .sticky-status{ font-size:12px; color:#6d4c41; }
-
+    .overlay{position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,0.45);z-index:2000;}
+    .card{background:#fff;border-radius:10px;min-width:280px;max-width:440px;padding:18px 20px;box-shadow:0 10px 30px rgba(0,0,0,0.3);text-align:center;}
+    .spin{width:36px;height:36px;border:4px solid #f3f3f3;border-top:4px solid var(--accent);border-radius:50%;margin:0 auto 12px auto;animation:spin 1s linear infinite;}
+    @keyframes spin{0%{transform:rotate(0)}100%{transform:rotate(360deg)}}
+    .ov-title{font-weight:700;color:#333;margin-bottom:6px;}
+    .ov-msg{color:#555;font-size:13px;}
   </style>
 </head>
 <body>
   <div class="header">
     <div class="hdr-left">
       <h1>Seed Categories</h1>
-      <span id="countStat" class="stat"></span>
     </div>
     <div class="hdr-right">
       <button id="cancelBtn" class="btn btn-secondary" title="Return to main page">Cancel</button>
-      <button id="saveBtn" class="btn btn-secondary" title="Save approved items and return">Save Changes</button>
-      <button id="addBtn" class="btn btn-primary" title="Add all listed items to database">Add to Database</button>
+      <button id="saveBtn" class="btn btn-primary" title="Persist labeled items">Save</button>
     </div>
   </div>
 
   <div class="layout">
     <aside class="pane-left">
       <div class="left-top">
-        <div class="stat">Important (Top 50)</div>
-        <div id="leftStatus" class="stat"></div>
+        <h2>Enter categories</h2>
+        <div class="left-help">
+          Add one or more category names. Click Go to search your inbox (up to 50 results per category).
+          Emails that don&#39;t match any category appear under "Other" (latest 10).
+        </div>
       </div>
-      <div id="list" class="list">
-        <div class="empty">Loading important emails...</div>
+      <div class="left-body">
+        <div id="catInputs"></div>
+        <div class="add-row">
+          <button id="addInputBtn" class="btn btn-secondary" title="Add another category">＋ Add</button>
+          <span class="pill">Category inputs are free text (e.g., "Apartment", "Lydia Chilton")</span>
+        </div>
+        <div class="go-bar">
+          <span class="go-note">Note: This only searches your inbox. Nothing is saved until you press Save.</span>
+          <button id="goBtn" class="btn btn-primary">Go</button>
+        </div>
       </div>
     </aside>
 
-    <section class="pane-right" style="display:none;">
-      <div class="right-top" style="flex-wrap:wrap;">
-        <div style="flex:1 1 100%; display:flex; align-items:center; justify-content:space-between; gap:12px;">
-          <div style="display:flex; align-items:center; gap:8px;">
-            <button class="btn btn-secondary" id="seedBackBtn" title="Back">← Back</button>
-            <div id="detailTitle" class="title">Select an item</div>
-          </div>
-          <div id="detailTags" class="it-actions"></div>
-        </div>
+    <section class="pane-right">
+      <div class="right-top">
+        <div class="right-title">Results</div>
+        <div class="small" id="summaryStat"></div>
       </div>
-      <div id="detailCats" style="padding:8px 16px; background:#fff; border-bottom:1px solid var(--border);"></div>
-
-      <!-- Email Notes section (per-email) -->
-      <div id="emailNotesSection" class="email-notes-section" style="padding:10px 16px; border-bottom:1px solid #e9ecef; background:#fff;">
-        <div style="font-weight:600; color:#333; margin-bottom:6px;">Email Notes</div>
-        <div id="emailNotesListSeed" style="max-height:140px; overflow:auto; border:1px solid #e9ecef; border-radius:6px; padding:8px; background:#fff;">
-          <div class="empty">No notes yet.</div>
-        </div>
-        <div style="display:flex; gap:8px; align-items:flex-start; margin-top:8px;">
-          <textarea id="emailNotesInputSeed" rows="2" placeholder="Add a note..." style="flex:1; padding:8px; border:1px solid #ddd; border-radius:6px; font-size:13px;"></textarea>
-          <button class="select-email-btn" id="emailNotesAddBtnSeed" onclick="seedAddEmailNote()">Add</button>
-        </div>
+      <div class="binders" id="binders">
+        <div class="empty">Enter one or more categories on the left and click Go.</div>
       </div>
-
-      <div id="viewer" class="viewer">
-        <div class="empty">Nothing selected.</div>
-      </div>
-      <div class="right-bottom"></div>
     </section>
   </div>
 
-  <div id="overlay" class="loading-overlay">
-    <div class="loading-card">
-      <div class="spinner"></div>
-      <div id="ovTitle" class="overlay-title">Loading</div>
-      <div id="ovMsg" class="overlay-msg">Please wait...</div>
-      <div id="ovActions" class="overlay-actions" style="display:none; margin-top:12px; display:flex; gap:8px; justify-content:center;">
-        <button id="ovCancel" class="btn btn-secondary">Cancel</button>
-        <button id="ovConfirm" class="btn btn-primary">Confirm</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- Centered progress overlay for initial load -->
-  <div id="progressOverlay" class="progress-overlay">
-    <div class="progress-card">
-      <div class="progress-title">Loading important emails…</div>
-      <div class="progress-bar">
-        <div class="fill" id="progressFill" style="width:0%"></div>
-      </div>
-      <!-- Removed numeric progress text by request -->
-    </div>
-  </div>
-
-  <!-- Missing categories overlay (Seed) -->
-  <div class="loading-overlay" id="seedMissingOverlay" style="display:none;">
-    <div class="loading-card">
-      <div class="overlay-title">Missing Categories</div>
-      <div class="overlay-msg">Add a category for these emails before adding to database:</div>
-      <div id="seedMissingList" style="text-align:left; max-height:240px; overflow:auto; margin-top:8px; font-size:13px; color:#333;"></div>
-      <button class="btn btn-secondary" id="seedMissingCloseBtn" style="margin-top:12px;">Close</button>
+  <div class="overlay" id="overlay">
+    <div class="card">
+      <div class="spin"></div>
+      <div class="ov-title" id="ovTitle">Working…</div>
+      <div class="ov-msg" id="ovMsg">Please wait.</div>
     </div>
   </div>
 
 <script>
-  // State
-  let seedItems = []; // [{id, subject, from, date, snippet, body, tags:{unreplied,thread}, category:'Other'}]
-  let categories = []; // system categories
-  let selectedId = '';
-  // multi-category UI (persisting primary only for now)
-  const selectedCatsById = new Map(); // id -> array (ordered)
-  // cache of response emails for matching threads
-  let responseEmails = [];
+(function(){
+  // ---------- State ----------
+  let inputNames = ['']; // user-entered category names (ordered)
+  const resultsByCat = new Map(); // name -> email[]
+  let otherList = []; // "Other" binder (latest 10 that did not match any category)
+  const assignments = new Map(); // emailId -> categoryName ('Other' allowed)
+  const emailsById = new Map(); // emailId -> email data
+  const OTHER_NAME = 'Other';
+  const openByName = new Map(); // category name -> boolean (open state); default collapsed
 
-  // Suggested sender category state
-  const senderKeyById = new Map();     // id -> normalized sender key
-  const senderLabelByKey = new Map();  // senderKey -> current label (editable suggestion)
-  const senderPresenceById = new Map(); // id -> boolean (whether sender chip is present)
-
-  // Utilities
+  // ---------- Utilities ----------
+  function $(id){ return document.getElementById(id); }
   function showOverlay(title, msg){
-    document.getElementById('ovTitle').textContent = title || 'Loading';
-    document.getElementById('ovMsg').textContent = msg || 'Please wait...';
-    // Reset overlay to loading state
-    const spin = document.querySelector('#overlay .spinner');
-    const actions = document.getElementById('ovActions');
-    if (spin) spin.style.display = '';
-    if (actions) actions.style.display = 'none';
-    document.getElementById('overlay').style.display = 'flex';
+    $('ovTitle').textContent = title || 'Working…';
+    $('ovMsg').textContent = msg || 'Please wait.';
+    $('overlay').style.display = 'flex';
   }
-  function hideOverlay(){
-    const ov = document.getElementById('overlay');
-    if (ov) ov.style.display = 'none';
-    const actions = document.getElementById('ovActions');
-    if (actions) actions.style.display = 'none';
-    const spin = document.querySelector('#overlay .spinner');
-    if (spin) spin.style.display = '';
-  }
+  function hideOverlay(){ $('overlay').style.display = 'none'; }
 
-  // Toggle single-column views: list <-> thread
-  function showSeedThread(){
-    const left = document.querySelector('.pane-left');
-    const right = document.querySelector('.pane-right');
-    if (left) left.style.display = 'none';
-    if (right) right.style.display = 'flex';
-  }
-  function showSeedList(){
-    const left = document.querySelector('.pane-left');
-    const right = document.querySelector('.pane-right');
-    if (right) right.style.display = 'none';
-    if (left) left.style.display = 'flex';
-  }
-
-  // Seed Missing categories popup
-  function showSeedMissingOverlay(items){
-    try{
-      const overlay = document.getElementById('seedMissingOverlay');
-      const list = document.getElementById('seedMissingList');
-      if (!overlay || !list) { alert('Please add a category before adding to database.'); return; }
-      const rows = (items || []).map(it => {
-        const subj = escapeHtml(it.subject || 'No Subject');
-        const from = escapeHtml(it.from || 'Unknown Sender');
-        const date = escapeHtml(fmtDate(it.date));
-        return `<div style="padding:6px 0; border-bottom:1px solid #eee;">
-          <div style="font-weight:600; color:#333;">${subj}</div>
-          <div style="font-size:12px; color:#666;">From: ${from} • ${date}</div>
-        </div>`;
-      }).join('');
-      list.innerHTML = rows || '<div class="empty">No items.</div>';
-      overlay.style.display = 'flex';
-    }catch(_){
-      alert('Please add a category before adding to database.');
-    }
-  }
-  function hideSeedMissingOverlay(){
-    const overlay = document.getElementById('seedMissingOverlay');
-    if (overlay) overlay.style.display = 'none';
-  }
-
-  // Styled inline confirmation dialog (uses overlay)
-  function showConfirmDialog(title, message, options){
-    return new Promise((resolve) => {
-      const opts = options || {};
-      const confirmText = opts.confirmText || 'Confirm';
-      const cancelText = opts.cancelText || 'Cancel';
-
-      const ov = document.getElementById('overlay');
-      const spin = document.querySelector('#overlay .spinner');
-      const actions = document.getElementById('ovActions');
-      const btnConfirm = document.getElementById('ovConfirm');
-      const btnCancel = document.getElementById('ovCancel');
-
-      // Set content
-      document.getElementById('ovTitle').textContent = title || 'Confirm';
-      document.getElementById('ovMsg').textContent = message || '';
-      if (btnConfirm) btnConfirm.textContent = confirmText;
-      if (btnCancel) btnCancel.textContent = cancelText;
-
-      // Show overlay in confirm mode (hide spinner, show actions)
-      if (spin) spin.style.display = 'none';
-      if (actions) actions.style.display = 'flex';
-      if (ov) ov.style.display = 'flex';
-
-      // One-time handlers
-      const cleanup = () => {
-        if (actions) actions.style.display = 'none';
-        if (spin) spin.style.display = '';
-        if (ov) ov.style.display = 'none';
-        if (btnConfirm) btnConfirm.removeEventListener('click', onConfirm);
-        if (btnCancel) btnCancel.removeEventListener('click', onCancel);
-        document.removeEventListener('keydown', onKey);
-      };
-      const onConfirm = () => { cleanup(); resolve(true); };
-      const onCancel = () => { cleanup(); resolve(false); };
-      const onKey = (e) => {
-        if (e.key === 'Escape') { onCancel(); }
-        if (e.key === 'Enter') { onConfirm(); }
-      };
-
-      if (btnConfirm) btnConfirm.addEventListener('click', onConfirm);
-      if (btnCancel) btnCancel.addEventListener('click', onCancel);
-      document.addEventListener('keydown', onKey);
-    });
-  }
-
-  // Progress overlay utilities
-  let progTimer = null;
-  let progPollTimer = null;
-  let progDisplayed = 0;
-  let progTotal = 50;
-
-  function setProgressDisplay(current){
-    progDisplayed = Math.max(0, Math.min(current || 0, progTotal));
-    const fill = document.getElementById('progressFill');
-    const pct = Math.round((progDisplayed / (progTotal || 1)) * 100);
-    if (fill) fill.style.width = pct + '%';
-  }
-
-  function startProgress(total = 200){
-    progTotal = total;
-    const ov = document.getElementById('progressOverlay');
-    if (ov) ov.style.display = 'flex';
-    setProgressDisplay(0);
-    if (progTimer) { clearInterval(progTimer); progTimer = null; }
-    if (typeof progPollTimer !== 'undefined' && progPollTimer) { clearInterval(progPollTimer); progPollTimer = null; }
-    // Poll backend for real progress towards total (400)
-    progPollTimer = setInterval(async () => {
-      try {
-        const r = await fetch('/api/seed-categories/progress');
-        const d = await r.json();
-        if (d && d.success) {
-          if (Number.isFinite(d.total) && d.total > 0) progTotal = d.total;
-          if (Number.isFinite(d.processed)) setProgressDisplay(d.processed);
-          if (!d.active && (d.finishedAt || 0) > 0) {
-            clearInterval(progPollTimer);
-            progPollTimer = null;
-          }
-        }
-      } catch (_) {}
-    }, 500);
-  }
-
-  function updateProgress(current, total){
-    if (Number.isFinite(total) && total > 0) progTotal = total;
-    setProgressDisplay(current);
-  }
-
-  function finishProgress(){
-    if (progTimer) { clearInterval(progTimer); progTimer = null; }
-    if (typeof progPollTimer !== 'undefined' && progPollTimer) { clearInterval(progPollTimer); progPollTimer = null; }
-    // Snap to current display and hide shortly after for visual smoothness
-    setTimeout(() => {
-      const ov = document.getElementById('progressOverlay');
-      if (ov) ov.style.display = 'none';
-    }, 250);
-  }
-  function fmtDate(s){
-    const d = new Date(s || Date.now());
-    if (Number.isNaN(+d)) return '';
-    const now = new Date();
-    const diff = (now - d) / 86400000;
-    if (diff < 1) return 'Today';
-    if (diff < 2) return 'Yesterday';
-    if (diff < 7) return `${Math.floor(diff)} days ago`;
-    return d.toLocaleDateString('en-US', {month:'short', day:'numeric'});
-  }
-  function normalizeSubjectKey(s){
-    return String(s || '').toLowerCase().replace(/^re:\s*/i,'').trim();
-  }
-  function normalizeSenderKey(s){
-    return String(s || '').toLowerCase().trim();
-  }
-  // Parse "From" header into a grouping key (prefer email) and a display label (prefer name)
-  function parseSenderParts(s){
-    const str = String(s || '').trim();
-    // Common: "Name <email@domain>"
-    const m = str.match(/^(?:"?([^"<]+)"?\s*)?<([^>]+)>/);
-    let email = '', name = '';
-    if (m) {
-      name = (m[1] || '').trim();
-      email = (m[2] || '').trim().toLowerCase();
-    } else {
-      // Fallbacks: "<email@domain>" or plain email or just name
-      const m2 = str.match(/<([^>]+)>/);
-      if (m2) email = (m2[1] || '').trim().toLowerCase();
-      if (!email && /@/.test(str)) {
-        email = str.toLowerCase();
-      }
-      if (!name) {
-        name = str.replace(/<[^>]*>/g, '').replace(/"/g, '').trim();
-      }
-    }
-    const key = email || normalizeSenderKey(name);
-    const label = name || (email ? email : (str || 'Unknown Sender'));
-    return { key, label };
-  }
-  function getPrimaryCat(id){
-    const arr = selectedCatsById.get(id) || [];
-    return arr.length ? arr[0] : '';
-  }
-  function ensureCatArray(id, def=''){
-    if (!selectedCatsById.has(id)) selectedCatsById.set(id, (def ? [def] : []));
-  }
-  function updateCount(){
-    const el = document.getElementById('countStat');
-    el.textContent = seedItems.length ? `(${seedItems.length})` : '';
-  }
-  function setCatOptionsDatalist(){
-    const dl = document.getElementById('catOptions');
-    if (!dl) return;
-    dl.innerHTML = (categories || []).map(c => `<option value="${escapeHtml(c)}"></option>`).join('');
-  }
-
-  async function loadInitial(){
-    try{
-      // load categories first
-      try{
-        const r = await fetch('/api/current-categories');
-        const d = await r.json();
-        categories = Array.isArray(d.categories) ? d.categories : [];
-      }catch(_){ categories = []; }
-      setCatOptionsDatalist();
-
-      // load response emails (for thread match best-effort)
-      try{
-        const r = await fetch('/api/response-emails');
-        const d = await r.json();
-        responseEmails = Array.isArray(d.emails) ? d.emails : [];
-      }catch(_){ responseEmails = []; }
-
-      // load seed list
-      document.getElementById('leftStatus').textContent = 'Loading...';
-      // Show centered progress overlay and poll real progress (target ~200)
-      startProgress(200);
-      const r = await fetch('/api/seed-categories/list');
-      const d = await r.json();
-      if(!r.ok || !d.success){
-        document.getElementById('list').innerHTML = '<div class="empty">Failed to load important emails. Authenticate Gmail and retry.</div>';
-        document.getElementById('leftStatus').textContent = '';
-        finishProgress();
-        return;
-      }
-      seedItems = (Array.isArray(d.items) ? d.items : []).map(it => ({
-        ...it,
-        category: (typeof it.category === 'string' ? it.category : '')
-      }));
-      // initialize multi-cat map (no default category) + initialize sender suggestion
-      seedItems.forEach(it => {
-        ensureCatArray(it.id, '');
-        const rawSender = String(it.from || '').trim();
-        const info = parseSenderParts(rawSender);
-        const key = info.key || normalizeSenderKey(rawSender);
-        const label = info.label || (rawSender || 'Unknown Sender');
-        senderKeyById.set(it.id, key);
-        if (!senderLabelByKey.has(key)) senderLabelByKey.set(key, label);
-        senderPresenceById.set(it.id, true);
-      });
-      renderList();
-      updateCount();
-      document.getElementById('leftStatus').textContent = seedItems.length ? `${seedItems.length} items` : '0 items';
-
-      if (seedItems.length){
-        selectItem(seedItems[0].id);
-      }else{
-        renderDetailEmpty();
-      }
-      // Done with initial load
-      finishProgress();
-    }catch(e){
-      console.error('Seed load failed:', e);
-      document.getElementById('list').innerHTML = '<div class="empty">Failed to load important emails. Please try again.</div>';
-      document.getElementById('leftStatus').textContent = '';
-      finishProgress();
-    }
-  }
-
-  function renderList(){
-    const host = document.getElementById('list');
-    if (!seedItems.length){
-      host.innerHTML = '<div class="empty">No items found.</div>';
-      return;
-    }
-    host.innerHTML = '';
-    seedItems.forEach((it) => {
-      const div = document.createElement('div');
-      div.className = 'item' + (selectedId===it.id ? ' active':'');
-      div.onclick = (ev) => {
-        // ignore clicks inside chip input or suggestions
-        if (ev.target.classList && (ev.target.classList.contains('chip-input') || ev.target.closest('.suggestions'))) {
-          return;
-        }
-        showSeedThread();
-        selectItem(it.id);
-      };
-
-      // Build actions: Hide button
-      const actionsHtml = `
-        <div class="it-actions">
-          <button class="approve-btn" title="Approve to database">Approve</button>
-          <button class="hide-btn" title="Hide this item">Hide</button>
-          <button class="hide-btn other-btn" title="Save as Other">Other</button>
-        </div>
-      `;
-
-      div.innerHTML = `
-        <div class="it-body">
-          <div class="it-row">
-            <div class="it-subj" title="${escapeHtml(it.subject||'No Subject')}">${escapeHtml(it.subject||'No Subject')}</div>
-            ${actionsHtml}
-          </div>
-          <div class="it-meta">${escapeHtml(it.from||'Unknown Sender')} • ${fmtDate(it.date)}</div>
-          <div class="chips" data-item="${it.id}"></div>
-
-          <!-- Inline Notes (same pattern as load.html) -->
-          <div class="sticky-note" onclick="event.stopPropagation();">
-            <div style="font-weight:600; color:#5d4037; margin-top:8px; margin-bottom:6px;">Notes</div>
-            <div id="notes-inline-list-${it.id}" class="sticky-row" style="width:100%; flex-direction:column; gap:6px;"></div>
-            <div class="sticky-row">
-              <textarea id="note-inline-${it.id}" rows="2" class="sticky-text" placeholder="Add a note..."></textarea>
-              <button class="sticky-btn" onclick="seedAddInlineNote('${it.id}')">Add</button>
-              <div id="note-inline-status-${it.id}" class="sticky-status"></div>
-            </div>
-          </div>
-        </div>
-      `;
-
-      // Hook approve/hide/other
-      const approveBtn = div.querySelector('.approve-btn');
-      if (approveBtn) {
-        approveBtn.addEventListener('click', (ev) => {
-          ev.stopPropagation();
-          approveOneSeed(it);
-        });
-      }
-      const hideBtn = div.querySelector('.hide-btn');
-      if (hideBtn) {
-        hideBtn.addEventListener('click', (ev) => {
-          ev.stopPropagation();
-          trashItem(it);
-        });
-      }
-      const otherBtn = div.querySelector('.other-btn');
-      if (otherBtn) {
-        otherBtn.addEventListener('click', (ev) => {
-          ev.stopPropagation();
-          approveOtherSeed(it);
-        });
-      }
-
-      // Render inline chips with input
-      const chipsHost = div.querySelector('.chips');
-      renderChipsEditorForItem(it.id, chipsHost);
-
-      host.appendChild(div);
-      // Load notes list inline for each item
-      try { seedLoadInlineNotes(it.id); } catch(_) {}
-    });
-  }
-
-  async function trashItem(it){
-    try{
-      showOverlay('Hiding', 'Removing from the list and adding to hidden...');
-      await fetch('/api/hidden-inbox/add', {
-        method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ id: it.id, subject: it.subject, date: it.date })
-      });
-      // remove locally
-      seedItems = seedItems.filter(x => x.id !== it.id);
-      selectedCatsById.delete(it.id);
-      if (selectedId === it.id) selectedId = '';
-      renderList();
-      updateCount();
-      if (seedItems.length){
-        selectItem(seedItems[0].id);
-      }else{
-        renderDetailEmpty();
-      }
-    }catch(e){
-      console.error('Hide failed', e);
-      alert('Failed to hide this item. Please try again.');
-    }finally{
-      hideOverlay();
-    }
-  }
-
-  // Approve a single item: persist to DB using seed add-all endpoint and remove from list
-  async function approveOneSeed(it){
-    try{
-      if (!it || !it.id) return;
-
-      // Build combined selection to validate presence
-      const userSelectedTmp = (selectedCatsById.get(it.id) || [])
-        .map(s => String(s || '').trim())
-        .filter(Boolean);
-      const selTmp = [];
-      const sKeyTmp = senderKeyById.get(it.id);
-      if (sKeyTmp && senderPresenceById.get(it.id)) {
-        const sLabelTmp = (senderLabelByKey.get(sKeyTmp) || '').trim();
-        if (sLabelTmp) selTmp.push(sLabelTmp);
-      }
-      userSelectedTmp.forEach(c => {
-        if (!selTmp.some(x => x.toLowerCase() === c.toLowerCase())) selTmp.push(c);
-      });
-      if (selTmp.length === 0){
-        showSeedMissingOverlay([it]);
-        return;
-      }
-
-      showOverlay('Approving', 'Saving to database...');
-
-      // Build combined selection for this item: sender suggestion (if present) first, then user-added (de-duped)
-      const userSelected = (selectedCatsById.get(it.id) || [])
-        .map(s => String(s || '').trim())
-        .filter(Boolean);
-      const sel = [];
-      const sKey = senderKeyById.get(it.id);
-      if (sKey && senderPresenceById.get(it.id)) {
-        const sLabel = (senderLabelByKey.get(sKey) || '').trim();
-        if (sLabel) sel.push(sLabel);
-      }
-      userSelected.forEach(c => {
-        if (!sel.some(x => x.toLowerCase() === c.toLowerCase())) sel.push(c);
-      });
-      const primary = sel.length ? sel[0] : '';
-
-      const rec = {
-        id: it.id,
-        subject: it.subject || 'No Subject',
-        from: it.from || 'Unknown Sender',
-        date: it.date || new Date().toISOString(),
-        snippet:
-          it.snippet ||
-          (typeof it.body === 'string'
-            ? it.body.slice(0, 100) + (it.body.length > 100 ? '...' : '')
-            : ''),
-        body: it.body || it.snippet || '',
-        tags: {
-          unreplied: !!(it.tags && it.tags.unreplied),
-          thread: !!(it.tags && it.tags.thread)
-        }
-      };
-      if (primary) rec.category = primary;
-
-      const extras = sel.slice(1);
-      if (extras.length) rec.categories = extras;
-
-      // Persist single item via seed batch endpoint
-      const res = await fetch('/api/seed-categories/add-all', {
-        method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ items: [rec] })
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok || !data || data.success !== true){
-        throw new Error((data && data.error) || 'Approve failed');
-      }
-
-      // Remove locally and refresh UI
-      seedItems = seedItems.filter(x => x.id !== it.id);
-      selectedCatsById.delete(it.id);
-      senderKeyById.delete(it.id);
-      senderPresenceById.delete(it.id);
-
-      if (selectedId === it.id) selectedId = '';
-      renderList();
-      updateCount();
-      if (seedItems.length){
-        selectItem(seedItems[0].id);
-      } else {
-        renderDetailEmpty();
-      }
-    } catch(e){
-      console.error('Approve failed', e);
-      alert('Failed to approve this item. Please try again.');
-    } finally {
-      hideOverlay();
-    }
-  }
-
-  async function approveOtherSeed(it){
-    try{
-      if (!it || !it.id) return;
-      showOverlay('Saving as Other', 'Saving to database...');
-
-      const rec = {
-        id: it.id,
-        subject: it.subject || 'No Subject',
-        from: it.from || 'Unknown Sender',
-        date: it.date || new Date().toISOString(),
-        snippet:
-          it.snippet ||
-          (typeof it.body === 'string'
-            ? it.body.slice(0, 100) + (it.body.length > 100 ? '...' : '')
-            : ''),
-        body: it.body || it.snippet || '',
-        tags: {
-          unreplied: !!(it.tags && it.tags.unreplied),
-          thread: !!(it.tags && it.tags.thread)
-        },
-        // Force ONLY "Other" as the category
-        category: 'Other',
-        categories: []
-      };
-
-      const res = await fetch('/api/seed-categories/add-all', {
-        method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ items: [rec] })
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok || !data || data.success !== true){
-        throw new Error((data && data.error) || 'Save failed');
-      }
-
-      // Remove locally and refresh UI
-      seedItems = seedItems.filter(x => x.id !== it.id);
-      selectedCatsById.delete(it.id);
-      senderKeyById.delete(it.id);
-      senderPresenceById.delete(it.id);
-
-      if (selectedId === it.id) selectedId = '';
-      renderList();
-      updateCount();
-      if (seedItems.length){
-        selectItem(seedItems[0].id);
-      }else{
-        renderDetailEmpty();
-      }
-    }catch(e){
-      console.error('Save as Other failed', e);
-      alert('Failed to save as Other. Please try again.');
-    }finally{
-      hideOverlay();
-    }
-  }
-
-  function selectItem(id){
-    selectedId = id;
-    renderList();           // refresh left selection + chips
-    renderDetail();         // detail + chips editor
-  }
-
-  function renderDetailEmpty(){
-    document.getElementById('detailTitle').textContent = 'Select an item';
-    document.getElementById('detailTags').innerHTML = '';
-    document.getElementById('viewer').innerHTML = '<div class="empty">Nothing selected.</div>';
-  }
-
-  async function renderDetail(){
-    const it = seedItems.find(x => x.id === selectedId);
-    if (!it){
-      renderDetailEmpty();
-      return;
-    }
-    document.getElementById('detailTitle').textContent = it.subject || 'No Subject';
-    document.getElementById('detailTags').innerHTML = ''; // removed unreplied/thread tags
-    // Render Default Tag + extras row beneath title
-    const dc = document.getElementById('detailCats');
-    if (dc){
-      dc.innerHTML = '';
-      const chips = document.createElement('div');
-      chips.className = 'chips';
-      chips.setAttribute('data-item', it.id);
-      dc.appendChild(chips);
-      renderChipsEditorForItem(it.id, chips);
-    }
-    try { await seedLoadEmailNotes(it.id); } catch(_){}
-
-    const viewer = document.getElementById('viewer');
-    viewer.innerHTML = '<div class="empty">Loading...</div>';
-
-    // Prefer full Gmail thread by this message id so each email renders in its own box
-    let rendered = false;
-    try {
-      if (it && it.id) {
-        const r = await fetch(`/api/gmail-thread-by-message/${encodeURIComponent(it.id)}`);
-        const d = await r.json();
-        if (r.ok && d && d.success && Array.isArray(d.messages) && d.messages.length) {
-          viewer.innerHTML = '';
-          d.messages.forEach(m => {
-            const card = document.createElement('div');
-            card.className = 'message' + (m.isResponse ? ' response' : '');
-            const header = document.createElement('div');
-            header.className = 'msg-h';
-            header.innerHTML = `<strong>${escapeHtml(m.from||'')}</strong> • ${new Date(m.date||Date.now()).toLocaleString()}<br/>To: ${escapeHtml(Array.isArray(m.to)? m.to.join(', '):(m.to||''))}`;
-            const body = document.createElement('div');
-            body.className = 'msg-b';
-            body.textContent = m.body || '';
-            card.appendChild(header);
-            card.appendChild(body);
-            viewer.appendChild(card);
-          });
-          rendered = true;
-        }
-      }
-      // Legacy fallback: match an existing saved response by normalized subject then fetch its thread
-      if (!rendered && responseEmails && responseEmails.length) {
-        const key = normalizeSubjectKey(it.subject);
-        const match = responseEmails.find(e => normalizeSubjectKey(e.subject) === key);
-        if (match && match.id){
-          const r2 = await fetch(`/api/email-thread/${encodeURIComponent(match.id)}`);
-          const d2 = await r2.json();
-          if (Array.isArray(d2.messages) && d2.messages.length){
-            viewer.innerHTML = '';
-            d2.messages.forEach(m => {
-              const card = document.createElement('div');
-              card.className = 'message' + (m.isResponse ? ' response' : '');
-              const header = document.createElement('div');
-              header.className = 'msg-h';
-              header.innerHTML = `<strong>${escapeHtml(m.from||'')}</strong> • ${new Date(m.date||Date.now()).toLocaleString()}<br/>To: ${escapeHtml(Array.isArray(m.to)? m.to.join(', '):(m.to||''))}`;
-              const body = document.createElement('div');
-              body.className = 'msg-b';
-              body.textContent = m.body || '';
-              card.appendChild(header);
-              card.appendChild(body);
-              viewer.appendChild(card);
-            });
-            rendered = true;
-          }
-        }
-      }
-    } catch (e) {
-      console.warn('Thread fetch failed, fallback to single', e);
-    }
-
-    if (!rendered) {
-      // fallback: fetch full body from Gmail if available; otherwise use snippet/body
-      let text = (typeof it.body === 'string' && it.body.trim()) ? it.body : '';
-      if (!text && it.id) {
-        try {
-          const res = await fetch(`/api/gmail-message/${encodeURIComponent(it.id)}`);
-          const data = await res.json();
-          if (res.ok && data && data.success && data.email && data.email.body) {
-            text = data.email.body;
-          }
-        } catch (_e) {
-          // ignore and fall back
-        }
-      }
-      if (!text) text = it.snippet || 'No content available';
-
-      // Clean the body to remove quoted history like "On ... wrote:" using server-side cleaner
-      let cleanedText = text;
-      try {
-        const cleanRes = await fetch('/api/clean-text', {
-          method:'POST', headers:{'Content-Type':'application/json'},
-          body: JSON.stringify({ text })
-        });
-        const cleanData = await cleanRes.json();
-        if (cleanRes.ok && cleanData && cleanData.success && typeof cleanData.cleaned === 'string') {
-          cleanedText = cleanData.cleaned;
-        }
-      } catch (_e) {
-        // keep original fallback text
-      }
-
-      const card = document.createElement('div');
-      card.className = 'message';
-      const header = document.createElement('div');
-      header.className = 'msg-h';
-      header.innerHTML = `<strong>${escapeHtml(it.from||'')}</strong> • ${new Date(it.date||Date.now()).toLocaleString()}`;
-      const body = document.createElement('div');
-      body.className = 'msg-b';
-      body.textContent = cleanedText || '';
-      card.appendChild(header);
-      card.appendChild(body);
-      viewer.innerHTML = '';
-      viewer.appendChild(card);
-    }
-
-  }
-
-  // Inline chips editor (used in list rows and in detail)
-  function renderChipsEditorForItem(id, host){
-    host.innerHTML = '';
-    const arr = (selectedCatsById.get(id) || []).slice();
-
-    // Render suggested sender chip first (light blue), with inline edit
-    const senderKey = senderKeyById.get(id);
-    if (senderKey && senderPresenceById.get(id)) {
-      // Label: Default Tag
-      const label = document.createElement('span');
-      label.style.fontSize = '12px';
-      label.style.color = 'var(--muted)';
-      label.style.marginRight = '6px';
-      label.textContent = 'Default Tag:';
-      host.appendChild(label);
-
-      const senderLabel = senderLabelByKey.get(senderKey) || '';
-      const chip = document.createElement('span');
-      chip.className = 'chip chip-sender';
-      chip.setAttribute('data-sender', '1');
-      chip.innerHTML = `<span class="txt">${escapeHtml(senderLabel)}</span> <span class="x" title="Remove category">×</span>`;
-      chip.querySelector('.x').onclick = (ev) => {
-        ev.stopPropagation();
-        senderPresenceById.set(id, false);
-        refreshAllChipEditorsForItem(id);
-      };
-      // Click anywhere but X to edit inline
-      chip.addEventListener('click', (ev) => {
-        if (ev.target && ev.target.classList && ev.target.classList.contains('x')) return;
-        ev.stopPropagation();
-        const current = senderLabel;
-        chip.innerHTML = '';
-        const input = document.createElement('input');
-        input.type = 'text';
-        input.value = current;
-        input.className = 'chip-input';
-        input.style.maxWidth = '240px';
-        chip.appendChild(input);
-        input.focus();
-        const commit = async () => {
-          const v = (input.value || '').trim();
-          if (v && v !== current) {
-            await commitSenderRename(senderKey, v);
-          }
-          // Re-render all affected chips for this item
-          refreshAllChipEditorsForItem(id);
-        };
-        input.addEventListener('keydown', (e) => {
-          if (e.key === 'Enter') { e.preventDefault(); commit(); }
-          else if (e.key === 'Escape') { refreshAllChipEditorsForItem(id); }
-        });
-        input.addEventListener('blur', commit);
-      });
-      host.appendChild(chip);
-    }
-
-    // render user-added chips
-    arr.forEach(name => {
-      const chip = document.createElement('span');
-      chip.className = 'chip';
-      chip.innerHTML = `<span>${escapeHtml(name)}</span> <span class="x" title="Remove category">×</span>`;
-      chip.querySelector('.x').onclick = (ev) => {
-        ev.stopPropagation();
-        removeCategorySelection(id, name);
-        // re-render both locations referencing this item
-        refreshAllChipEditorsForItem(id);
-      };
-      host.appendChild(chip);
-    });
-
-    // input
-    const wrapper = document.createElement('div');
-    wrapper.style.position = 'relative';
-    const input = document.createElement('input');
-    input.className = 'chip-input';
-    input.setAttribute('placeholder', 'Add category…');
-    wrapper.appendChild(input);
-
-    const sugg = document.createElement('div');
-    sugg.className = 'suggestions';
-    wrapper.appendChild(sugg);
-
-    // show custom suggestions when typing (enhances datalist) + keyboard nav
-    let lastFilter = '';
-    let options = [];
-    let activeIndex = -1;
-
-    function renderOptions() {
-      if (!options.length) {
-        sugg.style.display = 'none';
-        sugg.innerHTML = '';
-        return;
-      }
-      sugg.innerHTML = options.map((o, i) => `<div class="opt${i===activeIndex ? ' active' : ''}">${escapeHtml(o)}</div>`).join('');
-      positionSuggestionsUnder(input, sugg);
-      sugg.style.display = 'block';
-      Array.from(sugg.querySelectorAll('.opt')).forEach((el, i) => {
-        el.onmouseenter = () => { activeIndex = i; updateActive(); };
-        el.onclick = (ev) => {
-          ev.stopPropagation();
-          chooseOption(options[i]);
-        };
-      });
-    }
-
-    function updateActive() {
-      const nodes = sugg.querySelectorAll('.opt');
-      nodes.forEach((el, i) => {
-        if (i === activeIndex) el.classList.add('active');
-        else el.classList.remove('active');
-      });
-      const node = nodes[activeIndex];
-      if (node && typeof node.scrollIntoView === 'function') {
-        node.scrollIntoView({ block: 'nearest' });
-      }
-    }
-
-    function chooseOption(name) {
-      const n = String(name || '').trim();
-      if (!n) return;
-      commitCategory(id, n);
-      input.value = '';
-      options = [];
-      activeIndex = -1;
-      sugg.style.display = 'none';
-    }
-
-    input.addEventListener('input', () => {
-      const v = (input.value || '').trim();
-      if (v === lastFilter) return;
-      lastFilter = v;
-      if (!v) {
-        options = [];
-        activeIndex = -1;
-        sugg.style.display = 'none';
-        sugg.innerHTML = '';
-        return;
-      }
-      const next = (categories || [])
-        .filter(c =>
-          c.toLowerCase().includes(v.toLowerCase()) &&
-          !arr.some(a => a.toLowerCase() === c.toLowerCase())
-        )
-        .slice(0, 8);
-      options = next;
-      activeIndex = -1;
-      renderOptions();
-    });
-
-    input.addEventListener('keydown', async (ev) => {
-      if (ev.key === 'ArrowDown' && options.length) {
-        ev.preventDefault();
-        activeIndex = (activeIndex + 1) % options.length;
-        updateActive();
-      } else if (ev.key === 'ArrowUp' && options.length) {
-        ev.preventDefault();
-        activeIndex = (activeIndex <= 0 ? options.length - 1 : activeIndex - 1);
-        updateActive();
-      } else if (ev.key === 'Enter') {
-        ev.preventDefault();
-        if (options.length && activeIndex >= 0) {
-          chooseOption(options[activeIndex]);
-        } else {
-          const v = (input.value || '').trim();
-          if (v) chooseOption(v);
-        }
-      } else if (ev.key === 'Escape') {
-        sugg.style.display = 'none';
-        options = [];
-        activeIndex = -1;
-      }
-    });
-
-    host.appendChild(wrapper);
-  }
-
-  function positionSuggestionsUnder(input, sugg){
-    try{
-      // Anchor to the input within its relatively positioned wrapper
-      const top = input.offsetTop + input.offsetHeight + 4; // directly under the input
-      const left = input.offsetLeft;
-      sugg.style.top = top + 'px';
-      sugg.style.left = left + 'px';
-      sugg.style.minWidth = input.offsetWidth + 'px';
-    }catch(_){}
-  }
-
-  async function commitCategory(id, name){
-    const n = (name || '').trim();
-    if (!n) return;
-    // if not already in system categories, create
-    const exists = (categories || []).some(c => c.toLowerCase() === n.toLowerCase());
-    if (!exists) {
-      try {
-        const res = await fetch('/api/categories/add', {
-          method:'POST', headers:{'Content-Type':'application/json'},
-          body: JSON.stringify({ name: n })
-        });
-        const data = await res.json();
-        if (res.ok && data && data.success){
-          categories = Array.isArray(data.categories) ? data.categories : categories;
-          setCatOptionsDatalist();
-        }
-      } catch (e) {
-        console.error('Failed to add category', e);
-      }
-    }
-    addCategorySelection(id, n);
-    refreshAllChipEditorsForItem(id);
-  }
-
-  // Commit a sender rename: update map, ensure category exists, and propagate UI updates
-  async function commitSenderRename(senderKey, newLabel){
-    const label = String(newLabel || '').trim();
-    if (!label) return;
-    const old = senderLabelByKey.get(senderKey) || '';
-    if (label.toLowerCase() !== old.toLowerCase()) {
-      const exists = (categories || []).some(c => c.toLowerCase() === label.toLowerCase());
-      if (!exists) {
-        try {
-          const res = await fetch('/api/categories/add', {
-            method:'POST', headers:{'Content-Type':'application/json'},
-            body: JSON.stringify({ name: label })
-          });
-          const data = await res.json();
-          if (res.ok && data && data.success){
-            categories = Array.isArray(data.categories) ? data.categories : categories;
-            setCatOptionsDatalist();
-          }
-        } catch (_) {}
-      }
-    }
-    senderLabelByKey.set(senderKey, label);
-    // propagate re-render for all items in this sender group that kept the sender chip
-    (seedItems || []).forEach(it => {
-      if (senderKeyById.get(it.id) === senderKey && senderPresenceById.get(it.id)) {
-        refreshAllChipEditorsForItem(it.id);
-      }
-    });
-  }
-
-  function addCategorySelection(id, name){
-    const arr = selectedCatsById.get(id) || [];
-    if (!arr.some(c => c.toLowerCase() === name.toLowerCase())){
-      arr.push(name);
-      selectedCatsById.set(id, arr);
-    }
-  }
-  function removeCategorySelection(id, name){
-    const arr = selectedCatsById.get(id) || [];
-    const next = arr.filter(c => c.toLowerCase() !== name.toLowerCase());
-    selectedCatsById.set(id, next);
-  }
-  function refreshAllChipEditorsForItem(id){
-    // refresh list row chips
-    document.querySelectorAll(`.chips[data-item="${cssEscape(id)}"]`).forEach(node => {
-      renderChipsEditorForItem(id, node);
-    });
-    // refresh detail if it's the same item (guard element presence)
-    if (selectedId === id) {
-      const host = document.getElementById('detailCats');
-      if (host) {
-        host.innerHTML = '';
-        const chips = document.createElement('div');
-        chips.className = 'chips';
-        chips.setAttribute('data-item', id);
-        host.appendChild(chips);
-        renderChipsEditorForItem(id, chips);
-      }
-    }
-  }
-
-  // CSS.escape polyfill
-  function cssEscape(s){
-    try { return CSS && CSS.escape ? CSS.escape(s) : String(s).replace(/"/g, '\\"'); } catch { return String(s).replace(/"/g, '\\"'); }
-  }
-
-  // Escape HTML util (safe minimal)
   function escapeHtml(s){
     return String(s||'')
       .replace(/&/g,'&')
@@ -1434,306 +171,550 @@
       .replace(/"/g,'"')
       .replace(/'/g,'&#39;');
   }
-
-  // Persist primary category (category) and additional categories (categories)
-  async function addAllToDatabase(){
-    if (!seedItems.length){
-      alert('Nothing to add.');
-      return;
-    }
-
-    // Build payloads from current selections
-    const allBuilt = seedItems.map(it => {
-      // Build combined selection: sender suggestion (if present) first, then user-added
-      const userSelected = (selectedCatsById.get(it.id) || [])
-        .map(s => String(s || '').trim())
-        .filter(Boolean);
-
-      const sel = [];
-      const sKey = senderKeyById.get(it.id);
-      if (sKey && senderPresenceById.get(it.id)) {
-        const sLabel = (senderLabelByKey.get(sKey) || '').trim();
-        if (sLabel) sel.push(sLabel);
-      }
-      userSelected.forEach(c => {
-        if (!sel.some(x => x.toLowerCase() === c.toLowerCase())) sel.push(c);
-      });
-
-      const primary = sel.length ? sel[0] : '';
-
-      const rec = {
-        id: it.id,
-        subject: it.subject || 'No Subject',
-        from: it.from || 'Unknown Sender',
-        date: it.date || new Date().toISOString(),
-        snippet:
-          it.snippet ||
-          (typeof it.body === 'string'
-            ? it.body.slice(0, 100) + (it.body.length > 100 ? '...' : '')
-            : ''),
-        body: it.body || it.snippet || '',
-        tags: {
-          unreplied: !!(it.tags && it.tags.unreplied),
-          thread: !!(it.tags && it.tags.thread)
-        }
-      };
-
-      if (primary) rec.category = primary;
-
-      // Additional categories are the remaining selections
-      const extras = sel.slice(1);
-      if (extras.length) rec.categories = extras;
-
-      return rec;
+  function fmtDate(iso){
+    const d = new Date(iso || Date.now());
+    if (Number.isNaN(+d)) return '';
+    const now = new Date();
+    const diff = (now - d)/86400000;
+    if (diff < 1) return 'Today';
+    if (diff < 2) return 'Yesterday';
+    if (diff < 7) return `${Math.floor(diff)} days ago`;
+    return d.toLocaleDateString('en-US', {month:'short', day:'numeric'});
+  }
+  function uniqNonEmpty(arr){
+    const out = [];
+    const seen = new Set();
+    arr.forEach(n => {
+      const s = String(n || '').trim();
+      if (!s) return;
+      const k = s.toLowerCase();
+      if (seen.has(k)) return;
+      seen.add(k);
+      out.push(s);
     });
-
-    // Split into categorized vs uncategorized
-    const isCategorized = (r) => {
-      const p = String(r?.category || '').trim();
-      const ex = Array.isArray(r?.categories) ? r.categories.filter(Boolean) : [];
-      return !!p || ex.length > 0;
-    };
-    const toAdd = allBuilt.filter(isCategorized);
-    const skippedCount = allBuilt.length - toAdd.length;
-
-    // Inline confirmation (styled overlay) if there are uncategorized emails
-    if (skippedCount > 0) {
-      const offenders = allBuilt.filter(r => !isCategorized(r));
-      showSeedMissingOverlay(offenders);
-      return;
-    }
-
-    if (toAdd.length === 0) {
-      alert('No categorized emails to add.');
-      return;
-    }
-
-    try {
-      // 1) Determine which categories are missing summaries BEFORE persisting (so we can show per-category progress)
-      let existingSummaries = {};
-      try {
-        const r = await fetch('/api/category-summaries');
-        const d = await r.json();
-        existingSummaries = (d && d.summaries) || {};
-      } catch (_) {
-        existingSummaries = {};
-      }
-
-      // Collect all categories from payload (primary + additional)
-      const catsSet = new Set();
-      toAdd.forEach(rec => {
-        if (rec.category) catsSet.add(rec.category);
-        if (Array.isArray(rec.categories)) rec.categories.forEach(c => { if (c) catsSet.add(c); });
-      });
-      const allCats = Array.from(catsSet);
-      const missingCats = allCats.filter(name => !existingSummaries || !existingSummaries[name]);
-
-      // 2) Generate missing summaries sequentially with UI feedback
-      for (const cat of missingCats) {
-        // Update overlay to show the current category being summarized
-        showOverlay(`Generating Summary for ${cat}`, `Creating a concise knowledge summary for "${cat}"…`);
-        try {
-          const resp = await fetch('/api/generate-category-summaries', {
-            method:'POST',
-            headers:{'Content-Type':'application/json'},
-            body: JSON.stringify({ categories: [cat], overwrite: false })
-          });
-          // Best-effort: ignore response content; UI just progresses to next
-          await resp.json().catch(() => ({}));
-        } catch (e) {
-          // Continue even if a single category fails; server-side fallback will try again later if needed
-          console.warn('Failed to generate summary for', cat, e?.message || e);
-        }
-      }
-
-      // 3) Persist items to database
-      showOverlay('Adding to Database', `Persisting ${toAdd.length} item${toAdd.length === 1 ? '' : 's'}…`);
-      const res = await fetch('/api/seed-categories/add-all', {
-        method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ items: toAdd })
-      });
-      const data = await res.json();
-      if (!res.ok || !data || data.success !== true){
-        throw new Error((data && data.error) || 'Add failed');
-      }
-
-      hideOverlay();
-      // Navigate back to home
-      window.location.href = '/';
-    } catch(e){
-      console.error('Add all failed:', e);
-      hideOverlay();
-      alert('Failed to add items. Please try again.');
-    }
+    return out;
   }
 
-  // Wire header buttons
-  document.getElementById('cancelBtn').addEventListener('click', () => {
-    window.location.href = '/';
-  });
-  const saveBtnEl = document.getElementById('saveBtn');
-  if (saveBtnEl) {
-    saveBtnEl.addEventListener('click', () => {
-      window.location.href = '/?msg=Changes saved';
-    });
+  // Thread/Detail helpers
+  async function fetchThreadByMessageId(id){
+    try{
+      const r = await fetch(`/api/gmail-thread-by-message/${encodeURIComponent(id)}`);
+      const d = await r.json();
+      if (r.ok && d && d.success && Array.isArray(d.messages)) {
+        return d.messages;
+      }
+    }catch(_){}
+    return null;
   }
-  document.getElementById('addBtn').addEventListener('click', addAllToDatabase);
-  const _seedMissingClose = document.getElementById('seedMissingCloseBtn');
-  if (_seedMissingClose) _seedMissingClose.addEventListener('click', hideSeedMissingOverlay);
-  // Back button for thread view -> list
-  const _seedBack = document.getElementById('seedBackBtn');
-  if (_seedBack) _seedBack.addEventListener('click', showSeedList);
-
-  // Boot
-  document.addEventListener('DOMContentLoaded', loadInitial);
-/* ===== Per-email Notes (Seed page) ===== */
-window.__seedCurrentEmailIdNotes = '';
-
-/* Inline notes (left list) — mirrors load.html behavior */
-async function seedAddInlineNote(emailId){
-  try {
-    const ta = document.getElementById(`note-inline-${emailId}`);
-    if (!ta) return;
-    const text = (ta.value || '').trim();
-    if (!text) return;
-    const r = await fetch(`/api/email-notes/${encodeURIComponent(emailId)}`, {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ text })
-    });
-    const d = await r.json().catch(()=> ({}));
-    const statusEl = document.getElementById(`note-inline-status-${emailId}`);
-    if (r.ok && d && d.success){
-      ta.value = '';
-      if (statusEl){ statusEl.textContent = 'Saved'; setTimeout(()=> statusEl.textContent = '', 1500); }
-      seedLoadInlineNotes(emailId);
-    } else {
-      if (statusEl){ statusEl.textContent = 'Failed to save'; setTimeout(()=> statusEl.textContent = '', 1500); }
-    }
-  } catch(_){}
-}
-
-async function seedLoadInlineNotes(emailId){
-  try {
-    const listEl = document.getElementById(`notes-inline-list-${emailId}`);
-    if (!listEl) return;
-    listEl.innerHTML = '';
-    const r = await fetch(`/api/email-notes/${encodeURIComponent(emailId)}`);
-    const d = await r.json().catch(()=> ({}));
-    const notes = Array.isArray(d.notes) ? d.notes : [];
-    if (!notes.length) {
-      listEl.innerHTML = '<div class="small" style="color:#6d4c41;">No notes yet.</div>';
-      return;
-    }
-    listEl.innerHTML = notes.map(n => {
-      const ts = new Date(n.updatedAt || n.createdAt || Date.now());
-      const when = isNaN(ts) ? '' : ts.toLocaleString();
-      const safe = escapeHtml(n.text || '');
-      return `
-        <div style="display:flex; align-items:flex-start; gap:8px;">
-          <div style="flex:1; border:1px solid #e9ecef; border-radius:6px; padding:8px; background:#fff;">
-            <div style="font-size:12px; color:#666; margin-bottom:4px;">${when}</div>
-            <div style="white-space:pre-wrap; font-size:13px; color:#333;">${safe}</div>
-          </div>
-          <button class="sticky-btn" title="Delete" onclick="seedDeleteInlineNote('${emailId}','${n.id}')">Delete</button>
-        </div>
-      `;
-    }).join('');
-  } catch(_){}
-}
-
-async function seedDeleteInlineNote(emailId, noteId){
-  try{
-    await fetch(`/api/email-notes/${encodeURIComponent(emailId)}/${encodeURIComponent(noteId)}`, {
-      method:'DELETE'
-    });
-    seedLoadInlineNotes(emailId);
-  }catch(_){}
-}
-
-async function seedLoadEmailNotes(emailId){
-  try{
-    window.__seedCurrentEmailIdNotes = emailId || '';
-    const listEl = document.getElementById('emailNotesListSeed');
-    if (listEl) listEl.innerHTML = '<div class="loading">Loading notes...</div>';
-    if (!emailId){
-      if (listEl) listEl.innerHTML = '<div class="empty">No notes yet.</div>';
-      return;
-    }
-    const r = await fetch(`/api/email-notes/${encodeURIComponent(emailId)}`);
-    const d = await r.json();
-    const notes = Array.isArray(d.notes) ? d.notes : [];
-    seedRenderEmailNotes(emailId, notes);
-  }catch(e){
-    const listEl = document.getElementById('emailNotesListSeed');
-    if (listEl) listEl.innerHTML = '<div class="error">Failed to load notes.</div>';
+  async function fetchSingleMessage(id){
+    try{
+      const r = await fetch(`/api/gmail-message/${encodeURIComponent(id)}`);
+      const d = await r.json();
+      if (r.ok && d && d.success && d.email) {
+        const e = d.email;
+        return [{
+          id: e.id, from: e.from, to: (e.to||'').split(',').map(s=>s.trim()).filter(Boolean),
+          date: e.date, subject: e.subject, body: e.body, isResponse: false
+        }];
+      }
+    }catch(_){}
+    return [];
   }
-}
-
-function seedRenderEmailNotes(emailId, notes){
-  const listEl = document.getElementById('emailNotesListSeed');
-  if (!listEl) return;
-  if (!Array.isArray(notes) || notes.length === 0){
-    listEl.innerHTML = '<div class="empty">No notes yet.</div>';
-    return;
-  }
-  const html = notes.map(n => {
-    const ts = new Date(n.updatedAt || n.createdAt || Date.now());
-    const when = isNaN(ts) ? '' : ts.toLocaleString();
-    return `
-      <div style="border:1px solid #e9ecef; border-radius:6px; padding:8px; margin-bottom:8px; background:#fff;">
-        <div style="font-size:12px; color:#666; margin-bottom:4px;">${when}</div>
-        <div style="white-space:pre-wrap; font-size:13px; color:#333;">${escapeHtml(n.text || '')}</div>
-        <div style="text-align:right; margin-top:6px;">
-          <button class="refinement-delete-btn" style="padding:4px 8px; font-size:12px;" onclick="seedDeleteEmailNote('${(n.id || '').replace(/'/g, "\\'")}')">Delete</button>
-        </div>
+  function renderResultsShell(){
+    const pr = document.querySelector('.pane-right');
+    if (!pr) return;
+    pr.innerHTML = `
+      <div class="right-top">
+        <div class="right-title">Results</div>
+        <div class="small" id="summaryStat"></div>
       </div>
+      <div class="binders" id="binders"></div>
     `;
-  }).join('');
-  listEl.innerHTML = html;
-}
+    renderBinders(uniqNonEmpty(inputNames));
+    updateSummary();
+  }
+  async function showThreadView(email){
+    const pr = document.querySelector('.pane-right');
+    if (!pr) return;
+    const subjectSafe = escapeHtml(email.subject || 'No Subject');
+    pr.innerHTML = `
+      <div class="thread-header">
+        <button id="seedBackBtn" class="btn btn-secondary" title="Back">← Back</button>
+        <div class="thread-title" title="${subjectSafe}">${subjectSafe}</div>
+      </div>
+      <div id="threadViewer" class="thread-body"><div class="small">Loading thread…</div></div>
+    `;
+    const back = document.getElementById('seedBackBtn');
+    if (back) back.addEventListener('click', renderResultsShell);
 
-async function seedAddEmailNote(){
-  try{
-    const emailId = window.__seedCurrentEmailIdNotes || '';
-    if (!emailId) return;
-    const input = document.getElementById('emailNotesInputSeed');
-    const text = (input?.value || '').trim();
-    if (!text) return;
-    const r = await fetch(`/api/email-notes/${encodeURIComponent(emailId)}`, {
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ text })
-    });
-    const d = await r.json();
-    if (!r.ok || !d.success){
-      alert('Failed to add note.');
+    // Load thread
+    let messages = await fetchThreadByMessageId(email.id);
+    if (!messages || !messages.length) {
+      messages = await fetchSingleMessage(email.id);
+    }
+    const viewer = document.getElementById('threadViewer');
+    if (!viewer) return;
+    if (!messages || !messages.length) {
+      viewer.innerHTML = '<div class="empty">No content available.</div>';
       return;
     }
-    if (input) input.value = '';
-    // reload notes
-    await seedLoadEmailNotes(emailId);
-  }catch(e){
-    alert('Failed to add note.');
-  }
-}
-
-async function seedDeleteEmailNote(noteId){
-  try{
-    const emailId = window.__seedCurrentEmailIdNotes || '';
-    if (!emailId || !noteId) return;
-    const r = await fetch(`/api/email-notes/${encodeURIComponent(emailId)}/${encodeURIComponent(noteId)}`, {
-      method:'DELETE'
+    // Render messages chronologically
+    try{ messages.sort((a,b) => new Date(a.date)-new Date(b.date)); }catch(_){}
+    viewer.innerHTML = '';
+    messages.forEach(m => {
+      const card = document.createElement('div');
+      card.className = 'message' + (m.isResponse ? ' response' : '');
+      const hdr = document.createElement('div');
+      hdr.className = 'msg-h';
+      const toLine = Array.isArray(m.to) ? m.to.join(', ') : (m.to || '');
+      hdr.innerHTML = `<strong>${escapeHtml(m.from||'')}</strong> • ${new Date(m.date||Date.now()).toLocaleString()}<br/>To: ${escapeHtml(toLine)}`;
+      const body = document.createElement('div');
+      body.className = 'msg-b';
+      body.textContent = m.body || '';
+      card.appendChild(hdr); card.appendChild(body);
+      viewer.appendChild(card);
     });
-    const d = await r.json();
-    if (!r.ok || !d.success){
-      alert('Failed to delete note.');
+  }
+  // ---------- Inputs UI ----------
+  function renderInputs(){
+    const host = $('catInputs');
+    host.innerHTML = '';
+    inputNames.forEach((val, idx) => {
+      const row = document.createElement('div');
+      row.className = 'input-row';
+      const inp = document.createElement('input');
+      inp.className = 'cat-input';
+      inp.placeholder = `Category #${idx+1}`;
+      inp.value = val || '';
+      inp.addEventListener('input', () => {
+        inputNames[idx] = inp.value;
+      });
+      row.appendChild(inp);
+
+      // Only show remove button when more than 1 input
+      if (inputNames.length > 1) {
+        const rm = document.createElement('button');
+        rm.className = 'btn btn-icon trash-btn';
+        rm.setAttribute('aria-label', 'Remove category');
+        rm.title = 'Remove this category input';
+        rm.innerHTML = '🗑️';
+        rm.onclick = () => {
+          inputNames.splice(idx, 1);
+          renderInputs();
+        };
+        row.appendChild(rm);
+      }
+      host.appendChild(row);
+    });
+  }
+
+  // ---------- Fetching ----------
+  async function fetchInbox(query, maxResults){
+    const payload = { query: String(query || 'in:inbox'), maxResults: Math.max(1, Math.min(50, Number(maxResults) || 10)) };
+    // Primary: use server Gmail API endpoint (handles auth + real Gmail search)
+    try{
+      const r = await fetch('/api/fetch-more-emails', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify(payload)
+      });
+      const d = await r.json().catch(()=> ({}));
+
+      // Handle auth required case (401 with needsAuth)
+      if (!r.ok && d && d.needsAuth) {
+        try {
+          const url = d.authUrl || '/api/auth/start';
+          window.open(url, '_blank', 'noopener,noreferrer');
+          alert('Gmail authentication is required. A new tab has been opened. After completing authentication, return here and click Go again.');
+        } catch(_){}
+        throw new Error('Gmail auth required');
+      }
+
+      if (r.ok && d && d.success && Array.isArray(d.emails)) {
+        const list = d.emails;
+        return list.map(e => {
+          const obj = {
+            id: e.id || '',
+            subject: e.subject || 'No Subject',
+            from: e.from || 'Unknown Sender',
+            date: e.date || new Date().toISOString(),
+            body: String(e.body || e.snippet || ''),
+            snippet: e.snippet || (e.body ? String(e.body).slice(0, 100) + (String(e.body).length > 100 ? '...' : '') : 'No content available'),
+            webUrl: e.webUrl || ''
+          };
+          if (obj.id) emailsById.set(obj.id, obj);
+          return obj;
+        });
+      }
+
+      // If server endpoint responded but without success, fall through to MCP as last resort
+      throw new Error((d && d.error) || 'Server fetch failed');
+    }catch(primaryErr){
+      // Fallback: MCP endpoint (only if running)
+      try{
+        const r2 = await fetch('/api/mcp-fetch-emails', {
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify(payload)
+        });
+        const d2 = await r2.json().catch(()=> ({}));
+        if (!r2.ok || !d2 || d2.success !== true) {
+          throw new Error((d2 && d2.error) || 'MCP fetch failed');
+        }
+        const list = Array.isArray(d2.emails) ? d2.emails : [];
+        return list.map(e => {
+          const obj = {
+            id: e.id || '',
+            subject: e.subject || 'No Subject',
+            from: e.from || 'Unknown Sender',
+            date: e.date || new Date().toISOString(),
+            body: String(e.body || e.snippet || ''),
+            snippet: e.snippet || (e.body ? String(e.body).slice(0, 100) + (String(e.body).length > 100 ? '...' : '') : 'No content available'),
+            webUrl: e.webUrl || ''
+          };
+          if (obj.id) emailsById.set(obj.id, obj);
+          return obj;
+        });
+      }catch(fallbackErr){
+        console.error('Inbox fetch failed (server + MCP):', primaryErr?.message || primaryErr, fallbackErr?.message || fallbackErr);
+        throw primaryErr;
+      }
+    }
+  }
+
+  async function fetchForCategory(name){
+    // Gmail-like semantics; quote the name to prefer phrase matches, keep is:important to bias signal
+    const q = `in:inbox is:important "${name}"`;
+    return await fetchInbox(q, 50);
+  }
+
+  // ---------- Search Orchestration ----------
+  async function runSearch(){
+    // Read and sanitize input names
+    const names = uniqNonEmpty(inputNames);
+    if (!names.length){
+      alert('Enter at least one category name.');
       return;
     }
-    await seedLoadEmailNotes(emailId);
-  }catch(e){
-    alert('Failed to delete note.');
+    showOverlay('Searching Inbox', 'Fetching up to 50 results per category…');
+
+    // Reset state
+    resultsByCat.clear();
+    otherList = [];
+    assignments.clear();
+    emailsById.clear();
+
+    try{
+      // For "first match wins" across categories, keep a seen set as we fetch in order
+      const seen = new Set();
+
+      // Fetch each category (sequential to avoid API overload and preserve ordering)
+      for (const name of names) {
+        let list = [];
+        try {
+          list = await fetchForCategory(name);
+        } catch (e) {
+          // surface partial error but continue
+          console.warn('Category search failed for', name, e?.message || e);
+          list = [];
+        }
+        // Deduplicate across earlier categories (first-match precedence)
+        const filtered = list.filter(e => e.id && !seen.has(e.id));
+        filtered.forEach(e => {
+          if (e.id) {
+            seen.add(e.id);
+            assignments.set(e.id, name);
+          }
+        });
+        resultsByCat.set(name, filtered);
+      }
+
+      // Build 'Other' from latest inbox (not matched anywhere), top 10 by date
+      let inboxAll = [];
+      try{
+        inboxAll = await fetchInbox('in:inbox is:important', 100);
+      }catch(e){
+        // If MCP fetch fails, try to fallback to today/priority via server (best-effort)
+        try{
+          const r = await fetch('/api/fetch-more-emails', {
+            method:'POST', headers:{'Content-Type':'application/json'},
+            body: JSON.stringify({ query: 'in:inbox is:important', maxResults: 50 })
+          });
+          const d = await r.json().catch(()=> ({}));
+          if (r.ok && d && d.success && Array.isArray(d.emails)) {
+            inboxAll = d.emails.map(e => ({
+              id: e.id || '',
+              subject: e.subject || 'No Subject',
+              from: e.from || 'Unknown Sender',
+              date: e.date || new Date().toISOString(),
+              body: String(e.body || e.snippet || ''),
+              snippet: e.snippet || (e.body ? String(e.body).slice(0, 100) + (String(e.body).length > 100 ? '...' : '') : 'No content available'),
+              webUrl: e.webUrl || ''
+            }));
+          }
+        } catch(_) {}
+      }
+      const unmatched = inboxAll.filter(e => e.id && !assignments.has(e.id));
+      unmatched.sort((a,b) => new Date(b.date) - new Date(a.date));
+      otherList = unmatched.slice(0, 20);
+      otherList.forEach(e => {
+        if (e.id && !assignments.has(e.id)) assignments.set(e.id, OTHER_NAME);
+        if (e.id) emailsById.set(e.id, e);
+      });
+
+      renderBinders(names);
+      updateSummary();
+    }catch(e){
+      console.error('Search orchestration failed:', e);
+      $('binders').innerHTML = `<div class="empty">Failed to search inbox. Please ensure Gmail MCP server is running or authenticate Gmail, then try again.</div>`;
+    }finally{
+      hideOverlay();
+    }
   }
-}
+
+  // ---------- Rendering ----------
+  function updateSummary(){
+    try{
+      const total =
+        Array.from(resultsByCat.values()).reduce((acc, arr) => acc + (Array.isArray(arr) ? arr.length : 0), 0)
+        + (Array.isArray(otherList) ? otherList.length : 0);
+      $('summaryStat').textContent = total ? `${total} emails` : '';
+    }catch(_){}
+  }
+
+  function renderBinders(names){
+    const host = $('binders');
+    host.innerHTML = '';
+
+    // Render each category section in the input order
+    names.forEach(name => {
+      const arr = resultsByCat.get(name) || [];
+      host.appendChild(renderBinder(name, arr, false));
+    });
+
+    // Render Other
+    host.appendChild(renderBinder(OTHER_NAME, otherList, true));
+
+    if (!names.length && (!otherList || !otherList.length)) {
+      host.innerHTML = '<div class="empty">Enter one or more categories on the left and click Go.</div>';
+    }
+  }
+
+  function renderBinder(name, arr, isOther){
+    const sec = document.createElement('section');
+    sec.className = 'binder';
+
+    const h = document.createElement('div');
+    h.className = 'binder-h';
+    const open = openByName.has(name) ? !!openByName.get(name) : false;
+
+    const left = document.createElement('div');
+    left.style.display = 'flex';
+    left.style.alignItems = 'center';
+    left.style.gap = '8px';
+
+    const arrow = document.createElement('span');
+    arrow.className = 'arrow';
+    arrow.textContent = open ? '▾' : '▸';
+
+    const nameEl = document.createElement('span');
+    nameEl.className = 'binder-name';
+    nameEl.textContent = name;
+
+    left.appendChild(arrow);
+    left.appendChild(nameEl);
+
+    const right = document.createElement('div');
+    right.className = 'binder-count';
+    right.textContent = `${Array.isArray(arr) ? arr.length : 0}`;
+
+    h.appendChild(left); 
+    h.appendChild(right);
+
+    // Toggle collapse on header click
+    h.addEventListener('click', () => {
+      const prev = openByName.get(name) || false;
+      const next = !prev;
+      openByName.set(name, next);
+      if (b) b.style.display = next ? 'block' : 'none';
+      arrow.textContent = next ? '▾' : '▸';
+    });
+
+    const b = document.createElement('div');
+    b.className = 'binder-b';
+    b.style.display = (openByName.has(name) ? !!openByName.get(name) : false) ? 'block' : 'none';
+
+    if (!arr || !arr.length) {
+      const empty = document.createElement('div');
+      empty.className = 'empty';
+      empty.textContent = 'No emails.';
+      b.appendChild(empty);
+    } else {
+      arr.forEach(e => {
+        const card = document.createElement('div');
+        card.className = 'email-card clickable';
+
+        const main = document.createElement('div');
+        main.className = 'email-main';
+        main.innerHTML = `
+          <div class="subj" title="${escapeHtml(e.subject)}">${escapeHtml(e.subject)}</div>
+          <div class="meta">${escapeHtml(e.from)} • ${fmtDate(e.date)}</div>
+          <div class="snippet">${escapeHtml(e.snippet || '')}</div>
+        `;
+
+        const act = document.createElement('div');
+        act.className = 'actions';
+
+        if (isOther) {
+          // Move dropdown into one of the user-entered categories (+ New Category)
+          const sel = document.createElement('select');
+          sel.className = 'select';
+          const ph = document.createElement('option');
+          ph.value = ''; ph.textContent = 'Move to…';
+          sel.appendChild(ph);
+          uniqNonEmpty(inputNames).forEach(n => {
+            const opt = document.createElement('option');
+            opt.value = n; opt.textContent = n;
+            sel.appendChild(opt);
+          });
+          const optNew = document.createElement('option');
+          optNew.value = '__NEW__'; optNew.textContent = '+ New Category';
+          sel.appendChild(optNew);
+
+          sel.addEventListener('click', (ev) => ev.stopPropagation());
+          sel.addEventListener('change', () => {
+            const tgt = sel.value;
+            if (!tgt) return;
+            if (tgt === '__NEW__') {
+              const name = (prompt('New category name?') || '').trim();
+              sel.value = '';
+              if (!name) return;
+              // add to inputs and results map
+              inputNames.push(name);
+              renderInputs();
+              if (!resultsByCat.has(name)) resultsByCat.set(name, []);
+              moveEmailTo(name, e.id);
+              return;
+            }
+            moveEmailTo(tgt, e.id);
+          });
+          act.appendChild(sel);
+        } else {
+          const btn = document.createElement('button');
+          btn.className = 'btn btn-secondary';
+          btn.textContent = 'Remove';
+          btn.title = 'Move to Other';
+          btn.addEventListener('click', (ev) => { ev.stopPropagation(); moveEmailTo(OTHER_NAME, e.id); });
+          act.appendChild(btn);
+        }
+
+        // Make whole card open thread on click
+        card.addEventListener('click', () => showThreadView(e));
+
+        card.appendChild(main);
+        card.appendChild(act);
+        b.appendChild(card);
+      });
+    }
+
+    sec.appendChild(h);
+    sec.appendChild(b);
+    return sec;
+  }
+
+  // ---------- Move logic ----------
+  function moveEmailTo(targetCat, emailId){
+    const id = String(emailId || '').trim();
+    if (!id) return;
+
+    // Find current category
+    const current = assignments.get(id) || '';
+    if (current === targetCat) return;
+
+    // Remove from current bucket
+    if (current && current !== OTHER_NAME) {
+      const arr = resultsByCat.get(current) || [];
+      const next = arr.filter(e => e.id !== id);
+      resultsByCat.set(current, next);
+    } else if (current === OTHER_NAME) {
+      otherList = (otherList || []).filter(e => e.id !== id);
+    } else {
+      // unknown (shouldn't happen), ensure removal from every place
+      for (const [k,v] of resultsByCat.entries()){
+        resultsByCat.set(k, (v||[]).filter(e => e.id !== id));
+      }
+      otherList = (otherList||[]).filter(e => e.id !== id);
+    }
+
+    // Add into target
+    const email = emailsById.get(id);
+    if (targetCat === OTHER_NAME) {
+      otherList = [email, ...otherList];
+    } else {
+      const arr = resultsByCat.get(targetCat) || [];
+      resultsByCat.set(targetCat, [email, ...arr]);
+    }
+
+    assignments.set(id, targetCat);
+    renderBinders(uniqNonEmpty(inputNames));
+    updateSummary();
+  }
+
+  // ---------- Save ----------
+  async function doSave(){
+    // Build items from current assignments (one item per email with its current bucket)
+    const items = [];
+    for (const [id, cat] of assignments.entries()) {
+      const rec = emailsById.get(id);
+      if (!rec) continue;
+      items.push({
+        id: rec.id,
+        subject: rec.subject || 'No Subject',
+        from: rec.from || 'Unknown Sender',
+        date: rec.date || new Date().toISOString(),
+        snippet: rec.snippet || (rec.body ? String(rec.body).slice(0, 100) + (String(rec.body).length > 100 ? '...' : '') : ''),
+        body: rec.body || rec.snippet || '',
+        category: String(cat || '').trim(), // includes "Other"
+        categories: [] // single-label for this workflow
+      });
+    }
+    if (!items.length){
+      alert('Nothing to save.');
+      return;
+    }
+
+    showOverlay('Saving', `Persisting ${items.length} item${items.length===1?'':'s'}…`);
+    try{
+      const r = await fetch('/api/seed-categories/add-all', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ items })
+      });
+      const d = await r.json().catch(()=> ({}));
+      if (!r.ok || !d || d.success !== true) {
+        throw new Error((d && d.error) || 'Save failed');
+      }
+      hideOverlay();
+      // Return to main page
+      window.location.href = '/';
+    }catch(e){
+      console.error('Save failed:', e);
+      hideOverlay();
+      alert('Failed to save items. Please try again.');
+    }
+  }
+
+  // ---------- Wire up ----------
+  $('addInputBtn').addEventListener('click', () => {
+    inputNames.push('');
+    renderInputs();
+  });
+  $('goBtn').addEventListener('click', runSearch);
+  $('saveBtn').addEventListener('click', doSave);
+  $('cancelBtn').addEventListener('click', () => { window.location.href = '/'; });
+
+  // Initial render
+  renderInputs();
+})();
 </script>
 </body>
 </html>
