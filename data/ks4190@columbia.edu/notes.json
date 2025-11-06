@@ -1,36 +1,3 @@
 {
-  "notes": [
-    {
-      "id": "note-1759508176769-07t8by",
-      "category": "Lab/Project Logistics",
-      "text": "test1",
-      "scope": "GLOBAL",
-      "createdAt": "2025-10-03T16:16:16.769Z",
-      "updatedAt": "2025-10-03T16:16:16.769Z"
-    },
-    {
-      "id": "note-1759508180868-jqs3pc",
-      "category": "Lab/Project Logistics",
-      "text": "iantai",
-      "scope": "GLOBAL",
-      "createdAt": "2025-10-03T16:16:20.868Z",
-      "updatedAt": "2025-10-03T16:16:20.868Z"
-    },
-    {
-      "id": "note-1759508193187-3kzlnv",
-      "category": "Grading/TA Administration",
-      "text": "jsfhdj",
-      "scope": "GLOBAL",
-      "createdAt": "2025-10-03T16:16:33.187Z",
-      "updatedAt": "2025-10-03T16:16:35.598Z"
-    },
-    {
-      "id": "note-1759853159602-3tfljh",
-      "category": "Apartment",
-      "text": "test2",
-      "scope": "GLOBAL",
-      "createdAt": "2025-10-07T16:05:59.602Z",
-      "updatedAt": "2025-10-07T16:05:59.602Z"
-    }
-  ]
+  "notes": []
 }

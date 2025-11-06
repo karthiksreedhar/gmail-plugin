@@ -1,25 +1,33 @@
 {
   "categories": [
     {
-      "name": "Apartment",
+      "name": "Akify",
       "notes": ""
     },
     {
-      "name": "Lydia Chilton",
+      "name": "Humor Project",
       "notes": ""
     },
     {
-      "name": "University",
+      "name": "DAPLab",
       "notes": ""
     },
     {
-      "name": "Conference",
+      "name": "Adobe Project",
       "notes": ""
     },
     {
-      "name": "UI Design",
+      "name": "CBL",
+      "notes": ""
+    },
+    {
+      "name": "Administrative",
+      "notes": ""
+    },
+    {
+      "name": "DoubleAgents",
       "notes": ""
     }
   ],
-  "updatedAt": "2025-10-14T16:44:15.774Z"
+  "updatedAt": "2025-09-24T14:14:31.059Z"
 }
