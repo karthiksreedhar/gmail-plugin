@@ -11309,6 +11309,119 @@ Provide a one or two sentence justification only.`;
   }
 });
 
+/**
+ * GET /api/priority-today
+ * Returns today's important (is:important) inbox emails as transient candidates (NOT persisted)
+ * Shape: { success: true, emails: [{ id, subject, from, date, threadId, body, snippet, category, webUrl }] }
+ * - Deduped by thread and filtered against existing DB entries (responses/threads/unreplied)
+ * - Categories assigned using keywordCategorizeUnreplied (mirrors Seed Categories keyword search)
+ */
+app.get('/api/priority-today', async (req, res) => {
+  try {
+    // Ensure Gmail API is available and authenticated
+    if (!gmail || !gmailAuth) {
+      const authUrl = getGmailAuthUrl();
+      return res.status(401).json({
+        success: false,
+        needsAuth: true,
+        authUrl: authUrl || null,
+        error: 'Gmail authentication required'
+      });
+    }
+    const paths = getCurrentUserPaths();
+    if (!fs.existsSync(paths.TOKENS_PATH)) {
+      const authUrl = getGmailAuthUrl();
+      return res.status(401).json({
+        success: false,
+        needsAuth: true,
+        authUrl: authUrl || null,
+        error: 'Gmail authentication required'
+      });
+    }
+
+    // Build Gmail query for "today" in local timezone with is:important
+    const now = new Date();
+    const startBase = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const tomorrow = new Date(startBase.getTime() + 24 * 60 * 60 * 1000);
+    const formatDateForGmail = (d) => {
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      return `${y}/${m}/${day}`;
+    };
+    const after = formatDateForGmail(startBase);
+    const before = formatDateForGmail(tomorrow);
+    const searchQuery = `in:inbox is:important after:${after} before:${before}`;
+
+    // Load existing unreplied to avoid exact duplicate message IDs only.
+    // IMPORTANT: For Priority Today, do NOT exclude items merely because their thread or subject/from
+    // matches existing database entries. We want to show today's important inbox even if the thread
+    // already exists in the local DB. We will:
+    //  - skip only exact duplicate message IDs already present in unreplied
+    //  - dedupe within this result set by thread
+    const existingUnrepliedEmails = loadUnrepliedEmails() || [];
+
+    const toPairKey = (subj, from) => `${String(subj || '').toLowerCase().replace(/^re:\s*/i,'').trim()}|${String(from || '').toLowerCase()}`;
+
+    // Search Gmail and expand into email objects
+    const emailMessages = await searchGmailEmails(searchQuery, 200);
+    const uniqueEmails = [];
+
+    for (const message of emailMessages) {
+      try {
+        const emailData = await getGmailEmail(message.id);
+
+        const isDuplicate = existingUnrepliedEmails.some(existing => existing && existing.id === emailData.id);
+        const isAlreadyAdded = uniqueEmails.some(added => added && added.id === emailData.id);
+
+        if (!isDuplicate && !isAlreadyAdded) {
+          const processedEmail = {
+            id: emailData.id,
+            subject: emailData.subject,
+            from: emailData.from,
+            date: emailData.date,
+            threadId: emailData.threadId || '',
+            body: emailData.body,
+            snippet: emailData.snippet || (emailData.body ? String(emailData.body).slice(0, 100) + (String(emailData.body).length > 100 ? '...' : '') : 'No content available'),
+            category: keywordCategorizeUnreplied(emailData.subject || '', emailData.body || '', emailData.from || ''),
+            source: 'gmail-api',
+            webUrl: emailData.webUrl || ''
+          };
+          uniqueEmails.push(processedEmail);
+        }
+      } catch (_) {
+        // skip failures
+      }
+    }
+
+    // Group by thread to ensure one entry per thread and skip threads already in DB
+    const dedupedByThread = [];
+    const seenThreads = new Set();
+    const seenPairs = new Set();
+    for (const e of uniqueEmails) {
+      const threadKey = e.threadId ? `thread-${e.threadId}` : `thread-${e.id}`;
+      const pairKey = toPairKey(e && e.subject, e && e.from);
+      // Only dedupe within this fetch by thread and subject/from pair to avoid showing the same thread twice
+      if (seenThreads.has(threadKey)) continue;
+      if (seenPairs.has(pairKey)) continue;
+      seenThreads.add(threadKey);
+      seenPairs.add(pairKey);
+      dedupedByThread.push(e);
+    }
+
+    // Sort newest first
+    dedupedByThread.sort((a, b) => new Date(b.date) - new Date(a.date));
+
+    return res.json({
+      success: true,
+      emails: dedupedByThread
+    });
+  } catch (error) {
+    console.error('priority-today failed:', error);
+    return res.status(500).json({ success: false, error: 'Failed to fetch priority emails for today' });
+  }
+});
+
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });

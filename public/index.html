@@ -611,6 +611,118 @@
             transform: scale(1);
         }
 
+        /* Priority Today (yellow) cards */
+        .priority-card {
+            border: 1px solid #e9ecef;
+            border-radius: 8px;
+            padding: 12px;
+            background: #FFF9CC;
+            margin: 10px 28px;
+            position: relative;
+            cursor: pointer;
+            transition: background-color 0.1s, box-shadow 0.1s;
+        }
+        .priority-card:hover {
+            background: #fff6b3;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.08);
+        }
+        .priority-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+        }
+        .priority-title {
+            font-weight: 600;
+            color: #333;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            padding-right: 12px;
+            font-size: 16px;
+        }
+        .priority-meta {
+            font-size: 12px;
+            color: #666;
+            margin-top: 2px;
+        }
+        .priority-preview {
+            font-size: 13px;
+            color: #555;
+            margin-top: 6px;
+            line-height: 1.45;
+        }
+        .priority-actions {
+            position: absolute;
+            top: 8px;
+            right: 12px;
+            display: flex;
+            gap: 8px;
+        }
+        .priority-approve-btn,
+        .priority-trash-btn {
+            border: none;
+            border-radius: 6px;
+            padding: 6px 10px;
+            font-size: 12px;
+            cursor: pointer;
+            transition: all 0.15s ease;
+        }
+        .priority-approve-btn {
+            background: #28a745;
+            color: #fff;
+        }
+        .priority-approve-btn:hover { background: #218838; }
+        .priority-trash-btn {
+            background: #dc3545;
+            color: #fff;
+        }
+        .priority-trash-btn:hover { background: #c82333; }
+
+        /* Category editor (inline input + dropdown) */
+        .priority-category-editor {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            margin-top: 8px;
+        }
+        .priority-cat-input {
+            min-width: 180px;
+            max-width: 320px;
+            padding: 6px 10px;
+            border: 1px solid #d0c28a;
+            border-radius: 14px;
+            background: #fffef2;
+            font-size: 13px;
+            color: #333;
+            outline: none;
+        }
+        .priority-cat-input:focus {
+            border-color: #c19a6b;
+            box-shadow: 0 0 0 2px rgba(193,154,107,0.15);
+        }
+        .priority-cat-suggest {
+            position: absolute;
+            z-index: 1200;
+            background: #ffffff;
+            border: 1px solid #e9ecef;
+            border-radius: 6px;
+            margin-top: 2px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.12);
+            max-height: 180px;
+            overflow-y: auto;
+            min-width: 200px;
+        }
+        .priority-cat-item {
+            padding: 8px 10px;
+            font-size: 13px;
+            cursor: pointer;
+        }
+        .priority-cat-item:hover,
+        .priority-cat-item.active {
+            background: #f5f7ff;
+        }
+
         /* Modal styles */
         .modal {
             display: none;
@@ -2621,6 +2733,8 @@
 
                 <!-- Email List -->
                 <div class="email-list">
+                    <!-- Priority Today (light yellow) will render here -->
+                    <div id="priorityContainer"></div>
                     <div id="emailContainer">
                         <div class="loading">Loading emails...</div>
                     </div>
@@ -6717,6 +6831,273 @@ function mapToCurrentCategory(name) {
         let hiddenThreads = new Set();
         let lastThreadDateFilter = null;
 
+        /* ===== Priority Today (important emails) ===== */
+let priorityTodayEmails = [];
+let priorityCatDropdown = null; // active dropdown element
+let priorityCatActiveIndex = -1;
+
+async function loadPriorityToday() {
+    try {
+        // Show loading popup as requested
+        showLoadingOverlay('Loading Priority Emails from Today…', 'Fetching important emails received today…', false);
+
+        // Ensure we have the current categories ordering for suggestions
+        await loadCurrentCategories();
+
+        const resp = await fetch('/api/priority-today');
+        const data = await resp.json().catch(() => ({}));
+
+        if (resp.status === 401 && data && data.needsAuth) {
+            hideLoadingOverlay();
+            // Kick off auth flow; index.html already handles startAuthentication UI
+            await startAuthentication();
+            return;
+        }
+
+        priorityTodayEmails = Array.isArray(data.emails) ? data.emails : [];
+        renderPriorityToday();
+    } catch (e) {
+        console.error('loadPriorityToday failed:', e);
+        priorityTodayEmails = [];
+        renderPriorityToday();
+    } finally {
+        try { hideLoadingOverlay(); } catch(_) {}
+    }
+}
+
+function renderPriorityToday() {
+    const host = document.getElementById('priorityContainer');
+    if (!host) return;
+    host.innerHTML = '';
+
+    if (!Array.isArray(priorityTodayEmails) || priorityTodayEmails.length === 0) {
+        // nothing to render
+        return;
+    }
+
+    // Title row
+    const header = document.createElement('div');
+    header.style.display = 'flex';
+    header.style.alignItems = 'center';
+    header.style.justifyContent = 'space-between';
+    header.style.padding = '8px 28px 0 28px';
+    header.innerHTML = `
+        <div style="color:#5f6368; font-size:12px; text-transform:uppercase; letter-spacing:0.4px;">
+            Priority Today — ${priorityTodayEmails.length} email${priorityTodayEmails.length===1?'':'s'}
+        </div>
+        <div></div>
+    `;
+    host.appendChild(header);
+
+    // Cards
+    priorityTodayEmails.forEach((email, idx) => {
+        const card = document.createElement('div');
+        card.className = 'priority-card';
+        card.setAttribute('data-pri-id', email.id);
+
+        const from = String(email.from || 'Unknown Sender');
+        const subj = String(email.subject || 'No Subject');
+        const date = String(email.date || '');
+        const previewText = (typeof email.body === 'string' ? email.body : (email.snippet || ''))
+                            .replace(/\s+/g, ' ')
+                            .trim()
+                            .slice(0, 200) + ((email.body && email.body.length > 200) ? '…' : '');
+
+        const initialCat = email._cat || email.category || 'Other';
+
+        card.innerHTML = `
+            <div class="priority-actions">
+                <button class="priority-trash-btn" title="Dismiss">Trash</button>
+                <button class="priority-approve-btn" title="Approve to Database">Approve</button>
+            </div>
+            <div class="priority-header">
+                <div class="priority-title">${escapeHtml(subj)}</div>
+            </div>
+            <div class="priority-meta">${escapeHtml(from)} • ${formatDate(date)}</div>
+            <div class="priority-preview">${escapeHtml(previewText)}</div>
+            <div class="priority-category-editor" style="position:relative;">
+                <span style="font-size:12px; color:#555;">Category:</span>
+                <input type="text" class="priority-cat-input" value="${escapeHtml(initialCat)}" placeholder="Type a category…">
+            </div>
+        `;
+
+        // Open thread on card click
+        card.addEventListener('click', (ev) => {
+            // ignore clicks on buttons or input
+            const t = ev.target;
+            if (t && (t.classList.contains('priority-approve-btn') || t.classList.contains('priority-trash-btn') || t.classList.contains('priority-cat-input') || (t.closest && t.closest('.priority-cat-suggest')))) {
+                return;
+            }
+            openEmailThread(email.id, email.subject);
+        });
+
+        // Wire Approve/Trash
+        const approveBtn = card.querySelector('.priority-approve-btn');
+        const trashBtn = card.querySelector('.priority-trash-btn');
+        const catInput = card.querySelector('.priority-cat-input');
+
+        if (approveBtn) {
+            approveBtn.addEventListener('click', async (ev) => {
+                ev.stopPropagation();
+                await approvePriorityEmail(email, catInput ? catInput.value.trim() : (email._cat || email.category || 'Other'), card);
+            });
+        }
+        if (trashBtn) {
+            trashBtn.addEventListener('click', async (ev) => {
+                ev.stopPropagation();
+                await trashPriorityEmail(email, card);
+            });
+        }
+
+        // Category input: suggestions dropdown from currentCategoriesOrder (type-ahead)
+        if (catInput) {
+            setupPriorityCategorySuggestions(catInput);
+        }
+
+        host.appendChild(card);
+    });
+}
+
+function setupPriorityCategorySuggestions(inputEl) {
+    // Close any existing dropdown
+    try { if (priorityCatDropdown && priorityCatDropdown.remove) priorityCatDropdown.remove(); } catch(_){}
+    priorityCatDropdown = null;
+    priorityCatActiveIndex = -1;
+
+    const makeDropdown = () => {
+        const dd = document.createElement('div');
+        dd.className = 'priority-cat-suggest';
+        dd.style.display = 'none';
+        inputEl.parentElement.appendChild(dd);
+        priorityCatDropdown = dd;
+        return dd;
+    };
+
+    const filterList = () => {
+        if (!priorityCatDropdown) makeDropdown();
+        const q = String(inputEl.value || '').toLowerCase().trim();
+        const list = Array.isArray(currentCategoriesOrder) ? currentCategoriesOrder.slice() : [];
+        const matches = list
+            .filter(c => !q || String(c).toLowerCase().includes(q))
+            .slice(0, 8);
+        priorityCatDropdown.innerHTML = '';
+        if (matches.length === 0) {
+            priorityCatDropdown.style.display = 'none';
+            return;
+        }
+        matches.forEach((name, i) => {
+            const item = document.createElement('div');
+            item.className = 'priority-cat-item' + (i === 0 ? ' active' : '');
+            if (i === 0) priorityCatActiveIndex = 0;
+            item.textContent = name;
+            item.addEventListener('mousedown', (ev) => {
+                ev.preventDefault();
+                inputEl.value = name;
+                priorityCatDropdown.style.display = 'none';
+            });
+            priorityCatDropdown.appendChild(item);
+        });
+        priorityCatDropdown.style.display = 'block';
+    };
+
+    inputEl.addEventListener('input', () => filterList());
+    inputEl.addEventListener('focus', () => filterList());
+    inputEl.addEventListener('blur', () => {
+        // small timeout to allow mousedown on item
+        setTimeout(() => {
+            try { if (priorityCatDropdown) priorityCatDropdown.style.display = 'none'; } catch(_){}
+        }, 120);
+    });
+    inputEl.addEventListener('keydown', (ev) => {
+        const dd = priorityCatDropdown;
+        if (!dd || dd.style.display === 'none') return;
+        const items = Array.from(dd.querySelectorAll('.priority-cat-item'));
+        if (!items.length) return;
+
+        if (ev.key === 'ArrowDown') {
+            ev.preventDefault();
+            priorityCatActiveIndex = Math.min(items.length - 1, priorityCatActiveIndex + 1);
+            items.forEach((it, idx) => it.classList.toggle('active', idx === priorityCatActiveIndex));
+            items[priorityCatActiveIndex].scrollIntoView({ block: 'nearest' });
+        } else if (ev.key === 'ArrowUp') {
+            ev.preventDefault();
+            priorityCatActiveIndex = Math.max(0, priorityCatActiveIndex - 1);
+            items.forEach((it, idx) => it.classList.toggle('active', idx === priorityCatActiveIndex));
+            items[priorityCatActiveIndex].scrollIntoView({ block: 'nearest' });
+        } else if (ev.key === 'Enter') {
+            ev.preventDefault();
+            const active = items[priorityCatActiveIndex] || items[0];
+            if (active) {
+                inputEl.value = active.textContent || inputEl.value;
+                dd.style.display = 'none';
+            }
+        } else if (ev.key === 'Escape') {
+            ev.preventDefault();
+            dd.style.display = 'none';
+        }
+    });
+}
+
+async function approvePriorityEmail(email, categoryValue, cardEl) {
+    try {
+        const primary = String(categoryValue || '').trim() || 'Other';
+        const payload = {
+            id: email.id,
+            subject: email.subject || 'No Subject',
+            from: email.from || 'Unknown Sender',
+            date: email.date || new Date().toISOString(),
+            body: email.body || email.snippet || '',
+            snippet: email.snippet || (email.body ? String(email.body).slice(0, 100) + (email.body.length > 100 ? '...' : '') : ''),
+            category: primary
+        };
+
+        // Persist
+        const resp = await fetch('/api/add-approved-email', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email: payload })
+        });
+        const data = await resp.json().catch(() => ({}));
+        if (!resp.ok || !data.success) {
+            throw new Error(data.error || 'Failed to approve email');
+        }
+
+        // Remove yellow card
+        try { cardEl.remove(); } catch(_){}
+        // Also remove from local list
+        priorityTodayEmails = priorityTodayEmails.filter(e => e.id !== email.id);
+
+        // Refresh main list so the white thread appears
+        try { await loadEmails(); } catch(_) {}
+
+        showSuccessPopup('Email approved and added to database.', 'Approved');
+    } catch (e) {
+        console.error('approvePriorityEmail failed:', e);
+        showErrorPopup('Failed to approve email. Please try again.', 'Approve Failed');
+    }
+}
+
+async function trashPriorityEmail(email, cardEl) {
+    try {
+        // Best-effort hide so it won’t immediately come back
+        try {
+            await fetch('/api/hidden-inbox/add', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ id: email.id, subject: email.subject, date: email.date })
+            });
+        } catch(_){}
+
+        // Remove from UI
+        try { cardEl.remove(); } catch(_){}
+        priorityTodayEmails = priorityTodayEmails.filter(e => e.id !== email.id);
+    } catch (e) {
+        console.error('trashPriorityEmail failed:', e);
+        // Still remove visually per requirement
+        try { cardEl.remove(); } catch(_){}
+        priorityTodayEmails = priorityTodayEmails.filter(e => e.id !== email.id);
+    }
+}
         /* ===== Load Today (Threads + Inbox) ===== */
 let todayThreads = [];
 let todayEmails = [];
@@ -14540,10 +14921,19 @@ async function renderEmailNotesPreview(el, emailId) {
         }
 
         document.addEventListener('DOMContentLoaded', function() {
-            loadEmails();
+            // Run initializers, then load Priority Today first with popup,
+            // then load the regular emails list.
             loadCurrentUser();
             initSearchBar();
             showFlashFromQuery();
+            (async () => {
+                try {
+                    await loadPriorityToday();
+                } catch (_){}
+                try {
+                    await loadEmails();
+                } catch (_){}
+            })();
         });
 
         // Load current user on page load
