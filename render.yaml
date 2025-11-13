@@ -1,0 +1,42 @@
+services:
+  - type: web
+    name: gmail-plugin
+    env: node
+    plan: starter
+    region: oregon
+    buildCommand: npm install
+    startCommand: node server.js
+    healthCheckPath: /api/current-user
+    autoDeploy: true
+    envVars:
+      # Core runtime
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: "10000" # Render injects PORT; server uses process.env.PORT || 3000
+
+      # Feature flags: Mongo in production
+      - key: USE_DB
+        value: "true"
+      - key: DB_TYPE
+        value: mongo
+
+      # MongoDB Atlas connection (set the value in Render dashboard or with Blueprint secrets)
+      - key: MONGO_URI
+        sync: false
+      - key: MONGO_DB_NAME
+        value: gmail-plugin
+
+      # OpenAI (AI features)
+      - key: OPENAI_API_KEY
+        sync: false
+
+      # Default current user context (can be changed via API /api/switch-user)
+      - key: CURRENT_USER_EMAIL
+        value: ks4190@columbia.edu
+      - key: SENDING_EMAIL
+        value: ks4190@columbia.edu
+
+      # Optional: restrict which users are allowed in production (comma-separated)
+      - key: ALLOWED_USERS
+        value: ks4190@columbia.edu,lc3251@columbia.edu
