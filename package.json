@@ -12,7 +12,16 @@
     "eval:classifier-limited": "node scripts/evaluate-classifier-limited.js",
     "eval:classifier-v2": "node scripts/evaluate-classifier-v2.js",
     "eval:classifier-v3": "node scripts/evaluate-classifier-v3.js",
-    "eval:classifier-v4": "node scripts/evaluate-classifier-v4.js"
+    "eval:classifier-v4": "node scripts/evaluate-classifier-v4.js",
+    "db:apply": "node scripts/apply-schema.js",
+    "db:dryrun:ks": "node scripts/import-json-to-postgres.js --dry-run --user ks4190@columbia.edu",
+    "db:dryrun:lc": "node scripts/import-json-to-postgres.js --dry-run --user lc3251@columbia.edu",
+    "db:import:ks": "node scripts/import-json-to-postgres.js --user ks4190@columbia.edu",
+    "db:import:lc": "node scripts/import-json-to-postgres.js --user lc3251@columbia.edu",
+    "mongo:dryrun:ks": "node -r dotenv/config scripts/import-json-to-mongo.js --dry-run --user ks4190@columbia.edu",
+    "mongo:dryrun:lc": "node -r dotenv/config scripts/import-json-to-mongo.js --dry-run --user lc3251@columbia.edu",
+    "mongo:import:ks": "node -r dotenv/config scripts/import-json-to-mongo.js --user ks4190@columbia.edu",
+    "mongo:import:lc": "node -r dotenv/config scripts/import-json-to-mongo.js --user lc3251@columbia.edu"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^0.5.0",
@@ -20,7 +29,9 @@
     "dotenv": "^17.2.2",
     "express": "^4.18.2",
     "googleapis": "^156.0.0",
-    "openai": "^4.104.0"
+    "mongodb": "^7.0.0",
+    "openai": "^4.104.0",
+    "pg": "^8.16.3"
   },
   "author": "Karthik Sreedhar",
   "license": "MIT"
