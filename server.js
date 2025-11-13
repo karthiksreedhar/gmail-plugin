@@ -4243,13 +4243,21 @@ app.post('/api/add-approved-email', async (req, res) => {
       userExtras.some(c => c.toLowerCase() === 'other') ||
       (primaryExplicit && String(primaryExplicit).trim().toLowerCase() === 'other');
 
-    const categoriesArrFinal = userExplicitOther
+    // Build final categories array, ensuring it always includes the primary category
+    let categoriesArrFinal = userExplicitOther
       ? categoriesArr
       : categoriesArr.filter(c => String(c || '').trim().toLowerCase() !== 'other');
 
-    // If primary is "Other" but not explicitly chosen by the user, prefer first non-Other final category as primary (or leave empty)
+    // If primary is "Other" but not explicitly chosen by the user, prefer first non-Other final category as primary
+    // BUT: never leave primaryCategory empty - always fall back to "Other" if no other category exists
     if (!userExplicitOther && String(primaryCategory || '').trim().toLowerCase() === 'other') {
-      primaryCategory = categoriesArrFinal[0] || '';
+      primaryCategory = categoriesArrFinal[0] || 'Other';
+    }
+    
+    // IMPORTANT: Always ensure primaryCategory appears in categoriesArrFinal
+    // This fixes the issue where "Other" gets stripped but is the only category
+    if (primaryCategory && !categoriesArrFinal.some(c => String(c).toLowerCase() === String(primaryCategory).toLowerCase())) {
+      categoriesArrFinal = [primaryCategory, ...categoriesArrFinal];
     }
 
     // Update authoritative categories list with any new names
@@ -10725,14 +10733,16 @@ app.post('/api/classifier-v4/suggest-batch', async (req, res) => {
           reasonsMap = { [suggestion]: rationales?.[suggestion] || 'Augmented contenders; defaulted to first' };
         }
       } else {
-        // No contenders at all - use keyword fallback then "Other"
+        // No contenders at all - use keyword fallback; if that also fails, default to "Other"
         const kw = __v3KeywordFallback(e, categoriesX);
-        if (kw) {
+        if (kw && normalizeKey(kw) !== 'other') {
           suggestion = matchToCurrentCategory(kw, categoriesX) || kw;
           reasonsMap = { [suggestion]: `Keyword fallback: subject x${__countOccurrencesInsensitive(e.subject || '', suggestion)}, body x${__countOccurrencesInsensitive(e.body || '', suggestion)}` };
         } else {
-          suggestion = categoriesX.find(c => normalizeKey(c) === 'other') || categoriesX[0] || '';
-          if (suggestion) reasonsMap = { [suggestion]: 'Last-resort default' };
+          // Last resort: default to "Other" with explanation
+          const otherCat = categoriesX.find(c => normalizeKey(c) === 'other') || 'Other';
+          suggestion = otherCat;
+          reasonsMap = { [suggestion]: 'No confident category match found (uncertain email)' };
         }
       }
 
@@ -11559,17 +11569,18 @@ app.get('/api/priority-today', async (req, res) => {
             }
           }
 
-          if (suggList.length) {
+        if (suggList.length) {
             out.suggestedCategories = suggList;
             out.suggestedReasons = reasonsMap;
             // For backward compatibility, set category to the first suggestion
             out.category = suggList[0];
-          } else {
-            // Maintain previous baseline keyword category as a fallback
-            out.suggestedCategories = [];
-            out.suggestedReasons = {};
-            out.category = out.category || keywordCategorizeUnreplied(out.subject || '', out.body || '', out.from || '');
-          }
+        } else {
+            // No confident suggestions - default to "Other" with explanation
+            const otherCat = categoriesX.find(c => normalizeKey(c) === 'other') || 'Other';
+            out.suggestedCategories = [otherCat];
+            out.suggestedReasons = { [otherCat]: 'No confident category match found (uncertain email)' };
+            out.category = otherCat;
+        }
           return out;
         });
 
@@ -11582,10 +11593,26 @@ app.get('/api/priority-today', async (req, res) => {
       console.warn('priority-today classifier suggestions failed, falling back to keyword categories:', e?.message || e);
     }
 
-    // Fallback: return baseline keyword categories if classifier call fails
+    // Fallback: return baseline keyword categories with "Other" default for uncertain emails
+    const fallbackEmails = dedupedByThread.map(e => {
+      const out = { ...e };
+      // If no category was assigned, default to "Other" with explanation
+      if (!out.category || !out.category.trim()) {
+        const otherCat = categoriesX.find(c => normalizeKey(c) === 'other') || 'Other';
+        out.category = otherCat;
+        out.suggestedCategories = [otherCat];
+        out.suggestedReasons = { [otherCat]: 'No confident category match found (uncertain email)' };
+      } else {
+        // Has a keyword category assignment - use it as the suggestion
+        out.suggestedCategories = [out.category];
+        out.suggestedReasons = { [out.category]: 'Keyword-based categorization' };
+      }
+      return out;
+    });
+    
     return res.json({
       success: true,
-      emails: dedupedByThread
+      emails: fallbackEmails
     });
   } catch (error) {
     console.error('priority-today failed:', error);
