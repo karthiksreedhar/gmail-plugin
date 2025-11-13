@@ -685,6 +685,7 @@
             align-items: center;
             gap: 6px;
             margin-top: 8px;
+            position: relative; /* ensure dropdown positions relative to this container */
         }
         .priority-cat-input {
             min-width: 180px;
@@ -707,11 +708,12 @@
             background: #ffffff;
             border: 1px solid #e9ecef;
             border-radius: 6px;
-            margin-top: 2px;
             box-shadow: 0 4px 12px rgba(0,0,0,0.12);
             max-height: 180px;
             overflow-y: auto;
             min-width: 200px;
+            left: 0;              /* anchor to left edge of editor */
+            top: calc(100% + 4px);/* appear cleanly below the input/tag */
         }
         .priority-cat-item {
             padding: 8px 10px;
@@ -6891,6 +6893,7 @@ function renderPriorityToday() {
 
     // Cards
     priorityTodayEmails.forEach((email, idx) => {
+        if (window.skippedPriorityIds && window.skippedPriorityIds.has(email.id)) { return; }
         const card = document.createElement('div');
         card.className = 'priority-card';
         card.setAttribute('data-pri-id', email.id);
@@ -6907,7 +6910,7 @@ function renderPriorityToday() {
 
         card.innerHTML = `
             <div class="priority-actions">
-                <button class="priority-trash-btn" title="Dismiss">Trash</button>
+                <button class="priority-trash-btn" title="Skip">Skip</button>
                 <button class="priority-approve-btn" title="Approve to Database">Approve</button>
             </div>
             <div class="priority-header">
@@ -6936,6 +6939,13 @@ function renderPriorityToday() {
         const trashBtn = card.querySelector('.priority-trash-btn');
         const catInput = card.querySelector('.priority-cat-input');
 
+// Prevent card click when interacting within the category editor
+        const editorEl = card.querySelector('.priority-category-editor');
+        if (editorEl) {
+            editorEl.addEventListener('click', (ev) => ev.stopPropagation());
+            editorEl.addEventListener('mousedown', (ev) => ev.stopPropagation());
+        }
+
         if (approveBtn) {
             approveBtn.addEventListener('click', async (ev) => {
                 ev.stopPropagation();
@@ -6959,81 +6969,97 @@ function renderPriorityToday() {
 }
 
 function setupPriorityCategorySuggestions(inputEl) {
-    // Close any existing dropdown
-    try { if (priorityCatDropdown && priorityCatDropdown.remove) priorityCatDropdown.remove(); } catch(_){}
-    priorityCatDropdown = null;
-    priorityCatActiveIndex = -1;
+    // Avoid double-binding on the same element
+    if (inputEl.__catSuggestSetup) return;
+    inputEl.__catSuggestSetup = true;
 
-    const makeDropdown = () => {
-        const dd = document.createElement('div');
-        dd.className = 'priority-cat-suggest';
-        dd.style.display = 'none';
-        inputEl.parentElement.appendChild(dd);
-        priorityCatDropdown = dd;
-        return dd;
+    let dropdown = null;
+    let activeIndex = -1;
+
+    const ensureDropdown = () => {
+        if (!dropdown) {
+            dropdown = document.createElement('div');
+            dropdown.className = 'priority-cat-suggest';
+            dropdown.style.display = 'none';
+            // Ensure parent is a positioning context for absolute dropdown
+            const parent = inputEl.parentElement || inputEl;
+            try {
+                if (getComputedStyle(parent).position === 'static') {
+                    parent.style.position = 'relative';
+                }
+            } catch (_) {}
+            parent.appendChild(dropdown);
+        }
+        return dropdown;
+    };
+
+    const hideDropdown = () => {
+        if (dropdown) dropdown.style.display = 'none';
     };
 
     const filterList = () => {
-        if (!priorityCatDropdown) makeDropdown();
+        const dd = ensureDropdown();
         const q = String(inputEl.value || '').toLowerCase().trim();
         const list = Array.isArray(currentCategoriesOrder) ? currentCategoriesOrder.slice() : [];
         const matches = list
             .filter(c => !q || String(c).toLowerCase().includes(q))
             .slice(0, 8);
-        priorityCatDropdown.innerHTML = '';
+
+        dd.innerHTML = '';
+        activeIndex = -1;
+
         if (matches.length === 0) {
-            priorityCatDropdown.style.display = 'none';
+            dd.style.display = 'none';
             return;
         }
+
         matches.forEach((name, i) => {
             const item = document.createElement('div');
             item.className = 'priority-cat-item' + (i === 0 ? ' active' : '');
-            if (i === 0) priorityCatActiveIndex = 0;
+            if (i === 0) activeIndex = 0;
             item.textContent = name;
             item.addEventListener('mousedown', (ev) => {
                 ev.preventDefault();
                 inputEl.value = name;
-                priorityCatDropdown.style.display = 'none';
+                hideDropdown();
             });
-            priorityCatDropdown.appendChild(item);
+            dd.appendChild(item);
         });
-        priorityCatDropdown.style.display = 'block';
+        dd.style.display = 'block';
     };
 
-    inputEl.addEventListener('input', () => filterList());
-    inputEl.addEventListener('focus', () => filterList());
+    inputEl.addEventListener('input', filterList);
+    inputEl.addEventListener('focus', filterList);
     inputEl.addEventListener('blur', () => {
         // small timeout to allow mousedown on item
-        setTimeout(() => {
-            try { if (priorityCatDropdown) priorityCatDropdown.style.display = 'none'; } catch(_){}
-        }, 120);
+        setTimeout(hideDropdown, 120);
     });
+
     inputEl.addEventListener('keydown', (ev) => {
-        const dd = priorityCatDropdown;
-        if (!dd || dd.style.display === 'none') return;
-        const items = Array.from(dd.querySelectorAll('.priority-cat-item'));
+        if (!dropdown || dropdown.style.display === 'none') return;
+        const items = Array.from(dropdown.querySelectorAll('.priority-cat-item'));
         if (!items.length) return;
 
         if (ev.key === 'ArrowDown') {
             ev.preventDefault();
-            priorityCatActiveIndex = Math.min(items.length - 1, priorityCatActiveIndex + 1);
-            items.forEach((it, idx) => it.classList.toggle('active', idx === priorityCatActiveIndex));
-            items[priorityCatActiveIndex].scrollIntoView({ block: 'nearest' });
+            activeIndex = Math.min(items.length - 1, activeIndex + 1);
+            items.forEach((it, idx) => it.classList.toggle('active', idx === activeIndex));
+            items[Math.max(0, activeIndex)].scrollIntoView({ block: 'nearest' });
         } else if (ev.key === 'ArrowUp') {
             ev.preventDefault();
-            priorityCatActiveIndex = Math.max(0, priorityCatActiveIndex - 1);
-            items.forEach((it, idx) => it.classList.toggle('active', idx === priorityCatActiveIndex));
-            items[priorityCatActiveIndex].scrollIntoView({ block: 'nearest' });
+            activeIndex = Math.max(0, activeIndex - 1);
+            items.forEach((it, idx) => it.classList.toggle('active', idx === activeIndex));
+            items[Math.max(0, activeIndex)].scrollIntoView({ block: 'nearest' });
         } else if (ev.key === 'Enter') {
             ev.preventDefault();
-            const active = items[priorityCatActiveIndex] || items[0];
+            const active = items[activeIndex] || items[0];
             if (active) {
                 inputEl.value = active.textContent || inputEl.value;
-                dd.style.display = 'none';
+                hideDropdown();
             }
         } else if (ev.key === 'Escape') {
             ev.preventDefault();
-            dd.style.display = 'none';
+            hideDropdown();
         }
     });
 }
@@ -7079,21 +7105,19 @@ async function approvePriorityEmail(email, categoryValue, cardEl) {
 
 async function trashPriorityEmail(email, cardEl) {
     try {
-        // Best-effort hide so it won’t immediately come back
-        try {
-            await fetch('/api/hidden-inbox/add', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ id: email.id, subject: email.subject, date: email.date })
-            });
-        } catch(_){}
+        // Ephemeral skip: do NOT persist to hidden-inbox.
+        // Just hide in this session so a page refresh will load it again.
+        window.skippedPriorityIds = window.skippedPriorityIds || new Set();
+        if (email && email.id) {
+            try { window.skippedPriorityIds.add(email.id); } catch(_){}
+        }
 
-        // Remove from UI
+        // Remove from UI and local array
         try { cardEl.remove(); } catch(_){}
         priorityTodayEmails = priorityTodayEmails.filter(e => e.id !== email.id);
     } catch (e) {
         console.error('trashPriorityEmail failed:', e);
-        // Still remove visually per requirement
+        // Still remove visually
         try { cardEl.remove(); } catch(_){}
         priorityTodayEmails = priorityTodayEmails.filter(e => e.id !== email.id);
     }
