@@ -79,7 +79,7 @@
         }
 
         .save-scenario-btn {
-            background: #28a745;
+            background: #667eea;
             color: white;
             border: none;
             padding: 12px 24px;
@@ -91,11 +91,11 @@
         }
 
         .save-scenario-btn:hover {
-            background: #218838;
+            background: #5a67d8;
         }
 
         .load-scenario-btn {
-            background: #17a2b8;
+            background: #667eea;
             color: white;
             border: none;
             padding: 12px 24px;
@@ -107,7 +107,7 @@
         }
 
         .load-scenario-btn:hover {
-            background: #138496;
+            background: #5a67d8;
         }
 
         .main-content {
@@ -128,6 +128,12 @@
 
         .sidebar-section {
             padding: 0 16px;
+        }
+
+        .sidebar-divider {
+            border: none;
+            border-top: 3px solid #e0e0e0;
+            margin: 8px 0;
         }
 
         .sidebar-section h3 {
@@ -212,6 +218,18 @@
 
         .people-refresh-btn:active {
             background: #2851a3;
+        }
+        .people-toggle-btn {
+            background: transparent;
+            color: #5f6368;
+            border: none;
+            padding: 6px 8px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        .people-toggle-btn:hover {
+            background: #e8eaed;
         }
 
         .categories-edit-btn {
@@ -543,7 +561,7 @@
         }
 
         .view-refinements-btn {
-            background: #ff6b35;
+            background: #667eea;
             color: white;
             border: none;
             padding: 12px 24px;
@@ -554,11 +572,11 @@
         }
 
         .view-refinements-btn:hover {
-            background: #e55a2b;
+            background: #5a67d8;
         }
 
         .view-saved-generations-btn {
-            background: #6f42c1;
+            background: #667eea;
             color: white;
             border: none;
             padding: 12px 24px;
@@ -569,7 +587,7 @@
         }
 
         .view-saved-generations-btn:hover {
-            background: #5a32a3;
+            background: #5a67d8;
         }
 
         .email-item {
@@ -2677,13 +2695,11 @@
             <div style="flex:1; display:flex; justify-content:center; gap:12px;">
                 <button class="refresh-btn" onclick="window.location.href='/seed.html'" title="Seed initial categories from important inbox">Seed Categories</button>
                 <button class="generate-btn" onclick="openTestClassifier()" title="Run classifier evaluation on labeled emails">Test Classifier</button>
-                <button class="generate-btn" onclick="promptAndGoLoadMore()" title="Load more important emails">Load More</button>
-            </div>
+                            </div>
             <div class="header-buttons">
                 <button class="view-saved-generations-btn" onclick="showViewSavedGenerationsModal()">View Saved Generations</button>
                 <button class="view-refinements-btn" onclick="showViewRefinementsModal()">View Refinements</button>
-                <button class="generate-btn" onclick="generateResponse()">Generate Response</button>
-            </div>
+                            </div>
         </div>
 
         <!-- Main Content Area -->
@@ -2691,9 +2707,8 @@
             <!-- Left Sidebar -->
             <div class="sidebar">
                 <div class="sidebar-section">
-                    <h3>System Generated Categories</h3>
-                    <button class="categories-edit-btn" onclick="showCategoriesReviewModal()" title="Edit Categories and Notes">Edit Categories & Notes</button>
-                    <div class="category-list">
+                    <h3>User Specified Categories</h3>
+                                        <div class="category-list">
                         <div class="category-item active" onclick="filterByCategory('all')" id="viewAll">
                             <span class="category-icon">📧</span>
                             <span class="category-name">View All</span>
@@ -2704,13 +2719,13 @@
                         </div>
                     </div>
                 </div>
-                
+                <hr class="sidebar-divider">
                 <div class="sidebar-section">
                     <div style="display: flex; align-items: center; justify-content: space-between; margin: 16px 0 8px 0;">
                         <h3 style="margin: 0;">People</h3>
-                        <button class="people-refresh-btn" onclick="refreshPeopleList()" title="Refresh People List">Refresh</button>
+                        <button id="peopleToggleArrow" class="people-toggle-btn" onclick="togglePeopleSection()" title="Toggle People Section">◀</button>
                     </div>
-                    <div class="category-list">
+                    <div class="category-list" id="peopleListContainer" style="display:none;">
                         <div id="peopleList">
                             <!-- People will be populated here -->
                         </div>
@@ -6499,6 +6514,28 @@ function mapToCurrentCategory(name) {
         }
 
         // Refresh People List functionality
+        function togglePeopleSection() {
+            try {
+                const container = document.getElementById('peopleListContainer');
+                const arrow = document.getElementById('peopleToggleArrow');
+                if (!container || !arrow) return;
+                const isHidden = (container.style.display === 'none' || container.style.display === '');
+                if (isHidden) {
+                    container.style.display = 'block';
+                    arrow.textContent = '▼';
+                    try {
+                        const list = document.getElementById('peopleList');
+                        if (list && list.children.length === 0 && Array.isArray(allEmails) && allEmails.length) {
+                            populatePeople(allEmails);
+                        }
+                    } catch (_) {}
+                } else {
+                    container.style.display = 'none';
+                    arrow.textContent = '◀';
+                }
+            } catch (e) {}
+        }
+
         function refreshPeopleList() {
             if (allEmails && allEmails.length > 0) {
                 // Recreate the people list and filters based on current email data
