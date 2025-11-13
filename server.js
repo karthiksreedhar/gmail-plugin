@@ -193,20 +193,45 @@ async function handleGmailAuthCallback(code) {
   }
 }
 
-// Search Gmail for emails
+// Search Gmail for emails with pagination support
 async function searchGmailEmails(query, maxResults = 10) {
   try {
     if (!gmail) {
       throw new Error('Gmail API not initialized');
     }
 
-    const response = await gmail.users.messages.list({
-      userId: 'me',
-      q: query,
-      maxResults: maxResults
-    });
+    const allMessages = [];
+    let pageToken = null;
+    let remainingToFetch = maxResults;
 
-    return response.data.messages || [];
+    // Keep fetching pages until we have enough results or run out of pages
+    do {
+      const response = await gmail.users.messages.list({
+        userId: 'me',
+        q: query,
+        maxResults: Math.min(remainingToFetch, 500), // Gmail API max per page is 500
+        pageToken: pageToken || undefined
+      });
+
+      const messages = response.data.messages || [];
+      allMessages.push(...messages);
+      
+      // Update remaining count and page token
+      remainingToFetch -= messages.length;
+      pageToken = response.data.nextPageToken;
+      
+      // Log pagination progress
+      if (pageToken && remainingToFetch > 0) {
+        console.log(`Fetched ${allMessages.length} messages so far, continuing to next page...`);
+      }
+      
+      // Continue if:
+      // 1. We have a next page token (more results available)
+      // 2. We haven't reached our maxResults limit yet
+    } while (pageToken && remainingToFetch > 0);
+
+    console.log(`Total messages fetched: ${allMessages.length} (requested: ${maxResults})`);
+    return allMessages;
   } catch (error) {
     console.error('Error searching Gmail emails:', error);
     throw error;
@@ -10311,7 +10336,7 @@ function __v3BuildCategoryRows() {
 }
 
 // OpenAI batched labeling: returns { [id]: { contenders, pick, rationales } }
-async function __v3OpenAIBatchLabel(newEmails, categories, perCatRows, summariesMap, guidelinesMap, maxPerCat = 30) {
+async function __v3OpenAIBatchLabel(newEmails, categories, perCatRows, summariesMap, guidelinesMap, maxPerCat = 20) {
   const bundles = [];
   for (const c of categories) {
     const rows = (perCatRows.get(c) || []).slice(0, maxPerCat).map((r, i) => ({
@@ -10371,6 +10396,12 @@ Return ONLY strictly valid JSON of the form:
   }
 }`;
 
+  // Log prompt size before calling API
+  const systemTokens = SYSTEM.length / 4; // rough estimate: 4 chars per token
+  const userTokens = USER.length / 4;
+  const totalEstimatedTokens = systemTokens + userTokens;
+  console.log(`[BatchLabel] Calling OpenAI with ~${Math.round(totalEstimatedTokens)} estimated tokens (${categories.length} categories, ${newEmails.length} new emails, max ${maxPerCat} examples/category)`);
+
   try {
     const resp = await openai.chat.completions.create({
       model: 'o3',
@@ -10382,14 +10413,46 @@ Return ONLY strictly valid JSON of the form:
       response_format: { type: 'json_object' }
     });
     const raw = resp.choices?.[0]?.message?.content || '';
+    const rawPreview = typeof raw === 'string' ? raw.slice(0, 500) : String(raw).slice(0, 500);
+    console.log(`[BatchLabel] Raw response preview (first 500 chars): ${rawPreview}`);
+    
     let parsed = null;
-    try { parsed = JSON.parse(raw); } catch {
+    try { 
+      parsed = JSON.parse(raw);
+      console.log(`[BatchLabel] JSON parsing succeeded, top-level keys: ${Object.keys(parsed || {}).join(', ')}`);
+    } catch (parseErr) {
+      console.warn(`[BatchLabel] Direct JSON parse failed: ${parseErr?.message}`);
       const m = raw.match(/\{[\s\S]*\}/);
-      if (m) { try { parsed = JSON.parse(m[0]); } catch {} }
+      if (m) { 
+        try { 
+          parsed = JSON.parse(m[0]);
+          console.log(`[BatchLabel] Regex extraction succeeded, top-level keys: ${Object.keys(parsed || {}).join(', ')}`);
+        } catch (regexErr) {
+          console.warn(`[BatchLabel] Regex extraction parse failed: ${regexErr?.message}`);
+        }
+      }
     }
+    
     const results = parsed && parsed.results && typeof parsed.results === 'object' ? parsed.results : {};
+    const resultCount = Object.keys(results).length;
+    console.log(`[BatchLabel] Success: returned results for ${resultCount}/${newEmails.length} emails`);
+    
+    if (resultCount === 0 && parsed) {
+      console.warn(`[BatchLabel] DIAGNOSTIC: Parsed object exists but no results. Parsed structure:`, JSON.stringify(parsed).slice(0, 1000));
+    }
+    
+    if (resultCount < newEmails.length) {
+      console.warn(`[BatchLabel] Warning: missing results for ${newEmails.length - resultCount} emails`);
+    }
     return results;
-  } catch (_) {
+  } catch (err) {
+    console.error(`[BatchLabel] OpenAI batch labeling FAILED:`, err?.message || err);
+    if (err?.status === 400) {
+      console.error(`[BatchLabel] HTTP 400 - likely context window exceeded (estimated ${Math.round(totalEstimatedTokens)} tokens)`);
+    } else if (err?.status === 429) {
+      console.error(`[BatchLabel] HTTP 429 - rate limit hit`);
+    }
+    console.log(`[BatchLabel] Returning empty results, downstream will use fallbacks`);
     return {};
   }
 }
@@ -10449,7 +10512,7 @@ function __v3KeywordFallback(email, categories) {
 app.post('/api/classifier-v3/suggest-batch', async (req, res) => {
   try {
     const input = Array.isArray(req.body?.emails) ? req.body.emails : [];
-    const MAX = Math.max(1, Math.min(200, Number(req.body?.maxPerCat) || 30));
+    const MAX = Math.max(1, Math.min(200, Number(req.body?.maxPerCat) || 20));
 
     // Categories X (authoritative) and per-category rows/meta
     const categoriesX = __getCategoriesList();
@@ -10460,15 +10523,29 @@ app.post('/api/classifier-v3/suggest-batch', async (req, res) => {
       ? Object.fromEntries(guidelinesPayload.categories.map(c => [c.name, c.notes || '']))
       : {};
 
+    // Dynamic batch size: at most 7 batches, or 1 email per batch if fewer than 7 emails
+    const BATCH = input.length < 7 ? 1 : Math.ceil(input.length / 7);
+    const totalBatches = Math.ceil(input.length / BATCH);
+    
+    console.log(`[ClassifierV3] Processing ${input.length} emails in ${totalBatches} batches (batch size: ${BATCH})`);
+
     // Batched LLM decision
-    const results = await __v3OpenAIBatchLabel(
-      input.map(e => ({ id: e.id, subject: e.subject, body: e.body, from: e.from })),
-      categoriesX,
-      perCatRows,
-      summaries,
-      guidelinesMap,
-      MAX
-    );
+    const results = {};
+    for (let i = 0; i < input.length; i += BATCH) {
+      const batchNum = Math.floor(i / BATCH) + 1;
+      const batch = input.slice(i, i + BATCH);
+      console.log(`[ClassifierV3] Processing batch ${batchNum}/${totalBatches} (${batch.length} emails)...`);
+      const r = await __v3OpenAIBatchLabel(
+        batch.map(e => ({ id: e.id, subject: e.subject, body: e.body, from: e.from })),
+        categoriesX,
+        perCatRows,
+        summaries,
+        guidelinesMap,
+        MAX
+      );
+      Object.assign(results, r || {});
+      console.log(`[ClassifierV3] Completed batch ${batchNum}/${totalBatches}`);
+    }
 
     // Fill in suggestions per the V3 fallback
     const out = {};
@@ -10561,7 +10638,7 @@ app.post('/api/classifier-v3/suggest-batch', async (req, res) => {
 app.post('/api/classifier-v4/suggest-batch', async (req, res) => {
   try {
     const input = Array.isArray(req.body?.emails) ? req.body.emails : [];
-    const MAX = Math.max(1, Math.min(200, Number(req.body?.maxPerCat) || 30));
+    const MAX = Math.max(1, Math.min(200, Number(req.body?.maxPerCat) || 20));
 
     // Authoritative categories X and per-category examples
     const categoriesX = __getCategoriesList();
@@ -10572,15 +10649,29 @@ app.post('/api/classifier-v4/suggest-batch', async (req, res) => {
       ? Object.fromEntries(guidelinesPayload.categories.map(c => [c.name, c.notes || '']))
       : {};
 
-    // One LLM call for the batch (same as v3)
-    const results = await __v3OpenAIBatchLabel(
-      input.map(e => ({ id: e.id, subject: e.subject, body: e.body, from: e.from })),
-      categoriesX,
-      perCatRows,
-      summaries,
-      guidelinesMap,
-      MAX
-    );
+    // Dynamic batch size: at most 7 batches, or 1 email per batch if fewer than 7 emails
+    const BATCH = input.length < 7 ? 1 : Math.ceil(input.length / 7);
+    const totalBatches = Math.ceil(input.length / BATCH);
+    
+    console.log(`[ClassifierV4] Processing ${input.length} emails in ${totalBatches} batches (batch size: ${BATCH})`);
+
+    // Batched LLM decision
+    const results = {};
+    for (let i = 0; i < input.length; i += BATCH) {
+      const batchNum = Math.floor(i / BATCH) + 1;
+      const batch = input.slice(i, i + BATCH);
+      console.log(`[ClassifierV4] Processing batch ${batchNum}/${totalBatches} (${batch.length} emails)...`);
+      const r = await __v3OpenAIBatchLabel(
+        batch.map(e => ({ id: e.id, subject: e.subject, body: e.body, from: e.from })),
+        categoriesX,
+        perCatRows,
+        summaries,
+        guidelinesMap,
+        MAX
+      );
+      Object.assign(results, r || {});
+      console.log(`[ClassifierV4] Completed batch ${batchNum}/${totalBatches}`);
+    }
 
     // Build V4 suggestions
     const out = {};
@@ -10774,26 +10865,31 @@ app.post('/api/test-classifier/run-v4', async (req, res) => {
       ? Object.fromEntries(guidelinesPayload.categories.map(c => [c.name, c.notes || '']))
       : {};
 
+    // Dynamic batch size: at most 7 batches, or 1 email per batch if fewer than 7 emails
+    const BATCH = test.length < 7 ? 1 : Math.ceil(test.length / 7);
+    const totalBatches = Math.ceil(test.length / BATCH);
+    
     console.log('\n=== Evaluate Classifier V4 (batched) — UI request ===');
     console.log(`User: ${CURRENT_USER_EMAIL}`);
     console.log('Split: 80% train / 20% test | Seed: 42');
-    console.log('Per-category example cap: 30 | Batch size: 12');
+    console.log(`Per-category example cap: 30 | Batch size: ${BATCH} (${totalBatches} batches total)`);
     console.log(`Loaded ${labeled.length} labeled emails; using ${categoriesX.length} categories.`);
     console.log(`Train size: ${train.length} | Test size: ${test.length}`);
 
     // Batched processing
-    const BATCH = 12;
     const resultsAll = {};
     for (let i = 0; i < test.length; i += BATCH) {
+      const batchNum = Math.floor(i / BATCH) + 1;
       const batch = test.slice(i, i + BATCH).map(e => ({
         id: e.id,
         subject: e.subject,
         body: e.body || e.snippet || '',
         from: e.from
       }));
-      console.log(`Doing batch ${Math.floor(i / BATCH) + 1}/${Math.max(1, Math.ceil(test.length / BATCH))} (${batch.length} emails)...`);
+      console.log(`Processing batch ${batchNum}/${totalBatches} (${batch.length} emails)...`);
       const r = await __v3OpenAIBatchLabel(batch, categoriesX, perCatRows, summaries, guidelinesMap, 30);
       Object.assign(resultsAll, r || {});
+      console.log(`Completed batch ${batchNum}/${totalBatches}`);
     }
 
     // Metrics
@@ -11009,25 +11105,27 @@ app.post('/api/test-classifier/run-v3', async (req, res) => {
       ? Object.fromEntries(guidelinesPayload.categories.map(c => [c.name, c.notes || '']))
       : {};
 
-    // Run in batches
-    const BATCH = 12;
+    // Dynamic batch size: at most 7 batches, or 1 email per batch if fewer than 7 emails
+    const BATCH = test.length < 7 ? 1 : Math.ceil(test.length / 7);
+    const totalBatches = Math.ceil(test.length / BATCH);
+    
     console.log('\n=== Evaluate Classifier V3 (batched) — UI request ===');
     console.log(`User: ${CURRENT_USER_EMAIL}`);
     console.log('Split: 80% train / 20% test | Seed: 42');
-    console.log('Per-category example cap: 30 | Batch size: 12');
+    console.log(`Per-category example cap: 30 | Batch size: ${BATCH} (${totalBatches} batches total)`);
     console.log(`Loaded ${labeled.length} labeled emails; using ${categoriesX.length} categories.`);
     console.log(`Train size: ${train.length} | Test size: ${test.length}`);
-    const totalBatches = Math.max(1, Math.ceil(test.length / BATCH));
-    console.log(`Total batches: ${totalBatches}`);
+    
     const results = {};
     for (let i = 0; i < test.length; i += BATCH) {
+      const batchNum = Math.floor(i / BATCH) + 1;
       const batch = test.slice(i, i + BATCH).map(e => ({
         id: e.id,
         subject: e.subject,
         body: e.body || e.snippet || '',
         from: e.from
       }));
-      console.log(`Doing batch ${Math.floor(i / BATCH) + 1}/${totalBatches} (${batch.length} emails)...`);
+      console.log(`Processing batch ${batchNum}/${totalBatches} (${batch.length} emails)...`);
       const r = await __v3OpenAIBatchLabel(batch, categoriesX, perCatRows, summaries, guidelinesMap, 30);
       // Per-email progress logging (mirrors CLI script style)
       try {
@@ -11274,11 +11372,20 @@ Provide a one or two sentence justification only.`;
           max_completion_tokens: 180
         });
         const txt = (completion.choices?.[0]?.message?.content || '').trim();
-        if (txt) explanation = txt;
-      } catch (_) {
-        // keep heuristic
+        if (txt) {
+          explanation = txt;
+          console.log(`[ExplainCategory] AI explanation generated for "${category}" (length: ${txt.length})`);
+        } else {
+          console.warn(`[ExplainCategory] OpenAI returned empty response for "${category}", using heuristic fallback`);
+          explanation = heuristic;
+        }
+      } catch (err) {
+        console.warn(`[ExplainCategory] OpenAI explanation failed for "${category}":`, err?.message || err);
+        console.log(`[ExplainCategory] Falling back to heuristic explanation`);
         explanation = heuristic;
       }
+    } else {
+      console.log(`[ExplainCategory] No OPENAI_API_KEY, using heuristic explanation for "${category}"`);
     }
 
     return res.json({
@@ -11327,7 +11434,7 @@ app.get('/api/priority-today', async (req, res) => {
       });
     }
 
-    // Build Gmail query for "today" in local timezone with is:important
+    // Build Gmail query for "today" in local timezone with is:important OR in:priority for maximum coverage
     const now = new Date();
     const startBase = new Date(now.getFullYear(), now.getMonth(), now.getDate());
     const tomorrow = new Date(startBase.getTime() + 24 * 60 * 60 * 1000);
@@ -11339,7 +11446,7 @@ app.get('/api/priority-today', async (req, res) => {
     };
     const after = formatDateForGmail(startBase);
     const before = formatDateForGmail(tomorrow);
-    const searchQuery = `in:inbox is:important after:${after} before:${before}`;
+    const searchQuery = `in:inbox (is:important OR in:priority) after:${after} before:${before}`;
 
     // Load existing unreplied to avoid exact duplicate message IDs only.
     // IMPORTANT: For Priority Today, do NOT exclude items merely because their thread or subject/from
