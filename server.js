@@ -174,6 +174,8 @@ async function handleGmailAuthCallback(code) {
   try {
     const { tokens } = await gmailAuth.getToken(code);
     gmailAuth.setCredentials(tokens);
+    // Initialize Gmail client immediately after setting credentials
+    gmail = google.gmail({ version: 'v1', auth: gmailAuth });
     
     const paths = getCurrentUserPaths();
     
@@ -2367,22 +2369,8 @@ app.get('/oauth2callback', async (req, res) => {
     const success = await handleGmailAuthCallback(code);
     
     if (success) {
-      res.send(`
-        <html>
-          <head><title>Authentication Successful</title></head>
-          <body style="font-family: Arial, sans-serif; padding: 40px; text-align: center;">
-            <h2>✅ Authentication Successful!</h2>
-            <p>Your Gmail account has been successfully connected.</p>
-            <p>You can now close this window and return to the application.</p>
-            <script>
-              // Try to close the window after a short delay
-              setTimeout(() => {
-                window.close();
-              }, 2000);
-            </script>
-          </body>
-        </html>
-      `);
+      // Redirect back to the main app automatically upon successful authentication
+      return res.redirect('/');
     } else {
       res.send(`
         <html>
@@ -11498,8 +11486,20 @@ app.get('/api/priority-today', async (req, res) => {
   }
 });
 
-app.get('/', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+app.get('/', async (req, res) => {
+  try {
+    // Ensure Gmail API is initialized; if not authenticated, start the OAuth flow immediately
+    const gmailReady = await initializeGmailAPI();
+    if (!gmailReady) {
+      const authUrl = getGmailAuthUrl();
+      if (authUrl) {
+        return res.redirect('/api/auth/start');
+      }
+    }
+  } catch (_) {
+    // Ignore and fall through to serving the app
+  }
+  return res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
 // Start server
