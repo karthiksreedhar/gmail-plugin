@@ -5,7 +5,7 @@ services:
     plan: starter
     region: oregon
     buildCommand: npm install
-    startCommand: node server.js
+    startCommand: bash -lc 'mkdir -p "data/${CURRENT_USER_EMAIL}" && if [ -n "$GCP_OAUTH_KEYS_JSON" ]; then printf "%s" "$GCP_OAUTH_KEYS_JSON" > "data/${CURRENT_USER_EMAIL}/gcp-oauth.keys.json"; fi; node server.js'
     healthCheckPath: /api/current-user
     autoDeploy: true
     envVars:
@@ -40,3 +40,16 @@ services:
       # Optional: restrict which users are allowed in production (comma-separated)
       - key: ALLOWED_USERS
         value: ks4190@columbia.edu,lc3251@columbia.edu
+
+      # OAuth redirect for Render (must match your Google OAuth client)
+      - key: OAUTH_REDIRECT_URI
+        value: https://gmail-plugin.onrender.com/oauth2callback
+
+      # Provide your Google OAuth credentials JSON as a single-line secret.
+      # Example: paste the full contents of client_secret_...json
+      - key: GCP_OAUTH_KEYS_JSON
+        sync: false
+
+      # Optional: explicitly set the base URL used to pick redirect URI
+      - key: BASE_URL
+        value: https://gmail-plugin.onrender.com

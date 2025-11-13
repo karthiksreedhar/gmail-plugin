@@ -6,6 +6,20 @@ const OpenAI = require('openai');
 const { google } = require('googleapis');
 require('dotenv').config();
 
+// DB configuration flags
+const USE_DB = String(process.env.USE_DB || '').toLowerCase() === 'true';
+const DB_TYPE = String(process.env.DB_TYPE || 'file').toLowerCase();
+
+// Optional Mongo integration (only loaded when using Mongo)
+let connectMongo, getCollection, ensureIndexes;
+if (USE_DB && DB_TYPE === 'mongo') {
+  try {
+    ({ connectMongo, getCollection, ensureIndexes } = require('./db/mongo'));
+  } catch (e) {
+    console.warn('Mongo module not available; falling back to file storage:', e?.message || e);
+  }
+}
+
 /**
  * Initialize OpenAI client using environment variable
  * Ensure OPENAI_API_KEY is set in your .env file
@@ -114,7 +128,53 @@ async function initializeGmailAPI() {
     const credentials = JSON.parse(fs.readFileSync(credentialsPath, 'utf8'));
     const { client_id, client_secret, redirect_uris } = credentials.installed || credentials.web;
 
-    gmailAuth = new google.auth.OAuth2(client_id, client_secret, redirect_uris[0]);
+    // Select appropriate redirect URI: prefer explicit env, then Render host, then any onrender.com entry, else first
+    const redirectUriCandidates = Array.isArray(redirect_uris) ? redirect_uris : [];
+    let selectedRedirect = process.env.OAUTH_REDIRECT_URI || '';
+    if (!selectedRedirect) {
+      const renderBase = (process.env.RENDER_EXTERNAL_URL || process.env.BASE_URL || '').replace(/\/+$/, '');
+      if (renderBase) {
+        const match = redirectUriCandidates.find(u => u.startsWith(`${renderBase}/oauth2callback`));
+        if (match) selectedRedirect = match;
+      }
+    }
+    if (!selectedRedirect) {
+      const renderCandidate = redirectUriCandidates.find(u => /onrender\.com/i.test(u));
+      selectedRedirect = renderCandidate || redirectUriCandidates[0];
+    }
+    gmailAuth = new google.auth.OAuth2(client_id, client_secret, selectedRedirect);
+
+    // Load existing tokens from Mongo (preferred in production) or file
+    if (USE_DB && DB_TYPE === 'mongo' && getCollection) {
+      try {
+        await (ensureIndexes ? ensureIndexes() : Promise.resolve());
+        if (connectMongo) { await connectMongo(); }
+        const col = await getCollection('gmail_tokens');
+        const doc = await col.findOne({ user_email: CURRENT_USER_EMAIL });
+        if (doc && (doc.access_token || doc.refresh_token)) {
+          const tokenPayload = {
+            access_token: doc.access_token || undefined,
+            refresh_token: doc.refresh_token || undefined,
+            token_type: doc.token_type || undefined,
+            scope: doc.scope || undefined,
+            expiry_date: doc.expiry_date ? (new Date(doc.expiry_date)).getTime() : undefined
+          };
+          gmailAuth.setCredentials(tokenPayload);
+          
+          // Check if tokens are still valid
+          try {
+            await gmailAuth.getAccessToken();
+            gmail = google.gmail({ version: 'v1', auth: gmailAuth });
+            console.log(`Gmail API initialized successfully with Mongo tokens for ${CURRENT_USER_EMAIL}`);
+            return true;
+          } catch (error) {
+            console.log(`Mongo tokens invalid for ${CURRENT_USER_EMAIL}, will attempt file tokens`, error?.message || error);
+          }
+        }
+      } catch (e) {
+        console.log('Mongo token lookup failed; will attempt file tokens', e?.message || e);
+      }
+    }
 
     // Load existing tokens if available
     if (fs.existsSync(paths.TOKENS_PATH)) {
@@ -178,6 +238,33 @@ async function handleGmailAuthCallback(code) {
     gmail = google.gmail({ version: 'v1', auth: gmailAuth });
     
     const paths = getCurrentUserPaths();
+
+    // Persist tokens to Mongo when enabled
+    if (USE_DB && DB_TYPE === 'mongo' && getCollection) {
+      try {
+        await (ensureIndexes ? ensureIndexes() : Promise.resolve());
+        if (connectMongo) { await connectMongo(); }
+        const col = await getCollection('gmail_tokens');
+        const payload = {
+          user_email: CURRENT_USER_EMAIL,
+          access_token: tokens.access_token || null,
+          refresh_token: tokens.refresh_token || null,
+          token_type: tokens.token_type || null,
+          scope: tokens.scope || null,
+          expiry_date: tokens.expiry_date ? new Date(tokens.expiry_date) : null,
+          raw: tokens,
+          updated_at: new Date()
+        };
+        await col.updateOne(
+          { user_email: CURRENT_USER_EMAIL },
+          { $set: payload, $setOnInsert: { created_at: new Date() } },
+          { upsert: true }
+        );
+        console.log('Gmail tokens saved to Mongo for', CURRENT_USER_EMAIL);
+      } catch (e) {
+        console.warn('Failed to save Gmail tokens to Mongo:', e?.message || e);
+      }
+    }
     
     // Save tokens for future use
     if (!fs.existsSync(paths.USER_DATA_DIR)) {
