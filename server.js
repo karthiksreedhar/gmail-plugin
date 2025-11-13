@@ -11412,6 +11412,82 @@ app.get('/api/priority-today', async (req, res) => {
     // Sort newest first
     dedupedByThread.sort((a, b) => new Date(b.date) - new Date(a.date));
 
+    // Use the Limited Classifier (same multi-signal pipeline used by the Test Classifier)
+    // by calling the existing internal endpoint /api/suggest-categories with stage="all".
+    // This returns ordered contenders per email and reasons; we attach those as suggestions,
+    // and set the primary category to the first suggestion for backward compatibility.
+    try {
+      const payload = {
+        stage: 'all',
+        emails: dedupedByThread.map(e => ({
+          id: e.id,
+          subject: e.subject,
+          body: e.body || e.snippet || '',
+          from: e.from
+        }))
+      };
+      const resp = await fetch(`http://localhost:${PORT}/api/classifier-v4/suggest-batch`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+
+      if (resp.ok) {
+        const data = await resp.json().catch(() => ({}));
+        const results = (data && typeof data.results === 'object') ? data.results : null;
+
+        // Attach suggestions to each email using V4 results; set category to first suggestion if present
+        const enriched = dedupedByThread.map(e => {
+          const r = results ? results[e.id] : null;
+          const out = { ...e };
+
+          let suggList = [];
+          let reasonsMap = {};
+
+          if (r && (r.suggestion || (Array.isArray(r.contenders) && r.contenders.length))) {
+            if (r.suggestion) {
+              const contenders = Array.isArray(r.contenders) ? r.contenders.filter(c => c && c !== r.suggestion) : [];
+              // ensure suggestion first, then top contender; cap to 2
+              suggList = [r.suggestion, ...contenders].slice(0, 2);
+              if (r.explanation && typeof r.explanation === 'string') {
+                reasonsMap[r.suggestion] = r.explanation;
+              } else if (r.rationales && typeof r.rationales === 'object') {
+                reasonsMap = r.rationales;
+              }
+            } else {
+              // No single suggestion; use contenders top 2
+              const contenders = Array.isArray(r.contenders) ? r.contenders : [];
+              suggList = contenders.slice(0, 2);
+              if (r.rationales && typeof r.rationales === 'object') {
+                reasonsMap = r.rationales;
+              }
+            }
+          }
+
+          if (suggList.length) {
+            out.suggestedCategories = suggList;
+            out.suggestedReasons = reasonsMap;
+            // For backward compatibility, set category to the first suggestion
+            out.category = suggList[0];
+          } else {
+            // Maintain previous baseline keyword category as a fallback
+            out.suggestedCategories = [];
+            out.suggestedReasons = {};
+            out.category = out.category || keywordCategorizeUnreplied(out.subject || '', out.body || '', out.from || '');
+          }
+          return out;
+        });
+
+        return res.json({
+          success: true,
+          emails: enriched
+        });
+      }
+    } catch (e) {
+      console.warn('priority-today classifier suggestions failed, falling back to keyword categories:', e?.message || e);
+    }
+
+    // Fallback: return baseline keyword categories if classifier call fails
     return res.json({
       success: true,
       emails: dedupedByThread

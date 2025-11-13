@@ -6898,6 +6898,26 @@ async function loadPriorityToday() {
         }
 
         priorityTodayEmails = Array.isArray(data.emails) ? data.emails : [];
+        // Step 2 message: Suggesting categories using the same classifier as Load More/Test Classifier
+        try { updateLoadingOverlayMessage('Loading Priority Emails from Today…', 'Suggesting categories for emails…'); } catch (_) {}
+        // Use server-provided Limited Classifier suggestions directly (do NOT reclassify on client)
+        try {
+            const list = Array.isArray(priorityTodayEmails) ? priorityTodayEmails : [];
+            list.forEach(e => {
+                const top = (Array.isArray(e?.suggestedCategories) && e.suggestedCategories.length) ? e.suggestedCategories[0] : '';
+                const chosen = e?.category || top || 'Other';
+                e._cat = mapToCurrentCategory(chosen);
+                // store brief reason for the top suggestion if available
+                let reason = '';
+                const sr = e?.suggestedReasons;
+                if (sr && typeof sr === 'object' && !Array.isArray(sr)) {
+                    if (top && sr[top]) reason = String(sr[top]);
+                } else if (Array.isArray(sr) && Array.isArray(e?.suggestedCategories)) {
+                    reason = String(sr[0] || '');
+                }
+                if (reason) e._catReason = reason;
+            });
+        } catch (_) {}
         renderPriorityToday();
     } catch (e) {
         console.error('loadPriorityToday failed:', e);
@@ -6905,6 +6925,62 @@ async function loadPriorityToday() {
         renderPriorityToday();
     } finally {
         try { hideLoadingOverlay(); } catch(_) {}
+    }
+}
+
+/* Use the same batched classifier as Load More/Test Classifier to assign categories
+   to priority emails. Results are stored on each email as _cat so the existing UI
+   picks them up (email._cat || email.category). */
+async function classifyPriorityEmails() {
+    try {
+        const list = Array.isArray(priorityTodayEmails) ? priorityTodayEmails : [];
+        if (!list.length) return;
+
+        const payload = {
+            emails: list
+                .filter(e => e && e.id)
+                .map(e => ({
+                    id: e.id,
+                    subject: e.subject || '',
+                    body: typeof e.body === 'string' ? e.body : (e.snippet || ''),
+                    snippet: e.snippet || '',
+                    from: e.from || '',
+                    // seed "Other" as baseline; server will assign properly
+                    category: 'Other'
+                })),
+            // Pass current categories to help the backend align labels consistently
+            categories: Array.isArray(currentCategoriesOrder) ? currentCategoriesOrder.slice() : []
+        };
+
+        let data = null;
+        try {
+            const resp = await fetch('/api/ai-enhanced-categorize', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            data = await resp.json().catch(() => ({}));
+            if (!resp.ok || !data || data.success !== true || !data.assignments) {
+                throw new Error((data && data.error) || 'Non-OK response');
+            }
+        } catch (serverErr) {
+            console.warn('[PriorityToday] AI-enhanced categorization failed; leaving categories as-is:', serverErr);
+            return; // keep default/fallbacks; UI still works with manual edit
+        }
+
+        // Apply assignments to list as _cat using authoritative mapping
+        const assignments = data.assignments || {};
+        const byId = new Map(list.map(e => [e && e.id, e]));
+        Object.keys(assignments).forEach(id => {
+            const email = byId.get(id);
+            if (email) {
+                const label = assignments[id] || '';
+                // Map to the most recent saved category name for consistency
+                email._cat = mapToCurrentCategory(label || 'Other');
+            }
+        });
+    } catch (e) {
+        console.warn('classifyPriorityEmails failed:', e);
     }
 }
 
@@ -6970,6 +7046,7 @@ function renderPriorityToday(filterCategory) {
                 <span style="font-size:12px; color:#555;">Category:</span>
                 <input type="text" class="priority-cat-input" value="${escapeHtml(initialCat)}" placeholder="Type a category…">
             </div>
+            ${email._catReason ? `<div class="priority-cat-reason" style="font-size:12px; color:#6b5e00; margin-top:4px;">${escapeHtml(email._catReason)}</div>` : ''}
         `;
 
         // Open thread on card click
@@ -7078,7 +7155,13 @@ function setupPriorityCategorySuggestions(inputEl, email) {
     };
 
     inputEl.addEventListener('input', filterList);
-    inputEl.addEventListener('input', () => { try { if (email) email._cat = String(inputEl.value || '').trim(); } catch(_) {} });
+    inputEl.addEventListener('input', () => {
+        try {
+            if (email) email._cat = String(inputEl.value || '').trim();
+            const reasonEl = inputEl.closest('.priority-card')?.querySelector('.priority-cat-reason');
+            if (reasonEl) reasonEl.style.display = 'none';
+        } catch(_) {}
+    });
     inputEl.addEventListener('focus', filterList);
     inputEl.addEventListener('blur', () => {
         // small timeout to allow mousedown on item
