@@ -7086,9 +7086,12 @@ function renderPriorityToday(filterCategory) {
                     <button class="priority-trash-btn" title="Skip">Skip</button>
                 </div>
                 <div class="priority-header">
-                    <div class="priority-title">${escapeHtml(subj)}</div>
+                    <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px;">
+                        <div class="priority-title" style="flex: 1; padding-right: 0;">${escapeHtml(subj)}</div>
+                        <div style="font-size: 16px; color: #5f6368; white-space: nowrap; font-weight: 500;">${new Date(date).toLocaleString()}</div>
+                    </div>
                 </div>
-                <div class="priority-meta">${escapeHtml(from)} • ${formatDate(date)}</div>
+                <div class="priority-meta">${escapeHtml(from)}</div>
                 <div class="priority-preview">${escapeHtml(previewText)}</div>
                 <div class="priority-category-editor" style="position:relative;">
                     <span style="font-size:12px; color:#555;">Category:</span>
