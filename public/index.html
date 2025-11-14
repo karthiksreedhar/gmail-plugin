@@ -6945,22 +6945,52 @@ async function loadPriorityToday() {
         priorityTodayEmails = Array.isArray(data.emails) ? data.emails : [];
         // Step 2 message: Suggesting categories using the same classifier as Load More/Test Classifier
         try { updateLoadingOverlayMessage('Loading Priority Emails from Today…', 'Suggesting categories for emails…'); } catch (_) {}
-        // Use server-provided Limited Classifier suggestions directly (do NOT reclassify on client)
+        // Two-stage categorization: keyword search (primary) + classifier validation (secondary)
         try {
             const list = Array.isArray(priorityTodayEmails) ? priorityTodayEmails : [];
             list.forEach(e => {
-                const top = (Array.isArray(e?.suggestedCategories) && e.suggestedCategories.length) ? e.suggestedCategories[0] : '';
-                const chosen = e?.category || top || 'Other';
-                e._cat = mapToCurrentCategory(chosen);
-                // store brief reason for the top suggestion if available
-                let reason = '';
-                const sr = e?.suggestedReasons;
-                if (sr && typeof sr === 'object' && !Array.isArray(sr)) {
-                    if (top && sr[top]) reason = String(sr[top]);
-                } else if (Array.isArray(sr) && Array.isArray(e?.suggestedCategories)) {
-                    reason = String(sr[0] || '');
+                // Stage 1: Keyword search - check if any category name appears in subject/body/sender
+                let keywordCategory = 'Other';
+                const searchText = [
+                    String(e.subject || ''),
+                    String(e.body || ''),
+                    String(e.from || '')
+                ].join(' ').toLowerCase();
+                
+                // Check each category name (from currentCategoriesOrder)
+                const categories = Array.isArray(currentCategoriesOrder) ? currentCategoriesOrder : [];
+                for (const cat of categories) {
+                    const catName = String(cat || '').toLowerCase();
+                    if (catName && searchText.includes(catName)) {
+                        keywordCategory = cat;
+                        break; // Use first match
+                    }
                 }
-                if (reason) e._catReason = reason;
+                
+                // Stage 2: Get classifier suggestion
+                const classifierTop = (Array.isArray(e?.suggestedCategories) && e.suggestedCategories.length) ? e.suggestedCategories[0] : '';
+                const classifierCategory = classifierTop ? mapToCurrentCategory(classifierTop) : '';
+                
+                // Compare keyword vs classifier
+                const keywordNorm = String(keywordCategory || '').toLowerCase();
+                const classifierNorm = String(classifierCategory || '').toLowerCase();
+                
+                if (keywordNorm === classifierNorm) {
+                    // They agree - use classifier justification
+                    e._cat = mapToCurrentCategory(keywordCategory);
+                    const sr = e?.suggestedReasons;
+                    let reason = '';
+                    if (sr && typeof sr === 'object' && !Array.isArray(sr)) {
+                        if (classifierTop && sr[classifierTop]) reason = String(sr[classifierTop]);
+                    } else if (Array.isArray(sr) && Array.isArray(e?.suggestedCategories)) {
+                        reason = String(sr[0] || '');
+                    }
+                    if (reason) e._catReason = reason;
+                } else {
+                    // They disagree - always use keyword result with simple justification
+                    e._cat = mapToCurrentCategory(keywordCategory);
+                    e._catReason = 'Suggested via keyword search';
+                }
             });
         } catch (_) {}
         renderPriorityToday();
