@@ -639,10 +639,45 @@
             position: relative;
             cursor: pointer;
             transition: background-color 0.1s, box-shadow 0.1s;
+            display: flex;
+            align-items: flex-start;
+            gap: 12px;
         }
         .priority-card:hover {
             background: #fff6b3;
             box-shadow: 0 4px 10px rgba(0,0,0,0.08);
+        }
+        .priority-card-left {
+            flex-shrink: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 8px;
+        }
+        .priority-approve-btn-circle {
+            width: 48px;
+            height: 48px;
+            border-radius: 50%;
+            border: none;
+            background: #28a745;
+            color: #fff;
+            font-size: 24px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s ease;
+            box-shadow: 0 2px 6px rgba(40, 167, 69, 0.3);
+        }
+        .priority-approve-btn-circle:hover {
+            background: #218838;
+            transform: scale(1.05);
+            box-shadow: 0 4px 8px rgba(40, 167, 69, 0.4);
+        }
+        .priority-card-content {
+            flex: 1;
+            min-width: 0;
+            padding-right: 60px;
         }
         .priority-header {
             display: flex;
@@ -677,7 +712,6 @@
             display: flex;
             gap: 8px;
         }
-        .priority-approve-btn,
         .priority-trash-btn {
             border: none;
             border-radius: 6px;
@@ -685,13 +719,6 @@
             font-size: 12px;
             cursor: pointer;
             transition: all 0.15s ease;
-        }
-        .priority-approve-btn {
-            background: #28a745;
-            color: #fff;
-        }
-        .priority-approve-btn:hover { background: #218838; }
-        .priority-trash-btn {
             background: #dc3545;
             color: #fff;
         }
@@ -7046,19 +7073,23 @@ function renderPriorityToday(filterCategory) {
         const initialCat = email._cat || email.category || 'Other';
 
         card.innerHTML = `
-            <div class="priority-actions">
-                <button class="priority-trash-btn" title="Skip">Skip</button>
-                <button class="priority-approve-btn" title="Approve to Database">Approve</button>
+            <div class="priority-card-left">
+                <button class="priority-approve-btn-circle" title="Approve to Database">✓</button>
             </div>
-            <div class="priority-header">
-                <div class="priority-title">${escapeHtml(subj)}</div>
-            </div>
-            <div class="priority-meta">${escapeHtml(from)} • ${formatDate(date)}</div>
-            <div class="priority-preview">${escapeHtml(previewText)}</div>
-            <div class="priority-category-editor" style="position:relative;">
-                <span style="font-size:12px; color:#555;">Category:</span>
-                <input type="text" class="priority-cat-input" value="${escapeHtml(initialCat)}" placeholder="Type a category…">
-                ${email._catReason ? `<span class="priority-cat-reason-inline" title="${escapeHtml(email._catReason)}">${escapeHtml(email._catReason)}</span>` : ''}
+            <div class="priority-card-content">
+                <div class="priority-actions">
+                    <button class="priority-trash-btn" title="Skip">Skip</button>
+                </div>
+                <div class="priority-header">
+                    <div class="priority-title">${escapeHtml(subj)}</div>
+                </div>
+                <div class="priority-meta">${escapeHtml(from)} • ${formatDate(date)}</div>
+                <div class="priority-preview">${escapeHtml(previewText)}</div>
+                <div class="priority-category-editor" style="position:relative;">
+                    <span style="font-size:12px; color:#555;">Category:</span>
+                    <input type="text" class="priority-cat-input" value="${escapeHtml(initialCat)}" placeholder="Type a category…">
+                    ${email._catReason ? `<span class="priority-cat-reason-inline" title="${escapeHtml(email._catReason)}">${escapeHtml(email._catReason)}</span>` : ''}
+                </div>
             </div>
         `;
 
@@ -7073,7 +7104,7 @@ function renderPriorityToday(filterCategory) {
         });
 
         // Wire Approve/Trash
-        const approveBtn = card.querySelector('.priority-approve-btn');
+        const approveBtn = card.querySelector('.priority-approve-btn-circle');
         const trashBtn = card.querySelector('.priority-trash-btn');
         const catInput = card.querySelector('.priority-cat-input');
 
@@ -7084,6 +7115,7 @@ function renderPriorityToday(filterCategory) {
             editorEl.addEventListener('mousedown', (ev) => ev.stopPropagation());
         }
 
+        // Prevent card click on the circular approve button
         if (approveBtn) {
             approveBtn.addEventListener('click', async (ev) => {
                 ev.stopPropagation();
