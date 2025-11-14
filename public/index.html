@@ -3291,6 +3291,11 @@ function onCategoryPillClick(ev) {
                 emailDiv.className = 'email-item';
                 emailDiv.onclick = () => openEmailThread(email.id, email.subject);
                 
+                // Apply yellow background if this email was recently added
+                if (window.recentlyAddedEmailIds && window.recentlyAddedEmailIds.has(email.id)) {
+                    emailDiv.style.backgroundColor = '#FFF9CC';
+                }
+                
                 const catNames = Array.isArray(email?.categories) && email.categories.length
                     ? email.categories
                     : (email?.category ? [email.category] : []);
@@ -7243,6 +7248,54 @@ function setupPriorityCategorySuggestions(inputEl, email) {
     });
 }
 
+// Track recently added emails for yellow highlighting
+window.recentlyAddedEmailIds = window.recentlyAddedEmailIds || new Set();
+
+function showStatsBarFlashMessage(message, isSuccess = true) {
+    try {
+        // Remove any existing flash message
+        const existing = document.getElementById('statsBarFlashMessage');
+        if (existing) existing.remove();
+
+        // Create flash message element
+        const flash = document.createElement('div');
+        flash.id = 'statsBarFlashMessage';
+        flash.textContent = message;
+        flash.style.padding = '8px 16px';
+        flash.style.borderRadius = '6px';
+        flash.style.fontSize = '14px';
+        flash.style.fontWeight = '500';
+        flash.style.transition = 'opacity 0.3s ease';
+        
+        if (isSuccess) {
+            flash.style.background = '#d4edda';
+            flash.style.color = '#155724';
+            flash.style.border = '1px solid #c3e6cb';
+        } else {
+            flash.style.background = '#f8d7da';
+            flash.style.color = '#721c24';
+            flash.style.border = '1px solid #f5c6cb';
+        }
+
+        // Insert into stats bar between stats-info and search-bar
+        const statsBar = document.querySelector('.stats-bar');
+        const searchBar = document.querySelector('.search-bar');
+        if (statsBar && searchBar) {
+            statsBar.insertBefore(flash, searchBar);
+        }
+
+        // Fade out and remove after 1.5 seconds
+        setTimeout(() => {
+            flash.style.opacity = '0';
+            setTimeout(() => {
+                try { flash.remove(); } catch(_) {}
+            }, 300);
+        }, 1500);
+    } catch (e) {
+        console.error('showStatsBarFlashMessage failed:', e);
+    }
+}
+
 async function approvePriorityEmail(email, categoryValue, cardEl) {
     try {
         const primary = String(categoryValue || '').trim() || 'Other';
@@ -7267,18 +7320,37 @@ async function approvePriorityEmail(email, categoryValue, cardEl) {
             throw new Error(data.error || 'Failed to approve email');
         }
 
-        // Remove yellow card
+        // Remove yellow card from priority section
         try { cardEl.remove(); } catch(_){}
-        // Also remove from local list
+        // Also remove from local priority list
         priorityTodayEmails = priorityTodayEmails.filter(e => e.id !== email.id);
 
-        // Refresh main list so the white thread appears
+        // Mark as recently added for yellow highlighting
+        window.recentlyAddedEmailIds.add(email.id);
+
+        // Refresh main list so the email appears (will be yellow initially)
         try { await loadEmails(); } catch(_) {}
 
-        showSuccessPopup('Email approved and added to database.', 'Approved');
+        // Show flash message
+        showStatsBarFlashMessage('Email approved and added to database', true);
+
+        // After 1.5 seconds, remove yellow highlighting
+        setTimeout(() => {
+            window.recentlyAddedEmailIds.delete(email.id);
+            // Find the email item and update its background
+            const emailItems = document.querySelectorAll('.email-item');
+            emailItems.forEach(item => {
+                // Check if this is the recently added email by looking for matching content
+                const itemSubject = item.querySelector('.email-subject');
+                if (itemSubject && itemSubject.textContent === payload.subject) {
+                    item.style.transition = 'background-color 0.3s ease';
+                    item.style.backgroundColor = '';
+                }
+            });
+        }, 1500);
     } catch (e) {
         console.error('approvePriorityEmail failed:', e);
-        showErrorPopup('Failed to approve email. Please try again.', 'Approve Failed');
+        showStatsBarFlashMessage('Failed to approve email. Please try again.', false);
     }
 }
 
