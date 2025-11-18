@@ -6,6 +6,7 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node server.js",
+    "migrate:mongo": "node scripts/migrate-to-mongo.js",
     "eval:classifier": "node scripts/evaluate-classifier.js",
     "eval:classifier-simple": "node scripts/evaluate-classifier-simple.js",
     "eval:classifier-no-similarity": "node scripts/evaluate-classifier-no-similarity.js",
@@ -20,6 +21,7 @@
     "dotenv": "^17.2.2",
     "express": "^4.18.2",
     "googleapis": "^156.0.0",
+    "mongodb": "^7.0.0",
     "openai": "^4.104.0"
   },
   "author": "Karthik Sreedhar",

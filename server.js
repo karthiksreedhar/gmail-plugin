@@ -6,6 +6,9 @@ const OpenAI = require('openai');
 const { google } = require('googleapis');
 require('dotenv').config();
 
+// MongoDB (Atlas) connection helper
+const { initMongo, getUserDoc, setUserDoc, warmCacheForUser, getCachedDoc } = require('./db');
+
 /**
  * Initialize OpenAI client using environment variable
  * Ensure OPENAI_API_KEY is set in your .env file
@@ -512,9 +515,22 @@ async function getGmailEmail(messageId) {
   }
 }
 
-// Function to load data from file
-function loadDataFromFile() {
+// Function to load persistent user state (scenarios/refinements/savedGenerations)
+async function loadDataFromFile() {
   try {
+    // Prefer MongoDB
+    try {
+      const doc = await getUserDoc('user_state', CURRENT_USER_EMAIL);
+      if (doc) {
+        return {
+          scenarios: Array.isArray(doc.scenarios) ? doc.scenarios : [],
+          refinements: Array.isArray(doc.refinements) ? doc.refinements : [],
+          savedGenerations: Array.isArray(doc.savedGenerations) ? doc.savedGenerations : []
+        };
+      }
+    } catch (_) {}
+
+    // Fallback to local JSON for backward-compatibility
     const paths = getCurrentUserPaths();
     if (fs.existsSync(paths.DATA_FILE_PATH)) {
       const data = fs.readFileSync(paths.DATA_FILE_PATH, 'utf8');
@@ -526,29 +542,32 @@ function loadDataFromFile() {
       };
     }
   } catch (error) {
-    console.error('Error loading data from file:', error);
+    console.error('Error loading user state:', error);
   }
-  return {
-    scenarios: [],
-    refinements: [],
-    savedGenerations: []
-  };
+  return { scenarios: [], refinements: [], savedGenerations: [] };
 }
 
-// Function to save data to file
-function saveDataToFile(data) {
+// Function to save persistent user state (scenarios/refinements/savedGenerations)
+async function saveDataToFile(data) {
   try {
-    const paths = getCurrentUserPaths();
-    // Ensure data directory exists
-    const dataDir = path.dirname(paths.DATA_FILE_PATH);
-    if (!fs.existsSync(dataDir)) {
-      fs.mkdirSync(dataDir, { recursive: true });
-    }
-    
-    fs.writeFileSync(paths.DATA_FILE_PATH, JSON.stringify(data, null, 2));
-    console.log('Data saved to file successfully');
+    // Primary: MongoDB
+    await setUserDoc('user_state', CURRENT_USER_EMAIL, {
+      scenarios: Array.isArray(data.scenarios) ? data.scenarios : [],
+      refinements: Array.isArray(data.refinements) ? data.refinements : [],
+      savedGenerations: Array.isArray(data.savedGenerations) ? data.savedGenerations : []
+    });
+    console.log('User state saved to MongoDB successfully');
   } catch (error) {
-    console.error('Error saving data to file:', error);
+    console.error('Error saving user state to MongoDB, falling back to file:', error?.message || error);
+    try {
+      const paths = getCurrentUserPaths();
+      // Ensure data directory exists
+      const dataDir = path.dirname(paths.DATA_FILE_PATH);
+      if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
+      fs.writeFileSync(paths.DATA_FILE_PATH, JSON.stringify(data, null, 2));
+    } catch (e) {
+      console.error('Fallback file save failed:', e?.message || e);
+    }
   }
 }
 
@@ -565,29 +584,45 @@ function loadEmailData(filePath) {
   return null;
 }
 
-// Function to load response emails from JSON file
+// Function to load response emails (cache/Mongo first, fallback to JSON) - synchronous for legacy callers
 function loadResponseEmails() {
+  try {
+    const doc = getCachedDoc('response_emails', CURRENT_USER_EMAIL);
+    if (doc && Array.isArray(doc.emails)) return doc.emails;
+  } catch (_) {}
   const paths = getCurrentUserPaths();
   const data = loadEmailData(paths.RESPONSE_EMAILS_PATH);
   return data ? data.emails || [] : [];
 }
 
-// Function to load email threads from JSON file
+// Function to load email threads (cache/Mongo first, fallback to JSON) - synchronous for legacy callers
 function loadEmailThreads() {
+  try {
+    const doc = getCachedDoc('email_threads', CURRENT_USER_EMAIL);
+    if (doc && Array.isArray(doc.threads)) return doc.threads;
+  } catch (_) {}
   const paths = getCurrentUserPaths();
   const data = loadEmailData(paths.EMAIL_THREADS_PATH);
   return data ? data.threads || [] : [];
 }
 
-// Function to load test emails from JSON file
+// Function to load test emails (cache/Mongo first, fallback JSON) - synchronous
 function loadTestEmails() {
+  try {
+    const doc = getCachedDoc('test_emails', CURRENT_USER_EMAIL);
+    if (doc && Array.isArray(doc.emails)) return doc.emails;
+  } catch (_) {}
   const paths = getCurrentUserPaths();
   const data = loadEmailData(paths.TEST_EMAILS_PATH);
   return data ? data.emails || [] : [];
 }
 
-// Function to load unreplied emails from JSON file
+// Function to load unreplied emails (cache/Mongo first, fallback JSON) - synchronous
 function loadUnrepliedEmails() {
+  try {
+    const doc = getCachedDoc('unreplied_emails', CURRENT_USER_EMAIL);
+    if (doc && Array.isArray(doc.emails)) return doc.emails;
+  } catch (_) {}
   const paths = getCurrentUserPaths();
   const data = loadEmailData(paths.UNREPLIED_EMAILS_PATH);
   return data ? data.emails || [] : [];
@@ -595,32 +630,79 @@ function loadUnrepliedEmails() {
 
 // Notes persistence helpers
 function loadNotes() {
+  try {
+    const doc = getCachedDoc('notes', CURRENT_USER_EMAIL);
+    if (doc && Array.isArray(doc.notes)) return doc.notes;
+  } catch (_) {}
   const paths = getCurrentUserPaths();
   const data = loadEmailData(paths.NOTES_PATH);
   return data ? (data.notes || []) : [];
 }
 
-function saveNotes(notes) {
-  const paths = getCurrentUserPaths();
-  if (!fs.existsSync(paths.USER_DATA_DIR)) {
-    fs.mkdirSync(paths.USER_DATA_DIR, { recursive: true });
+async function saveNotes(notes) {
+  try {
+    await setUserDoc('notes', CURRENT_USER_EMAIL, { notes: notes || [] });
+  } catch (e) {
+    const paths = getCurrentUserPaths();
+    if (!fs.existsSync(paths.USER_DATA_DIR)) fs.mkdirSync(paths.USER_DATA_DIR, { recursive: true });
+    fs.writeFileSync(paths.NOTES_PATH, JSON.stringify({ notes }, null, 2));
   }
-  fs.writeFileSync(paths.NOTES_PATH, JSON.stringify({ notes }, null, 2));
 }
 
 // Hidden threads persistence helpers
 function loadHiddenThreads() {
+  try {
+    const doc = getCachedDoc('hidden_threads', CURRENT_USER_EMAIL);
+    if (doc && Array.isArray(doc.hidden)) return doc.hidden;
+  } catch (_) {}
   const paths = getCurrentUserPaths();
   const data = loadEmailData(paths.HIDDEN_THREADS_PATH);
   return data ? (data.hidden || []) : [];
 }
 
-function saveHiddenThreads(hidden) {
-  const paths = getCurrentUserPaths();
-  if (!fs.existsSync(paths.USER_DATA_DIR)) {
-    fs.mkdirSync(paths.USER_DATA_DIR, { recursive: true });
+async function saveHiddenThreads(hidden) {
+  try {
+    await setUserDoc('hidden_threads', CURRENT_USER_EMAIL, { hidden: hidden || [] });
+  } catch (e) {
+    const paths = getCurrentUserPaths();
+    if (!fs.existsSync(paths.USER_DATA_DIR)) fs.mkdirSync(paths.USER_DATA_DIR, { recursive: true });
+    fs.writeFileSync(paths.HIDDEN_THREADS_PATH, JSON.stringify({ hidden }, null, 2));
   }
-  fs.writeFileSync(paths.HIDDEN_THREADS_PATH, JSON.stringify({ hidden }, null, 2));
+}
+
+// Store helpers for primary collections
+async function saveResponseEmailsStore(emails) {
+  try {
+    await setUserDoc('response_emails', CURRENT_USER_EMAIL, { emails: emails || [] });
+  } catch (e) {
+    try {
+      const paths = getCurrentUserPaths();
+      if (!fs.existsSync(paths.USER_DATA_DIR)) fs.mkdirSync(paths.USER_DATA_DIR, { recursive: true });
+      fs.writeFileSync(paths.RESPONSE_EMAILS_PATH, JSON.stringify({ emails: emails || [] }, null, 2));
+    } catch (_) {}
+  }
+}
+async function saveEmailThreadsStore(threads) {
+  try {
+    await setUserDoc('email_threads', CURRENT_USER_EMAIL, { threads: threads || [] });
+  } catch (e) {
+    try {
+      const paths = getCurrentUserPaths();
+      if (!fs.existsSync(paths.USER_DATA_DIR)) fs.mkdirSync(paths.USER_DATA_DIR, { recursive: true });
+      fs.writeFileSync(paths.EMAIL_THREADS_PATH, JSON.stringify({ threads: threads || [] }, null, 2));
+    } catch (_) {}
+  }
+}
+async function saveUnrepliedEmailsStore(emails) {
+  try {
+    await setUserDoc('unreplied_emails', CURRENT_USER_EMAIL, { emails: emails || [] });
+  } catch (e) {
+    try {
+      const paths = getCurrentUserPaths();
+      if (!fs.existsSync(paths.USER_DATA_DIR)) fs.mkdirSync(paths.USER_DATA_DIR, { recursive: true });
+      fs.writeFileSync(paths.UNREPLIED_EMAILS_PATH, JSON.stringify({ emails: emails || [] }, null, 2));
+    } catch (_) {}
+  }
 }
 
 /**
@@ -629,6 +711,12 @@ function saveHiddenThreads(hidden) {
  * Shape: { hiddenMessages: [{ id, subject, date }] }
  */
 function loadHiddenInbox() {
+  try {
+    const doc = getCachedDoc('hidden_inbox', CURRENT_USER_EMAIL);
+    if (doc && Array.isArray(doc.hiddenMessages)) return doc.hiddenMessages;
+  } catch (e) {
+    console.warn('Failed to read hidden-inbox from cache:', e?.message || e);
+  }
   try {
     const paths = getCurrentUserPaths();
     const p = path.join(paths.USER_DATA_DIR, 'hidden-inbox.json');
@@ -642,16 +730,18 @@ function loadHiddenInbox() {
   return [];
 }
 
-function saveHiddenInbox(hiddenMessages) {
+async function saveHiddenInbox(hiddenMessages) {
   try {
-    const paths = getCurrentUserPaths();
-    if (!fs.existsSync(paths.USER_DATA_DIR)) {
-      fs.mkdirSync(paths.USER_DATA_DIR, { recursive: true });
-    }
-    const p = path.join(paths.USER_DATA_DIR, 'hidden-inbox.json');
-    fs.writeFileSync(p, JSON.stringify({ hiddenMessages: hiddenMessages || [] }, null, 2));
+    await setUserDoc('hidden_inbox', CURRENT_USER_EMAIL, { hiddenMessages: hiddenMessages || [] });
   } catch (e) {
-    console.error('Failed to save hidden-inbox.json:', e?.message || e);
+    try {
+      const paths = getCurrentUserPaths();
+      if (!fs.existsSync(paths.USER_DATA_DIR)) fs.mkdirSync(paths.USER_DATA_DIR, { recursive: true });
+      const p = path.join(paths.USER_DATA_DIR, 'hidden-inbox.json');
+      fs.writeFileSync(p, JSON.stringify({ hiddenMessages: hiddenMessages || [] }, null, 2));
+    } catch (e2) {
+      console.error('Failed to save hidden-inbox.json:', e2?.message || e2);
+    }
   }
 }
 
@@ -665,17 +755,17 @@ function saveHiddenInbox(hiddenMessages) {
  * }
  */
 function loadCategoryGuidelines() {
+  try {
+    const doc = getCachedDoc('category_guidelines', CURRENT_USER_EMAIL);
+    if (doc && Array.isArray(doc.categories)) return doc.categories;
+  } catch (_) {}
   const paths = getCurrentUserPaths();
   const data = loadEmailData(paths.CATEGORY_GUIDELINES_PATH);
   if (data && Array.isArray(data.categories)) return data.categories;
   return [];
 }
 
-function saveCategoryGuidelines(categories) {
-  const paths = getCurrentUserPaths();
-  if (!fs.existsSync(paths.USER_DATA_DIR)) {
-    fs.mkdirSync(paths.USER_DATA_DIR, { recursive: true });
-  }
+async function saveCategoryGuidelines(categories) {
   const payload = {
     categories: (categories || []).map(c => ({
       name: String(c?.name || '').trim(),
@@ -683,30 +773,37 @@ function saveCategoryGuidelines(categories) {
     })).filter(c => c.name),
     updatedAt: new Date().toISOString()
   };
-  fs.writeFileSync(paths.CATEGORY_GUIDELINES_PATH, JSON.stringify(payload, null, 2));
+  try {
+    await setUserDoc('category_guidelines', CURRENT_USER_EMAIL, payload);
+  } catch (_) {
+    const paths = getCurrentUserPaths();
+    if (!fs.existsSync(paths.USER_DATA_DIR)) fs.mkdirSync(paths.USER_DATA_DIR, { recursive: true });
+    fs.writeFileSync(paths.CATEGORY_GUIDELINES_PATH, JSON.stringify(payload, null, 2));
+  }
 }
 
 // Category summaries persistence helpers
 function loadCategorySummaries() {
+  try {
+    const doc = getCachedDoc('category_summaries', CURRENT_USER_EMAIL);
+    if (doc && doc.summaries && typeof doc.summaries === 'object') return doc.summaries;
+  } catch (_) {}
   const paths = getCurrentUserPaths();
   const data = loadEmailData(paths.CATEGORY_SUMMARIES_PATH);
   if (!data) return {};
-  if (data.summaries && typeof data.summaries === 'object') {
-    return data.summaries;
-  }
+  if (data.summaries && typeof data.summaries === 'object') return data.summaries;
   return (typeof data === 'object' && data) ? data : {};
 }
 
-function saveCategorySummaries(summaries) {
-  const paths = getCurrentUserPaths();
-  if (!fs.existsSync(paths.USER_DATA_DIR)) {
-    fs.mkdirSync(paths.USER_DATA_DIR, { recursive: true });
+async function saveCategorySummaries(summaries) {
+  const payload = { summaries: summaries || {}, updatedAt: new Date().toISOString() };
+  try {
+    await setUserDoc('category_summaries', CURRENT_USER_EMAIL, payload);
+  } catch (_) {
+    const paths = getCurrentUserPaths();
+    if (!fs.existsSync(paths.USER_DATA_DIR)) fs.mkdirSync(paths.USER_DATA_DIR, { recursive: true });
+    fs.writeFileSync(paths.CATEGORY_SUMMARIES_PATH, JSON.stringify(payload, null, 2));
   }
-  const payload = {
-    summaries: summaries || {},
-    updatedAt: new Date().toISOString()
-  };
-  fs.writeFileSync(paths.CATEGORY_SUMMARIES_PATH, JSON.stringify(payload, null, 2));
 }
 
 /**
@@ -723,12 +820,20 @@ function saveCategorySummaries(summaries) {
  */
 function loadEmailNotesStore() {
   try {
+    const doc = getCachedDoc('email_notes', CURRENT_USER_EMAIL);
+    if (doc && typeof doc === 'object') {
+      const notesByEmail = (doc.notesByEmail && typeof doc.notesByEmail === 'object') ? doc.notesByEmail : {};
+      return { notesByEmail, updatedAt: doc.updatedAt || '' };
+    }
+  } catch (e) {
+    console.warn('Failed to load email-notes from cache:', e?.message || e);
+  }
+  try {
     const paths = getCurrentUserPaths();
     const p = paths.EMAIL_NOTES_PATH;
     if (fs.existsSync(p)) {
       const data = JSON.parse(fs.readFileSync(p, 'utf8'));
       if (data && typeof data === 'object') {
-        // Normalize shape
         const notesByEmail = (data.notesByEmail && typeof data.notesByEmail === 'object') ? data.notesByEmail : {};
         return { notesByEmail, updatedAt: data.updatedAt || '' };
       }
@@ -739,37 +844,41 @@ function loadEmailNotesStore() {
   return { notesByEmail: {}, updatedAt: '' };
 }
 
-function saveEmailNotesStore(store) {
+async function saveEmailNotesStore(store) {
   try {
-    const paths = getCurrentUserPaths();
-    if (!fs.existsSync(paths.USER_DATA_DIR)) {
-      fs.mkdirSync(paths.USER_DATA_DIR, { recursive: true });
-    }
     const payload = {
       notesByEmail: (store && typeof store.notesByEmail === 'object') ? store.notesByEmail : {},
       updatedAt: new Date().toISOString()
     };
-    fs.writeFileSync(paths.EMAIL_NOTES_PATH, JSON.stringify(payload, null, 2));
+    await setUserDoc('email_notes', CURRENT_USER_EMAIL, payload);
     return true;
   } catch (e) {
-    console.error('Failed to save email-notes.json:', e?.message || e);
-    return false;
+    console.error('Failed to save email-notes to Mongo:', e?.message || e);
+    try {
+      const paths = getCurrentUserPaths();
+      if (!fs.existsSync(paths.USER_DATA_DIR)) fs.mkdirSync(paths.USER_DATA_DIR, { recursive: true });
+      fs.writeFileSync(paths.EMAIL_NOTES_PATH, JSON.stringify({ notesByEmail: store?.notesByEmail || {}, updatedAt: new Date().toISOString() }, null, 2));
+      return true;
+    } catch (e2) {
+      console.error('Fallback save of email-notes.json failed:', e2?.message || e2);
+      return false;
+    }
   }
 }
 
 // Categories list persistence (authoritative category names/order across the app)
 function loadCategoriesList() {
+  try {
+    const doc = getCachedDoc('categories', CURRENT_USER_EMAIL);
+    if (doc && Array.isArray(doc.categories)) return doc.categories;
+  } catch (_) {}
   const paths = getCurrentUserPaths();
   const data = loadEmailData(paths.CATEGORIES_PATH);
   if (data && Array.isArray(data.categories)) return data.categories;
   return [];
 }
 
-function saveCategoriesList(categories) {
-  const paths = getCurrentUserPaths();
-  if (!fs.existsSync(paths.USER_DATA_DIR)) {
-    fs.mkdirSync(paths.USER_DATA_DIR, { recursive: true });
-  }
+async function saveCategoriesList(categories) {
   const uniq = [];
   const seen = new Set();
   (categories || []).forEach(n => {
@@ -780,11 +889,25 @@ function saveCategoriesList(categories) {
     seen.add(k);
     uniq.push(s);
   });
-  fs.writeFileSync(paths.CATEGORIES_PATH, JSON.stringify({ categories: uniq }, null, 2));
+  try {
+    await setUserDoc('categories', CURRENT_USER_EMAIL, { categories: uniq });
+  } catch (_) {
+    const paths = getCurrentUserPaths();
+    if (!fs.existsSync(paths.USER_DATA_DIR)) fs.mkdirSync(paths.USER_DATA_DIR, { recursive: true });
+    fs.writeFileSync(paths.CATEGORIES_PATH, JSON.stringify({ categories: uniq }, null, 2));
+  }
 }
 
-// Load initial data from file
-const persistentData = loadDataFromFile();
+// Initialize MongoDB on server start and warm cache for current user
+initMongo()
+  .then(() => warmCacheForUser(CURRENT_USER_EMAIL))
+  .catch(err => console.error('Mongo init error:', err));
+
+// Load initial data (async-aware)
+let persistentData = { scenarios: [], refinements: [], savedGenerations: [] };
+(async () => {
+  try { persistentData = await loadDataFromFile(); } catch (_) {}
+})();
 
 // Store for email memory/categories, refinements, saved generations, and scenarios
 let emailMemory = {
@@ -1171,9 +1294,22 @@ app.get('/api/current-categories', (req, res) => {
 // API endpoint to get response emails - prioritize JSON data, Gmail API only for specific features
 app.get('/api/response-emails', async (req, res) => {
   try {
-    // Always load from JSON files for the main UI display
-    console.log('Loading response emails from JSON file...');
-    const responseEmails = loadResponseEmails();
+    // Prefer MongoDB (via direct fetch), fallback to cache/file for resilience
+    console.log('Loading response emails (MongoDB preferred, fallback to local JSON)...');
+    let source = 'mongo';
+    let responseEmails = [];
+    try {
+      const doc = await getUserDoc('response_emails', CURRENT_USER_EMAIL);
+      if (doc && Array.isArray(doc.emails)) {
+        responseEmails = doc.emails;
+      } else {
+        source = 'file';
+        responseEmails = loadResponseEmails();
+      }
+    } catch (_) {
+      source = 'file';
+      responseEmails = loadResponseEmails();
+    }
     
     if (responseEmails.length === 0) {
       console.warn('No response emails found in JSON file');
@@ -1241,8 +1377,8 @@ app.get('/api/response-emails', async (req, res) => {
     if (filteredEmails.length !== validatedEmails.length) {
       console.log(`Filtered out ${validatedEmails.length - filteredEmails.length} hidden emails`);
     }
-    console.log(`Returning ${filteredEmails.length} validated emails from JSON file`);
-    res.json({ emails: filteredEmails });
+    console.log(`Returning ${filteredEmails.length} validated emails (source: ${source})`);
+    res.json({ emails: filteredEmails, source });
   } catch (error) {
     console.error('Error fetching response emails:', error);
     res.status(500).json({ error: 'Failed to fetch response emails', details: error.message });
@@ -2008,7 +2144,7 @@ app.post('/api/unreplied-emails/reclassify', async (req, res) => {
     if (!fs.existsSync(paths.USER_DATA_DIR)) {
       fs.mkdirSync(paths.USER_DATA_DIR, { recursive: true });
     }
-    fs.writeFileSync(paths.UNREPLIED_EMAILS_PATH, JSON.stringify({ emails: updated }, null, 2));
+    await saveUnrepliedEmailsStore(updated);
 
     return res.json({
       success: true,
@@ -2028,7 +2164,7 @@ app.get('/api/scenarios', (req, res) => {
   res.json({ scenarios: emailMemory.scenarios });
 });
 
-app.post('/api/scenarios', (req, res) => {
+app.post('/api/scenarios', async (req, res) => {
   try {
     const { name, description, emails } = req.body;
     
@@ -2042,8 +2178,8 @@ app.post('/api/scenarios', (req, res) => {
     
     emailMemory.scenarios.push(scenario);
     
-    // Save to file
-    saveDataToFile({
+    // Save to DB
+    await saveDataToFile({
       scenarios: emailMemory.scenarios,
       refinements: emailMemory.refinements,
       savedGenerations: emailMemory.savedGenerations
@@ -2056,7 +2192,7 @@ app.post('/api/scenarios', (req, res) => {
   }
 });
 
-app.delete('/api/scenarios/:id', (req, res) => {
+app.delete('/api/scenarios/:id', async (req, res) => {
   try {
     const id = req.params.id;
     emailMemory.scenarios = emailMemory.scenarios.filter(s => s.id !== id);
@@ -2076,7 +2212,7 @@ app.delete('/api/scenarios/:id', (req, res) => {
 });
 
 // Start a new scenario (clear refinements and saved generations)
-app.post('/api/scenarios/new/load', (req, res) => {
+app.post('/api/scenarios/new/load', async (req, res) => {
   try {
     // Clear refinements and saved generations
     emailMemory.refinements = [];
@@ -2100,7 +2236,7 @@ app.post('/api/scenarios/new/load', (req, res) => {
 });
 
 // Load a specific scenario
-app.post('/api/scenarios/:id/load', (req, res) => {
+app.post('/api/scenarios/:id/load', async (req, res) => {
   try {
     const id = req.params.id;
     const scenario = emailMemory.scenarios.find(s => s.id === id);
@@ -2135,7 +2271,7 @@ app.post('/api/scenarios/:id/load', (req, res) => {
 });
 
 // Clear all scenarios
-app.delete('/api/scenarios', (req, res) => {
+app.delete('/api/scenarios', async (req, res) => {
   try {
     emailMemory.scenarios = [];
     
@@ -2224,6 +2360,9 @@ app.post('/api/switch-user', async (req, res) => {
     CURRENT_USER_EMAIL = userEmail;
     // Reset sending email to match current user (can be changed later if needed)
     SENDING_EMAIL = userEmail;
+
+    // Warm Mongo cache for new user to support synchronous loaders
+    await warmCacheForUser(CURRENT_USER_EMAIL);
     
     // Reinitialize Gmail API for new user
     gmailAuth = null;
@@ -3358,7 +3497,7 @@ app.post('/api/fetch-more-emails', async (req, res) => {
 });
 
 // API endpoint to load more emails from inbox using MCP
-app.post('/api/hidden-inbox/add', (req, res) => {
+app.post('/api/hidden-inbox/add', async (req, res) => {
   try {
     const { id, subject, date } = req.body || {};
     if (!id && !subject) {
@@ -3369,7 +3508,7 @@ app.post('/api/hidden-inbox/add', (req, res) => {
     const exists = list.some(h => (id && h.id === id) || (subject && norm(h.subject) === norm(subject)));
     if (!exists) {
       list.push({ id: id || '', subject: subject || '', date: date || new Date().toISOString() });
-      saveHiddenInbox(list);
+      await saveHiddenInbox(list);
     }
     return res.json({ success: true, totalHidden: list.length });
   } catch (e) {
@@ -3655,7 +3794,7 @@ app.get('/api/categories/all-with-counts', (req, res) => {
  * DELETE /api/categories/:name
  * Returns: { success: true, removed, moved: { responses, unreplied }, categories: [...] }
  */
-app.delete('/api/categories/:name', (req, res) => {
+app.delete('/api/categories/:name', async (req, res) => {
   try {
     const raw = String(req.params.name || '').trim();
     if (!raw) {
@@ -3733,12 +3872,12 @@ app.delete('/api/categories/:name', (req, res) => {
     if (!fs.existsSync(paths.USER_DATA_DIR)) {
       fs.mkdirSync(paths.USER_DATA_DIR, { recursive: true });
     }
-    fs.writeFileSync(paths.RESPONSE_EMAILS_PATH, JSON.stringify({ emails: responses }, null, 2));
-    fs.writeFileSync(paths.UNREPLIED_EMAILS_PATH, JSON.stringify({ emails: unreplied }, null, 2));
+    await saveResponseEmailsStore(responses);
+    await saveUnrepliedEmailsStore(unreplied);
 
     // Update categories list: remove the deleted name, keep "Other"
     const nextCats = (catList || []).filter(c => String(c).toLowerCase() !== targetLc);
-    saveCategoriesList(nextCats);
+    await saveCategoriesList(nextCats);
 
     // Optionally remove category summary (best-effort)
     try {
@@ -3747,7 +3886,7 @@ app.delete('/api/categories/:name', (req, res) => {
       const foundKey = keys.find(k => String(k).toLowerCase() === targetLc);
       if (foundKey) {
         delete summaries[foundKey];
-        saveCategorySummaries(summaries);
+        await saveCategorySummaries(summaries);
       }
     } catch (_) {}
 
@@ -3950,9 +4089,9 @@ app.post('/api/seed-categories/add-all', async (req, res) => {
     });
 
     // Persist all stores
-    fs.writeFileSync(paths.UNREPLIED_EMAILS_PATH, JSON.stringify({ emails: unreplied }, null, 2));
-    fs.writeFileSync(paths.RESPONSE_EMAILS_PATH, JSON.stringify({ emails: responses }, null, 2));
-    fs.writeFileSync(paths.EMAIL_THREADS_PATH, JSON.stringify({ threads }, null, 2));
+    await saveUnrepliedEmailsStore(unreplied);
+    await saveResponseEmailsStore(responses);
+    await saveEmailThreadsStore(threads);
 
     // After persisting, auto-generate summaries for any categories that don't yet have one.
     try {
@@ -4058,9 +4197,7 @@ app.post('/api/load-more-emails', async (req, res) => {
           fs.mkdirSync(paths.USER_DATA_DIR, { recursive: true });
         }
 
-        fs.writeFileSync(paths.UNREPLIED_EMAILS_PATH, JSON.stringify({
-          emails: allUnrepliedEmails
-        }, null, 2));
+        await saveUnrepliedEmailsStore(allUnrepliedEmails);
 
         const newEmailsAdded = allUnrepliedEmails.length - existingUnrepliedEmails.length;
 
@@ -4112,9 +4249,7 @@ app.post('/api/load-more-emails', async (req, res) => {
         fs.mkdirSync(paths.USER_DATA_DIR, { recursive: true });
       }
 
-      fs.writeFileSync(paths.UNREPLIED_EMAILS_PATH, JSON.stringify({
-        emails: allUnrepliedEmails
-      }, null, 2));
+      await saveUnrepliedEmailsStore(allUnrepliedEmails);
 
       res.json({
         success: true,
@@ -4321,7 +4456,7 @@ app.post('/api/add-approved-email', async (req, res) => {
         if (!fs.existsSync(paths.USER_DATA_DIR)) {
           fs.mkdirSync(paths.USER_DATA_DIR, { recursive: true });
         }
-        fs.writeFileSync(paths.UNREPLIED_EMAILS_PATH, JSON.stringify({ emails: allUnrepliedEmails }, null, 2));
+        await saveUnrepliedEmailsStore(allUnrepliedEmails);
         wroteUnreplied = true;
       } catch (e) {
         console.error('Failed to write unreplied-emails.json:', e);
@@ -4365,7 +4500,7 @@ app.post('/api/add-approved-email', async (req, res) => {
         if (!fs.existsSync(paths.USER_DATA_DIR)) {
           fs.mkdirSync(paths.USER_DATA_DIR, { recursive: true });
         }
-        fs.writeFileSync(paths.EMAIL_THREADS_PATH, JSON.stringify({ threads }, null, 2));
+        await saveEmailThreadsStore(threads);
         wroteThread = true;
       } catch (e) {
         console.error('Failed to write email-threads.json:', e);
@@ -4397,7 +4532,7 @@ app.post('/api/add-approved-email', async (req, res) => {
         if (!fs.existsSync(paths.USER_DATA_DIR)) {
           fs.mkdirSync(paths.USER_DATA_DIR, { recursive: true });
         }
-        fs.writeFileSync(paths.RESPONSE_EMAILS_PATH, JSON.stringify({ emails: responses }, null, 2));
+        await saveResponseEmailsStore(responses);
         wroteResponse = true;
       } catch (e) {
         console.error('Failed to write response-emails.json:', e);
@@ -4424,7 +4559,7 @@ app.post('/api/add-approved-email', async (req, res) => {
   }
 });
 
-app.post('/api/hide-email-threads', (req, res) => {
+app.post('/api/hide-email-threads', async (req, res) => {
   try {
     const { threads } = req.body || {};
     if (!threads || !Array.isArray(threads) || threads.length === 0) {
@@ -4465,7 +4600,7 @@ app.post('/api/hide-email-threads', (req, res) => {
     const existingResponses = loadResponseEmails();
     const prunedResponses = existingResponses.filter(e => !toHideResponseIds.has(e.id));
     if (prunedResponses.length !== existingResponses.length) {
-      fs.writeFileSync(paths.RESPONSE_EMAILS_PATH, JSON.stringify({ emails: prunedResponses }, null, 2));
+      await saveResponseEmailsStore(prunedResponses);
     }
 
     // 2) Email threads
@@ -4473,7 +4608,7 @@ app.post('/api/hide-email-threads', (req, res) => {
     const hiddenThreadIds = new Set(updatedHidden.map(h => h.id));
     const prunedThreads = existingThreads.filter(t => !hiddenThreadIds.has(t.id));
     if (prunedThreads.length !== existingThreads.length) {
-      fs.writeFileSync(paths.EMAIL_THREADS_PATH, JSON.stringify({ threads: prunedThreads }, null, 2));
+      await saveEmailThreadsStore(prunedThreads);
     }
 
     res.json({
@@ -4586,14 +4721,10 @@ app.post('/api/add-email-threads', async (req, res) => {
       }
 
       // Save response emails
-      fs.writeFileSync(paths.RESPONSE_EMAILS_PATH, JSON.stringify({
-        emails: allResponseEmails
-      }, null, 2));
+      await saveResponseEmailsStore(allResponseEmails);
 
       // Save email threads
-      fs.writeFileSync(paths.EMAIL_THREADS_PATH, JSON.stringify({
-        threads: allEmailThreads
-      }, null, 2));
+      await saveEmailThreadsStore(allEmailThreads);
 
       console.log(`Successfully added ${newResponseEmails.length} new email threads to database`);
       
@@ -4731,23 +4862,10 @@ app.delete('/api/email-thread/:emailId', async (req, res) => {
         fs.mkdirSync(paths.USER_DATA_DIR, { recursive: true });
       }
 
-      // Save updated response emails
-      fs.writeFileSync(
-        paths.RESPONSE_EMAILS_PATH,
-        JSON.stringify({ emails: updatedResponseEmails }, null, 2)
-      );
-
-      // Save updated email threads
-      fs.writeFileSync(
-        paths.EMAIL_THREADS_PATH,
-        JSON.stringify({ threads: updatedEmailThreads }, null, 2)
-      );
-
-      // Save updated unreplied emails
-      fs.writeFileSync(
-        paths.UNREPLIED_EMAILS_PATH,
-        JSON.stringify({ emails: updatedUnrepliedEmails }, null, 2)
-      );
+      // Save updated stores to MongoDB
+      await saveResponseEmailsStore(updatedResponseEmails);
+      await saveEmailThreadsStore(updatedEmailThreads);
+      await saveUnrepliedEmailsStore(updatedUnrepliedEmails);
 
       console.log(`Successfully deleted email across stores: ${emailToDelete.subject}`);
 
@@ -4787,7 +4905,7 @@ app.delete('/api/email-thread/:emailId', async (req, res) => {
 // - Removes orphaned threads whose responses no longer exist
 // - Removes unreplied emails that match orphaned threads by subject/from within ±14 days
 // - Deduplicates unreplied by id
-app.post('/api/reconcile-stores', (req, res) => {
+app.post('/api/reconcile-stores', async (req, res) => {
   try {
     const apply = req.body && Object.prototype.hasOwnProperty.call(req.body, 'apply') ? !!req.body.apply : true;
 
@@ -4908,13 +5026,13 @@ app.post('/api/reconcile-stores', (req, res) => {
         fs.mkdirSync(paths.USER_DATA_DIR, { recursive: true });
       }
       try {
-        fs.writeFileSync(paths.UNREPLIED_EMAILS_PATH, JSON.stringify({ emails: nextUnreplied }, null, 2));
+        await saveUnrepliedEmailsStore(nextUnreplied);
       } catch (e) {
         console.error('Failed saving unreplied after reconcile:', e);
         return res.status(500).json({ success: false, error: 'Failed to save unreplied-emails.json' });
       }
       try {
-        fs.writeFileSync(paths.EMAIL_THREADS_PATH, JSON.stringify({ threads: nextThreads }, null, 2));
+        await saveEmailThreadsStore(nextThreads);
       } catch (e) {
         console.error('Failed saving threads after reconcile:', e);
         return res.status(500).json({ success: false, error: 'Failed to save email-threads.json' });
@@ -4938,7 +5056,7 @@ app.post('/api/reconcile-stores', (req, res) => {
  * - Backfills missing responseId by matching on subject (ignoring "Re:"), originalFrom, and date proximity.
  * - Drops threads that cannot be matched to a response email.
  */
-app.post('/api/cleanup-email-threads', (req, res) => {
+app.post('/api/cleanup-email-threads', async (req, res) => {
   try {
     const paths = getCurrentUserPaths();
     const responses = loadResponseEmails();
@@ -4991,7 +5109,7 @@ app.post('/api/cleanup-email-threads', (req, res) => {
     if (!fs.existsSync(paths.USER_DATA_DIR)) {
       fs.mkdirSync(paths.USER_DATA_DIR, { recursive: true });
     }
-    fs.writeFileSync(paths.EMAIL_THREADS_PATH, JSON.stringify({ threads: updated }, null, 2));
+    await saveEmailThreadsStore(updated);
 
     return res.json({
       success: true,
@@ -5512,7 +5630,7 @@ Please return ONLY the JSON object as specified above. Ensure every provided ID 
   }
 });
 
-app.post('/api/save-categories', (req, res) => {
+app.post('/api/save-categories', async (req, res) => {
   try {
     const { assignments, categories } = req.body || {};
 
@@ -5583,15 +5701,9 @@ app.post('/api/save-categories', (req, res) => {
     }
 
     // Persist both files
-    fs.writeFileSync(
-      paths.RESPONSE_EMAILS_PATH,
-      JSON.stringify({ emails: renamedResponses }, null, 2)
-    );
+    await saveResponseEmailsStore(renamedResponses);
 
-    fs.writeFileSync(
-      paths.UNREPLIED_EMAILS_PATH,
-      JSON.stringify({ emails: renamedUnreplied }, null, 2)
-    );
+    await saveUnrepliedEmailsStore(renamedUnreplied);
 
     // Persist the authoritative categories list (names and order) for system-wide consistency
     try {
@@ -5613,7 +5725,7 @@ app.post('/api/save-categories', (req, res) => {
         );
       }
       if (orderedNames.length) {
-        saveCategoriesList(orderedNames);
+        await saveCategoriesList(orderedNames);
       }
     } catch (e) {
       console.warn('Failed to save categories list:', e?.message || e);
@@ -5640,7 +5752,7 @@ app.post('/api/save-categories', (req, res) => {
  * Input: { assignments: { [emailId]: categoryName }, categories?: [{ name, emails: [{id}] }]}
  * Updates only unreplied-emails.json, does not touch response-emails.json.
  */
-app.post('/api/unreplied/save-categories', (req, res) => {
+app.post('/api/unreplied/save-categories', async (req, res) => {
   try {
     const { assignments, categories } = req.body || {};
 
@@ -5678,10 +5790,7 @@ app.post('/api/unreplied/save-categories', (req, res) => {
     }
 
     // Persist only unreplied emails
-    fs.writeFileSync(
-      paths.UNREPLIED_EMAILS_PATH,
-      JSON.stringify({ emails: updatedUnreplied }, null, 2)
-    );
+    await saveUnrepliedEmailsStore(updatedUnreplied);
 
     return res.json({
       success: true,
@@ -5710,7 +5819,7 @@ app.get('/api/category-guidelines', (req, res) => {
   }
 });
 
-app.post('/api/category-guidelines', (req, res) => {
+app.post('/api/category-guidelines', async (req, res) => {
   try {
     const { categories } = req.body || {};
     if (!Array.isArray(categories)) {
@@ -5719,7 +5828,7 @@ app.post('/api/category-guidelines', (req, res) => {
     const cleaned = categories
       .map(c => ({ name: String(c?.name || '').trim(), notes: String(c?.notes || '') }))
       .filter(c => c.name);
-    saveCategoryGuidelines(cleaned);
+    await saveCategoryGuidelines(cleaned);
     return res.json({ success: true, count: cleaned.length });
   } catch (e) {
     console.error('Error saving category guidelines:', e);
@@ -5958,7 +6067,7 @@ app.get('/api/notes', (req, res) => {
   }
 });
 
-app.post('/api/notes', (req, res) => {
+app.post('/api/notes', async (req, res) => {
   try {
     const { category, text, scope } = req.body || {};
     if (!category || !text) {
@@ -5974,7 +6083,7 @@ app.post('/api/notes', (req, res) => {
       updatedAt: new Date().toISOString()
     };
     notes.push(note);
-    saveNotes(notes);
+    await saveNotes(notes);
     res.json({ success: true, note });
   } catch (error) {
     console.error('Error creating note:', error);
@@ -5982,7 +6091,7 @@ app.post('/api/notes', (req, res) => {
   }
 });
 
-app.put('/api/notes/:id', (req, res) => {
+app.put('/api/notes/:id', async (req, res) => {
   try {
     const id = req.params.id;
     const { category, text, scope } = req.body || {};
@@ -5995,7 +6104,7 @@ app.put('/api/notes/:id', (req, res) => {
     if (category) notes[idx].category = category;
     if (scope === 'GLOBAL' || scope === 'LOCAL') notes[idx].scope = scope;
     notes[idx].updatedAt = new Date().toISOString();
-    saveNotes(notes);
+    await saveNotes(notes);
     res.json({ success: true, note: notes[idx] });
   } catch (error) {
     console.error('Error updating note:', error);
@@ -6003,7 +6112,7 @@ app.put('/api/notes/:id', (req, res) => {
   }
 });
 
-app.delete('/api/notes/:id', (req, res) => {
+app.delete('/api/notes/:id', async (req, res) => {
   try {
     const id = req.params.id;
     const notes = loadNotes();
@@ -6011,7 +6120,7 @@ app.delete('/api/notes/:id', (req, res) => {
     if (next.length === notes.length) {
       return res.status(404).json({ error: 'Note not found' });
     }
-    saveNotes(next);
+    await saveNotes(next);
     res.json({ success: true });
   } catch (error) {
     console.error('Error deleting note:', error);
@@ -6039,7 +6148,7 @@ app.get('/api/email-notes/:emailId', (req, res) => {
   }
 });
 
-app.post('/api/email-notes/:emailId', (req, res) => {
+app.post('/api/email-notes/:emailId', async (req, res) => {
   try {
     const emailId = String(req.params.emailId || '').trim();
     const text = typeof req.body?.text === 'string' ? req.body.text : '';
@@ -6057,7 +6166,8 @@ app.post('/api/email-notes/:emailId', (req, res) => {
     };
     list.push(note);
     store.notesByEmail[emailId] = list;
-    if (!saveEmailNotesStore(store)) {
+    const ok = await saveEmailNotesStore(store);
+    if (!ok) {
       return res.status(500).json({ success: false, error: 'Failed to persist note' });
     }
     return res.json({ success: true, note, total: list.length });
@@ -6067,7 +6177,7 @@ app.post('/api/email-notes/:emailId', (req, res) => {
   }
 });
 
-app.put('/api/email-notes/:emailId/:noteId', (req, res) => {
+app.put('/api/email-notes/:emailId/:noteId', async (req, res) => {
   try {
     const emailId = String(req.params.emailId || '').trim();
     const noteId = String(req.params.noteId || '').trim();
@@ -6083,7 +6193,8 @@ app.put('/api/email-notes/:emailId/:noteId', (req, res) => {
     list[idx].text = text;
     list[idx].updatedAt = new Date().toISOString();
     store.notesByEmail[emailId] = list;
-    if (!saveEmailNotesStore(store)) {
+    const ok = await saveEmailNotesStore(store);
+    if (!ok) {
       return res.status(500).json({ success: false, error: 'Failed to persist note' });
     }
     return res.json({ success: true, note: list[idx] });
@@ -6093,7 +6204,7 @@ app.put('/api/email-notes/:emailId/:noteId', (req, res) => {
   }
 });
 
-app.delete('/api/email-notes/:emailId/:noteId', (req, res) => {
+app.delete('/api/email-notes/:emailId/:noteId', async (req, res) => {
   try {
     const emailId = String(req.params.emailId || '').trim();
     const noteId = String(req.params.noteId || '').trim();
@@ -6105,7 +6216,8 @@ app.delete('/api/email-notes/:emailId/:noteId', (req, res) => {
     if (next.length === list.length) return res.status(404).json({ success: false, error: 'Note not found' });
 
     store.notesByEmail[emailId] = next;
-    if (!saveEmailNotesStore(store)) {
+    const ok = await saveEmailNotesStore(store);
+    if (!ok) {
       return res.status(500).json({ success: false, error: 'Failed to persist note deletion' });
     }
     return res.json({ success: true, total: next.length });
@@ -6132,14 +6244,14 @@ app.get('/api/category-summaries', (req, res) => {
   }
 });
 
-app.post('/api/category-summaries', (req, res) => {
+app.post('/api/category-summaries', async (req, res) => {
   try {
     const { name, summary, summaries } = req.body || {};
     const existing = loadCategorySummaries();
 
     if (typeof name === 'string' && typeof summary === 'string') {
       existing[name] = summary;
-      saveCategorySummaries(existing);
+      await saveCategorySummaries(existing);
       return res.json({ success: true, saved: 1 });
     }
 
@@ -6152,7 +6264,7 @@ app.post('/api/category-summaries', (req, res) => {
           count++;
         }
       });
-      saveCategorySummaries(existing);
+      await saveCategorySummaries(existing);
       return res.json({ success: true, saved: count });
     }
 
@@ -7409,10 +7521,10 @@ app.post('/api/clean-all-threads', async (req, res) => {
       try {
         const paths = getCurrentUserPaths();
         // Persist threads
-        fs.writeFileSync(paths.EMAIL_THREADS_PATH, JSON.stringify({ threads: updatedThreads }, null, 2));
+        await saveEmailThreadsStore(updatedThreads);
         // Persist responses (preserve original array order)
         const updatedResponses = (responses || []).map(r => responseById.get(r.id) || r);
-        fs.writeFileSync(paths.RESPONSE_EMAILS_PATH, JSON.stringify({ emails: updatedResponses }, null, 2));
+        await saveResponseEmailsStore(updatedResponses);
       } catch (e) {
         console.error('Failed to persist cleaned data:', e);
         return res.status(500).json({ success: false, error: 'Failed to save cleaned results' });
@@ -9576,7 +9688,7 @@ app.post('/api/classifier/suggest', async (req, res) => {
  * POST /api/log-loadmore-contenders
  * body: { emails: [{ id, subject, from, date, suggestedCategories: string[] }] }
  */
-app.post('/api/log-loadmore-contenders', (req, res) => {
+app.post('/api/log-loadmore-contenders', async (req, res) => {
   try {
     const emails = Array.isArray(req.body?.emails) ? req.body.emails : [];
     for (const e of emails) {
@@ -11516,6 +11628,9 @@ app.get('/api/priority-today', async (req, res) => {
 
     // Sort newest first
     dedupedByThread.sort((a, b) => new Date(b.date) - new Date(a.date));
+
+    // Load current categories list for fallback assignment decisions
+    const categoriesX = __getCategoriesList();
 
     // Use the Limited Classifier (same multi-signal pipeline used by the Test Classifier)
     // by calling the existing internal endpoint /api/suggest-categories with stage="all".
