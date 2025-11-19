@@ -719,10 +719,10 @@
             font-size: 12px;
             cursor: pointer;
             transition: all 0.15s ease;
-            background: #dc3545;
+            background: #6c757d;
             color: #fff;
         }
-        .priority-trash-btn:hover { background: #c82333; }
+        .priority-trash-btn:hover { background: #5a6268; }
 
         /* Category editor (inline input + dropdown) */
         .priority-category-editor {
@@ -7110,11 +7110,9 @@ function renderPriorityToday(filterCategory) {
         card.innerHTML = `
             <div class="priority-card-left">
                 <button class="priority-approve-btn-circle" title="Approve to Database">✓</button>
+                <button class="priority-trash-btn" title="Skip">Skip</button>
             </div>
             <div class="priority-card-content">
-                <div class="priority-actions">
-                    <button class="priority-trash-btn" title="Skip">Skip</button>
-                </div>
                 <div class="priority-header">
                     <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px;">
                         <div class="priority-title" style="flex: 1; padding-right: 0;">${escapeHtml(subj)}</div>
