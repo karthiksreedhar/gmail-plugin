@@ -629,6 +629,25 @@
             transform: scale(1);
         }
 
+        /* Open in Gmail button */
+        .open-gmail-btn {
+            display: inline-block;
+            margin-left: 10px;
+            padding: 8px 14px;
+            border-radius: 18px;
+            border: 1px solid #dadce0;
+            background: #f1f3f4;
+            color: #1a73e8;
+            font-size: 14px;
+            line-height: 1.2;
+            text-decoration: none;
+            cursor: pointer;
+            font-weight: 600;
+        }
+        .open-gmail-btn.small { padding: 6px 12px; font-size: 13px; border-radius: 16px; }
+        .open-gmail-btn:hover { background: #e8eaed; }
+        .open-gmail-btn:active { background: #dadce0; }
+
         /* Priority Today (yellow) cards */
         .priority-card {
             border: 1px solid #e9ecef;
@@ -2905,6 +2924,41 @@ window.__categoryChats = window.__categoryChats || {};
             }
         }
 
+        // Build a best-effort Gmail web URL for an email or message-like object
+        function buildGmailWebUrl(data) {
+            try {
+                const d = data || {};
+                // Prefer server-provided webUrl if present
+                if (d.webUrl && /^https?:\/\//i.test(String(d.webUrl))) {
+                    return String(d.webUrl);
+                }
+                const from = String(d.originalFrom || d.from || '').trim();
+                const subject = String(d.subject || '').trim();
+                // Construct a Gmail search link using from and subject if available
+                if (from || subject) {
+                    const qParts = [];
+                    if (from) qParts.push(`from:${from}`);
+                    if (subject) qParts.push(`subject:"${subject}"`);
+                    const q = qParts.join(' ');
+                    return `https://mail.google.com/mail/u/0/#search/${encodeURIComponent(q)}`;
+                }
+                return '';
+            } catch (_) {
+                return '';
+            }
+        }
+        // Return anchor HTML for an "Open in Gmail" button or empty string
+        function gmailLinkHtml(data, size) {
+            try {
+                const url = buildGmailWebUrl(data);
+                if (!url) return '';
+                const cls = size === 'small' ? 'open-gmail-btn small' : 'open-gmail-btn';
+                return `<a href="${url}" class="${cls}" title="Open in Inbox" target="_blank" rel="noopener">Open in Inbox</a>`;
+            } catch (_) {
+                return '';
+            }
+        }
+
         async function loadEmails() {
             const container = document.getElementById('emailContainer');
             container.innerHTML = '<div class="loading">Loading emails...</div>';
@@ -3321,7 +3375,7 @@ const pillsHtml = catNames.map(cat => {
                 emailDiv.innerHTML = `
                     <div class="email-content">
                         <div class="email-header">
-                            <div class="email-from">${originalSender}</div>
+                            <div class="email-from" style="display:flex; align-items:center; gap:8px;">${originalSender} ${gmailLinkHtml(email)}</div>
                             <div class="email-date">${formatDate(email.date)}</div>
                         </div>
                         <div class="email-subject">${email.subject}</div>
@@ -7113,12 +7167,12 @@ function renderPriorityToday(filterCategory) {
                 <button class="priority-trash-btn" title="Skip">Skip</button>
             </div>
             <div class="priority-card-content">
-                <div class="priority-header">
-                    <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px;">
-                        <div class="priority-title" style="flex: 1; padding-right: 0;">${escapeHtml(subj)}</div>
-                        <div style="font-size: 16px; color: #5f6368; white-space: nowrap; font-weight: 500;">${new Date(date).toLocaleString()}</div>
-                    </div>
-                </div>
+                        <div class="priority-header">
+                            <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px;">
+                                <div class="priority-title" style="flex: 1; padding-right: 0;">${escapeHtml(subj)}</div>
+                                <div style="font-size: 16px; color: #5f6368; white-space: nowrap; font-weight: 500; display:flex; align-items:center; gap:8px;">${new Date(date).toLocaleString()} ${gmailLinkHtml(email)}</div>
+                            </div>
+                        </div>
                 <div class="priority-meta">${escapeHtml(from)}</div>
                 <div class="priority-preview">${escapeHtml(previewText)}</div>
                 <div class="priority-category-editor" style="position:relative;">
@@ -8600,7 +8654,7 @@ function renderTodayThreadsList() {
                             </td>
                             <td style="vertical-align: top;">
                                 <div style="font-weight:600; color:#333; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${subj}</div>
-                                <div style="font-size:12px; color:#666; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; margin-top: 2px;">${from} • ${formatDate(date)}</div>
+                                <div style="font-size:12px; color:#666; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; margin-top: 2px;">${from} • ${formatDate(date)} ${gmailLinkHtml({ webUrl: (last && last.webUrl) || '', originalFrom: last ? (last.from || '') : '', from: last ? (last.from || '') : '', subject: t.subject || '' })}</div>
                                 <div style="font-size:12px; color:#777; margin-top:4px; line-height:1.4;">${preview}</div>
                                 <div class="email-category ${categoryClass}" style="display:inline-block; padding:4px 8px; border-radius:12px; font-size:12px; font-weight:500; margin-top:6px; ${catStyle}">
                                     ${catDisplay}
@@ -8681,7 +8735,7 @@ function renderTodayEmailsList(authNeeded) {
                             </td>
                             <td style="vertical-align: top;">
                                 <div style="font-weight:600; color:#333; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${subj}</div>
-                                <div style="font-size:12px; color:#666; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; margin-top: 2px;">${from} • ${formatDate(date)}</div>
+                                <div style="font-size:12px; color:#666; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; margin-top: 2px;">${from} • ${formatDate(date)} ${gmailLinkHtml(e)}</div>
                                 <div style="font-size:12px; color:#777; margin-top:4px; line-height:1.4;">${safePreview}</div>
                                 <div class="email-category ${categoryClass}" style="display:inline-block; padding:4px 8px; border-radius:12px; font-size:12px; font-weight:500; margin-top:6px; ${catStyle}">
                                     ${e._cat || 'Personal & Life Management'}
