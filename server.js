@@ -10807,6 +10807,54 @@ app.post('/api/classifier-v4/suggest-batch', async (req, res) => {
       const rationales = (r.rationales && typeof r.rationales === 'object') ? r.rationales : {};
       const pickRaw = typeof r.pick === 'string' ? r.pick : '';
 
+      // POLICY OVERRIDE: If the classifier suggests a potential "rec letter" category
+      // (ignore case; via contenders or pick), always choose that as the suggestion
+      // even if keyword-based logic would select a different category. Prefer the
+      // classifier rationale when available.
+      const __recRe = /rec\s*letter/i;
+      const __recInLlm = (Array.isArray(llmContenders) && llmContenders.some(c => __recRe.test(String(c)))) || __recRe.test(String(pickRaw || ''));
+      // Map to the authoritative category name in X, if it exists
+      const __recInX = matchToCurrentCategory('Rec Letter', categoriesX) || (categoriesX.find(c => __recRe.test(String(c))) || '');
+      // Rec Letter override: if LLM hints at a recommendation letter, force that category and prefer LLM rationale
+      if (__recInLlm) {
+        const recCat = __recInX || 'Rec Letter';
+        let explanation = '';
+        // Prefer exact rationale for mapped category
+        if (rationales && typeof rationales[recCat] === 'string' && rationales[recCat].trim()) {
+          explanation = rationales[recCat].trim();
+        } else {
+          // Try mapping rationale keys to current categories
+          try {
+            const keys = (rationales && typeof rationales === 'object') ? Object.keys(rationales) : [];
+            for (const k of keys) {
+              const mappedKey = matchToCurrentCategory(k, categoriesX) || k;
+              if (String(mappedKey).toLowerCase() === String(recCat).toLowerCase()) {
+                const val = rationales[k];
+                if (typeof val === 'string' && val.trim()) { explanation = val.trim(); break; }
+              }
+            }
+          } catch (_) {}
+          // Fallback: ask local explainer
+          if (!explanation) {
+            try {
+              const resp = await fetch(`http://localhost:${PORT}/api/explain-category-assignment`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ email: e, category: recCat })
+              });
+              const j = await resp.json().catch(() => ({}));
+              if (j && j.explanation) explanation = String(j.explanation).trim();
+            } catch (_) {}
+          }
+        }
+        out[id] = { contenders: llmContenders, pick: pickRaw || '', rationales, suggestion: recCat, explanation };
+        try {
+          console.log(`[ClassifierV4][LoadMore][RecLetterOverride] "${e.subject || 'No Subject'}" | from=${e.from || 'Unknown Sender'} | suggestion=${recCat}`);
+        } catch (_) {}
+        continue;
+      }
+
+
       // V4: sender-augment contenders
       const senderBest = __v3SenderMajorityFallback(e, categoriesX, perCatRows);
       const contendersUnion = (() => {
