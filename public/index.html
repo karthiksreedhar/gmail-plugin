@@ -7026,13 +7026,13 @@ async function loadPriorityToday() {
                 const classifierTop = (Array.isArray(e?.suggestedCategories) && e.suggestedCategories.length) ? e.suggestedCategories[0] : '';
                 const classifierCategory = classifierTop ? mapToCurrentCategory(classifierTop) : '';
                 
-                // Compare keyword vs classifier
-                const keywordNorm = String(keywordCategory || '').toLowerCase();
-                const classifierNorm = String(classifierCategory || '').toLowerCase();
+                // REC LETTER OVERRIDE: If classifier suggests "Rec letter", always use that regardless of keyword search
+                const recLetterRegex = /rec\s*letter/i;
+                const isRecLetter = recLetterRegex.test(classifierTop || '');
                 
-                if (keywordNorm === classifierNorm) {
-                    // They agree - use classifier justification
-                    e._cat = mapToCurrentCategory(keywordCategory);
+                if (isRecLetter) {
+                    // Force use of classifier's Rec Letter suggestion, bypass keyword comparison
+                    e._cat = mapToCurrentCategory(classifierTop);
                     const sr = e?.suggestedReasons;
                     let reason = '';
                     if (sr && typeof sr === 'object' && !Array.isArray(sr)) {
@@ -7040,11 +7040,29 @@ async function loadPriorityToday() {
                     } else if (Array.isArray(sr) && Array.isArray(e?.suggestedCategories)) {
                         reason = String(sr[0] || '');
                     }
-                    if (reason) e._catReason = reason;
+                    e._catReason = reason || 'Classified as Rec Letter by AI (recommendation letter detected)';
+                    console.log(`[PriorityToday] Rec Letter override applied for "${e.subject}" - bypassed keyword search`);
                 } else {
-                    // They disagree - always use keyword result with simple justification
-                    e._cat = mapToCurrentCategory(keywordCategory);
-                    e._catReason = 'Suggested via keyword search';
+                    // Normal comparison logic for non-rec-letter emails
+                    const keywordNorm = String(keywordCategory || '').toLowerCase();
+                    const classifierNorm = String(classifierCategory || '').toLowerCase();
+                    
+                    if (keywordNorm === classifierNorm) {
+                        // They agree - use classifier justification
+                        e._cat = mapToCurrentCategory(keywordCategory);
+                        const sr = e?.suggestedReasons;
+                        let reason = '';
+                        if (sr && typeof sr === 'object' && !Array.isArray(sr)) {
+                            if (classifierTop && sr[classifierTop]) reason = String(sr[classifierTop]);
+                        } else if (Array.isArray(sr) && Array.isArray(e?.suggestedCategories)) {
+                            reason = String(sr[0] || '');
+                        }
+                        if (reason) e._catReason = reason;
+                    } else {
+                        // They disagree - always use keyword result with simple justification
+                        e._cat = mapToCurrentCategory(keywordCategory);
+                        e._catReason = 'Suggested via keyword search';
+                    }
                 }
             });
         } catch (_) {}

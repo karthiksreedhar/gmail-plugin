@@ -2009,6 +2009,15 @@ function keywordCategorizeUnreplied(subject, body, from) {
     const hayBody = textBody;
     const hayFrom = textFrom;
 
+    // REC LETTER EARLY DETECTION: If subject or body contains "rec letter", immediately return that
+    // This prevents keyword search from overriding LLM suggestions for recommendation letters
+    const recLetterRegex = /rec\s*letter/i;
+    const allText = `${subject || ''} ${body || ''}`;
+    if (recLetterRegex.test(allText)) {
+      console.log(`[KeywordCategorize] Rec Letter detected in text, returning early: "${allText.slice(0, 100)}..."`);
+      return 'Rec Letter';
+    }
+
     const map = getKeywordCategoryMap();
 
     // Build current categories list (authoritative)
@@ -7728,12 +7737,27 @@ Return only JSON: {"category":"<name>"} where <name> is one of: ${categoriesX.jo
           if (m) { try { parsed = JSON.parse(m[0]); } catch {} }
         }
         const rawCat = parsed && typeof parsed.category === 'string' ? parsed.category : 'Other';
+        
+        // REC LETTER OVERRIDE: If LLM suggests "Rec letter", always use that regardless of keyword search
+        const recLetterRegex = /rec\s*letter/i;
+        const isRecLetter = recLetterRegex.test(rawCat);
+        
         let mapped = matchToCurrentCategory(rawCat, categoriesX) || 'Other';
-        // Fallback: if the chooser returned "Other" or an unrecognized label, use keyword mapping as tie-breaker
-        if (mapped === 'Other') {
-          const kw = keywordCategorizeUnreplied(item.subject || '', item.body || '', item.from || '');
-          mapped = matchToCurrentCategory(kw, categoriesX) || 'Other';
+        
+        if (isRecLetter) {
+          // Force use of "Rec letter" category, prefer exact match or create it
+          const recInX = matchToCurrentCategory('Rec Letter', categoriesX) || 
+                        (categoriesX.find(c => recLetterRegex.test(String(c))) || '');
+          mapped = recInX || 'Rec Letter';
+          console.log(`[AI-Enhanced] Rec Letter override applied: "${rawCat}" -> "${mapped}"`);
+        } else {
+          // Fallback: if the chooser returned "Other" or an unrecognized label, use keyword mapping as tie-breaker
+          if (mapped === 'Other') {
+            const kw = keywordCategorizeUnreplied(item.subject || '', item.body || '', item.from || '');
+            mapped = matchToCurrentCategory(kw, categoriesX) || 'Other';
+          }
         }
+        
         assignments[item.id] = mapped;
         if (mapped !== 'Other') reassignedFromOther++;
       } catch {
@@ -8046,7 +8070,21 @@ Return ONLY JSON matching {"category":"<name>"} with the category chosen from th
               if (m) { try { parsed = JSON.parse(m[0]); } catch {} }
             }
             const catRaw = parsed && typeof parsed.category === 'string' ? parsed.category : '';
-            const mapped = __strictMapToCategory(catRaw, categoriesX);
+            
+            // REC LETTER OVERRIDE: If LLM suggests "Rec letter", always use that regardless of strict mapping
+            const recLetterRegex = /rec\s*letter/i;
+            const isRecLetter = recLetterRegex.test(catRaw);
+            
+            let mapped = __strictMapToCategory(catRaw, categoriesX);
+            
+            if (isRecLetter) {
+              // Force use of "Rec letter" category, prefer exact match or create it
+              const recInX = matchToCurrentCategory('Rec Letter', categoriesX) || 
+                            (categoriesX.find(c => recLetterRegex.test(String(c))) || '');
+              mapped = recInX || 'Rec Letter';
+              console.log(`[LimitedClassifier] Rec Letter override applied in chooseCategoryOpenAI: "${catRaw}" -> "${mapped}"`);
+            }
+            
             return { category: mapped || 'Other', raw: catRaw };
           } catch (_) {
             return { category: 'Other', raw: '' };
@@ -8978,7 +9016,20 @@ Return only JSON.`;
               if (m) { try { parsed = JSON.parse(m[0]); } catch {} }
             }
             const catRaw = parsed && typeof parsed.category === 'string' ? parsed.category : 'Other';
-            picked = __strictMapToCategory(catRaw, categoriesX) || 'Other';
+            
+            // REC LETTER OVERRIDE: If LLM suggests "Rec letter", always use that regardless of strict mapping
+            const recLetterRegex = /rec\s*letter/i;
+            const isRecLetter = recLetterRegex.test(catRaw);
+            
+            if (isRecLetter) {
+              // Force use of "Rec letter" category, prefer exact match or create it
+              const recInX = matchToCurrentCategory('Rec Letter', categoriesX) || 
+                            (categoriesX.find(c => recLetterRegex.test(String(c))) || '');
+              picked = recInX || 'Rec Letter';
+              console.log(`[SummaryStage] Rec Letter override applied: "${catRaw}" -> "${picked}"`);
+            } else {
+              picked = __strictMapToCategory(catRaw, categoriesX) || 'Other';
+            }
           } catch (_) {
             // fall back to keyword mapping
             const kw = keywordCategorizeUnreplied(em.subject || '', em.body || em.snippet || '', em.from || '');
@@ -10557,6 +10608,27 @@ Return ONLY strictly valid JSON of the form:
     const resultCount = Object.keys(results).length;
     console.log(`[BatchLabel] Success: returned results for ${resultCount}/${newEmails.length} emails`);
     
+    // POST-PROCESS: Apply Rec Letter override to batch results
+    // This ensures that any "rec letter" suggestions from the LLM are preserved and flagged
+    for (const [emailId, result] of Object.entries(results)) {
+      if (!result || typeof result !== 'object') continue;
+      
+      const contenders = Array.isArray(result.contenders) ? result.contenders : [];
+      const pick = typeof result.pick === 'string' ? result.pick : '';
+      const rationales = result.rationales || {};
+      
+      // Check if LLM suggested rec letter in contenders or pick
+      const recLetterRegex = /rec\s*letter/i;
+      const hasRecInContenders = contenders.some(c => recLetterRegex.test(String(c)));
+      const hasRecInPick = recLetterRegex.test(pick);
+      
+      if (hasRecInContenders || hasRecInPick) {
+        // Mark this result as having rec letter override to bypass downstream keyword logic
+        result._recLetterOverride = true;
+        console.log(`[BatchLabel] Rec Letter override flagged for email ${emailId} (contenders: [${contenders.join(', ')}], pick: "${pick}")`);
+      }
+    }
+    
     if (resultCount === 0 && parsed) {
       console.warn(`[BatchLabel] DIAGNOSTIC: Parsed object exists but no results. Parsed structure:`, JSON.stringify(parsed).slice(0, 1000));
     }
@@ -10806,6 +10878,40 @@ app.post('/api/classifier-v4/suggest-batch', async (req, res) => {
         : [];
       const rationales = (r.rationales && typeof r.rationales === 'object') ? r.rationales : {};
       const pickRaw = typeof r.pick === 'string' ? r.pick : '';
+
+      // POLICY OVERRIDE: Check for rec letter override flag first (set during batch processing)
+      // If flagged, immediately apply rec letter logic and skip all fallback processing
+      if (r._recLetterOverride) {
+        const __recRe = /rec\s*letter/i;
+        let recCat = 'Rec Letter';
+        let recRationale = '';
+        
+        // Find the actual rec letter suggestion from contenders or pick
+        const recInContenders = llmContenders.find(c => __recRe.test(String(c)));
+        const recInPick = __recRe.test(String(pickRaw || '')) ? pickRaw : '';
+        
+        if (recInContenders) {
+          const mapped = matchToCurrentCategory(recInContenders, categoriesX) || (categoriesX.find(c => __recRe.test(String(c))) || recInContenders);
+          recCat = mapped;
+          recRationale = rationales[recInContenders] || `LLM suggested "${recInContenders}" (Rec Letter category)`;
+        } else if (recInPick) {
+          const mapped = matchToCurrentCategory(recInPick, categoriesX) || (categoriesX.find(c => __recRe.test(String(c))) || recInPick);
+          recCat = mapped;
+          recRationale = rationales[recInPick] || `LLM suggested "${recInPick}" (Rec Letter category)`;
+        }
+        
+        out[id] = { 
+          contenders: llmContenders, 
+          pick: pickRaw || '', 
+          rationales, 
+          suggestion: recCat, 
+          explanation: recRationale || `Classified as "${recCat}" based on LLM recommendation letter detection.`
+        };
+        try {
+          console.log(`[ClassifierV4][LoadMore][RecLetterOverrideFlag] "${e.subject || 'No Subject'}" | from=${e.from || 'Unknown Sender'} | suggestion=${recCat} (BYPASSED fallback logic)`);
+        } catch (_) {}
+        continue;
+      }
 
       // POLICY OVERRIDE: If the classifier suggests a potential "rec letter" category
       // (ignore case; via contenders or pick), always choose that as the suggestion
