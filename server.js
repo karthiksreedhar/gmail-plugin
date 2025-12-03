@@ -11682,7 +11682,7 @@ Provide a one or two sentence justification only.`;
 
 /**
  * GET /api/priority-today
- * Returns today's important (is:important) inbox emails as transient candidates (NOT persisted)
+ * Returns important (is:important) inbox emails since the most recent email in the database (NOT persisted)
  * Shape: { success: true, emails: [{ id, subject, from, date, threadId, body, snippet, category, webUrl }] }
  * - Deduped by thread and filtered against existing DB entries (responses/threads/unreplied)
  * - Categories assigned using keywordCategorizeUnreplied (mirrors Seed Categories keyword search)
@@ -11710,19 +11710,79 @@ app.get('/api/priority-today', async (req, res) => {
       });
     }
 
-    // Build Gmail query for "today" in local timezone with is:important OR in:priority for maximum coverage
-    const now = new Date();
-    const startBase = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    const tomorrow = new Date(startBase.getTime() + 24 * 60 * 60 * 1000);
+    // Find the most recent email in the database across all collections
+    const responses = loadResponseEmails() || [];
+    const threads = loadEmailThreads() || [];
+    const unreplied = loadUnrepliedEmails() || [];
+    
+    let latestEmail = null;
+    let latestDate = null;
+    
+    // Check response emails
+    for (const email of responses) {
+      if (email && email.date) {
+        const emailDate = new Date(email.date);
+        if (!latestDate || emailDate > latestDate) {
+          latestDate = emailDate;
+          latestEmail = { date: email.date, subject: email.subject || 'No Subject', source: 'responses' };
+        }
+      }
+    }
+    
+    // Check email threads
+    for (const thread of threads) {
+      if (thread && thread.date) {
+        const threadDate = new Date(thread.date);
+        if (!latestDate || threadDate > latestDate) {
+          latestDate = threadDate;
+          latestEmail = { date: thread.date, subject: thread.subject || 'No Subject', source: 'threads' };
+        }
+      }
+    }
+    
+    // Check unreplied emails
+    for (const email of unreplied) {
+      if (email && email.date) {
+        const emailDate = new Date(email.date);
+        if (!latestDate || emailDate > latestDate) {
+          latestDate = emailDate;
+          latestEmail = { date: email.date, subject: email.subject || 'No Subject', source: 'unreplied' };
+        }
+      }
+    }
+    
+    // Format date for display and Gmail query
     const formatDateForGmail = (d) => {
       const y = d.getFullYear();
       const m = String(d.getMonth() + 1).padStart(2, '0');
       const day = String(d.getDate()).padStart(2, '0');
       return `${y}/${m}/${day}`;
     };
-    const after = formatDateForGmail(startBase);
-    const before = formatDateForGmail(tomorrow);
-    const searchQuery = `in:inbox (is:important OR in:priority) after:${after} before:${before}`;
+    
+    let searchQuery;
+    if (latestEmail && latestDate) {
+      // Log the retrieval message
+      const latestDateStr = latestDate.toLocaleString('en-US', { 
+        month: 'numeric', 
+        day: 'numeric', 
+        year: 'numeric', 
+        hour: 'numeric', 
+        minute: '2-digit', 
+        hour12: true 
+      });
+      console.log(`\nRetrieving all emails since ${latestDateStr}, subject: "${latestEmail.subject}"`);
+      
+      // Use the date of the latest email as the starting point
+      const after = formatDateForGmail(latestDate);
+      searchQuery = `in:inbox (is:important OR in:priority) after:${after}`;
+    } else {
+      // Fallback: if no emails in database, use today
+      console.log('\nNo emails found in database. Retrieving all emails from today.');
+      const now = new Date();
+      const startBase = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      const after = formatDateForGmail(startBase);
+      searchQuery = `in:inbox (is:important OR in:priority) after:${after}`;
+    }
 
     // Load existing unreplied to avoid exact duplicate message IDs only.
     // IMPORTANT: For Priority Today, do NOT exclude items merely because their thread or subject/from
@@ -11735,7 +11795,7 @@ app.get('/api/priority-today', async (req, res) => {
     const toPairKey = (subj, from) => `${String(subj || '').toLowerCase().replace(/^re:\s*/i,'').trim()}|${String(from || '').toLowerCase()}`;
 
     // Search Gmail and expand into email objects
-    const emailMessages = await searchGmailEmails(searchQuery, 200);
+    const emailMessages = await searchGmailEmails(searchQuery, 500);
     const uniqueEmails = [];
 
     for (const message of emailMessages) {
