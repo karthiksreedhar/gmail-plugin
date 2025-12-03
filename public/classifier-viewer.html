@@ -1,0 +1,519 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Email Classifier - Real-Time Results</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Google Sans', 'Roboto', Arial, sans-serif;
+            background-color: #ffffff;
+            color: #202124;
+            margin: 0;
+            padding: 0;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        .gmail-container {
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .header {
+            background: #d2b48c;
+            border-bottom: 1px solid #e0e0e0;
+            padding: 16px 24px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+
+        .header h1 {
+            font-size: 2.2em;
+            font-weight: 500;
+            color: #000000;
+            margin: 0;
+        }
+
+        .progress-bar {
+            background: rgba(0,0,0,0.1);
+            height: 8px;
+            border-radius: 4px;
+            margin-top: 15px;
+            overflow: hidden;
+            max-width: 600px;
+            margin-left: auto;
+            margin-right: auto;
+        }
+
+        .progress-fill {
+            background: #667eea;
+            height: 100%;
+            width: 0%;
+            transition: width 0.3s ease;
+        }
+
+        .main-content {
+            display: flex;
+            flex: 1;
+            overflow: hidden;
+        }
+
+        .sidebar {
+            width: 300px;
+            background: #f5f0e8;
+            border-right: 1px solid #e0e0e0;
+            padding: 20px;
+            overflow-y: auto;
+        }
+
+        .stat {
+            text-align: center;
+            margin-bottom: 20px;
+        }
+
+        .stat-value {
+            font-size: 32px;
+            font-weight: bold;
+            color: #667eea;
+        }
+
+        .stat-label {
+            font-size: 14px;
+            color: #6c757d;
+            margin-top: 5px;
+        }
+
+        .content-area {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .stats-bar {
+            background: #ffffff;
+            border-bottom: 1px solid #e0e0e0;
+            padding: 20px 24px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .stats-info {
+            font-size: 22px;
+            color: #5f6368;
+        }
+
+        .email-list {
+            flex: 1;
+            background: #ffffff;
+            overflow-y: auto;
+        }
+
+        .email-item {
+            border-bottom: 1px solid #e0e0e0;
+            padding: 24px 28px;
+            cursor: pointer;
+            transition: background-color 0.1s;
+            display: flex;
+            align-items: center;
+            animation: slideIn 0.3s ease;
+        }
+
+        @keyframes slideIn {
+            from {
+                opacity: 0;
+                transform: translateY(-10px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .email-item:hover {
+            background-color: #f1f3f4;
+        }
+
+        .email-content {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .email-header {
+            display: flex;
+            align-items: center;
+            margin-bottom: 4px;
+        }
+
+        .email-from {
+            font-size: 22px;
+            font-weight: 400;
+            color: #202124;
+            margin-right: 8px;
+            white-space: nowrap;
+            flex: 1;
+        }
+
+        .email-date {
+            font-size: 20px;
+            color: #5f6368;
+            margin-left: auto;
+            white-space: nowrap;
+        }
+
+        .email-subject {
+            font-size: 22px;
+            color: #202124;
+            margin-bottom: 6px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            font-weight: 400;
+        }
+
+        .email-meta-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            margin-top: 6px;
+        }
+
+        .email-category {
+            display: inline-block;
+            padding: 6px 14px;
+            border-radius: 14px;
+            font-size: 16px;
+            font-weight: 500;
+            text-transform: uppercase;
+        }
+
+        .email-explanation {
+            color: #495057;
+            font-size: 13px;
+            line-height: 1.5;
+            padding: 8px 12px;
+            background: #f8f9fa;
+            border-left: 3px solid #667eea;
+            border-radius: 4px;
+            margin-top: 8px;
+        }
+
+        .thread-view {
+            flex: 1;
+            background: #ffffff;
+            overflow-y: auto;
+            border-left: 1px solid #e0e0e0;
+            display: none;
+        }
+
+        .thread-header {
+            position: sticky;
+            top: 0;
+            background: #ffffff;
+            border-bottom: 1px solid #e0e0e0;
+            padding: 20px 24px;
+            z-index: 10;
+        }
+
+        .back-btn {
+            background: #f1f3f4;
+            color: #202124;
+            border: 1px solid #dadce0;
+            padding: 8px 16px;
+            border-radius: 20px;
+            cursor: pointer;
+            font-size: 14px;
+            border: none;
+            margin-bottom: 12px;
+        }
+
+        .back-btn:hover {
+            background: #e8eaed;
+        }
+
+        .thread-title {
+            font-size: 24px;
+            font-weight: 600;
+            color: #202124;
+            margin-bottom: 8px;
+        }
+
+        .thread-meta {
+            font-size: 16px;
+            color: #5f6368;
+            margin-bottom: 16px;
+        }
+
+        .thread-body {
+            padding: 0 24px 40px 24px;
+        }
+
+        .detail-section {
+            background: #f8f9fa;
+            border: 1px solid #e9ecef;
+            border-radius: 8px;
+            padding: 16px;
+            margin-bottom: 16px;
+        }
+
+        .detail-label {
+            font-weight: 600;
+            color: #5f6368;
+            font-size: 14px;
+            margin-bottom: 8px;
+        }
+
+        .detail-value {
+            color: #202124;
+            font-size: 16px;
+            line-height: 1.6;
+            white-space: pre-wrap;
+        }
+
+        .status-message {
+            text-align: center;
+            padding: 40px;
+            color: #6c757d;
+        }
+
+        .spinner {
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #667eea;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 20px auto;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .complete-message {
+            text-align: center;
+            padding: 30px;
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+            border-radius: 8px;
+            margin: 20px 24px;
+            font-weight: 500;
+        }
+    </style>
+</head>
+<body>
+    <div class="gmail-container">
+        <div class="header">
+            <div style="flex: 1; text-align: center;">
+                <h1>Classifier</h1>
+                <p id="user-info" style="color: #000; margin-top: 8px;">Loading...</p>
+                <div class="progress-bar">
+                    <div class="progress-fill" id="progress-fill"></div>
+                </div>
+            </div>
+        </div>
+
+        <div class="main-content">
+            <!-- Left Sidebar -->
+            <div class="sidebar">
+                <div class="stat">
+                    <div class="stat-value" id="processed-count">0</div>
+                    <div class="stat-label">Processed</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-value" id="total-count">0</div>
+                    <div class="stat-label">Total</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-value" id="batch-count">0</div>
+                    <div class="stat-label">Current Batch</div>
+                </div>
+            </div>
+
+            <!-- Middle: Email List and Detail View -->
+            <div class="content-area">
+                <div id="complete-banner" style="display: none;"></div>
+
+                <div class="email-list" id="email-list">
+                    <div class="status-message">
+                        <div class="spinner"></div>
+                        <p>Connecting to classifier...</p>
+                    </div>
+                </div>
+
+                <!-- Detail View (replaces email list when shown) -->
+                <div class="thread-view" id="detail-view">
+                    <!-- Email details will be shown here -->
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let processedCount = 0;
+        let totalCount = 0;
+        let currentBatch = 0;
+        const emailList = document.getElementById('email-list');
+        let allEmails = [];
+
+        // Connect to Server-Sent Events stream
+        const eventSource = new EventSource('/classifier-stream');
+
+        eventSource.addEventListener('init', (e) => {
+            const data = JSON.parse(e.data);
+            totalCount = data.total;
+            document.getElementById('total-count').textContent = totalCount;
+            document.getElementById('user-info').textContent = `User: ${data.user}`;
+            emailList.innerHTML = ''; // Clear loading message
+        });
+
+        eventSource.addEventListener('batch-start', (e) => {
+            const data = JSON.parse(e.data);
+            currentBatch = data.batchNum;
+            document.getElementById('batch-count').textContent = `${data.batchNum}/${data.totalBatches}`;
+        });
+
+        eventSource.addEventListener('email', (e) => {
+            const data = JSON.parse(e.data);
+            processedCount++;
+            
+            // Store email data
+            allEmails.unshift(data);
+            
+            // Update stats
+            document.getElementById('processed-count').textContent = processedCount;
+            const progress = (processedCount / totalCount) * 100;
+            document.getElementById('progress-fill').style.width = progress + '%';
+
+            // Create email item (matching index.html format)
+            const emailItem = document.createElement('div');
+            emailItem.className = 'email-item';
+            emailItem.onclick = () => showEmailDetail(data);
+
+            const categoryStyle = getCategoryBadgeStyle(data.category);
+            const categoryClass = `category-${data.category.toLowerCase().replace(/\s+/g, '-')}`;
+            
+            emailItem.innerHTML = `
+                <div class="email-content">
+                    <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 6px;">
+                        <div class="email-subject" style="font-weight: 600;">${escapeHtml(data.subject)}</div>
+                        <div class="email-date">${formatDate(data.date)}</div>
+                    </div>
+                    <div class="email-from" style="font-size: 16px; color: #5f6368; margin-bottom: 10px;">${escapeHtml(data.from)}</div>
+                    <div style="display: flex; align-items: center; gap: 12px;">
+                        <div class="email-category ${categoryClass}" style="${categoryStyle}">
+                            ${escapeHtml(data.category)}
+                        </div>
+                        ${data.explanation ? `<div style="color: #495057; font-size: 13px; flex: 1;">${escapeHtml(data.explanation)}</div>` : ''}
+                    </div>
+                </div>
+            `;
+
+            // Insert at top of list
+            emailList.insertBefore(emailItem, emailList.firstChild);
+        });
+
+        eventSource.addEventListener('complete', (e) => {
+            const data = JSON.parse(e.data);
+            const banner = document.getElementById('complete-banner');
+            banner.style.display = 'block';
+            banner.className = 'complete-message';
+            banner.textContent = `✓ Classification complete! ${data.total} emails processed in ${data.time}s. Results saved to ${data.outputFile}`;
+            eventSource.close();
+        });
+
+        eventSource.addEventListener('error', (e) => {
+            console.error('EventSource error:', e);
+            emailList.innerHTML = '<div class="status-message"><p style="color: #dc3545;">Connection lost. Please refresh the page.</p></div>';
+        });
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        function formatDate(dateString) {
+            const date = new Date(dateString);
+            const now = new Date();
+            const diffTime = Math.abs(now - date);
+            const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+            
+            if (diffDays === 1) return 'Yesterday';
+            if (diffDays < 7) return `${diffDays} days ago`;
+            return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+        }
+
+        function getCategoryBadgeStyle(category) {
+            const colors = getCategoryColors(category);
+            return `background: ${colors.bg}; color: ${colors.fg};`;
+        }
+
+        function hashString(str) {
+            let h = 0;
+            for (let i = 0; i < str.length; i++) {
+                h = ((h << 5) - h) + str.charCodeAt(i);
+                h |= 0;
+            }
+            return Math.abs(h);
+        }
+
+        function getCategoryColors(category) {
+            const name = String(category || 'Uncategorized');
+            const h = hashString(name) % 360;
+            const s = 70;
+            const l = 88;
+            const bg = `hsl(${h}, ${s}%, ${l}%)`;
+            const fg = `hsl(${h}, 45%, 25%)`;
+            return { bg, fg };
+        }
+
+        function showEmailDetail(email) {
+            const listPane = document.querySelector('.email-list');
+            const detailPane = document.getElementById('detail-view');
+
+            // Hide list, show detail
+            if (listPane) listPane.style.display = 'none';
+            if (detailPane) detailPane.style.display = 'block';
+
+            detailPane.innerHTML = `
+                <div class="thread-header">
+                    <button class="back-btn" onclick="backToList()">← Back to List</button>
+                    <div class="thread-title">${escapeHtml(email.subject)}</div>
+                    <div class="thread-meta">
+                        From: ${escapeHtml(email.from)} • ${new Date(email.date).toLocaleString()}
+                    </div>
+                </div>
+                <div class="thread-body">
+                    <div class="detail-section">
+                        <div class="detail-value">${escapeHtml(email.body || 'No content available')}</div>
+                    </div>
+                </div>
+            `;
+        }
+
+        function backToList() {
+            const listPane = document.querySelector('.email-list');
+            const detailPane = document.getElementById('detail-view');
+
+            if (listPane) listPane.style.display = 'block';
+            if (detailPane) detailPane.style.display = 'none';
+        }
+    </script>
+</body>
+</html>

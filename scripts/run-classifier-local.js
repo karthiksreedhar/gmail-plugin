@@ -10,10 +10,15 @@
 const fs = require('fs');
 const path = require('path');
 const OpenAI = require('openai');
+const express = require('express');
+const { exec } = require('child_process');
 require('dotenv').config();
 
 // Load MongoDB helper
 const { initMongo, getUserDoc } = require('../db');
+
+// SSE clients for streaming results
+let sseClients = [];
 
 // Configuration
 const CURRENT_USER_EMAIL = process.env.CURRENT_USER_EMAIL || 'ks4190@columbia.edu';
@@ -416,9 +421,73 @@ function keywordFallback(email, categories) {
 }
 
 /**
+ * Send SSE message to all connected clients
+ */
+function sendSSE(event, data) {
+  const message = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+  sseClients.forEach(client => {
+    try {
+      client.write(message);
+    } catch (e) {
+      // Client disconnected, will be cleaned up
+    }
+  });
+}
+
+/**
+ * Start HTTP server for real-time viewer
+ */
+function startServer(port = 3500) {
+  return new Promise((resolve) => {
+    const app = express();
+    
+    // Serve static files from public directory
+    app.use(express.static(path.join(__dirname, '..', 'public')));
+
+    // SSE endpoint for streaming classification results
+    app.get('/classifier-stream', (req, res) => {
+      res.setHeader('Content-Type', 'text/event-stream');
+      res.setHeader('Cache-Control', 'no-cache');
+      res.setHeader('Connection', 'keep-alive');
+      
+      sseClients.push(res);
+      console.log('  Client connected to stream');
+
+      req.on('close', () => {
+        sseClients = sseClients.filter(client => client !== res);
+        console.log('  Client disconnected from stream');
+      });
+    });
+
+    const server = app.listen(port, () => {
+      console.log(`✓ Real-time viewer available at http://localhost:${port}/classifier-viewer.html`);
+      resolve(server);
+    });
+  });
+}
+
+/**
+ * Open browser to viewer page
+ */
+function openBrowser(url) {
+  const platform = process.platform;
+  const command = platform === 'darwin' ? 'open' : platform === 'win32' ? 'start' : 'xdg-open';
+  exec(`${command} ${url}`, (error) => {
+    if (error) {
+      console.warn(`Could not auto-open browser: ${error.message}`);
+      console.log(`Please manually open: ${url}`);
+    } else {
+      console.log(`✓ Opened browser to ${url}`);
+    }
+  });
+}
+
+/**
  * Main classifier function
  */
 async function classifyEmails() {
+  let server = null;
+  
   try {
     console.log('='.repeat(60));
     console.log('Run Classifier Local Script (V4)');
@@ -435,13 +504,22 @@ async function classifyEmails() {
       throw new Error('OPENAI_API_KEY not found in .env file');
     }
 
+    // Start HTTP server for real-time viewer
+    console.log('Step 1: Starting real-time viewer server...');
+    server = await startServer(3500);
+    
+    // Open browser after a short delay to ensure server is ready
+    setTimeout(() => {
+      openBrowser('http://localhost:3500/classifier-viewer.html');
+    }, 1000);
+
     // Initialize MongoDB
-    console.log('Step 1: Connecting to MongoDB...');
+    console.log('\nStep 2: Connecting to MongoDB...');
     await initMongo();
     console.log('✓ MongoDB connected');
 
     // Load input emails
-    console.log('\nStep 2: Loading input emails...');
+    console.log('\nStep 3: Loading input emails...');
     if (!fs.existsSync(INPUT_FILE)) {
       throw new Error(`Input file not found: ${INPUT_FILE}`);
     }
@@ -449,8 +527,14 @@ async function classifyEmails() {
     const emails = inputData.emails || [];
     console.log(`✓ Loaded ${emails.length} emails from ${INPUT_FILE}`);
 
+    // Send init event to clients
+    sendSSE('init', { 
+      total: emails.length, 
+      user: CURRENT_USER_EMAIL 
+    });
+
     // Load training data and metadata
-    console.log('\nStep 3: Loading training data and categories...');
+    console.log('\nStep 4: Loading training data and categories...');
     const categoriesX = await loadCategoriesList();
     const responses = await loadResponseEmails();
     const summaries = await loadCategorySummaries();
@@ -459,7 +543,7 @@ async function classifyEmails() {
     console.log(`✓ Training data loaded (${responses.length} examples)`);
 
     // Process in batches and output results immediately
-    console.log('\nStep 4: Running V4 classifier and outputting results...');
+    console.log('\nStep 5: Running V4 classifier and outputting results...');
     const totalBatches = Math.ceil(emails.length / BATCH_SIZE);
     console.log(`Processing ${emails.length} emails in ${totalBatches} batches\n`);
     
@@ -470,6 +554,9 @@ async function classifyEmails() {
       const batchNum = Math.floor(i / BATCH_SIZE) + 1;
       const batch = emails.slice(i, i + BATCH_SIZE);
       console.log(`Batch ${batchNum}/${totalBatches} (${batch.length} emails)...`);
+      
+      // Send batch-start event to clients
+      sendSSE('batch-start', { batchNum, totalBatches, count: batch.length });
       
       const r = await openAIBatchLabel(
         batch.map(e => ({ id: e.id, subject: e.subject, body: e.body, from: e.from })),
@@ -490,6 +577,7 @@ async function classifyEmails() {
           ? result.contenders.filter(c => c && normalizeKey(c) !== 'other')
           : [];
         const pickRaw = typeof result.pick === 'string' ? result.pick : '';
+        const rationales = (result.rationales && typeof result.rationales === 'object') ? result.rationales : {};
 
         // V4 decision: sender-augment contenders
         const senderBest = senderMajorityFallback(e, categoriesX, perCatRows);
@@ -513,23 +601,32 @@ async function classifyEmails() {
         })();
 
         let suggestion = '';
+        let explanation = '';
+        
         if (contendersUnion.length > 0) {
           const mappedPick = pickRaw ? (matchToCurrentCategory(pickRaw, categoriesX) || '') : '';
           const unionKeys = new Set(contendersUnion.map(c => normalizeKey(c)));
           if (mappedPick && unionKeys.has(normalizeKey(mappedPick))) {
             suggestion = mappedPick;
+            explanation = rationales[suggestion] || rationales[pickRaw] || 'LLM best-of from sender-augmented contenders';
           } else if (senderBest && unionKeys.has(normalizeKey(senderBest))) {
             suggestion = matchToCurrentCategory(senderBest, categoriesX) || senderBest;
+            explanation = 'Sender augmentation: highest co-occurrence in training';
           } else {
             suggestion = contendersUnion[0] || '';
+            explanation = rationales[suggestion] || 'Augmented contenders; defaulted to first';
           }
         } else {
           // No contenders - use keyword fallback
           const kw = keywordFallback(e, categoriesX);
           if (kw && normalizeKey(kw) !== 'other') {
             suggestion = matchToCurrentCategory(kw, categoriesX) || kw;
+            const subjCount = countOccurrencesInsensitive(e.subject || '', suggestion);
+            const bodyCount = countOccurrencesInsensitive(e.body || '', suggestion);
+            explanation = `Keyword fallback: subject x${subjCount}, body x${bodyCount}`;
           } else {
             suggestion = categoriesX.find(c => normalizeKey(c) === 'other') || 'Other';
+            explanation = 'No confident category match found (uncertain email)';
           }
         }
 
@@ -537,6 +634,18 @@ async function classifyEmails() {
         const outputLine = `${suggestion} | ${subject}`;
         outputLines.push(outputLine);
         console.log(outputLine);
+        
+        // Send email event to clients (include full body for detail view)
+        sendSSE('email', {
+          id: e.id,
+          subject: e.subject || 'No Subject',
+          from: e.from || 'Unknown Sender',
+          date: e.date || new Date().toISOString(),
+          category: suggestion,
+          explanation: explanation,
+          body: e.body || 'No content available',
+          snippet: e.snippet || (e.body ? String(e.body).slice(0, 200) : '')
+        });
       }
       
       console.log(`✓ Batch ${batchNum}/${totalBatches} completed\n`);
@@ -551,6 +660,13 @@ async function classifyEmails() {
     fs.writeFileSync(OUTPUT_FILE, outputLines.join('\n'));
     console.log(`✓ Saved results to: ${OUTPUT_FILE}`);
 
+    // Send completion event to clients
+    sendSSE('complete', {
+      total: outputLines.length,
+      time: totalTime,
+      outputFile: OUTPUT_FILE
+    });
+
     // Summary
     console.log('\n' + '='.repeat(60));
     console.log('SUMMARY');
@@ -559,10 +675,23 @@ async function classifyEmails() {
     console.log(`Output file: ${OUTPUT_FILE}`);
     console.log(`Total time: ${totalTime}s`);
     console.log('='.repeat(60));
+    console.log('\nReal-time viewer still running at http://localhost:3500/classifier-viewer.html');
+    console.log('Press Ctrl+C to exit and close the server');
+
+    // Keep server running so user can review results
+    // Don't exit automatically
 
   } catch (error) {
     console.error('\n✗ Script failed:', error.message);
     console.error(error.stack);
+    
+    // Send error to clients
+    sendSSE('error', { message: error.message });
+    
+    // Close server and exit
+    if (server) {
+      server.close();
+    }
     process.exit(1);
   }
 }
@@ -571,8 +700,7 @@ async function classifyEmails() {
 if (require.main === module) {
   classifyEmails()
     .then(() => {
-      console.log('\n✓ Script completed successfully');
-      process.exit(0);
+      // Don't exit - keep server running for user to review results
     })
     .catch(error => {
       console.error('\n✗ Script failed:', error.message);
