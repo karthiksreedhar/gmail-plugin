@@ -7004,6 +7004,17 @@ async function loadPriorityToday() {
         try {
             const list = Array.isArray(priorityTodayEmails) ? priorityTodayEmails : [];
             list.forEach(e => {
+                // DEBUG: Log the raw email data to see what we're actually receiving
+                if (e && e.subject && e.subject.includes('Con Edison')) {
+                    console.log('[DEBUG ConEdison] Raw email data:', JSON.stringify({
+                        id: e.id,
+                        subject: e.subject,
+                        category: e.category,
+                        suggestedCategories: e.suggestedCategories,
+                        suggestedReasons: e.suggestedReasons
+                    }, null, 2));
+                }
+                
                 // Stage 1: Keyword search - check if any category name appears in subject/body/sender
                 let keywordCategory = 'Other';
                 const searchText = [
@@ -7045,24 +7056,22 @@ async function loadPriorityToday() {
                 } else {
                     // Normal comparison logic for non-rec-letter emails
                     const keywordNorm = String(keywordCategory || '').toLowerCase();
-                    const classifierNorm = String(classifierCategory || '').toLowerCase();
                     
-                    if (keywordNorm === classifierNorm) {
-                        // They agree - use classifier justification
-                        e._cat = mapToCurrentCategory(keywordCategory);
-                        const sr = e?.suggestedReasons;
-                        let reason = '';
-                        if (sr && typeof sr === 'object' && !Array.isArray(sr)) {
-                            if (classifierTop && sr[classifierTop]) reason = String(sr[classifierTop]);
-                        } else if (Array.isArray(sr) && Array.isArray(e?.suggestedCategories)) {
-                            reason = String(sr[0] || '');
-                        }
-                        if (reason) e._catReason = reason;
-                    } else {
-                        // They disagree - always use keyword result with simple justification
-                        e._cat = mapToCurrentCategory(keywordCategory);
-                        e._catReason = 'Suggested via keyword search';
+                    // Extract classifier reason and category directly
+                    const sr = e?.suggestedReasons;
+                    let reason = '';
+                    if (sr && typeof sr === 'object' && !Array.isArray(sr)) {
+                        if (classifierTop && sr[classifierTop]) reason = String(sr[classifierTop]);
+                    } else if (Array.isArray(sr) && Array.isArray(e?.suggestedCategories)) {
+                        reason = String(sr[0] || '');
                     }
+                    
+                    // Use classifier category directly without mapping to preserve new category names
+                    const finalCat = classifierTop || classifierCategory || keywordCategory || 'Other';
+                    e._cat = finalCat;
+                    e._catReason = reason || (classifierTop ? 'Suggested by classifier' : 'Suggested via keyword search');
+                    
+                    console.log(`[PriorityToday] Processed "${e.subject}": _cat="${e._cat}", _catReason="${e._catReason}"`);
                 }
             });
         } catch (_) {}
@@ -7173,10 +7182,14 @@ function renderPriorityToday(filterCategory) {
         const from = String(email.from || 'Unknown Sender');
         const subj = String(email.subject || 'No Subject');
         const date = String(email.date || '');
-        const previewText = (typeof email.body === 'string' ? email.body : (email.snippet || ''))
+        
+        // Strip HTML tags from body to prevent style injection and layout issues
+        const rawBody = (typeof email.body === 'string' ? email.body : (email.snippet || ''));
+        const cleanBody = rawBody.replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' ');
+        const previewText = cleanBody
                             .replace(/\s+/g, ' ')
                             .trim()
-                            .slice(0, 200) + ((email.body && email.body.length > 200) ? '…' : '');
+                            .slice(0, 200) + ((cleanBody && cleanBody.length > 200) ? '…' : '');
 
         const initialCat = email._cat || email.category || 'Other';
 
