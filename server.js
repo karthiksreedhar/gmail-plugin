@@ -10715,8 +10715,8 @@ app.post('/api/classifier-v3/suggest-batch', async (req, res) => {
       ? Object.fromEntries(guidelinesPayload.categories.map(c => [c.name, c.notes || '']))
       : {};
 
-    // Dynamic batch size: at most 7 batches, or 1 email per batch if fewer than 7 emails
-    const BATCH = input.length < 7 ? 1 : Math.ceil(input.length / 7);
+    // Dynamic batch size: at most 50 batches, or 1 email per batch if fewer than 50 emails
+    const BATCH = input.length < 50 ? 1 : Math.ceil(input.length / 50);
     const totalBatches = Math.ceil(input.length / BATCH);
     
     console.log(`[ClassifierV3] Processing ${input.length} emails in ${totalBatches} batches (batch size: ${BATCH})`);
@@ -10841,8 +10841,8 @@ app.post('/api/classifier-v4/suggest-batch', async (req, res) => {
       ? Object.fromEntries(guidelinesPayload.categories.map(c => [c.name, c.notes || '']))
       : {};
 
-    // Dynamic batch size: at most 7 batches, or 1 email per batch if fewer than 7 emails
-    const BATCH = input.length < 7 ? 1 : Math.ceil(input.length / 7);
+    // Dynamic batch size: at most 50 batches, or 1 email per batch if fewer than 50 emails
+    const BATCH = input.length < 50 ? 1 : Math.ceil(input.length / 50);
     const totalBatches = Math.ceil(input.length / BATCH);
     
     console.log(`[ClassifierV4] Processing ${input.length} emails in ${totalBatches} batches (batch size: ${BATCH})`);
@@ -11141,8 +11141,8 @@ app.post('/api/test-classifier/run-v4', async (req, res) => {
       ? Object.fromEntries(guidelinesPayload.categories.map(c => [c.name, c.notes || '']))
       : {};
 
-    // Dynamic batch size: at most 7 batches, or 1 email per batch if fewer than 7 emails
-    const BATCH = test.length < 7 ? 1 : Math.ceil(test.length / 7);
+    // Dynamic batch size: at most 50 batches, or 1 email per batch if fewer than 50 emails
+    const BATCH = test.length < 50 ? 1 : Math.ceil(test.length / 50);
     const totalBatches = Math.ceil(test.length / BATCH);
     
     console.log('\n=== Evaluate Classifier V4 (batched) — UI request ===');
@@ -11381,8 +11381,8 @@ app.post('/api/test-classifier/run-v3', async (req, res) => {
       ? Object.fromEntries(guidelinesPayload.categories.map(c => [c.name, c.notes || '']))
       : {};
 
-    // Dynamic batch size: at most 7 batches, or 1 email per batch if fewer than 7 emails
-    const BATCH = test.length < 7 ? 1 : Math.ceil(test.length / 7);
+    // Dynamic batch size: at most 50 batches, or 1 email per batch if fewer than 50 emails
+    const BATCH = test.length < 50 ? 1 : Math.ceil(test.length / 50);
     const totalBatches = Math.ceil(test.length / BATCH);
     
     console.log('\n=== Evaluate Classifier V3 (batched) — UI request ===');
