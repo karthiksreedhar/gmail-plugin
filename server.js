@@ -53,9 +53,24 @@ function getDisplayNameForUser(email) {
   }
 }
 
+/**
+ * Normalize user email to the corresponding data directory (handles known aliases/typos)
+ * Example: "lc3521@columbia.edu" -> "lc3251@columbia.edu"
+ */
+function normalizeUserEmailForData(email) {
+  try {
+    const e = String(email || '').toLowerCase().trim();
+    if (e === 'lc3521@columbia.edu') return 'lc3251@columbia.edu';
+    return email;
+  } catch {
+    return email;
+  }
+}
+
 // Function to get user-specific paths
 function getUserPaths(userEmail = CURRENT_USER_EMAIL) {
-  const USER_DATA_DIR = path.join(__dirname, 'data', userEmail);
+  const effectiveEmail = normalizeUserEmailForData(userEmail);
+  const USER_DATA_DIR = path.join(__dirname, 'data', effectiveEmail);
   return {
     USER_DATA_DIR,
     DATA_FILE_PATH: path.join(USER_DATA_DIR, 'scenarios.json'),
@@ -2359,16 +2374,17 @@ app.post('/api/switch-user', async (req, res) => {
       return res.status(400).json({ error: 'Invalid user email' });
     }
     
-    // Check if user directory exists
-    const userDataDir = path.join(__dirname, 'data', userEmail);
+    // Check if user directory exists (support aliases/typos via normalization)
+    const userDataDir = path.join(__dirname, 'data', normalizeUserEmailForData(userEmail));
     if (!fs.existsSync(userDataDir)) {
       return res.status(404).json({ error: 'User not found' });
     }
     
-    // Switch current user
-    CURRENT_USER_EMAIL = userEmail;
-    // Reset sending email to match current user (can be changed later if needed)
-    SENDING_EMAIL = userEmail;
+    // Switch current user (normalize aliases/typos to backing data dir)
+    const effective = normalizeUserEmailForData(userEmail);
+    CURRENT_USER_EMAIL = effective;
+    // Reset sending email to match current (effective) user (can be changed later if needed)
+    SENDING_EMAIL = effective;
 
     // Warm Mongo cache for new user to support synchronous loaders
     await warmCacheForUser(CURRENT_USER_EMAIL);
@@ -2378,7 +2394,7 @@ app.post('/api/switch-user', async (req, res) => {
     gmail = null;
     
     // Load new user's data
-    const newPersistentData = loadDataFromFile();
+    const newPersistentData = await loadDataFromFile();
     emailMemory = {
       categories: [],
       responses: [],
@@ -2391,12 +2407,27 @@ app.post('/api/switch-user', async (req, res) => {
     const gmailInitialized = await initializeGmailAPI();
     
     console.log(`Switched to user: ${userEmail}`);
+
+    // Auto-load 50 priority emails (from local priority-emails-5000.json if present)
+    // so the lightweight UI can render immediately after switching users.
+    let priorityEmails = [];
+    try {
+      const resp = await fetch(`http://localhost:${PORT}/api/priority-today`);
+      if (resp.ok) {
+        const data = await resp.json().catch(() => ({}));
+        priorityEmails = Array.isArray(data.emails) ? data.emails : [];
+      }
+    } catch (_) {
+      // ignore, keep priorityEmails as empty array
+    }
+
     res.json({ 
       success: true, 
       currentUser: CURRENT_USER_EMAIL,
       displayName: getDisplayNameForUser(CURRENT_USER_EMAIL),
       gmailInitialized: gmailInitialized,
-      message: `Switched to user ${userEmail}` 
+      message: `Switched to user ${userEmail}`,
+      priorityEmails
     });
   } catch (error) {
     console.error('Error switching user:', error);
@@ -11682,6 +11713,88 @@ Provide a one or two sentence justification only.`;
  */
 app.get('/api/priority-today', async (req, res) => {
   try {
+    // LOCALIZED-TEST: Serve 50 random emails from data/{user}/priority-emails-5000.json and classify (no Gmail)
+    try {
+      const paths = getCurrentUserPaths();
+      const p = path.join(paths.USER_DATA_DIR, 'priority-emails-5000.json');
+      if (fs.existsSync(p)) {
+        const raw = JSON.parse(fs.readFileSync(p, 'utf8'));
+        const list = Array.isArray(raw) ? raw : (Array.isArray(raw?.emails) ? raw.emails : []);
+        const pool = Array.isArray(list) ? list.slice() : [];
+
+        // Shuffle and pick up to 50
+        for (let i = pool.length - 1; i > 0; i--) {
+          const j = Math.floor(Math.random() * (i + 1));
+          [pool[i], pool[j]] = [pool[j], pool[i]];
+        }
+        const pick = pool.slice(0, 50).map((e, idx) => {
+          const body = (typeof e?.body === 'string' && e.body) ? e.body : (typeof e?.snippet === 'string' ? e.snippet : '');
+          const snippet = e?.snippet || (body ? String(body).slice(0, 100) + (String(body).length > 100 ? '...' : '') : 'No content available');
+          return {
+            id: e?.id || `local-${Date.now()}-${idx}`,
+            subject: e?.subject || 'No Subject',
+            from: e?.from || e?.originalFrom || 'Unknown Sender',
+            date: e?.date || new Date().toISOString(),
+            threadId: e?.threadId || '',
+            body,
+            snippet,
+            category: 'Other',
+            source: 'local-priority',
+            webUrl: e?.webUrl || ''
+          };
+        });
+
+        // Use classifier-v4 to get suggestions
+        try {
+          const resp = await fetch(`http://localhost:${PORT}/api/classifier-v4/suggest-batch`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              emails: pick.map(e => ({
+                id: e.id,
+                subject: e.subject,
+                body: e.body || e.snippet || '',
+                from: e.from
+              }))
+            })
+          });
+          if (resp.ok) {
+            const data = await resp.json().catch(() => ({}));
+            const results = (data && data.results && typeof data.results === 'object') ? data.results : {};
+            const categoriesX = __getCategoriesList();
+            const enriched = pick.map(e => {
+              const r = results[e.id] || {};
+              const sugg = r && r.suggestion ? r.suggestion : '';
+              const contenders = Array.isArray(r.contenders) ? r.contenders : [];
+              const reasons = (r && typeof r.rationales === 'object') ? r.rationales : {};
+              const chosen = sugg || contenders[0] || (categoriesX.find(c => normalizeKey(c) === 'other') || 'Other');
+              return {
+                ...e,
+                suggestedCategories: sugg ? [sugg, ...contenders.filter(c => c && c !== sugg)].slice(0, 2) : contenders.slice(0, 2),
+                suggestedReasons: reasons,
+                category: chosen
+              };
+            });
+            return res.json({ success: true, emails: enriched });
+          }
+        } catch (_) {
+          // fall through to simple fallback
+        }
+
+        // Fallback: default all to "Other" with a clear explanation
+        const categoriesX = __getCategoriesList();
+        const otherCat = categoriesX.find(c => normalizeKey(c) === 'other') || 'Other';
+        const fallback = pick.map(e => ({
+          ...e,
+          suggestedCategories: [otherCat],
+          suggestedReasons: { [otherCat]: 'No confident category match found (local test mode)' },
+          category: otherCat
+        }));
+        return res.json({ success: true, emails: fallback });
+      }
+    } catch (_) {
+      // If local file missing or unreadable, continue to the original Gmail path as a safety net
+    }
     // Ensure Gmail API is available and authenticated
     if (!gmail || !gmailAuth) {
       const authUrl = getGmailAuthUrl();
@@ -11936,18 +12049,7 @@ app.get('/api/priority-today', async (req, res) => {
 });
 
 app.get('/', async (req, res) => {
-  try {
-    // Ensure Gmail API is initialized; if not authenticated, start the OAuth flow immediately
-    const gmailReady = await initializeGmailAPI();
-    if (!gmailReady) {
-      const authUrl = getGmailAuthUrl();
-      if (authUrl) {
-        return res.redirect('/api/auth/start');
-      }
-    }
-  } catch (_) {
-    // Ignore and fall through to serving the app
-  }
+  // localized-test: do not force Gmail auth; just serve the app
   return res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
