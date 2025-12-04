@@ -94,6 +94,100 @@ function getCurrentUserPaths() {
   return getUserPaths(CURRENT_USER_EMAIL);
 }
 
+/**
+ * Helper to write classifier results to a log file for audit/debugging
+ */
+function writeClassifierLog(emailId, subject, from, suggestedCategory, rationale, timestamp) {
+  try {
+    const paths = getCurrentUserPaths();
+    const logPath = path.join(paths.USER_DATA_DIR, 'classifier-log.txt');
+    
+    const entry = `========================================
+Timestamp: ${timestamp || new Date().toISOString()}
+Email ID: ${emailId || 'N/A'}
+Subject: ${subject || 'No Subject'}
+From: ${from || 'Unknown Sender'}
+Suggested Category: ${suggestedCategory || 'N/A'}
+Rationale: ${rationale || 'No rationale provided'}
+
+`;
+    
+    // Ensure directory exists
+    if (!fs.existsSync(paths.USER_DATA_DIR)) {
+      fs.mkdirSync(paths.USER_DATA_DIR, { recursive: true });
+    }
+    
+    // Append to log file
+    fs.appendFileSync(logPath, entry, 'utf8');
+  } catch (error) {
+    console.error('Error writing classifier log:', error);
+  }
+}
+
+/**
+ * API endpoint to read classifier log
+ * GET /api/classifier-log
+ */
+app.get('/api/classifier-log', (req, res) => {
+  try {
+    const paths = getCurrentUserPaths();
+    const logPath = path.join(paths.USER_DATA_DIR, 'classifier-log.txt');
+    
+    if (!fs.existsSync(logPath)) {
+      return res.json({ success: true, entries: [], message: 'No classifier log found' });
+    }
+    
+    const content = fs.readFileSync(logPath, 'utf8');
+    
+    // Parse entries from log file
+    const entries = [];
+    const sections = content.split('========================================').filter(s => s.trim());
+    
+    for (const section of sections) {
+      const lines = section.trim().split('\n');
+      const entry = {};
+      
+      for (const line of lines) {
+        if (line.includes('Timestamp:')) entry.timestamp = line.split('Timestamp:')[1].trim();
+        if (line.includes('Email ID:')) entry.emailId = line.split('Email ID:')[1].trim();
+        if (line.includes('Subject:')) entry.subject = line.split('Subject:')[1].trim();
+        if (line.includes('From:')) entry.from = line.split('From:')[1].trim();
+        if (line.includes('Suggested Category:')) entry.suggestedCategory = line.split('Suggested Category:')[1].trim();
+        if (line.includes('Rationale:')) entry.rationale = line.split('Rationale:')[1].trim();
+      }
+      
+      if (entry.emailId && entry.emailId !== 'N/A') {
+        entries.push(entry);
+      }
+    }
+    
+    res.json({ success: true, entries });
+  } catch (error) {
+    console.error('Error reading classifier log:', error);
+    res.status(500).json({ success: false, error: 'Failed to read classifier log' });
+  }
+});
+
+/**
+ * API endpoint to clear classifier log
+ * DELETE /api/classifier-log
+ */
+app.delete('/api/classifier-log', (req, res) => {
+  try {
+    const paths = getCurrentUserPaths();
+    const logPath = path.join(paths.USER_DATA_DIR, 'classifier-log.txt');
+    
+    if (fs.existsSync(logPath)) {
+      fs.unlinkSync(logPath);
+    }
+    
+    res.json({ success: true, message: 'Classifier log cleared' });
+  } catch (error) {
+    console.error('Error clearing classifier log:', error);
+    res.status(500).json({ success: false, error: 'Failed to clear classifier log' });
+  }
+});
+
 // Gmail API setup
 let gmailAuth = null;
 let gmail = null;
@@ -11765,6 +11859,11 @@ app.get('/api/priority-today', async (req, res) => {
               const contenders = Array.isArray(r.contenders) ? r.contenders : [];
               const reasons = (r && typeof r.rationales === 'object') ? r.rationales : {};
               const chosen = sugg || contenders[0] || (categoriesX.find(c => normalizeKey(c) === 'other') || 'Other');
+              
+              // Write to classifier log
+              const rationale = r.explanation || reasons[chosen] || 'No rationale provided';
+              writeClassifierLog(e.id, e.subject, e.from, chosen, rationale, new Date().toISOString());
+              
               return {
                 ...e,
                 suggestedCategories: sugg ? [sugg, ...contenders.filter(c => c && c !== sugg)].slice(0, 2) : contenders.slice(0, 2),

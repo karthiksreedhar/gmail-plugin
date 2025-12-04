@@ -7001,6 +7001,41 @@ async function loadPriorityToday() {
         }
 
         priorityTodayEmails = Array.isArray(data.emails) ? data.emails : [];
+        
+        // Read from classifier log to get categories and rationales
+        try {
+            updateLoadingOverlayMessage('Loading Priority Emails from Today…', 'Reading classifier results from log…');
+            const logResp = await fetch('/api/classifier-log');
+            const logData = await logResp.json().catch(() => ({}));
+            
+            if (logResp.ok && logData.success && Array.isArray(logData.entries)) {
+                // Map log entries to emails by ID
+                const logByEmailId = new Map();
+                logData.entries.forEach(entry => {
+                    if (entry.emailId && entry.emailId !== 'N/A') {
+                        logByEmailId.set(entry.emailId, entry);
+                    }
+                });
+                
+                // Enrich emails with log data
+                priorityTodayEmails = priorityTodayEmails.map(email => {
+                    const logEntry = logByEmailId.get(email.id);
+                    if (logEntry) {
+                        return {
+                            ...email,
+                            _cat: logEntry.suggestedCategory || email.category || email._cat || 'Other',
+                            _catReason: logEntry.rationale || email._catReason || 'Categorized by backend classifier',
+                            category: logEntry.suggestedCategory || email.category || 'Other'
+                        };
+                    }
+                    return email;
+                });
+                
+                console.log(`[PriorityToday] Enriched ${priorityTodayEmails.length} emails with ${logData.entries.length} log entries`);
+            }
+        } catch (logErr) {
+            console.warn('[PriorityToday] Failed to read classifier log, using backend categories:', logErr);
+        }
         // Step 2 message: Suggesting categories using the same classifier as Load More/Test Classifier
         try { updateLoadingOverlayMessage('Loading Priority Emails from Today…', 'Suggesting categories for emails…'); } catch (_) {}
         // Two-stage categorization: keyword search (primary) + classifier validation (secondary)
