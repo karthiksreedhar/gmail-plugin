@@ -3376,10 +3376,10 @@ const pillsHtml = catNames.map(cat => {
                 emailDiv.innerHTML = `
                     <div class="email-content">
                         <div class="email-header">
-                            <div class="email-from" style="display:flex; align-items:center; gap:8px;">${originalSender} ${gmailLinkHtml(email)}</div>
+                            <div class="email-from" style="display:flex; align-items:center; gap:8px;">${escapeHtml(originalSender)} ${gmailLinkHtml(email)}</div>
                             <div class="email-date">${formatDate(email.date)}</div>
                         </div>
-                        <div class="email-subject">${email.subject}</div>
+                        <div class="email-subject">${escapeHtml(email.subject)}</div>
                         <div class="email-meta-row">
                             <div class="email-categories">${pillsHtml}</div>
                         </div>
@@ -7003,39 +7003,40 @@ async function loadPriorityToday() {
         // Two-stage categorization: keyword search (primary) + classifier validation (secondary)
         try {
             const list = Array.isArray(priorityTodayEmails) ? priorityTodayEmails : [];
-            list.forEach(e => {
-                // DEBUG: Log the raw email data to see what we're actually receiving
-                if (e && e.subject && e.subject.includes('Con Edison')) {
-                    console.log('[DEBUG ConEdison] Raw email data:', JSON.stringify({
-                        id: e.id,
-                        subject: e.subject,
-                        category: e.category,
-                        suggestedCategories: e.suggestedCategories,
-                        suggestedReasons: e.suggestedReasons
-                    }, null, 2));
+        list.forEach(e => {
+            // Priority 0: Use backend-provided category if it exists and is not 'Other'
+            const backendCategory = String(e.category || '').trim();
+            const hasValidBackendCategory = backendCategory && backendCategory.toLowerCase() !== 'other';
+            
+            if (hasValidBackendCategory) {
+                // Backend already categorized this email - use it directly
+                e._cat = backendCategory;
+                e._catReason = 'Categorized by backend classifier';
+                console.log(`[PriorityToday] Using backend category for "${e.subject}": _cat="${e._cat}"`);
+                return; // Skip frontend re-categorization
+            }
+            
+            // Stage 1: Keyword search - check if any category name appears in subject/body/sender
+            let keywordCategory = 'Other';
+            const searchText = [
+                String(e.subject || ''),
+                String(e.body || ''),
+                String(e.from || '')
+            ].join(' ').toLowerCase();
+            
+            // Check each category name (from currentCategoriesOrder)
+            const categories = Array.isArray(currentCategoriesOrder) ? currentCategoriesOrder : [];
+            for (const cat of categories) {
+                const catName = String(cat || '').toLowerCase();
+                if (catName && searchText.includes(catName)) {
+                    keywordCategory = cat;
+                    break; // Use first match
                 }
-                
-                // Stage 1: Keyword search - check if any category name appears in subject/body/sender
-                let keywordCategory = 'Other';
-                const searchText = [
-                    String(e.subject || ''),
-                    String(e.body || ''),
-                    String(e.from || '')
-                ].join(' ').toLowerCase();
-                
-                // Check each category name (from currentCategoriesOrder)
-                const categories = Array.isArray(currentCategoriesOrder) ? currentCategoriesOrder : [];
-                for (const cat of categories) {
-                    const catName = String(cat || '').toLowerCase();
-                    if (catName && searchText.includes(catName)) {
-                        keywordCategory = cat;
-                        break; // Use first match
-                    }
-                }
-                
-                // Stage 2: Get classifier suggestion
-                const classifierTop = (Array.isArray(e?.suggestedCategories) && e.suggestedCategories.length) ? e.suggestedCategories[0] : '';
-                const classifierCategory = classifierTop ? mapToCurrentCategory(classifierTop) : '';
+            }
+            
+            // Stage 2: Get classifier suggestion
+            const classifierTop = (Array.isArray(e?.suggestedCategories) && e.suggestedCategories.length) ? e.suggestedCategories[0] : '';
+            const classifierCategory = classifierTop ? mapToCurrentCategory(classifierTop) : '';
                 
                 // REC LETTER OVERRIDE: If classifier suggests "Rec letter", always use that regardless of keyword search
                 const recLetterRegex = /rec\s*letter/i;
