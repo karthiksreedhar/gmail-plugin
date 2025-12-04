@@ -20,13 +20,34 @@ const { initMongo, getUserDoc } = require('../db');
 // SSE clients for streaming results
 let sseClients = [];
 
-// Configuration
-const CURRENT_USER_EMAIL = process.env.CURRENT_USER_EMAIL || 'ks4190@columbia.edu';
+// Parse command line arguments
+const args = process.argv.slice(2);
+let CLI_USER_EMAIL = null;
+let LOCAL_ONLY = false;
+
+args.forEach(arg => {
+  if (arg.startsWith('--email=')) {
+    CLI_USER_EMAIL = arg.split('=')[1];
+  } else if (arg === '--local-only') {
+    LOCAL_ONLY = true;
+  }
+});
+
+// Configuration (command line args override .env)
+const CURRENT_USER_EMAIL = CLI_USER_EMAIL || process.env.CURRENT_USER_EMAIL || 'ks4190@columbia.edu';
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const BATCH_SIZE = 10; // Small batch size to allow up to 500 batches (5000 emails = 500 batches)
 const INPUT_DIR = path.join(__dirname, '..', 'data', CURRENT_USER_EMAIL);
 const INPUT_FILE = path.join(INPUT_DIR, 'priority-emails-5000.json');
 const OUTPUT_FILE = path.join(INPUT_DIR, 'classified-emails-5000.txt');
+
+// Log mode
+if (CLI_USER_EMAIL) {
+  console.log(`Using command-line email: ${CURRENT_USER_EMAIL}`);
+}
+if (LOCAL_ONLY) {
+  console.log('Running in LOCAL-ONLY mode (skipping MongoDB)');
+}
 
 // Initialize OpenAI
 const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
@@ -114,15 +135,18 @@ function countOccurrencesInsensitive(haystack, needle) {
  * Load categories list from MongoDB or local file
  */
 async function loadCategoriesList() {
-  try {
-    // Try MongoDB first
-    const doc = await getUserDoc('categories', CURRENT_USER_EMAIL);
-    if (doc && Array.isArray(doc.categories)) {
-      console.log(`✓ Loaded ${doc.categories.length} categories from MongoDB`);
-      return doc.categories;
+  // Skip MongoDB if LOCAL_ONLY flag is set
+  if (!LOCAL_ONLY) {
+    try {
+      // Try MongoDB first
+      const doc = await getUserDoc('categories', CURRENT_USER_EMAIL);
+      if (doc && Array.isArray(doc.categories)) {
+        console.log(`✓ Loaded ${doc.categories.length} categories from MongoDB`);
+        return doc.categories;
+      }
+    } catch (e) {
+      console.warn('Could not load categories from MongoDB:', e.message);
     }
-  } catch (e) {
-    console.warn('Could not load categories from MongoDB:', e.message);
   }
 
   // Fallback to local JSON
@@ -156,15 +180,18 @@ async function loadCategoriesList() {
  * Load response emails from MongoDB or local file (for training examples)
  */
 async function loadResponseEmails() {
-  try {
-    // Try MongoDB first
-    const doc = await getUserDoc('response_emails', CURRENT_USER_EMAIL);
-    if (doc && Array.isArray(doc.emails)) {
-      console.log(`✓ Loaded ${doc.emails.length} response emails from MongoDB`);
-      return doc.emails;
+  // Skip MongoDB if LOCAL_ONLY flag is set
+  if (!LOCAL_ONLY) {
+    try {
+      // Try MongoDB first
+      const doc = await getUserDoc('response_emails', CURRENT_USER_EMAIL);
+      if (doc && Array.isArray(doc.emails)) {
+        console.log(`✓ Loaded ${doc.emails.length} response emails from MongoDB`);
+        return doc.emails;
+      }
+    } catch (e) {
+      console.warn('Could not load response emails from MongoDB:', e.message);
     }
-  } catch (e) {
-    console.warn('Could not load response emails from MongoDB:', e.message);
   }
 
   // Fallback to local JSON
@@ -189,15 +216,18 @@ async function loadResponseEmails() {
  * Load category summaries from MongoDB or local file
  */
 async function loadCategorySummaries() {
-  try {
-    // Try MongoDB first
-    const doc = await getUserDoc('category_summaries', CURRENT_USER_EMAIL);
-    if (doc && doc.summaries && typeof doc.summaries === 'object') {
-      console.log(`✓ Loaded summaries for ${Object.keys(doc.summaries).length} categories from MongoDB`);
-      return doc.summaries;
+  // Skip MongoDB if LOCAL_ONLY flag is set
+  if (!LOCAL_ONLY) {
+    try {
+      // Try MongoDB first
+      const doc = await getUserDoc('category_summaries', CURRENT_USER_EMAIL);
+      if (doc && doc.summaries && typeof doc.summaries === 'object') {
+        console.log(`✓ Loaded summaries for ${Object.keys(doc.summaries).length} categories from MongoDB`);
+        return doc.summaries;
+      }
+    } catch (e) {
+      console.warn('Could not load category summaries from MongoDB:', e.message);
     }
-  } catch (e) {
-    console.warn('Could not load category summaries from MongoDB:', e.message);
   }
 
   // Fallback to local JSON
@@ -513,10 +543,18 @@ async function classifyEmails() {
       openBrowser('http://localhost:3500/classifier-viewer.html');
     }, 1000);
 
-    // Initialize MongoDB
-    console.log('\nStep 2: Connecting to MongoDB...');
-    await initMongo();
-    console.log('✓ MongoDB connected');
+    // Initialize MongoDB (skip if LOCAL_ONLY mode)
+    if (!LOCAL_ONLY) {
+      console.log('\nStep 2: Connecting to MongoDB...');
+      try {
+        await initMongo();
+        console.log('✓ MongoDB connected');
+      } catch (e) {
+        console.warn('⚠ MongoDB connection failed, falling back to local files:', e.message);
+      }
+    } else {
+      console.log('\nStep 2: Skipping MongoDB (LOCAL_ONLY mode)');
+    }
 
     // Load input emails
     console.log('\nStep 3: Loading input emails...');
@@ -617,17 +655,9 @@ async function classifyEmails() {
             explanation = rationales[suggestion] || 'Augmented contenders; defaulted to first';
           }
         } else {
-          // No contenders - use keyword fallback
-          const kw = keywordFallback(e, categoriesX);
-          if (kw && normalizeKey(kw) !== 'other') {
-            suggestion = matchToCurrentCategory(kw, categoriesX) || kw;
-            const subjCount = countOccurrencesInsensitive(e.subject || '', suggestion);
-            const bodyCount = countOccurrencesInsensitive(e.body || '', suggestion);
-            explanation = `Keyword fallback: subject x${subjCount}, body x${bodyCount}`;
-          } else {
-            suggestion = categoriesX.find(c => normalizeKey(c) === 'other') || 'Other';
-            explanation = 'No confident category match found (uncertain email)';
-          }
+          // No contenders from LLM - default to "Other" (no keyword fallback)
+          suggestion = categoriesX.find(c => normalizeKey(c) === 'other') || 'Other';
+          explanation = 'No confident category match found (uncertain email)';
         }
 
         const subject = String(e.subject || 'No Subject');

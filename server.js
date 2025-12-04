@@ -10998,19 +10998,12 @@ app.post('/api/classifier-v4/suggest-batch', async (req, res) => {
           suggestion = contendersUnion[0] || '';
           reasonsMap = { [suggestion]: rationales?.[suggestion] || 'Augmented contenders; defaulted to first' };
         }
-      } else {
-        // No contenders at all - use keyword fallback; if that also fails, default to "Other"
-        const kw = __v3KeywordFallback(e, categoriesX);
-        if (kw && normalizeKey(kw) !== 'other') {
-          suggestion = matchToCurrentCategory(kw, categoriesX) || kw;
-          reasonsMap = { [suggestion]: `Keyword fallback: subject x${__countOccurrencesInsensitive(e.subject || '', suggestion)}, body x${__countOccurrencesInsensitive(e.body || '', suggestion)}` };
         } else {
-          // Last resort: default to "Other" with explanation
+          // No contenders at all - default to "Other" (no keyword fallback)
           const otherCat = categoriesX.find(c => normalizeKey(c) === 'other') || 'Other';
           suggestion = otherCat;
           reasonsMap = { [suggestion]: 'No confident category match found (uncertain email)' };
         }
-      }
 
       // Choose explanation for V4: prefer LLM rationale for the chosen category; fallback to local explain endpoint
       let explanation = '';
@@ -11221,13 +11214,13 @@ app.post('/api/test-classifier/run-v4', async (req, res) => {
           reasonsMap = { [suggestion]: rationales?.[suggestion] || 'Augmented contenders; defaulted to first' };
         }
       } else {
-        const kw = __v3KeywordFallback({ subject: te.subject, body: te.body }, categoriesX);
-        if (kw) {
-          suggestion = matchToCurrentCategory(kw, categoriesX) || kw;
-          reasonsMap = { [suggestion]: `Keyword fallback: subject x${__countOccurrencesInsensitive(te.subject || '', suggestion)}, body x${__countOccurrencesInsensitive(te.body || '', suggestion)}` };
+        // No contenders: try sender-majority, else default to "Other" (no keyword fallback)
+        const sb = __v3SenderMajorityFallback(e, categoriesX, perCatRows);
+        if (sb) {
+          suggestion = sb;
         } else {
           suggestion = categoriesX.find(c => normalizeKey(c) === 'other') || categoriesX[0] || '';
-          if (suggestion) reasonsMap = { [suggestion]: 'Last-resort default' };
+          if (suggestion) reasonsMap = { [suggestion]: 'No confident category match found (uncertain email)' };
         }
       }
 
@@ -11466,8 +11459,8 @@ app.post('/api/test-classifier/run-v3', async (req, res) => {
         const sb = __v3SenderMajorityFallback({ from: te.from, body: te.body, subject: te.subject }, categoriesX, perCatRows);
         if (sb) suggestion = sb;
         else {
-          const kw = __v3KeywordFallback({ subject: te.subject, body: te.body }, categoriesX) || 'Other';
-          suggestion = matchToCurrentCategory(kw, categoriesX) || kw;
+          // No keyword fallback: default to "Other"
+          suggestion = categoriesX.find(c => normalizeKey(c) === 'other') || categoriesX[0] || '';
         }
       }
 
@@ -11806,18 +11799,18 @@ app.get('/api/priority-today', async (req, res) => {
         const isAlreadyAdded = uniqueEmails.some(added => added && added.id === emailData.id);
 
         if (!isDuplicate && !isAlreadyAdded) {
-          const processedEmail = {
-            id: emailData.id,
-            subject: emailData.subject,
-            from: emailData.from,
-            date: emailData.date,
-            threadId: emailData.threadId || '',
-            body: emailData.body,
-            snippet: emailData.snippet || (emailData.body ? String(emailData.body).slice(0, 100) + (String(emailData.body).length > 100 ? '...' : '') : 'No content available'),
-            category: keywordCategorizeUnreplied(emailData.subject || '', emailData.body || '', emailData.from || ''),
-            source: 'gmail-api',
-            webUrl: emailData.webUrl || ''
-          };
+            const processedEmail = {
+              id: emailData.id,
+              subject: emailData.subject,
+              from: emailData.from,
+              date: emailData.date,
+              threadId: emailData.threadId || '',
+              body: emailData.body,
+              snippet: emailData.snippet || (emailData.body ? String(emailData.body).slice(0, 100) + (String(emailData.body).length > 100 ? '...' : '') : 'No content available'),
+              category: 'Other',
+              source: 'gmail-api',
+              webUrl: emailData.webUrl || ''
+            };
           uniqueEmails.push(processedEmail);
         }
       } catch (_) {
@@ -11922,20 +11915,13 @@ app.get('/api/priority-today', async (req, res) => {
       console.warn('priority-today classifier suggestions failed, falling back to keyword categories:', e?.message || e);
     }
 
-    // Fallback: return baseline keyword categories with "Other" default for uncertain emails
+    // Fallback: default all to "Other" with explanation (no keyword fallback)
     const fallbackEmails = dedupedByThread.map(e => {
       const out = { ...e };
-      // If no category was assigned, default to "Other" with explanation
-      if (!out.category || !out.category.trim()) {
-        const otherCat = categoriesX.find(c => normalizeKey(c) === 'other') || 'Other';
-        out.category = otherCat;
-        out.suggestedCategories = [otherCat];
-        out.suggestedReasons = { [otherCat]: 'No confident category match found (uncertain email)' };
-      } else {
-        // Has a keyword category assignment - use it as the suggestion
-        out.suggestedCategories = [out.category];
-        out.suggestedReasons = { [out.category]: 'Keyword-based categorization' };
-      }
+      const otherCat = categoriesX.find(c => normalizeKey(c) === 'other') || 'Other';
+      out.category = otherCat;
+      out.suggestedCategories = [otherCat];
+      out.suggestedReasons = { [otherCat]: 'No confident category match found (uncertain email)' };
       return out;
     });
     

@@ -21,7 +21,7 @@
     "dotenv": "^17.2.2",
     "express": "^4.18.2",
     "googleapis": "^156.0.0",
-    "mongodb": "^7.0.0",
+    "mongodb": "^6.21.0",
     "openai": "^4.104.0"
   },
   "author": "Karthik Sreedhar",
