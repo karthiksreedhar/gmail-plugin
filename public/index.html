@@ -7203,7 +7203,11 @@ function renderPriorityToday(filterCategory) {
                         <div class="priority-header">
                             <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px;">
                                 <div class="priority-title" style="flex: 1; padding-right: 0;">${escapeHtml(subj)}</div>
-                                <div style="font-size: 16px; color: #5f6368; white-space: nowrap; font-weight: 500; display:flex; align-items:center; gap:8px;">${new Date(date).toLocaleString()} ${gmailLinkHtml(email)}</div>
+                                <div style="font-size: 16px; color: #5f6368; white-space: nowrap; font-weight: 500; display:flex; align-items:center; gap:8px;">
+                                    ${new Date(date).toLocaleString()} 
+                                    ${gmailLinkHtml(email)}
+                                    ${email.__isNew || window.recentlyAddedEmailIds?.has(email.id) ? '' : `<span style="font-size: 11px; color: #9aa0a6; font-weight: 400;">${escapeHtml(email.id || '')}</span>`}
+                                </div>
                             </div>
                         </div>
                 <div class="priority-meta">${escapeHtml(from)}</div>

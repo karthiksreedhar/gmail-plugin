@@ -11722,11 +11722,8 @@ app.get('/api/priority-today', async (req, res) => {
         const list = Array.isArray(raw) ? raw : (Array.isArray(raw?.emails) ? raw.emails : []);
         const pool = Array.isArray(list) ? list.slice() : [];
 
-        // Shuffle and pick up to 50
-        for (let i = pool.length - 1; i > 0; i--) {
-          const j = Math.floor(Math.random() * (i + 1));
-          [pool[i], pool[j]] = [pool[j], pool[i]];
-        }
+        // Sort by date descending (most recent first) and take top 50
+        pool.sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
         const pick = pool.slice(0, 50).map((e, idx) => {
           const body = (typeof e?.body === 'string' && e.body) ? e.body : (typeof e?.snippet === 'string' ? e.snippet : '');
           const snippet = e?.snippet || (body ? String(body).slice(0, 100) + (String(body).length > 100 ? '...' : '') : 'No content available');
