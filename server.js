@@ -11816,9 +11816,28 @@ app.get('/api/priority-today', async (req, res) => {
         const list = Array.isArray(raw) ? raw : (Array.isArray(raw?.emails) ? raw.emails : []);
         const pool = Array.isArray(list) ? list.slice() : [];
 
-        // Sort by date descending (most recent first) and take top 50
-        pool.sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
-        const pick = pool.slice(0, 50).map((e, idx) => {
+        // Filter out emails already in the database by checking all three stores
+        const responses = loadResponseEmails() || [];
+        const threads = loadEmailThreads() || [];
+        const unreplied = loadUnrepliedEmails() || [];
+        
+        // Build set of existing IDs across all stores
+        const existingIds = new Set();
+        responses.forEach(e => e && e.id && existingIds.add(e.id));
+        threads.forEach(t => {
+          if (t && t.responseId) existingIds.add(t.responseId);
+          if (Array.isArray(t.messages)) {
+            t.messages.forEach(m => m && m.id && existingIds.add(m.id));
+          }
+        });
+        unreplied.forEach(e => e && e.id && existingIds.add(e.id));
+        
+        // Filter to only new emails and sort by date ascending (earliest first)
+        const newEmails = pool.filter(e => e && e.id && !existingIds.has(e.id));
+        newEmails.sort((a, b) => new Date(a.date || 0) - new Date(b.date || 0));
+        
+        // Take first 50 earliest emails not in database
+        const pick = newEmails.slice(0, 50).map((e, idx) => {
           const body = (typeof e?.body === 'string' && e.body) ? e.body : (typeof e?.snippet === 'string' ? e.snippet : '');
           const snippet = e?.snippet || (body ? String(body).slice(0, 100) + (String(body).length > 100 ? '...' : '') : 'No content available');
           return {
