@@ -7004,6 +7004,7 @@ async function loadPriorityToday() {
         
         // Read from classifier log to get categories and rationales
         try {
+            console.log('[PriorityToday] Reading in classifier results.....');
             updateLoadingOverlayMessage('Loading Priority Emails from Today…', 'Reading classifier results from log…');
             const logResp = await fetch('/api/classifier-log');
             const logData = await logResp.json().catch(() => ({}));
@@ -7017,7 +7018,7 @@ async function loadPriorityToday() {
                     }
                 });
                 
-                // Enrich emails with log data
+                // Enrich emails with log data - MARK EMAILS THAT HAVE LOG DATA
                 priorityTodayEmails = priorityTodayEmails.map(email => {
                     const logEntry = logByEmailId.get(email.id);
                     if (logEntry) {
@@ -7025,7 +7026,8 @@ async function loadPriorityToday() {
                             ...email,
                             _cat: logEntry.suggestedCategory || email.category || email._cat || 'Other',
                             _catReason: logEntry.rationale || email._catReason || 'Categorized by backend classifier',
-                            category: logEntry.suggestedCategory || email.category || 'Other'
+                            category: logEntry.suggestedCategory || email.category || 'Other',
+                            _hasLogData: true // Mark that this email has classifier log data
                         };
                     }
                     return email;
@@ -7042,6 +7044,12 @@ async function loadPriorityToday() {
         try {
             const list = Array.isArray(priorityTodayEmails) ? priorityTodayEmails : [];
         list.forEach(e => {
+            // PRIORITY: If email has log data from classifier, DON'T overwrite it
+            if (e._hasLogData) {
+                console.log(`[PriorityToday] Email "${e.subject}" has log data - preserving _cat="${e._cat}" and _catReason="${e._catReason}"`);
+                return; // Skip re-categorization to preserve log data
+            }
+            
             // Priority 0: Use backend-provided category if it exists and is not 'Other'
             const backendCategory = String(e.category || '').trim();
             const hasValidBackendCategory = backendCategory && backendCategory.toLowerCase() !== 'other';
