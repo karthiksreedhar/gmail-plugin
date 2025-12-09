@@ -398,3 +398,403 @@ From: Room Reservation <alerts@mail.libcal.com>
 Suggested Category: Other
 Rationale: Placed in “Other” because similar past items include: “Spam and Low Priority Email Digest: 17 New Messages”; “Spam and Low Priority Email Digest: 26 New Messages”; “Spam and Low Priority Email Digest: 18 New Messages”; this aligns with the saved category summary.
 
+========================================
+Timestamp: 2025-12-09T16:33:41.131Z
+Email ID: 18d4168369a77bbf
+Subject: Invitation: lydia will read system and results section @ Sat Jan 27, 2024 2pm - 3pm (EST) (Karthik Sreedhar)
+From: "Lydia B. Chilton" <lc3251@columbia.edu>
+Suggested Category: Lydia Chilton
+Rationale: Calendar invite from Prof. Lydia Chilton coordinating a meeting fits her category.
+
+========================================
+Timestamp: 2025-12-09T16:33:41.133Z
+Email ID: 18d41b0e83a29324
+Subject: REMINDER: Add/Drop ends tomorrow at 10 a.m.
+From: Melanie Greer Huff <mgh2@columbia.edu>
+Suggested Category: SEAS
+Rationale: Administrative school notice about course add-drop deadlines fits academic registrar-type traffic handled like SEAS messages.
+
+========================================
+Timestamp: 2025-12-09T16:33:41.133Z
+Email ID: 18d423081a76b916
+Subject: INVITATION: JSchool & University Listening Sessions
+From: Melanie Greer Huff <mgh2@columbia.edu>
+Suggested Category: Other
+Rationale: Broadcast university event invitation fits bulk academic notice with no immediate action required beyond optional registration.
+
+========================================
+Timestamp: 2025-12-09T16:33:41.133Z
+Email ID: 18d4251d1b8655fe
+Subject: Keep shopping for Bookcases
+From: "Amazon.com" <vfe-campaign-response@amazon.com>
+Suggested Category: Other
+Rationale: Amazon promotional email recommending products fits low-urgency marketing spam category.
+
+========================================
+Timestamp: 2025-12-09T16:33:41.133Z
+Email ID: 18d45934f39d6065
+Subject: Re: Week 1 Assignment
+From: Dhrumil Mehta <dm3494@columbia.edu>
+Suggested Category: Other
+Rationale: Placed in “Other” because similar past items include: “Spam and Low Priority Email Digest: 17 New Messages”; “Spam and Low Priority Email Digest: 26 New Messages”; “Spam and Low Priority Email Digest: 18 New Messages”; this aligns with the saved category summary.
+
+========================================
+Timestamp: 2025-12-09T16:33:41.133Z
+Email ID: 18d45c1c7cd21505
+Subject: Room change: NLP section 2 now in 301 Pupin: COMSW4705_002_2024_1 - NATURAL LANGUAGE PROCESSING
+From: COMSW4705_002_2024_1 - NATURAL LANGUAGE PROCESSING <notifications@instructure.com>
+Suggested Category: SEAS
+Rationale: CourseWorks announcement about classroom change is an academic administrative notice within engineering school scope.
+
+========================================
+Timestamp: 2025-12-09T16:33:41.133Z
+Email ID: 18d45ea6eef83e91
+Subject: Share request for "Week 1 Assignment.pdf"
+From: "Nick Thieme (via Google Drive)" <drive-shares-dm-noreply@google.com>
+Suggested Category: Other
+Rationale: Google Drive access request is general collaboration email that fits no specialized category.
+
+========================================
+Timestamp: 2025-12-09T16:33:41.133Z
+Email ID: 18d461373118a1b9
+Subject: Dialogue Across Difference: Programs, Funding Opportunities, and Resources
+From: "Dennis A. Mitchell, Interim Provost" <Provost@columbia.edu>
+Suggested Category: SEAS
+Rationale: University administrative message but not specific to Engineering so fit is weaker.
+
+========================================
+Timestamp: 2025-12-09T16:33:41.134Z
+Email ID: 18d558a75ca099a6
+Subject: [Ms-students] [CfP] CHIL 2024 Call for Participation - Conference on Health, Inference, and Learning
+From: CHIL <info@chilconference.org>
+Suggested Category: Other
+Rationale: Bulk listserv conference announcement that requires no immediate action.
+
+========================================
+Timestamp: 2025-12-09T16:33:41.134Z
+Email ID: 18d46f3d1c9f5ca6
+Subject: Take care of you, with support from Columbia Health
+From: "Melanie Bernitz, Columbia Health" <health@columbia.edu>
+Suggested Category: Other
+Rationale: Mass campus-wide wellness bulletin that is informational and requires no immediate personal action.
+
+========================================
+Timestamp: 2025-12-09T16:33:41.134Z
+Email ID: 18d46f42a055112c
+Subject: Spring 2024 EGSC Department Representative Election Notice
+From: Thomas Bina <vp@egsc.seas.columbia.edu>
+Suggested Category: SEAS
+Rationale: EGSC election email is school administration/student affairs communication addressed to SEAS students.
+
+========================================
+Timestamp: 2025-12-09T16:33:41.134Z
+Email ID: 18d4731a1338cebe
+Subject: Re: duPont Volunteers meeting
+From: Lisa Cohen <lisa.r.cohen@columbia.edu>
+Suggested Category: Other
+Rationale: Generic post-event thank-you email unrelated to any specialized category.
+
+========================================
+Timestamp: 2025-12-09T16:33:41.134Z
+Email ID: 18d47517739d19b1
+Subject: JPM news/profits
+From: Sreedhar Sivakumaran <sreedhar_sivakumaran@yahoo.com>
+Suggested Category: Sreedhar Sivakumaran
+Rationale: Email is sent directly from Sreedhar, whose messages are grouped under this category even when simply forwarding finance-related news.
+
+========================================
+Timestamp: 2025-12-09T16:33:41.134Z
+Email ID: 18d4775ae2027311
+Subject: Capital One Card
+From: Sreedhar Sivakumaran <sreedhar_sivakumaran@yahoo.com>
+Suggested Category: Sreedhar Sivakumaran
+Rationale: Message from dad about Capital One card delivery relates to family finance/logistics queries.
+
+========================================
+Timestamp: 2025-12-09T16:33:41.134Z
+Email ID: 18d4819f038cb7c3
+Subject: Homework 1 released: COMSW4705_002_2024_1 - NATURAL LANGUAGE PROCESSING
+From: COMSW4705_002_2024_1 - NATURAL LANGUAGE PROCESSING <notifications@instructure.com>
+Suggested Category: SEAS
+Rationale: Courseworks homework announcement is an academic notice related to a SEAS course.
+
+========================================
+Timestamp: 2025-12-09T16:33:41.134Z
+Email ID: 18d481a6297c1f0b
+Subject: Homework 1 released: COMSW4705_001_2024_1 - NATURAL LANGUAGE PROCESSING
+From: COMSW4705_001_2024_1 - NATURAL LANGUAGE PROCESSING <notifications@instructure.com>
+Suggested Category: SEAS
+Rationale: CourseWorks homework announcement is an academic notice related to a SEAS course.
+
+========================================
+Timestamp: 2025-12-09T16:33:41.134Z
+Email ID: 18d4c40532f716a4
+Subject: INVITATION: First PhD Students Connect of Spring 2024 - Friday, Feb. 2nd!
+From: Andy Chae <ac4897@columbia.edu>
+Suggested Category: SEAS
+Rationale: Event invitation for SEAS doctoral students from ESA fits SEAS administrative/newsletter scope.
+
+========================================
+Timestamp: 2025-12-09T16:33:41.134Z
+Email ID: 18d4c90039ca2165
+Subject: Invitation from Abel Feleke to apply to Google
+From: Google Recruiting <noreply+jobs@google.com>
+Suggested Category: Internship
+Rationale: Email is a recruiter referral inviting application for jobs at Google, matching internship/career correspondence.
+
+========================================
+Timestamp: 2025-12-09T16:33:41.134Z
+Email ID: 18d4cd4c30c32b86
+Subject: 2 Introduction
+From: "Lydia B. Chilton (Google Docs)" <comments-noreply@docs.google.com>
+Suggested Category: Lydia Chilton
+Rationale: Google Docs comment notification contains feedback written by Prof. Lydia Chilton, matching her category.
+
+========================================
+Timestamp: 2025-12-09T16:33:41.135Z
+Email ID: 18d4d540cfa02f7e
+Subject: Your return of Dreo Space Heater, Portable...
+From: "return@amazon.com" <return@amazon.com>
+Suggested Category: Other
+Rationale: Placed in “Other” because the email mentions “other”; similar past items include: “Spam and Low Priority Email Digest: 17 New Messages”; “Spam and Low Priority Email Digest: 26 New Messages”; “Spam and Low Priority Email Digest: 18 New Messages”; this aligns with the saved category summary.
+
+========================================
+Timestamp: 2025-12-09T16:33:41.135Z
+Email ID: 18d4e2fc0e9057ca
+Subject: Your Capital One Savor Card online account is setup
+From: Sreedhar Sivakumaran <sreedhar_sivakumaran@yahoo.com>
+Suggested Category: Sreedhar Sivakumaran
+Rationale: Email from dad about managing Capital One account access and payments fits the family finance oversight pattern.
+
+========================================
+Timestamp: 2025-12-09T16:33:41.135Z
+Email ID: 18d4e5a18152d718
+Subject: Re: Discover card statement - can you check 24hr?
+From: Sreedhar Sivakumaran <sreedhar_sivakumaran@yahoo.com>
+Suggested Category: Sreedhar Sivakumaran
+Rationale: Dad requests verification of potential duplicate charges and missing refund on Discover card.
+
+========================================
+Timestamp: 2025-12-09T16:33:41.135Z
+Email ID: 18d4e7df097dcd62
+Subject: Amazon purchases
+From: Meera Sreedhar <meera9sree@yahoo.com>
+Suggested Category: Sreedhar Sivakumaran
+Rationale: Family member querying unexplained Amazon charges, matching finance-oversight pattern of this category.
+
+========================================
+Timestamp: 2025-12-09T16:33:41.135Z
+Email ID: 18d4edd484c8d275
+Subject: Luke response
+From: Sreedhar Sivakumaran <sreedhar_sivakumaran@yahoo.com>
+Suggested Category: Sreedhar Sivakumaran
+Rationale: Email is from Sreedhar and relates to personal oversight/updates, fitting the dedicated folder for his messages.
+
+========================================
+Timestamp: 2025-12-09T16:33:41.135Z
+Email ID: 18d51c6f7eb98a1d
+Subject: 5 System
+From: "Lydia B. Chilton (Google Docs)" <comments-noreply@docs.google.com>
+Suggested Category: Lydia Chilton
+Rationale: Email is a Google Docs comment notification with comments authored by Lydia Chilton, matching her coordination category.
+
+========================================
+Timestamp: 2025-12-09T16:33:41.135Z
+Email ID: 18d5207444eb4eca
+Subject: I dumped things in overleaf!
+From: Lydia Chilton <chilton@cs.columbia.edu>
+Suggested Category: Lydia Chilton
+Rationale: Email is from Prof. Lydia Chilton coordinating project progress and next-day meeting tasks.
+
+========================================
+Timestamp: 2025-12-09T16:33:41.135Z
+Email ID: 18d56633537d43d4
+Subject: GRADUATION 2024 ACTION ITEM: Diploma Applications
+From: Melanie Greer Huff <mgh2@columbia.edu>
+Suggested Category: SEAS
+Rationale: Graduation diploma application email is an academic administrative action item analogous to SEAS degree-conferral notices.
+
+========================================
+Timestamp: 2025-12-09T16:33:41.135Z
+Email ID: 18d566fa7a034710
+Subject: Brown Institute Venture Challenge Info-Session (and Breakfast!) - Wednesday, January 31 from 8-9am (coffee and bagels)
+From: Mark Hansen <mh3287@columbia.edu>
+Suggested Category: Other
+Rationale: Promotional campus event email not matching any specialized category.
+
+========================================
+Timestamp: 2025-12-09T16:33:41.135Z
+Email ID: 18d56a24c83c64a1
+Subject: ODS note taking request: COMSW4705_002_2024_1 - NATURAL LANGUAGE PROCESSING
+From: COMSW4705_002_2024_1 - NATURAL LANGUAGE PROCESSING <notifications@instructure.com>
+Suggested Category: SEAS
+Rationale: CourseWorks announcement about disability services is an academic administrative notice for a SEAS course.
+
+========================================
+Timestamp: 2025-12-09T16:33:41.135Z
+Email ID: 18d570619bca07a5
+Subject: RE: Help!! $250 for your notes for ***NATURAL LANGUAGE PROCESSI (COMS 4705, section 002)***
+From: odsnotes <odsnotes@cumc.columbia.edu>
+Suggested Category: SEAS
+Rationale: Academic administrative message about course accommodations requiring response.
+
+========================================
+Timestamp: 2025-12-09T16:33:41.135Z
+Email ID: 18d578e84bc1443c
+Subject: 2024 Commencement Updates
+From: Commencement <commencement@columbia.edu>
+Suggested Category: SEAS
+Rationale: University Commencement update is an academic administrative notice relevant to students similar to SEAS-wide announcements.
+
+========================================
+Timestamp: 2025-12-09T16:33:41.136Z
+Email ID: 18d585b5181f6d31
+Subject: Re: Update
+From: Lydia Chilton <chilton@cs.columbia.edu>
+Suggested Category: Lydia Chilton
+Rationale: Message comes directly from Prof. Lydia Chilton about research edits.
+
+========================================
+Timestamp: 2025-12-09T16:33:41.136Z
+Email ID: 18d5b275952d0603
+Subject: Important information about your application to C3 AI - Interns and Early Professionals (Summer 2024)
+From: no-reply@us.greenhouse-mail.io
+Suggested Category: Internship
+Rationale: Provides status update declining candidacy for a summer internship role.
+
+========================================
+Timestamp: 2025-12-09T16:33:41.136Z
+Email ID: 18d5b5e844aef898
+Subject: Re: Meeting Now
+From: TaLisa Carter <carter@american.edu>
+Suggested Category: Other
+Rationale: Placed in “Other” because similar past items include: “Spam and Low Priority Email Digest: 17 New Messages”; “Spam and Low Priority Email Digest: 26 New Messages”; “Spam and Low Priority Email Digest: 18 New Messages”; this aligns with the saved category summary.
+
+========================================
+Timestamp: 2025-12-09T16:33:41.136Z
+Email ID: 18d5bf7d0931f657
+Subject: Alfonso OH: COMSW4705_001_2024_1 - NATURAL LANGUAGE PROCESSING
+From: COMSW4705_001_2024_1 - NATURAL LANGUAGE PROCESSING <notifications@instructure.com>
+Suggested Category: SEAS
+Rationale: Canvas announcement for a SEAS course (COMSW4705) fits academic administrative traffic.
+
+========================================
+Timestamp: 2025-12-09T16:33:41.136Z
+Email ID: 18d5c6ead67e4366
+Subject: Fwd: [ee-students-forum] SWE Internship Opportunity at Synchron
+From: Kavya Sreedhar <skavya@stanford.edu>
+Suggested Category: Internship
+Rationale: Email forwards a listing for a summer software engineering internship.
+
+========================================
+Timestamp: 2025-12-09T16:33:41.136Z
+Email ID: 18d5d6925386fef7
+Subject: Invitation: Karthik Lydia @ Thu Feb 1, 2024 2pm - 3pm (EST) (Karthik Sreedhar)
+From: "Lydia B. Chilton" <lc3251@columbia.edu>
+Suggested Category: Lydia Chilton
+Rationale: Meeting invite sent by Prof. Lydia Chilton coordinating 1-on-1 schedule.
+
+========================================
+Timestamp: 2025-12-09T16:33:41.136Z
+Email ID: 18d6002b39338145
+Subject: CORRECTION-Commencement
+From: Melanie Greer Huff <mgh2@columbia.edu>
+Suggested Category: SEAS
+Rationale: University administrative notice about commencement akin to other academic event communications handled in SEAS folder.
+
+========================================
+Timestamp: 2025-12-09T16:33:41.136Z
+Email ID: 18d619b356dc5416
+Subject: Re: Future Work
+From: Lydia Chilton <chilton@cs.columbia.edu>
+Suggested Category: Lydia Chilton
+Rationale: Email from Prof. Lydia coordinating meeting schedule.
+
+========================================
+Timestamp: 2025-12-09T16:33:41.136Z
+Email ID: 18d61ea980460538
+Subject: Your Countdown to Class Day Begins!
+From: Dean Chang <deanchang@columbia.edu>
+Suggested Category: SEAS
+Rationale: Email is a Columbia Engineering administrative newsletter about Class Day, matching SEAS community notices.
+
+========================================
+Timestamp: 2025-12-09T16:33:41.136Z
+Email ID: 18d61e8fbd057611
+Subject: Invitation: Karthik Sreedhar and Dhrumil Mehta @ Wed Feb 7, 2024 5:30pm - 6pm (EST) (Karthik Sreedhar)
+From: Dhrumil Mehta <dm3494@columbia.edu>
+Suggested Category: Other
+Rationale: Placed in “Other” because the email mentions “other”; similar past items include: “Spam and Low Priority Email Digest: 17 New Messages”; “Spam and Low Priority Email Digest: 26 New Messages”; “Spam and Low Priority Email Digest: 18 New Messages”; this aligns with the saved category summary.
+
+========================================
+Timestamp: 2025-12-09T16:33:41.136Z
+Email ID: 18d6252bf940df13
+Subject: Morningside campus access update for tomorrow (Thursday, February 1)
+From: "EVP Facilities & Operations" <EVP-FacilitiesOps@columbia.edu>
+Suggested Category: Other
+Rationale: University-wide broadcast announcement that is informational and requires no direct reply, fitting the bulk-notice nature of the Other category.
+
+========================================
+Timestamp: 2025-12-09T16:33:41.136Z
+Email ID: 18d62656f4fe9914
+Subject: The Pudding 2024 Cohort Application
+From: Google Forms <forms-receipts-noreply@google.com>
+Suggested Category: Internship
+Rationale: Receipt confirms submission for a summer fellowship application, fitting internship/job opportunity communications.
+
+========================================
+Timestamp: 2025-12-09T16:33:41.136Z
+Email ID: 18d626afbbe92746
+Subject: Thanks for accepting Abel Feleke’s invitation to apply to Google
+From: Google Recruiting <noreply+jobs@google.com>
+Suggested Category: Internship
+Rationale: Google recruiting email about applying for job roles fits the Internship category.
+
+========================================
+Timestamp: 2025-12-09T16:33:41.136Z
+Email ID: 18d667f9d4bfc057
+Subject: Possible Covid Exposure: COMSW4705_001_2024_1 - NATURAL LANGUAGE PROCESSING
+From: COMSW4705_001_2024_1 - NATURAL LANGUAGE PROCESSING <notifications@instructure.com>
+Suggested Category: Internship
+Rationale: Placed in “Internship” because similar past items include: “Thank you for Applying to Amazon!”; “Keep track of your application”; “You’ve been referred for a role at Amazon”; this aligns with the saved category summary.
+
+========================================
+Timestamp: 2025-12-09T16:33:41.136Z
+Email ID: 18d67c2cf8f26037
+Subject: Welcome to Tyler Data & Insights!
+From: NYC Open Data <no-reply@data.cityofnewyork.us>
+Suggested Category: Other
+Rationale: Automated welcome/marketing email from NYC Open Data with no urgent action required.
+
+========================================
+Timestamp: 2025-12-09T16:33:41.136Z
+Email ID: 18d684106ffc5b3a
+Subject: Fw: MyHSS Notification | Please Complete Required Questionnaire Before Appointment
+From: sreedhar_sivakumaran@yahoo.com
+Suggested Category: Sreedhar Sivakumaran
+Rationale: Email is a medical logistics forward from your dad’s account asking you to complete a questionnaire, matching his oversight/finance-and-care coordination pattern.
+
+========================================
+Timestamp: 2025-12-09T16:33:41.136Z
+Email ID: 18d6ae896fca85bf
+Subject: PDL - Elective Offerings 2/5-2/16 and Reminders
+From: SEAS-PDL <seas-pdl@columbia.edu>
+Suggested Category: Internship
+Rationale: PDL emails are career-development event invites similar to prior Internship examples.
+
+========================================
+Timestamp: 2025-12-09T16:33:41.137Z
+Email ID: 18d6ccc87a73a031
+Subject: Spring '24 DTA info
+From: Hayden Wander <hw2942@columbia.edu>
+Suggested Category: SEAS
+Rationale: Columbia administrative email about student timesheet procedures matches SEAS category for school HR notices.
+
+========================================
+Timestamp: 2025-12-09T16:33:41.137Z
+Email ID: 18d6d182882adfe0
+Subject: Booking Cancelled
+From: Room Reservation <alerts@mail.libcal.com>
+Suggested Category: SEAS
+Rationale: University logistical notice about on-campus academic space usage fits administrative campus bucket.
+
