@@ -2298,3 +2298,803 @@ From: "Anthropic, PBC" <invoice+statements@mail.anthropic.com>
 Suggested Category: Other
 Rationale: Automated receipt email for a purchase that does not reference any specific project category.
 
+========================================
+Timestamp: 2025-12-09T16:23:29.849Z
+Email ID: 1984b30532de4f24
+Subject: Invited Article for extended version of your conference paper
+From: "Prof. Wang Xiu Ying" <editor3@astesjournal.com>
+Suggested Category: Other
+Rationale: Journal solicitation about a past conference paper is generic academic outreach not tied to any listed project category.
+
+========================================
+Timestamp: 2025-12-09T16:23:29.850Z
+Email ID: 1984bcb040487d48
+Subject: Recommendation Verification Request for Nathan Wangidjaja from Re Vera Services on Behalf of MIT Sloan School of Management
+From: verifications@reveraservices.com
+Suggested Category: Rec letter
+Rationale: Email verifies submission of a recommendation letter for a student application.
+
+========================================
+Timestamp: 2025-12-09T16:23:29.850Z
+Email ID: 1984ca8c54ec38f2
+Subject: Invitation: Funny Business @ Wed Aug 6, 2025 12pm - 1pm (EDT) (Lydia B. Chilton)
+From: Michael Roger <mr4217@columbia.edu>
+Suggested Category: Humor Project
+Rationale: Calendar invite sent by Humor Project student Michael Roger for a project meeting fits the Humor Project category.
+
+========================================
+Timestamp: 2025-12-09T16:23:29.850Z
+Email ID: 1984ca8c337c1227
+Subject: Invitation: Funny Business @ Wed Jul 30, 2025 12pm - 1pm (EDT) (Lydia B. Chilton)
+From: Michael Roger <mr4217@columbia.edu>
+Suggested Category: Humor Project
+Rationale: Calendar invite from Humor Project organizer Michael Roger scheduling a project meeting fits the team-logistics pattern.
+
+========================================
+Timestamp: 2025-12-09T16:23:29.850Z
+Email ID: 1984ca8d3e5c6414
+Subject: Updated invitation: Funny Business @ Weekly from 12pm to 1pm on Wednesday from Wed Jul 9 to Tue Jul 29 (EDT) (Lydia B. Chilton)
+From: Michael Roger <mr4217@columbia.edu>
+Suggested Category: Humor Project
+Rationale: Calendar update from Humor Project member Michael Roger scheduling recurring meeting.
+
+========================================
+Timestamp: 2025-12-09T16:23:29.850Z
+Email ID: 1984ca8d3d5b9739
+Subject: Invitation: Funny Business @ Weekly from 12pm to 1pm on Wednesday from Wed Jul 30 to Wed Aug 13 (EDT) (Lydia B. Chilton)
+From: Michael Roger <mr4217@columbia.edu>
+Suggested Category: Humor Project
+Rationale: Calendar invite from Humor Project member Michael Roger scheduling a recurring project meeting with the usual team.
+
+========================================
+Timestamp: 2025-12-09T16:23:29.850Z
+Email ID: 1984dab0e80e98d7
+Subject: Check in carry-on baggage free of charge for your flight to New York
+From: Lufthansa Flight Service <flight.service@information.lufthansa.com>
+Suggested Category: Other
+Rationale: Travel notification about baggage check-in does not relate to any specific project or rec-letter.
+
+========================================
+Timestamp: 2025-12-09T16:23:29.850Z
+Email ID: 1984ed02299915c3
+Subject: Departure from gate 205 | Your flight to Frankfurt
+From: Lufthansa Flight Service <flight.service@information.lufthansa.com>
+Suggested Category: Other
+Rationale: Airline gate alert is personal logistics with no link to defined projects.
+
+========================================
+Timestamp: 2025-12-09T16:23:29.850Z
+Email ID: 1984f141cf401252
+Subject: Delay of your flight to Frankfurt
+From: Lufthansa Flight Change <flight.change@information.lufthansa.com>
+Suggested Category: Other
+Rationale: Travel delay notice unrelated to any listed project categories.
+
+========================================
+Timestamp: 2025-12-09T16:23:29.851Z
+Email ID: 1984f165359b5748
+Subject: Your baggage receipt 0220710731 for Skopje – New York on 28. July 2025
+From: Lufthansa Flight Service <flight.service@information.lufthansa.com>
+Suggested Category: Other
+Rationale: Airline baggage receipt is a travel/receipt email unrelated to any defined project categories.
+
+========================================
+Timestamp: 2025-12-09T16:23:29.851Z
+Email ID: 1984f5ac71873426
+Subject: Re: Great meeting you, lets make a better world!...
+From: Ted Selker <ted.selker@gmail.com>
+Suggested Category: Other
+Rationale: Collaboration outreach with no explicit link to Akify, DAPLab, or other defined projects.
+
+========================================
+Timestamp: 2025-12-09T16:23:29.851Z
+Email ID: 1984f725d3035d3b
+Subject: PhD Opportunity
+From: Sarthi Chitroda <sarthichitroda@gmail.com>
+Suggested Category: DoubleAgents
+Rationale: Student supervision requests are common here, but the message lacks any mention of the DoubleAgents project.
+
+========================================
+Timestamp: 2025-12-09T16:23:29.851Z
+Email ID: 19850be9765e8f4a
+Subject: Re: Cool interface!
+From: Jeff Nickerson <jvnickerson@gmail.com>
+Suggested Category: Other
+Rationale: General project discussion without explicit link to Akify, DAPLab, Humor Project, DoubleAgents, Jumpstarter, Rec letters, or DS3.
+
+========================================
+Timestamp: 2025-12-09T16:23:29.851Z
+Email ID: 19851b92ba187471
+Subject: Re: Advisor?
+From: Ted Benson <ted@steamship.com>
+Suggested Category: Akify
+Rationale: The thread coordinates investor-style pitch practice for the Akify startup’s fundraising efforts.
+
+========================================
+Timestamp: 2025-12-09T16:23:29.851Z
+Email ID: 198520dccfe6d02a
+Subject: Message to AAAI 2026 Conference Authors
+From: AAAI-26 <aaai-26-notifications@openreview.net>
+Suggested Category: Jumpstarter
+Rationale: AAAI-26 submission guidance matches prior Jumpstarter AAAI correspondence.
+
+========================================
+Timestamp: 2025-12-09T16:23:29.851Z
+Email ID: 198520f069159f58
+Subject: Re: Davis Hall + Hall of History Availability in October
+From: Alexis M Newman <amn2199@columbia.edu>
+Suggested Category: DAPLab
+Rationale: Venue logistics might be for a DAPLab event, but no direct evidence is provided.
+
+========================================
+Timestamp: 2025-12-09T16:23:29.851Z
+Email ID: 1985210139828843
+Subject: Re: digital storytelling meetup
+From: Vivian Liu <vivian@cs.columbia.edu>
+Suggested Category: Other
+Rationale: One-off scheduling note about a Columbia meetup that does not match any dedicated project category.
+
+========================================
+Timestamp: 2025-12-09T16:23:29.851Z
+Email ID: 1985223ed731b820
+Subject: Re: My flight got cancelled. I’ll be flying Tuesday but free Wednesday and onward.
+From: Soya Park <soya.the.golden@gmail.com>
+Suggested Category: Akify
+Rationale: Co-founders coordinating VC fundraising meetings for Akify fits the Akify category.
+
+========================================
+Timestamp: 2025-12-09T16:23:29.851Z
+Email ID: 198524ab39f91982
+Subject: Update on Negotiations with SWC Union
+From: Office of Public Affairs <columbianews@m.columbia.edu>
+Suggested Category: Other
+Rationale: University-wide labor update not tied to any specific project or category.
+
+========================================
+Timestamp: 2025-12-09T16:23:29.851Z
+Email ID: 198524ad25538d71
+Subject: Important updates to your Pro account usage limits
+From: Anthropic Team <team@email.anthropic.com>
+Suggested Category: Other
+Rationale: Service email about Anthropic account limits is unrelated to any specific project category.
+
+========================================
+Timestamp: 2025-12-09T16:23:29.851Z
+Email ID: 198524ba7f416dbe
+Subject: Re: Grace / Lydia: CHI Submission
+From: Grace Li <graceli458@gmail.com>
+Suggested Category: DoubleAgents
+Rationale: Discussion of CHI paper submission logistics fits the DoubleAgents research-project pattern of coordinating conference deadlines.
+
+========================================
+Timestamp: 2025-12-09T16:23:29.851Z
+Email ID: 198524c49727891c
+Subject: Declined: Soya/Lydia :) @ Tue Jul 29, 2025 5pm - 6pm (EDT) (lc3251@columbia.edu)
+From: Soya Park <soya.the.golden@gmail.com>
+Suggested Category: Akify
+Rationale: Meeting invite between Lydia and Soya Park, an Akify co-founder, fits internal Akify coordination.
+
+========================================
+Timestamp: 2025-12-09T16:23:29.851Z
+Email ID: 198528e7e4cd04c6
+Subject: TA or Research Opportunity Interest
+From: Jenny Leana Fotso Ngompe <jf3433@columbia.edu>
+Suggested Category: Other
+Rationale: Student enquires about TA or general research opportunities not tied to any named project category.
+
+========================================
+Timestamp: 2025-12-09T16:23:29.851Z
+Email ID: 198528efa61da0ab
+Subject: Opportunity to Contribute to Your Lab
+From: Amrutha Ragashree Rao <arr2249@columbia.edu>
+Suggested Category: DoubleAgents
+Rationale: Prospective student asking to contribute to lab research fits external interest pattern for DoubleAgents category.
+
+========================================
+Timestamp: 2025-12-09T16:23:29.851Z
+Email ID: 19852cfd82d69c2e
+Subject: Your receipt from Anthropic, PBC #2212-4503-1621
+From: "Anthropic, PBC" <invoice+statements@mail.anthropic.com>
+Suggested Category: Other
+Rationale: A generic purchase receipt that is not tied to any listed project category.
+
+========================================
+Timestamp: 2025-12-09T16:23:29.851Z
+Email ID: 19852dcb603f1dc2
+Subject: Invitation: Mark <> Soya, Lydia @ Wed Jul 30, 2025 6pm - 6:30pm (EDT) (lc3251@columbia.edu)
+From: Soya Park <soya.the.golden@gmail.com>
+Suggested Category: Akify
+Rationale: Meeting invite sent by Akify co-founder regarding a call with an external contact, fitting Akify fundraising/partner coordination traffic.
+
+========================================
+Timestamp: 2025-12-09T16:23:29.851Z
+Email ID: 19852e660e68db43
+Subject: Re: Connection from CHI & start-up!
+From: Soya Park <soya.the.golden@gmail.com>
+Suggested Category: Akify
+Rationale: Investor scheduling and pitch deck for the Akify startup fits the fundraising/partner communication pattern.
+
+========================================
+Timestamp: 2025-12-09T16:23:29.851Z
+Email ID: 19853356d02841af
+Subject: Re: [COMS 6901/ Hackathon] Seeking opportunity to do project with you!
+From: Theadora Seo <ys3338@columbia.edu>
+Suggested Category: Humor Project
+Rationale: Student coordinating to join project with Michael Roger (Humor team) and asking about COMS 6901 credits, fitting course/project logistics.
+
+========================================
+Timestamp: 2025-12-09T16:23:29.851Z
+Email ID: 1985339ba6c6e3a0
+Subject: Re: I’m remote for the digital storytelling meetup
+From: Riya Sahni <rs4640@columbia.edu>
+Suggested Category: Other
+Rationale: One-off scheduling request for a meetup without clear ties to any defined project or category.
+
+========================================
+Timestamp: 2025-12-09T16:23:29.851Z
+Email ID: 19853aae52305105
+Subject: Invitation to sign open letter about OpenAI
+From: Tyler Johnston <tyler@themidasproject.com>
+Suggested Category: Other
+Rationale: External advocacy email unrelated to any Akify or research project, fits miscellaneous traffic.
+
+========================================
+Timestamp: 2025-12-09T16:23:29.852Z
+Email ID: 19853bc1312bfbd5
+Subject: Re: Flight canceled :/
+From: Tanya Vlach <tanyavlach@gmail.com>
+Suggested Category: Other
+Rationale: Casual personal reply unrelated to any defined project or recommendation tasks.
+
+========================================
+Timestamp: 2025-12-09T16:23:29.852Z
+Email ID: 19853fe16a01e4c9
+Subject: Invitation: Mia’s defense @ Fri Sep 12, 2025 11am - 1pm (EDT) (Lydia B. Chilton)
+From: Mia Anna Chiquier <mac2500@columbia.edu>
+Suggested Category: Other
+Rationale: General scheduling invite unrelated to any defined project categories.
+
+========================================
+Timestamp: 2025-12-09T16:23:29.852Z
+Email ID: 19853fe7ae24c464
+Subject: Re: Defense Confirmation
+From: Mia A Chiquier <mac2500@columbia.edu>
+Suggested Category: Other
+Rationale: PhD defense scheduling does not match any project-specific or rec-letter categories, so it falls under miscellaneous academic coordination.
+
+========================================
+Timestamp: 2025-12-09T16:23:29.852Z
+Email ID: 1985421ba95bae60
+Subject: RE: Soya/Lydia (NewCo) <> Andrew (Gunderson)
+From: "Andrew O. Person" <aperson@gunder.com>
+Suggested Category: Akify
+Rationale: Email is a law‐firm engagement letter for Lydia & Soya’s company, fitting Akify’s bucket for external legal docs.
+
+========================================
+Timestamp: 2025-12-09T16:23:29.852Z
+Email ID: 198545ccac1f9003
+Subject: [URGENT] Inspired by your research — would love to connect
+From: aalang@ucsc.edu
+Suggested Category: Other
+Rationale: Cold outreach seeking a general research connection with no tie to specific listed projects.
+
+========================================
+Timestamp: 2025-12-09T16:23:29.852Z
+Email ID: 1985616d3a50a688
+Subject: System and interface meeting Jul 29
+From: "Torres Calderon, Wilfredo" <trrscld2@illinois.edu>
+Suggested Category: Other
+Rationale: Generic meeting invite unrelated to any defined project categories.
+
+========================================
+Timestamp: 2025-12-09T16:23:29.852Z
+Email ID: 1985628f7c92dff4
+Subject: Fwd: Verification Pending - Please Respond 95625/939401
+From: Nathan Bradley Wangidjaja <nbw2120@columbia.edu>
+Suggested Category: Rec letter
+Rationale: Student requests completion of a verification form related to a recommendation letter.
+
+========================================
+Timestamp: 2025-12-09T16:23:29.852Z
+Email ID: 19856a1212d55bd4
+Subject: You Are Now Eligible for the Columbia University Retirement Plan for Officers
+From: ColumbiaBenefits@ehr.com
+Suggested Category: Other
+Rationale: HR retirement-plan eligibility notice is general university admin and not tied to any listed project.
+
+========================================
+Timestamp: 2025-12-09T16:23:29.852Z
+Email ID: 19856a989b1b8585
+Subject: Folder shared with you: "Updated_Videos_LogoMotion_July_2025"
+From: "Vivian Liu (via Google Drive)" <drive-shares-dm-noreply@google.com>
+Suggested Category: Other
+Rationale: Shared Google Drive folder with project videos lacks clear ties to any defined project categories and is general file sharing.
+
+========================================
+Timestamp: 2025-12-09T16:23:29.852Z
+Email ID: 19857157bcbf70b6
+Subject: New Voice Message from +62 (811) 1800337 on 07/29/2025 12:47
+From: RingCentral <notify@ringcentral.com>
+Suggested Category: Other
+Rationale: Automated voicemail alert with no clear tie to any specific project or recommendation process.
+
+========================================
+Timestamp: 2025-12-09T16:23:29.852Z
+Email ID: 19857311d0b81f3b
+Subject: ML Ph.D - (U.S. Masters + 5y of Experience)
+From: skj01.edu@gmail.com
+Suggested Category: Other
+Rationale: Cold outreach from prospective PhD applicant not tied to any listed project or category.
+
+========================================
+Timestamp: 2025-12-09T16:23:29.852Z
+Email ID: 198575b59a564976
+Subject: Re: Post DAPlab - riya karthik lydia
+From: Karthik Sreedhar <ks4190@columbia.edu>
+Suggested Category: DAPLab
+Rationale: Scheduling follow-up meeting for DAPLab members after a DAPLab session.
+
+========================================
+Timestamp: 2025-12-09T16:23:29.852Z
+Email ID: 198576b9190bac08
+Subject: Invitation: AI Provenance Narratives Meeting @ Weekly from 12pm to 1pm on Thursday (EDT) (lc3251@columbia.edu)
+From: Dashiel Carrera <dashiel.carrera@gmail.com>
+Suggested Category: Other
+Rationale: Generic external meeting invitation with no clear link to any defined project categories.
+
+========================================
+Timestamp: 2025-12-09T16:23:29.852Z
+Email ID: 1985788bb0670cdc
+Subject: Re: Meeting Thursday morning?
+From: Dashiel Carrera <dashiel.carrera@gmail.com>
+Suggested Category: Other
+Rationale: Simple scheduling email not tied to any defined project categories.
+
+========================================
+Timestamp: 2025-12-09T16:23:29.852Z
+Email ID: 19857deb719c3907
+Subject: Eugene Wu mentioned you in #faculty
+From: Slack <notification@slack.com>
+Suggested Category: DAPLab
+Rationale: Slack notification from the DAPLab workspace belongs to lab communications.
+
+========================================
+Timestamp: 2025-12-09T16:23:29.852Z
+Email ID: 19859754b88bb465
+Subject: Re: Personas, Simulation pow wow @ Thu, Jul 10, 2025 2:00pm – 3:00pm (GMT-04)
+From: Eugene Wu <ew2493@columbia.edu>
+Suggested Category: DAPLab
+Rationale: Internal research-meeting coordination from Eugene Wu on digital-twin work fits DAPLab project communications.
+
+========================================
+Timestamp: 2025-12-09T16:23:29.852Z
+Email ID: 1985b1714fe588fa
+Subject: Re: Schedules
+From: Jeff Nickerson <jvnickerson@gmail.com>
+Suggested Category: Other
+Rationale: Pure scheduling email with no explicit link to any named project or category.
+
+========================================
+Timestamp: 2025-12-09T16:23:29.852Z
+Email ID: 1985b24773edb6f9
+Subject: Re: Invitation: MISQ @ Thu Jul 31, 2025 6pm - 7pm (EDT) (jvnickerson@gmail.com)
+From: Jeff Nickerson <jvnickerson@gmail.com>
+Suggested Category: Other
+Rationale: This is a one-off scheduling email unrelated to any specific project or category.
+
+========================================
+Timestamp: 2025-12-09T16:23:29.852Z
+Email ID: 1985b6e05b2f33b3
+Subject: You Are Now Eligible for the Officer Retirement Plan and to Receive Matching Contributions
+From: ColumbiaBenefits@ehr.com
+Suggested Category: Other
+Rationale: HR benefits notification unrelated to any specific project category.
+
+========================================
+Timestamp: 2025-12-09T16:23:29.852Z
+Email ID: 1985b7c1480bb4f5
+Subject: Re: CHI paper on utility of Structural Mapping Theory (and how to get it)
+From: "Glassman, Elena" <glassman@seas.harvard.edu>
+Suggested Category: Other
+Rationale: Research collaboration about a new CHI paper not tied to any specific listed project.
+
+========================================
+Timestamp: 2025-12-09T16:23:48.182Z
+Email ID: 1984b30532de4f24
+Subject: Invited Article for extended version of your conference paper
+From: "Prof. Wang Xiu Ying" <editor3@astesjournal.com>
+Suggested Category: Other
+Rationale: Journal solicitation about extending a prior conference paper is generic academic outreach not tied to any defined project or recommendation request.
+
+========================================
+Timestamp: 2025-12-09T16:23:48.182Z
+Email ID: 1984bcb040487d48
+Subject: Recommendation Verification Request for Nathan Wangidjaja from Re Vera Services on Behalf of MIT Sloan School of Management
+From: verifications@reveraservices.com
+Suggested Category: Rec letter
+Rationale: Verification request confirms a previously submitted recommendation letter.
+
+========================================
+Timestamp: 2025-12-09T16:23:48.183Z
+Email ID: 1984ca8c54ec38f2
+Subject: Invitation: Funny Business @ Wed Aug 6, 2025 12pm - 1pm (EDT) (Lydia B. Chilton)
+From: Michael Roger <mr4217@columbia.edu>
+Suggested Category: Humor Project
+Rationale: Calendar invite from Humor Project member Michael Roger scheduling a project-related meeting.
+
+========================================
+Timestamp: 2025-12-09T16:23:48.183Z
+Email ID: 1984ca8c337c1227
+Subject: Invitation: Funny Business @ Wed Jul 30, 2025 12pm - 1pm (EDT) (Lydia B. Chilton)
+From: Michael Roger <mr4217@columbia.edu>
+Suggested Category: Humor Project
+Rationale: Invite is sent by Humor Project member Michael Roger for a project meeting, matching Humor Project logistics traffic.
+
+========================================
+Timestamp: 2025-12-09T16:23:48.183Z
+Email ID: 1984ca8d3e5c6414
+Subject: Updated invitation: Funny Business @ Weekly from 12pm to 1pm on Wednesday from Wed Jul 9 to Tue Jul 29 (EDT) (Lydia B. Chilton)
+From: Michael Roger <mr4217@columbia.edu>
+Suggested Category: Humor Project
+Rationale: Calendar update for a recurring meeting sent by Humor Project member Michael Roger.
+
+========================================
+Timestamp: 2025-12-09T16:23:48.183Z
+Email ID: 1984ca8d3d5b9739
+Subject: Invitation: Funny Business @ Weekly from 12pm to 1pm on Wednesday from Wed Jul 30 to Wed Aug 13 (EDT) (Lydia B. Chilton)
+From: Michael Roger <mr4217@columbia.edu>
+Suggested Category: Humor Project
+Rationale: Calendar invite from Humor Project member Michael Roger for recurring meeting aligns with project coordination traffic.
+
+========================================
+Timestamp: 2025-12-09T16:23:48.183Z
+Email ID: 1984dab0e80e98d7
+Subject: Check in carry-on baggage free of charge for your flight to New York
+From: Lufthansa Flight Service <flight.service@information.lufthansa.com>
+Suggested Category: Other
+Rationale: Airline baggage notice is a miscellaneous travel email unrelated to any listed projects.
+
+========================================
+Timestamp: 2025-12-09T16:23:48.183Z
+Email ID: 1984ed02299915c3
+Subject: Departure from gate 205 | Your flight to Frankfurt
+From: Lufthansa Flight Service <flight.service@information.lufthansa.com>
+Suggested Category: Other
+Rationale: Travel gate notification does not match any project-specific category and fits miscellaneous traffic.
+
+========================================
+Timestamp: 2025-12-09T16:23:48.183Z
+Email ID: 1984f141cf401252
+Subject: Delay of your flight to Frankfurt
+From: Lufthansa Flight Change <flight.change@information.lufthansa.com>
+Suggested Category: Other
+Rationale: Generic travel delay notice unrelated to any specific project.
+
+========================================
+Timestamp: 2025-12-09T16:23:48.183Z
+Email ID: 1984f165359b5748
+Subject: Your baggage receipt 0220710731 for Skopje – New York on 28. July 2025
+From: Lufthansa Flight Service <flight.service@information.lufthansa.com>
+Suggested Category: Other
+Rationale: Travel baggage receipt is a one-off automated notification that fits the general 'receipts/alerts' bucket.
+
+========================================
+Timestamp: 2025-12-09T16:23:48.183Z
+Email ID: 1984f5ac71873426
+Subject: Re: Great meeting you, lets make a better world!...
+From: Ted Selker <ted.selker@gmail.com>
+Suggested Category: Other
+Rationale: External collaborator proposing a general project discussion with no clear link to any defined lab projects or rec-letter request.
+
+========================================
+Timestamp: 2025-12-09T16:23:48.183Z
+Email ID: 1984f725d3035d3b
+Subject: PhD Opportunity
+From: Sarthi Chitroda <sarthichitroda@gmail.com>
+Suggested Category: Other
+Rationale: Generic research inquiry from prospective student not tied to any listed project or rec-letter request.
+
+========================================
+Timestamp: 2025-12-09T16:23:48.183Z
+Email ID: 19850be9765e8f4a
+Subject: Re: Cool interface!
+From: Jeff Nickerson <jvnickerson@gmail.com>
+Suggested Category: DoubleAgents
+Rationale: Thread with collaborator giving feedback on a research interface aligns with ongoing DoubleAgents project coordination emails.
+
+========================================
+Timestamp: 2025-12-09T16:23:48.183Z
+Email ID: 19851b92ba187471
+Subject: Re: Advisor?
+From: Ted Benson <ted@steamship.com>
+Suggested Category: Akify
+Rationale: Thread arranges a practice pitch and fundraising support for Soya & Lydia’s startup, fitting Akify investor-related correspondence.
+
+========================================
+Timestamp: 2025-12-09T16:23:48.183Z
+Email ID: 198520dccfe6d02a
+Subject: Message to AAAI 2026 Conference Authors
+From: AAAI-26 <aaai-26-notifications@openreview.net>
+Suggested Category: Jumpstarter
+Rationale: AAAI-2026 submission instructions align with prior JumpStarter conversations about redirecting the paper to AAAI.
+
+========================================
+Timestamp: 2025-12-09T16:23:48.183Z
+Email ID: 198520f069159f58
+Subject: Re: Davis Hall + Hall of History Availability in October
+From: Alexis M Newman <amn2199@columbia.edu>
+Suggested Category: Other
+Rationale: This is routine campus event-space coordination with no clear link to the named projects.
+
+========================================
+Timestamp: 2025-12-09T16:23:48.184Z
+Email ID: 1985210139828843
+Subject: Re: digital storytelling meetup
+From: Vivian Liu <vivian@cs.columbia.edu>
+Suggested Category: DAPLab
+Rationale: Mentions a storytelling meetup that could loosely relate to prior DAPLab partner events, but link is uncertain.
+
+========================================
+Timestamp: 2025-12-09T16:23:48.184Z
+Email ID: 1985223ed731b820
+Subject: Re: My flight got cancelled. I’ll be flying Tuesday but free Wednesday and onward.
+From: Soya Park <soya.the.golden@gmail.com>
+Suggested Category: Akify
+Rationale: Internal Akify coordination about scheduling VC fundraising meetings.
+
+========================================
+Timestamp: 2025-12-09T16:23:48.184Z
+Email ID: 198524ab39f91982
+Subject: Update on Negotiations with SWC Union
+From: Office of Public Affairs <columbianews@m.columbia.edu>
+Suggested Category: Other
+Rationale: University-wide informational update unrelated to any defined project categories.
+
+========================================
+Timestamp: 2025-12-09T16:23:48.184Z
+Email ID: 198524ad25538d71
+Subject: Important updates to your Pro account usage limits
+From: Anthropic Team <team@email.anthropic.com>
+Suggested Category: Other
+Rationale: Generic service usage alert unrelated to specific lab or project categories.
+
+========================================
+Timestamp: 2025-12-09T16:23:48.184Z
+Email ID: 198524ba7f416dbe
+Subject: Re: Grace / Lydia: CHI Submission
+From: Grace Li <graceli458@gmail.com>
+Suggested Category: Other
+Rationale: The thread is generic travel/scheduling around a CHI submission with no clear tie to any listed project.
+
+========================================
+Timestamp: 2025-12-09T16:23:48.184Z
+Email ID: 198524c49727891c
+Subject: Declined: Soya/Lydia :) @ Tue Jul 29, 2025 5pm - 6pm (EDT) (lc3251@columbia.edu)
+From: Soya Park <soya.the.golden@gmail.com>
+Suggested Category: Akify
+Rationale: Declined calendar invite between Soya Park and Lydia concerns internal Akify scheduling.
+
+========================================
+Timestamp: 2025-12-09T16:23:48.184Z
+Email ID: 198528e7e4cd04c6
+Subject: TA or Research Opportunity Interest
+From: Jenny Leana Fotso Ngompe <jf3433@columbia.edu>
+Suggested Category: Other
+Rationale: Student asks about TA/research roles unrelated to any defined project categories.
+
+========================================
+Timestamp: 2025-12-09T16:23:48.184Z
+Email ID: 198528efa61da0ab
+Subject: Opportunity to Contribute to Your Lab
+From: Amrutha Ragashree Rao <arr2249@columbia.edu>
+Suggested Category: DoubleAgents
+Rationale: Student cold-email seeking to join your lab aligns with the category’s ‘external interest’ examples of prospective collaborators.
+
+========================================
+Timestamp: 2025-12-09T16:23:48.184Z
+Email ID: 19852cfd82d69c2e
+Subject: Your receipt from Anthropic, PBC #2212-4503-1621
+From: "Anthropic, PBC" <invoice+statements@mail.anthropic.com>
+Suggested Category: Other
+Rationale: General purchase receipt; no project or category references.
+
+========================================
+Timestamp: 2025-12-09T16:23:48.184Z
+Email ID: 19852dcb603f1dc2
+Subject: Invitation: Mark <> Soya, Lydia @ Wed Jul 30, 2025 6pm - 6:30pm (EDT) (lc3251@columbia.edu)
+From: Soya Park <soya.the.golden@gmail.com>
+Suggested Category: Akify
+Rationale: Calendar invite from Akify co-founders to an external contact fits investor/partner meeting traffic for the Akify category.
+
+========================================
+Timestamp: 2025-12-09T16:23:48.184Z
+Email ID: 19852e660e68db43
+Subject: Re: Connection from CHI & start-up!
+From: Soya Park <soya.the.golden@gmail.com>
+Suggested Category: Akify
+Rationale: Thread discusses sending Akify pitch deck and scheduling investor meeting, matching fundraising-related Akify traffic.
+
+========================================
+Timestamp: 2025-12-09T16:23:48.184Z
+Email ID: 19853356d02841af
+Subject: Re: [COMS 6901/ Hackathon] Seeking opportunity to do project with you!
+From: Theadora Seo <ys3338@columbia.edu>
+Suggested Category: Humor Project
+Rationale: Student joins a project/hackathon coordinated by Michael Roger and Prof. Chilton, both recurring actors in Humor Project course emails (COMS 6901).
+
+========================================
+Timestamp: 2025-12-09T16:23:48.184Z
+Email ID: 1985339ba6c6e3a0
+Subject: Re: I’m remote for the digital storytelling meetup
+From: Riya Sahni <rs4640@columbia.edu>
+Suggested Category: DAPLab
+Rationale: Digital storytelling was mentioned in prior DAPLab partner threads, so possible but uncertain.
+
+========================================
+Timestamp: 2025-12-09T16:23:48.184Z
+Email ID: 19853aae52305105
+Subject: Invitation to sign open letter about OpenAI
+From: Tyler Johnston <tyler@themidasproject.com>
+Suggested Category: Other
+Rationale: External outreach unrelated to any listed project or rec-letter, requesting action on public letter.
+
+========================================
+Timestamp: 2025-12-09T16:23:48.184Z
+Email ID: 19853bc1312bfbd5
+Subject: Re: Flight canceled :/
+From: Tanya Vlach <tanyavlach@gmail.com>
+Suggested Category: Other
+Rationale: Informal personal exchange with no evident connection to any defined project category.
+
+========================================
+Timestamp: 2025-12-09T16:23:48.184Z
+Email ID: 19853fe16a01e4c9
+Subject: Invitation: Mia’s defense @ Fri Sep 12, 2025 11am - 1pm (EDT) (Lydia B. Chilton)
+From: Mia Anna Chiquier <mac2500@columbia.edu>
+Suggested Category: Other
+Rationale: A general calendar invite for a colleague's defense that is not tied to any listed project or rec-letter workflow.
+
+========================================
+Timestamp: 2025-12-09T16:23:48.184Z
+Email ID: 19853fe7ae24c464
+Subject: Re: Defense Confirmation
+From: Mia A Chiquier <mac2500@columbia.edu>
+Suggested Category: Other
+Rationale: General scheduling thread for a PhD defense that does not reference any defined project category.
+
+========================================
+Timestamp: 2025-12-09T16:23:48.184Z
+Email ID: 1985421ba95bae60
+Subject: RE: Soya/Lydia (NewCo) <> Andrew (Gunderson)
+From: "Andrew O. Person" <aperson@gunder.com>
+Suggested Category: Akify
+Rationale: Law firm follows up about an engagement letter for Lydia and Soya’s startup, fitting Akify’s fundraising/partnership legal threads.
+
+========================================
+Timestamp: 2025-12-09T16:23:48.185Z
+Email ID: 198545ccac1f9003
+Subject: [URGENT] Inspired by your research — would love to connect
+From: aalang@ucsc.edu
+Suggested Category: Other
+Rationale: General external outreach expressing interest in your research without referencing a specific project or category.
+
+========================================
+Timestamp: 2025-12-09T16:23:48.185Z
+Email ID: 1985616d3a50a688
+Subject: System and interface meeting Jul 29
+From: "Torres Calderon, Wilfredo" <trrscld2@illinois.edu>
+Suggested Category: Other
+Rationale: Generic meeting invite unrelated to listed projects or rec-letter requests.
+
+========================================
+Timestamp: 2025-12-09T16:23:48.185Z
+Email ID: 1985628f7c92dff4
+Subject: Fwd: Verification Pending - Please Respond 95625/939401
+From: Nathan Bradley Wangidjaja <nbw2120@columbia.edu>
+Suggested Category: Rec letter
+Rationale: Student asks professor to complete verification linked to a prior recommendation letter.
+
+========================================
+Timestamp: 2025-12-09T16:23:48.185Z
+Email ID: 19856a1212d55bd4
+Subject: You Are Now Eligible for the Columbia University Retirement Plan for Officers
+From: ColumbiaBenefits@ehr.com
+Suggested Category: Other
+Rationale: An HR retirement eligibility notice is general admin unrelated to specific projects.
+
+========================================
+Timestamp: 2025-12-09T16:23:48.185Z
+Email ID: 19856a989b1b8585
+Subject: Folder shared with you: "Updated_Videos_LogoMotion_July_2025"
+From: "Vivian Liu (via Google Drive)" <drive-shares-dm-noreply@google.com>
+Suggested Category: Rec letter
+Rationale: Vivian Liu, who recently requested a recommendation, is sending additional portfolio materials to aid that letter.
+
+========================================
+Timestamp: 2025-12-09T16:23:48.185Z
+Email ID: 19857157bcbf70b6
+Subject: New Voice Message from +62 (811) 1800337 on 07/29/2025 12:47
+From: RingCentral <notify@ringcentral.com>
+Suggested Category: Other
+Rationale: Automated voicemail alert with no connection to the listed project categories.
+
+========================================
+Timestamp: 2025-12-09T16:23:48.185Z
+Email ID: 19857311d0b81f3b
+Subject: ML Ph.D - (U.S. Masters + 5y of Experience)
+From: skj01.edu@gmail.com
+Suggested Category: Other
+Rationale: Cold outreach about PhD opportunities that does not align with any specific project folder.
+
+========================================
+Timestamp: 2025-12-09T16:23:48.185Z
+Email ID: 198575b59a564976
+Subject: Re: Post DAPlab - riya karthik lydia
+From: Karthik Sreedhar <ks4190@columbia.edu>
+Suggested Category: DAPLab
+Rationale: Email coordinates a follow-up meeting after a DAPLab event, with lab members Karthik and Lydia included.
+
+========================================
+Timestamp: 2025-12-09T16:23:48.185Z
+Email ID: 198576b9190bac08
+Subject: Invitation: AI Provenance Narratives Meeting @ Weekly from 12pm to 1pm on Thursday (EDT) (lc3251@columbia.edu)
+From: Dashiel Carrera <dashiel.carrera@gmail.com>
+Suggested Category: Other
+Rationale: Calendar invite for an external AI meeting not tied to any listed project.
+
+========================================
+Timestamp: 2025-12-09T16:23:48.185Z
+Email ID: 1985788bb0670cdc
+Subject: Re: Meeting Thursday morning?
+From: Dashiel Carrera <dashiel.carrera@gmail.com>
+Suggested Category: Other
+Rationale: Ad-hoc scheduling message unrelated to any specific project category.
+
+========================================
+Timestamp: 2025-12-09T16:23:48.185Z
+Email ID: 19857deb719c3907
+Subject: Eugene Wu mentioned you in #faculty
+From: Slack <notification@slack.com>
+Suggested Category: DAPLab
+Rationale: Slack notification comes from the DAPLab workspace about lab-related student coordination.
+
+========================================
+Timestamp: 2025-12-09T16:23:48.185Z
+Email ID: 19859754b88bb465
+Subject: Re: Personas, Simulation pow wow @ Thu, Jul 10, 2025 2:00pm – 3:00pm (GMT-04)
+From: Eugene Wu <ew2493@columbia.edu>
+Suggested Category: DAPLab
+Rationale: Eugene Wu coordinating a research doc and meeting about digital twins/personas fits DAPLab internal project logistics.
+
+========================================
+Timestamp: 2025-12-09T16:23:48.185Z
+Email ID: 1985b1714fe588fa
+Subject: Re: Schedules
+From: Jeff Nickerson <jvnickerson@gmail.com>
+Suggested Category: Other
+Rationale: General scheduling email without references to any specific project or category.
+
+========================================
+Timestamp: 2025-12-09T16:23:48.185Z
+Email ID: 1985b24773edb6f9
+Subject: Re: Invitation: MISQ @ Thu Jul 31, 2025 6pm - 7pm (EDT) (jvnickerson@gmail.com)
+From: Jeff Nickerson <jvnickerson@gmail.com>
+Suggested Category: Other
+Rationale: General scheduling clarification unrelated to any specific project categories.
+
+========================================
+Timestamp: 2025-12-09T16:23:48.185Z
+Email ID: 1985b6e05b2f33b3
+Subject: You Are Now Eligible for the Officer Retirement Plan and to Receive Matching Contributions
+From: ColumbiaBenefits@ehr.com
+Suggested Category: Other
+Rationale: HR benefits notice does not relate to any specific project category and fits miscellaneous traffic.
+
+========================================
+Timestamp: 2025-12-09T16:23:48.185Z
+Email ID: 1985b7c1480bb4f5
+Subject: Re: CHI paper on utility of Structural Mapping Theory (and how to get it)
+From: "Glassman, Elena" <glassman@seas.harvard.edu>
+Suggested Category: Other
+Rationale: Research collaboration email does not reference any listed project or category, fitting only miscellaneous 'Other'.
+

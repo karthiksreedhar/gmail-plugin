@@ -11807,16 +11807,43 @@ Provide a one or two sentence justification only.`;
  */
 app.get('/api/priority-today', async (req, res) => {
   try {
-    // LOCALIZED-TEST: Serve 50 random emails from data/{user}/priority-emails-5000.json and classify (no Gmail)
+    // Load 50 priority emails from MongoDB first, with JSON fallback
+    let pool = [];
+    let source = 'mongo';
+    
     try {
-      const paths = getCurrentUserPaths();
-      const p = path.join(paths.USER_DATA_DIR, 'priority-emails-5000.json');
-      if (fs.existsSync(p)) {
-        const raw = JSON.parse(fs.readFileSync(p, 'utf8'));
-        const list = Array.isArray(raw) ? raw : (Array.isArray(raw?.emails) ? raw.emails : []);
-        const pool = Array.isArray(list) ? list.slice() : [];
-
-        // Filter out emails already in the database by checking all three stores
+      // Try MongoDB first
+      const doc = await getUserDoc('priority_emails', CURRENT_USER_EMAIL);
+      if (doc && Array.isArray(doc.emails)) {
+        pool = doc.emails.slice();
+        console.log(`Loaded ${pool.length} priority emails from MongoDB`);
+      } else {
+        source = 'file';
+      }
+    } catch (mongoErr) {
+      console.warn('MongoDB load failed, falling back to JSON file:', mongoErr?.message || mongoErr);
+      source = 'file';
+    }
+    
+    // Fallback to local JSON file if MongoDB didn't return data
+    if (source === 'file') {
+      try {
+        const paths = getCurrentUserPaths();
+        const p = path.join(paths.USER_DATA_DIR, 'priority-emails-5000.json');
+        if (fs.existsSync(p)) {
+          const raw = JSON.parse(fs.readFileSync(p, 'utf8'));
+          const list = Array.isArray(raw) ? raw : (Array.isArray(raw?.emails) ? raw.emails : []);
+          pool = Array.isArray(list) ? list.slice() : [];
+          console.log(`Loaded ${pool.length} priority emails from JSON file (fallback)`);
+        }
+      } catch (fileErr) {
+        console.error('Failed to load from JSON file:', fileErr?.message || fileErr);
+      }
+    }
+    
+    // If we have emails from either source, process them
+    if (pool.length > 0) {
+      // Filter out emails already in the database by checking all three stores
         const responses = loadResponseEmails() || [];
         const threads = loadEmailThreads() || [];
         const unreplied = loadUnrepliedEmails() || [];
@@ -11906,10 +11933,9 @@ app.get('/api/priority-today', async (req, res) => {
           category: otherCat
         }));
         return res.json({ success: true, emails: fallback });
-      }
-    } catch (_) {
-      // If local file missing or unreadable, continue to the original Gmail path as a safety net
     }
+    
+    // If no data from MongoDB or local file, continue to Gmail API
     // Ensure Gmail API is available and authenticated
     if (!gmail || !gmailAuth) {
       const authUrl = getGmailAuthUrl();
