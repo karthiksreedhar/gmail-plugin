@@ -6985,7 +6985,7 @@ let priorityCatActiveIndex = -1;
 async function loadPriorityToday() {
     try {
         // Show loading popup as requested
-        showLoadingOverlay('Loading Priority Emails from Today…', 'Fetching important emails received today…', false);
+        showLoadingOverlay('Loading emails from downloaded set…', 'Fetching important emails from downloaded set…', false);
 
         // Ensure we have the current categories ordering for suggestions
         await loadCurrentCategories();
