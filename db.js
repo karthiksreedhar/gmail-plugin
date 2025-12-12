@@ -24,7 +24,9 @@ const COLLECTIONS = [
   'hidden_threads',
   'hidden_inbox',
   'test_emails',
-  'user_state'
+  'user_state',
+  'classifier_log',
+  'priority_emails'
 ];
 
 async function initMongo() {

@@ -95,10 +95,38 @@ function getCurrentUserPaths() {
 }
 
 /**
- * Helper to write classifier results to a log file for audit/debugging
+ * Helper to write classifier results to MongoDB for audit/debugging
  */
-function writeClassifierLog(emailId, subject, from, suggestedCategory, rationale, timestamp) {
+async function writeClassifierLog(emailId, subject, from, suggestedCategory, rationale, timestamp) {
   try {
+    // Try MongoDB first
+    try {
+      const doc = await getUserDoc('classifier_log', CURRENT_USER_EMAIL);
+      const entries = Array.isArray(doc?.entries) ? doc.entries : [];
+      
+      const entry = {
+        timestamp: timestamp || new Date().toISOString(),
+        emailId: emailId || 'N/A',
+        subject: subject || 'No Subject',
+        from: from || 'Unknown Sender',
+        suggestedCategory: suggestedCategory || 'N/A',
+        rationale: rationale || 'No rationale provided'
+      };
+      
+      // Keep last 1000 entries to avoid unbounded growth
+      entries.push(entry);
+      if (entries.length > 1000) {
+        entries.shift();
+      }
+      
+      await setUserDoc('classifier_log', CURRENT_USER_EMAIL, { entries });
+      console.log(`[ClassifierLog] Wrote to MongoDB for ${CURRENT_USER_EMAIL}`);
+      return;
+    } catch (mongoErr) {
+      console.warn('MongoDB classifier log write failed, falling back to file:', mongoErr);
+    }
+    
+    // Fallback to file system
     const paths = getCurrentUserPaths();
     const logPath = path.join(paths.USER_DATA_DIR, 'classifier-log.txt');
     
@@ -128,8 +156,20 @@ Rationale: ${rationale || 'No rationale provided'}
  * API endpoint to read classifier log
  * GET /api/classifier-log
  */
-app.get('/api/classifier-log', (req, res) => {
+app.get('/api/classifier-log', async (req, res) => {
   try {
+    // Try MongoDB first
+    try {
+      const doc = await getUserDoc('classifier_log', CURRENT_USER_EMAIL);
+      if (doc && Array.isArray(doc.entries)) {
+        console.log(`[ClassifierLog] Read ${doc.entries.length} entries from MongoDB for ${CURRENT_USER_EMAIL}`);
+        return res.json({ success: true, entries: doc.entries });
+      }
+    } catch (mongoErr) {
+      console.warn('MongoDB classifier log read failed, falling back to file:', mongoErr);
+    }
+    
+    // Fallback to file system
     const paths = getCurrentUserPaths();
     const logPath = path.join(paths.USER_DATA_DIR, 'classifier-log.txt');
     
@@ -172,8 +212,17 @@ app.get('/api/classifier-log', (req, res) => {
  * API endpoint to clear classifier log
  * DELETE /api/classifier-log
  */
-app.delete('/api/classifier-log', (req, res) => {
+app.delete('/api/classifier-log', async (req, res) => {
   try {
+    // Clear from MongoDB first
+    try {
+      await setUserDoc('classifier_log', CURRENT_USER_EMAIL, { entries: [] });
+      console.log(`[ClassifierLog] Cleared from MongoDB for ${CURRENT_USER_EMAIL}`);
+    } catch (mongoErr) {
+      console.warn('MongoDB classifier log clear failed, clearing file:', mongoErr);
+    }
+    
+    // Also clear file if it exists
     const paths = getCurrentUserPaths();
     const logPath = path.join(paths.USER_DATA_DIR, 'classifier-log.txt');
     
