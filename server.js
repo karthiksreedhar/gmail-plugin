@@ -20,6 +20,9 @@ const openai = new OpenAI({
 const app = express();
 const PORT = parseInt(process.env.PORT, 10) || 3000;
 
+// Base URL for internal API calls (supports deployment environments)
+const BASE_URL = process.env.BASE_URL || `${BASE_URL}`;
+
 // Middleware
 app.use(cors());
 // Increase JSON body size limit to accommodate facet-analysis payloads from the client
@@ -2555,7 +2558,7 @@ app.post('/api/switch-user', async (req, res) => {
     // so the lightweight UI can render immediately after switching users.
     let priorityEmails = [];
     try {
-      const resp = await fetch(`http://localhost:${PORT}/api/priority-today`);
+      const resp = await fetch(`${BASE_URL}/api/priority-today`);
       if (resp.ok) {
         const data = await resp.json().catch(() => ({}));
         priorityEmails = Array.isArray(data.emails) ? data.emails : [];
@@ -4284,7 +4287,7 @@ app.post('/api/seed-categories/add-all', async (req, res) => {
       if (missingCats.length) {
         try {
           // Reuse existing endpoint logic via internal HTTP call
-          await fetch(`http://localhost:${PORT}/api/generate-category-summaries`, {
+          await fetch(`${BASE_URL}/api/generate-category-summaries`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ categories: missingCats, overwrite: false })
@@ -10966,7 +10969,7 @@ app.post('/api/classifier-v3/suggest-batch', async (req, res) => {
           // 3) final fallback: call local explanation endpoint
           if (!explanation) {
             try {
-              const resp = await fetch(`http://localhost:${PORT}/api/explain-category-assignment`, {
+              const resp = await fetch(`${BASE_URL}/api/explain-category-assignment`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ email: e, category: suggestion })
@@ -11117,7 +11120,7 @@ app.post('/api/classifier-v4/suggest-batch', async (req, res) => {
           // Fallback: ask local explainer
           if (!explanation) {
             try {
-              const resp = await fetch(`http://localhost:${PORT}/api/explain-category-assignment`, {
+              const resp = await fetch(`${BASE_URL}/api/explain-category-assignment`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ email: e, category: recCat })
@@ -11200,7 +11203,7 @@ app.post('/api/classifier-v4/suggest-batch', async (req, res) => {
           } catch (_) {}
           if (!explanation) {
             try {
-              const resp = await fetch(`http://localhost:${PORT}/api/explain-category-assignment`, {
+              const resp = await fetch(`${BASE_URL}/api/explain-category-assignment`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ email: e, category: suggestion })
@@ -11932,7 +11935,7 @@ app.get('/api/priority-today', async (req, res) => {
 
         // Use classifier-v4 to get suggestions
         try {
-          const resp = await fetch(`http://localhost:${PORT}/api/classifier-v4/suggest-batch`, {
+          const resp = await fetch(`${BASE_URL}/api/classifier-v4/suggest-batch`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -12156,7 +12159,7 @@ app.get('/api/priority-today', async (req, res) => {
           from: e.from
         }))
       };
-      const resp = await fetch(`http://localhost:${PORT}/api/classifier-v4/suggest-batch`, {
+      const resp = await fetch(`${BASE_URL}/api/classifier-v4/suggest-batch`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
@@ -12245,7 +12248,7 @@ app.get('/', async (req, res) => {
 
 // Start server
 app.listen(PORT, async () => {
-  console.log(`Server running on http://localhost:${PORT}`);
+  console.log(`Server running on ${BASE_URL}`);
   console.log(`Current user: ${CURRENT_USER_EMAIL}`);
   console.log(`Data directory: ${getCurrentUserPaths().USER_DATA_DIR}`);
   console.log(`Loaded ${emailMemory.scenarios.length} scenarios, ${emailMemory.refinements.length} refinements, ${emailMemory.savedGenerations.length} saved generations`);
