@@ -11948,16 +11948,16 @@ app.get('/api/priority-today', async (req, res) => {
             const data = await resp.json().catch(() => ({}));
             const results = (data && data.results && typeof data.results === 'object') ? data.results : {};
             const categoriesX = __getCategoriesList();
-            const enriched = pick.map(e => {
+            const enriched = await Promise.all(pick.map(async (e) => {
               const r = results[e.id] || {};
               const sugg = r && r.suggestion ? r.suggestion : '';
               const contenders = Array.isArray(r.contenders) ? r.contenders : [];
               const reasons = (r && typeof r.rationales === 'object') ? r.rationales : {};
               const chosen = sugg || contenders[0] || (categoriesX.find(c => normalizeKey(c) === 'other') || 'Other');
               
-              // Write to classifier log
+              // Write to classifier log (await to ensure it completes before response)
               const rationale = r.explanation || reasons[chosen] || 'No rationale provided';
-              writeClassifierLog(e.id, e.subject, e.from, chosen, rationale, new Date().toISOString());
+              await writeClassifierLog(e.id, e.subject, e.from, chosen, rationale, new Date().toISOString());
               
               return {
                 ...e,
@@ -11965,7 +11965,7 @@ app.get('/api/priority-today', async (req, res) => {
                 suggestedReasons: reasons,
                 category: chosen
               };
-            });
+            }));
             return res.json({ success: true, emails: enriched });
           }
         } catch (_) {
