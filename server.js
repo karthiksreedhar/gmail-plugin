@@ -95,30 +95,46 @@ function getCurrentUserPaths() {
 }
 
 /**
- * Helper to write classifier results to a log file for audit/debugging
+ * Helper to write classifier results to MongoDB for audit/debugging
  */
-function writeClassifierLog(emailId, subject, from, suggestedCategory, rationale, timestamp) {
+async function writeClassifierLog(emailId, subject, from, suggestedCategory, rationale, timestamp) {
   try {
-    const paths = getCurrentUserPaths();
-    const logPath = path.join(paths.USER_DATA_DIR, 'classifier-log.txt');
+    const entry = {
+      emailId: emailId || 'N/A',
+      subject: subject || 'No Subject',
+      from: from || 'Unknown Sender',
+      suggestedCategory: suggestedCategory || 'N/A',
+      rationale: rationale || 'No rationale provided',
+      timestamp: timestamp || new Date().toISOString()
+    };
     
-    const entry = `========================================
-Timestamp: ${timestamp || new Date().toISOString()}
-Email ID: ${emailId || 'N/A'}
-Subject: ${subject || 'No Subject'}
-From: ${from || 'Unknown Sender'}
-Suggested Category: ${suggestedCategory || 'N/A'}
-Rationale: ${rationale || 'No rationale provided'}
+    // Try MongoDB first
+    try {
+      const doc = await getUserDoc('classifier_log', CURRENT_USER_EMAIL);
+      const entries = (doc && Array.isArray(doc.entries)) ? doc.entries : [];
+      entries.push(entry);
+      // Keep only last 1000 entries to avoid unbounded growth
+      const trimmed = entries.slice(-1000);
+      await setUserDoc('classifier_log', CURRENT_USER_EMAIL, { entries: trimmed });
+    } catch (mongoErr) {
+      console.warn('MongoDB classifier log write failed, falling back to file:', mongoErr?.message || mongoErr);
+      // Fallback to file system for local dev
+      const paths = getCurrentUserPaths();
+      const logPath = path.join(paths.USER_DATA_DIR, 'classifier-log.txt');
+      const logEntry = `========================================
+Timestamp: ${entry.timestamp}
+Email ID: ${entry.emailId}
+Subject: ${entry.subject}
+From: ${entry.from}
+Suggested Category: ${entry.suggestedCategory}
+Rationale: ${entry.rationale}
 
 `;
-    
-    // Ensure directory exists
-    if (!fs.existsSync(paths.USER_DATA_DIR)) {
-      fs.mkdirSync(paths.USER_DATA_DIR, { recursive: true });
+      if (!fs.existsSync(paths.USER_DATA_DIR)) {
+        fs.mkdirSync(paths.USER_DATA_DIR, { recursive: true });
+      }
+      fs.appendFileSync(logPath, logEntry, 'utf8');
     }
-    
-    // Append to log file
-    fs.appendFileSync(logPath, entry, 'utf8');
   } catch (error) {
     console.error('Error writing classifier log:', error);
   }
@@ -128,8 +144,19 @@ Rationale: ${rationale || 'No rationale provided'}
  * API endpoint to read classifier log
  * GET /api/classifier-log
  */
-app.get('/api/classifier-log', (req, res) => {
+app.get('/api/classifier-log', async (req, res) => {
   try {
+    // Try MongoDB first
+    try {
+      const doc = await getUserDoc('classifier_log', CURRENT_USER_EMAIL);
+      if (doc && Array.isArray(doc.entries)) {
+        return res.json({ success: true, entries: doc.entries });
+      }
+    } catch (mongoErr) {
+      console.warn('MongoDB classifier log read failed, falling back to file:', mongoErr?.message || mongoErr);
+    }
+    
+    // Fallback to file system for local dev
     const paths = getCurrentUserPaths();
     const logPath = path.join(paths.USER_DATA_DIR, 'classifier-log.txt');
     
@@ -172,8 +199,16 @@ app.get('/api/classifier-log', (req, res) => {
  * API endpoint to clear classifier log
  * DELETE /api/classifier-log
  */
-app.delete('/api/classifier-log', (req, res) => {
+app.delete('/api/classifier-log', async (req, res) => {
   try {
+    // Try MongoDB first
+    try {
+      await setUserDoc('classifier_log', CURRENT_USER_EMAIL, { entries: [] });
+    } catch (mongoErr) {
+      console.warn('MongoDB classifier log clear failed, falling back to file:', mongoErr?.message || mongoErr);
+    }
+    
+    // Also clear file system for local dev
     const paths = getCurrentUserPaths();
     const logPath = path.join(paths.USER_DATA_DIR, 'classifier-log.txt');
     
@@ -11899,16 +11934,16 @@ app.get('/api/priority-today', async (req, res) => {
             const data = await resp.json().catch(() => ({}));
             const results = (data && data.results && typeof data.results === 'object') ? data.results : {};
             const categoriesX = __getCategoriesList();
-            const enriched = pick.map(e => {
+            const enriched = await Promise.all(pick.map(async (e) => {
               const r = results[e.id] || {};
               const sugg = r && r.suggestion ? r.suggestion : '';
               const contenders = Array.isArray(r.contenders) ? r.contenders : [];
               const reasons = (r && typeof r.rationales === 'object') ? r.rationales : {};
               const chosen = sugg || contenders[0] || (categoriesX.find(c => normalizeKey(c) === 'other') || 'Other');
               
-              // Write to classifier log
+              // Write to classifier log (await to prevent race condition with frontend reads)
               const rationale = r.explanation || reasons[chosen] || 'No rationale provided';
-              writeClassifierLog(e.id, e.subject, e.from, chosen, rationale, new Date().toISOString());
+              await writeClassifierLog(e.id, e.subject, e.from, chosen, rationale, new Date().toISOString());
               
               return {
                 ...e,
@@ -11916,7 +11951,7 @@ app.get('/api/priority-today', async (req, res) => {
                 suggestedReasons: reasons,
                 category: chosen
               };
-            });
+            }));
             return res.json({ success: true, emails: enriched });
           }
         } catch (_) {
