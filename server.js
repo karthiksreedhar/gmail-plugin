@@ -10984,50 +10984,46 @@ app.post('/api/classifier-v3/suggest-batch', async (req, res) => {
  * - Test run endpoint for Test Classifier page
  */
 
-// POST /api/classifier-v4/suggest-batch
-// Input: { emails: [{id, subject, body, from}], maxPerCat?: number }
-// Output: { success: true, results: { [id]: { contenders, pick, rationales, suggestion } } }
-app.post('/api/classifier-v4/suggest-batch', async (req, res) => {
-  try {
-    const input = Array.isArray(req.body?.emails) ? req.body.emails : [];
-    const MAX = Math.max(1, Math.min(200, Number(req.body?.maxPerCat) || 20));
+// Shared classifier V4 logic (used by API endpoint and internal calls)
+async function __classifierV4SuggestBatch(input, maxPerCat = 20) {
+  const MAX = Math.max(1, Math.min(200, Number(maxPerCat) || 20));
 
-    // Authoritative categories X and per-category examples
-    const categoriesX = __getCategoriesList();
-    const perCatRows = __v3BuildCategoryRows();
-    const summaries = loadCategorySummaries() || {};
-    const guidelinesPayload = loadEmailData(getCurrentUserPaths().CATEGORY_GUIDELINES_PATH) || {};
-    const guidelinesMap = (guidelinesPayload && Array.isArray(guidelinesPayload.categories))
-      ? Object.fromEntries(guidelinesPayload.categories.map(c => [c.name, c.notes || '']))
-      : {};
+  // Authoritative categories X and per-category examples
+  const categoriesX = __getCategoriesList();
+  const perCatRows = __v3BuildCategoryRows();
+  const summaries = loadCategorySummaries() || {};
+  const guidelinesPayload = loadEmailData(getCurrentUserPaths().CATEGORY_GUIDELINES_PATH) || {};
+  const guidelinesMap = (guidelinesPayload && Array.isArray(guidelinesPayload.categories))
+    ? Object.fromEntries(guidelinesPayload.categories.map(c => [c.name, c.notes || '']))
+    : {};
 
-    // Dynamic batch size: at most 50 batches, or 1 email per batch if fewer than 50 emails
-    const BATCH = input.length < 50 ? 1 : Math.ceil(input.length / 50);
-    const totalBatches = Math.ceil(input.length / BATCH);
-    
-    console.log(`[ClassifierV4] Processing ${input.length} emails in ${totalBatches} batches (batch size: ${BATCH})`);
+  // Dynamic batch size: at most 50 batches, or 1 email per batch if fewer than 50 emails
+  const BATCH = input.length < 50 ? 1 : Math.ceil(input.length / 50);
+  const totalBatches = Math.ceil(input.length / BATCH);
+  
+  console.log(`[ClassifierV4] Processing ${input.length} emails in ${totalBatches} batches (batch size: ${BATCH})`);
 
-    // Batched LLM decision
-    const results = {};
-    for (let i = 0; i < input.length; i += BATCH) {
-      const batchNum = Math.floor(i / BATCH) + 1;
-      const batch = input.slice(i, i + BATCH);
-      console.log(`[ClassifierV4] Processing batch ${batchNum}/${totalBatches} (${batch.length} emails)...`);
-      const r = await __v3OpenAIBatchLabel(
-        batch.map(e => ({ id: e.id, subject: e.subject, body: e.body, from: e.from })),
-        categoriesX,
-        perCatRows,
-        summaries,
-        guidelinesMap,
-        MAX
-      );
-      Object.assign(results, r || {});
-      console.log(`[ClassifierV4] Completed batch ${batchNum}/${totalBatches}`);
-    }
+  // Batched LLM decision
+  const results = {};
+  for (let i = 0; i < input.length; i += BATCH) {
+    const batchNum = Math.floor(i / BATCH) + 1;
+    const batch = input.slice(i, i + BATCH);
+    console.log(`[ClassifierV4] Processing batch ${batchNum}/${totalBatches} (${batch.length} emails)...`);
+    const r = await __v3OpenAIBatchLabel(
+      batch.map(e => ({ id: e.id, subject: e.subject, body: e.body, from: e.from })),
+      categoriesX,
+      perCatRows,
+      summaries,
+      guidelinesMap,
+      MAX
+    );
+    Object.assign(results, r || {});
+    console.log(`[ClassifierV4] Completed batch ${batchNum}/${totalBatches}`);
+  }
 
-    // Build V4 suggestions
-    const out = {};
-    for (const e of input) {
+  // Build V4 suggestions
+  const out = {};
+  for (const e of input) {
       const id = String(e.id || '');
       if (!id) continue;
 
@@ -11211,7 +11207,18 @@ app.post('/api/classifier-v4/suggest-batch', async (req, res) => {
       } catch (_) {}
     }
 
-    return res.json({ success: true, results: out });
+    return out;
+}
+
+// POST /api/classifier-v4/suggest-batch
+// Input: { emails: [{id, subject, body, from}], maxPerCat?: number }
+// Output: { success: true, results: { [id]: { contenders, pick, rationales, suggestion } } }
+app.post('/api/classifier-v4/suggest-batch', async (req, res) => {
+  try {
+    const input = Array.isArray(req.body?.emails) ? req.body.emails : [];
+    const MAX = Math.max(1, Math.min(200, Number(req.body?.maxPerCat) || 20));
+    const results = await __classifierV4SuggestBatch(input, MAX);
+    return res.json({ success: true, results });
   } catch (err) {
     console.error('classifier-v4/suggest-batch failed:', err);
     return res.status(500).json({ success: false, error: 'Failed to run classifier v4 batch' });
@@ -11916,23 +11923,19 @@ app.get('/api/priority-today', async (req, res) => {
           };
         });
 
-        // Use classifier-v4 to get suggestions
+        // Use classifier-v4 to get suggestions (direct function call - works on Render)
         try {
-          const resp = await fetch(`http://localhost:${PORT}/api/classifier-v4/suggest-batch`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              emails: pick.map(e => ({
-                id: e.id,
-                subject: e.subject,
-                body: e.body || e.snippet || '',
-                from: e.from
-              }))
-            })
-          });
-          if (resp.ok) {
-            const data = await resp.json().catch(() => ({}));
-            const results = (data && data.results && typeof data.results === 'object') ? data.results : {};
+          const results = await __classifierV4SuggestBatch(
+            pick.map(e => ({
+              id: e.id,
+              subject: e.subject,
+              body: e.body || e.snippet || '',
+              from: e.from
+            })),
+            20 // maxPerCat
+          );
+          
+          if (results && typeof results === 'object') {
             const categoriesX = __getCategoriesList();
             console.log(`[Priority-Today] Writing ${pick.length} classifier logs to MongoDB (this prevents race condition)...`);
             const enriched = await Promise.all(pick.map(async (e) => {
@@ -11956,7 +11959,8 @@ app.get('/api/priority-today', async (req, res) => {
             console.log(`[Priority-Today] ✓ All ${pick.length} classifier logs written to MongoDB. Frontend can now safely read them.`);
             return res.json({ success: true, emails: enriched });
           }
-        } catch (_) {
+        } catch (classifierErr) {
+          console.error('[Priority-Today] Classifier failed:', classifierErr?.message || classifierErr);
           // fall through to simple fallback
         }
 
