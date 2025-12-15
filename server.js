@@ -12135,28 +12135,19 @@ app.get('/api/priority-today', async (req, res) => {
     const categoriesX = __getCategoriesList();
 
     // Use the Limited Classifier (same multi-signal pipeline used by the Test Classifier)
-    // by calling the existing internal endpoint /api/suggest-categories with stage="all".
-    // This returns ordered contenders per email and reasons; we attach those as suggestions,
-    // and set the primary category to the first suggestion for backward compatibility.
+    // by calling the shared function directly (works on Render without localhost fetch)
     try {
-      const payload = {
-        stage: 'all',
-        emails: dedupedByThread.map(e => ({
+      const results = await __classifierV4SuggestBatch(
+        dedupedByThread.map(e => ({
           id: e.id,
           subject: e.subject,
           body: e.body || e.snippet || '',
           from: e.from
-        }))
-      };
-      const resp = await fetch(`http://localhost:${PORT}/api/classifier-v4/suggest-batch`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
+        })),
+        20 // maxPerCat
+      );
 
-      if (resp.ok) {
-        const data = await resp.json().catch(() => ({}));
-        const results = (data && typeof data.results === 'object') ? data.results : null;
+      if (results && typeof results === 'object') {
 
         // Attach suggestions to each email using V4 results; set category to first suggestion if present
         const enriched = dedupedByThread.map(e => {
