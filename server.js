@@ -11934,6 +11934,7 @@ app.get('/api/priority-today', async (req, res) => {
             const data = await resp.json().catch(() => ({}));
             const results = (data && data.results && typeof data.results === 'object') ? data.results : {};
             const categoriesX = __getCategoriesList();
+            console.log(`[Priority-Today] Writing ${pick.length} classifier logs to MongoDB (this prevents race condition)...`);
             const enriched = await Promise.all(pick.map(async (e) => {
               const r = results[e.id] || {};
               const sugg = r && r.suggestion ? r.suggestion : '';
@@ -11952,6 +11953,7 @@ app.get('/api/priority-today', async (req, res) => {
                 category: chosen
               };
             }));
+            console.log(`[Priority-Today] ✓ All ${pick.length} classifier logs written to MongoDB. Frontend can now safely read them.`);
             return res.json({ success: true, emails: enriched });
           }
         } catch (_) {
