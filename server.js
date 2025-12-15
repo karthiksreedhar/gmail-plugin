@@ -11953,7 +11953,8 @@ app.get('/api/priority-today', async (req, res) => {
                 ...e,
                 suggestedCategories: sugg ? [sugg, ...contenders.filter(c => c && c !== sugg)].slice(0, 2) : contenders.slice(0, 2),
                 suggestedReasons: reasons,
-                category: chosen
+                category: chosen,
+                explanation: rationale  // Add the actual explanation for UI display
               };
             }));
             console.log(`[Priority-Today] ✓ All ${pick.length} classifier logs written to MongoDB. Frontend can now safely read them.`);

@@ -7055,10 +7055,11 @@ async function loadPriorityToday() {
             const hasValidBackendCategory = backendCategory && backendCategory.toLowerCase() !== 'other';
             
             if (hasValidBackendCategory) {
-                // Backend already categorized this email - use it directly
+                // Backend already categorized this email - use it directly with explanation
                 e._cat = backendCategory;
-                e._catReason = 'Categorized by backend classifier';
-                console.log(`[PriorityToday] Using backend category for "${e.subject}": _cat="${e._cat}"`);
+                // Extract explanation from backend response - check multiple sources
+                e._catReason = e.explanation || (e.suggestedReasons && e.suggestedReasons[backendCategory]) || 'Categorized by backend classifier';
+                console.log(`[PriorityToday] Using backend category for "${e.subject}": _cat="${e._cat}", _catReason="${e._catReason}"`);
                 return; // Skip frontend re-categorization
             }
             
