@@ -9,6 +9,9 @@ require('dotenv').config();
 // MongoDB (Atlas) connection helper
 const { initMongo, getUserDoc, setUserDoc, warmCacheForUser, getCachedDoc } = require('./db');
 
+// Feature system loader
+const features = require('./data/features/_loader');
+
 /**
  * Initialize OpenAI client using environment variable
  * Ensure OPENAI_API_KEY is set in your .env file
@@ -12227,6 +12230,102 @@ app.get('/', async (req, res) => {
   return res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
+// =============================================
+// FEATURE SYSTEM API ENDPOINTS
+// =============================================
+
+/**
+ * List all loaded features with status
+ * GET /api/features
+ */
+app.get('/api/features', (req, res) => {
+  try {
+    const list = features.listFeatures();
+    return res.json({ success: true, features: list });
+  } catch (e) {
+    console.error('Error listing features:', e);
+    return res.status(500).json({ success: false, error: 'Failed to list features' });
+  }
+});
+
+/**
+ * Get a specific feature's details
+ * GET /api/features/:name
+ */
+app.get('/api/features/:name', (req, res) => {
+  try {
+    const name = req.params.name;
+    const feature = features.getFeature(name);
+    if (!feature) {
+      return res.status(404).json({ success: false, error: 'Feature not found' });
+    }
+    return res.json({ success: true, feature });
+  } catch (e) {
+    console.error('Error getting feature:', e);
+    return res.status(500).json({ success: false, error: 'Failed to get feature' });
+  }
+});
+
+/**
+ * Enable a feature
+ * POST /api/features/:name/enable
+ */
+app.post('/api/features/:name/enable', (req, res) => {
+  try {
+    const name = req.params.name;
+    const result = features.setFeatureEnabled(name, true);
+    return res.json({ success: true, ...result });
+  } catch (e) {
+    console.error('Error enabling feature:', e);
+    return res.status(500).json({ success: false, error: 'Failed to enable feature' });
+  }
+});
+
+/**
+ * Disable a feature
+ * POST /api/features/:name/disable
+ */
+app.post('/api/features/:name/disable', (req, res) => {
+  try {
+    const name = req.params.name;
+    const result = features.setFeatureEnabled(name, false);
+    return res.json({ success: true, ...result });
+  } catch (e) {
+    console.error('Error disabling feature:', e);
+    return res.status(500).json({ success: false, error: 'Failed to disable feature' });
+  }
+});
+
+/**
+ * Update a feature's configuration
+ * PUT /api/features/:name/config
+ */
+app.put('/api/features/:name/config', (req, res) => {
+  try {
+    const name = req.params.name;
+    const config = req.body || {};
+    const result = features.updateFeatureConfig(name, config);
+    return res.json({ success: true, ...result });
+  } catch (e) {
+    console.error('Error updating feature config:', e);
+    return res.status(500).json({ success: false, error: 'Failed to update feature config' });
+  }
+});
+
+/**
+ * Reload all features from disk
+ * POST /api/features/reload
+ */
+app.post('/api/features/reload', (req, res) => {
+  try {
+    const result = features.reload();
+    return res.json({ success: true, ...result });
+  } catch (e) {
+    console.error('Error reloading features:', e);
+    return res.status(500).json({ success: false, error: 'Failed to reload features' });
+  }
+});
+
 // Start server
 app.listen(PORT, async () => {
   console.log(`Server running on http://localhost:${PORT}`);
@@ -12240,5 +12339,13 @@ app.listen(PORT, async () => {
     console.log('Gmail API ready for use');
   } else {
     console.log('Gmail API requires authentication - visit /api/auth to authenticate');
+  }
+  
+  // Initialize Feature System
+  try {
+    const featureResult = await features.init();
+    console.log(`Feature system initialized: ${featureResult.featureCount} feature(s) loaded`);
+  } catch (e) {
+    console.warn('Feature system initialization failed:', e?.message || e);
   }
 });
