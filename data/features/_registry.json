@@ -1,4 +1,6 @@
 {
-  "enabled": {},
+  "enabled": {
+    "student-interest-quick-reply": true
+  },
   "config": {}
 }

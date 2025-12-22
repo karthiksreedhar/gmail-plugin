@@ -3001,6 +3001,18 @@ app.post('/api/load-email-threads', async (req, res) => {
         }
 
         console.log(`Loaded ${uniqueThreads.length} threads from today (participated + new mail today)`);
+        
+        // Trigger feature hooks for loaded threads
+        try {
+          await features.executeHook('onEmailThreadsLoaded', {
+            threads: uniqueThreads,
+            user: CURRENT_USER_EMAIL
+          });
+          console.log(`[Features] onEmailThreadsLoaded hook triggered for ${uniqueThreads.length} threads`);
+        } catch (featureErr) {
+          console.warn('[Features] Email threads hook failed:', featureErr?.message || featureErr);
+        }
+        
         return res.json({
           success: true,
           threads: uniqueThreads,
@@ -3168,6 +3180,17 @@ app.post('/api/load-email-threads', async (req, res) => {
       }
 
       console.log(`Successfully loaded ${uniqueThreads.length} unique email threads from Gmail`);
+      
+      // Trigger feature hooks for loaded threads
+      try {
+        await features.executeHook('onEmailThreadsLoaded', {
+          threads: uniqueThreads,
+          user: CURRENT_USER_EMAIL
+        });
+        console.log(`[Features] onEmailThreadsLoaded hook triggered for ${uniqueThreads.length} threads`);
+      } catch (featureErr) {
+        console.warn('[Features] Email threads hook failed:', featureErr?.message || featureErr);
+      }
       
       res.json({
         success: true,
@@ -11961,6 +11984,18 @@ app.get('/api/priority-today', async (req, res) => {
               };
             }));
             console.log(`[Priority-Today] ✓ All ${pick.length} classifier logs written to MongoDB. Frontend can now safely read them.`);
+            
+            // Trigger feature hooks for priority emails
+            try {
+              await features.executeHook('onPriorityEmailsLoaded', {
+                emails: enriched,
+                user: CURRENT_USER_EMAIL
+              });
+              console.log(`[Features] onPriorityEmailsLoaded hook triggered for ${enriched.length} emails`);
+            } catch (featureErr) {
+              console.warn('[Features] Priority emails hook failed:', featureErr?.message || featureErr);
+            }
+            
             return res.json({ success: true, emails: enriched });
           }
         } catch (classifierErr) {
@@ -11977,6 +12012,17 @@ app.get('/api/priority-today', async (req, res) => {
           suggestedReasons: { [otherCat]: 'No confident category match found (local test mode)' },
           category: otherCat
         }));
+        // Trigger feature hooks for priority emails (fallback)
+        try {
+          await features.executeHook('onPriorityEmailsLoaded', {
+            emails: fallback,
+            user: CURRENT_USER_EMAIL
+          });
+          console.log(`[Features] onPriorityEmailsLoaded hook triggered for ${fallback.length} emails (fallback)`);
+        } catch (featureErr) {
+          console.warn('[Features] Priority emails hook failed (fallback):', featureErr?.message || featureErr);
+        }
+        
         return res.json({ success: true, emails: fallback });
     }
     
