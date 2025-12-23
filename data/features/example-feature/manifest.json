@@ -1,0 +1,14 @@
+{
+  "id": "example-feature",
+  "name": "Example Feature",
+  "version": "1.0.0",
+  "description": "Example feature demonstrating the plugin API",
+  "author": "Gmail Plugin Team",
+  "backend": "backend.js",
+  "frontend": "frontend.js",
+  "permissions": [
+    "emails:read",
+    "emails:write",
+    "api:custom"
+  ]
+}

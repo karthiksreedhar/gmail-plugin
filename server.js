@@ -21,13 +21,136 @@ const app = express();
 const PORT = parseInt(process.env.PORT, 10) || 3000;
 
 // Base URL for internal API calls (supports deployment environments)
-const BASE_URL = process.env.BASE_URL || `${BASE_URL}`;
+const BASE_URL = process.env.BASE_URL || `http://localhost:${PORT}`;
+
+/**
+ * FEATURE PLUGIN SYSTEM
+ * Dynamically loads features from data/features/ directory
+ * Each feature can register API routes, UI components, and hooks
+ */
+const loadedFeatures = [];
+
+function initializeFeatures() {
+  const featuresDir = path.join(__dirname, 'data', 'features');
+  
+  // Check if features directory exists
+  if (!fs.existsSync(featuresDir)) {
+    console.log('Features directory not found - skipping feature loading');
+    return;
+  }
+
+  try {
+    const featureDirs = fs.readdirSync(featuresDir, { withFileTypes: true })
+      .filter(dirent => dirent.isDirectory())
+      .map(dirent => dirent.name);
+
+    console.log(`Found ${featureDirs.length} potential features to load`);
+
+    featureDirs.forEach(featureName => {
+      try {
+        const featurePath = path.join(featuresDir, featureName);
+        const manifestPath = path.join(featurePath, 'manifest.json');
+        
+        // Skip if no manifest
+        if (!fs.existsSync(manifestPath)) {
+          console.log(`Skipping ${featureName} - no manifest.json found`);
+          return;
+        }
+
+        const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+        console.log(`Loading feature: ${manifest.name || featureName} (${manifest.version || '1.0.0'})`);
+
+        // Create feature context with access to server resources
+        const featureContext = {
+          app,
+          express,
+          gmail: () => gmail, // Lazy getter since gmail may not be initialized yet
+          gmailAuth: () => gmailAuth,
+          openai,
+          fs,
+          path,
+          // Database helpers
+          getUserDoc,
+          setUserDoc,
+          loadEmailData,
+          loadResponseEmails,
+          loadEmailThreads,
+          loadUnrepliedEmails,
+          loadTestEmails,
+          loadNotes,
+          saveNotes,
+          loadCategoriesList,
+          saveCategoriesList,
+          // Email processing helpers
+          searchGmailEmails,
+          getGmailEmail,
+          cleanResponseBody,
+          categorizeEmail,
+          writeClassifierLog,
+          // Current user context
+          getCurrentUser: () => CURRENT_USER_EMAIL,
+          getCurrentUserPaths,
+          // Utility functions
+          getDisplayNameForUser,
+          normalizeUserEmailForData
+        };
+
+        // Load backend if specified
+        if (manifest.backend) {
+          const backendPath = path.join(featurePath, manifest.backend);
+          if (fs.existsSync(backendPath)) {
+            try {
+              const backendModule = require(backendPath);
+              if (typeof backendModule.initialize === 'function') {
+                backendModule.initialize(featureContext);
+                console.log(`  ✓ Backend initialized for ${featureName}`);
+              }
+            } catch (error) {
+              console.error(`  ✗ Failed to initialize backend for ${featureName}:`, error.message);
+            }
+          }
+        }
+
+        // Track loaded feature
+        loadedFeatures.push({
+          id: manifest.id || featureName,
+          name: manifest.name || featureName,
+          version: manifest.version || '1.0.0',
+          manifest,
+          path: featurePath
+        });
+
+        console.log(`  ✓ Feature ${manifest.name || featureName} loaded successfully`);
+      } catch (error) {
+        console.error(`Failed to load feature ${featureName}:`, error.message);
+      }
+    });
+
+    console.log(`Successfully loaded ${loadedFeatures.length} features`);
+  } catch (error) {
+    console.error('Error initializing features:', error);
+  }
+}
+
+// API endpoint to list loaded features
+app.get('/api/features', (req, res) => {
+  res.json({
+    success: true,
+    features: loadedFeatures.map(f => ({
+      id: f.id,
+      name: f.name,
+      version: f.version,
+      description: f.manifest.description || ''
+    }))
+  });
+});
 
 // Middleware
 app.use(cors());
 // Increase JSON body size limit to accommodate facet-analysis payloads from the client
 app.use(express.json({ limit: '10mb' }));
 app.use(express.static('public'));
+app.use('/data', express.static('data')); // Serve feature scripts and data files
 
 // Current user - can be changed via API (loaded from .env if present)
 let CURRENT_USER_EMAIL = process.env.CURRENT_USER_EMAIL || 'ks4190@columbia.edu';
@@ -1069,6 +1192,10 @@ let persistentData = { scenarios: [], refinements: [], savedGenerations: [] };
 (async () => {
   try { persistentData = await loadDataFromFile(); } catch (_) {}
 })();
+
+// Initialize features after core dependencies are ready
+// Features can register routes and hooks during initialization
+initializeFeatures();
 
 // Store for email memory/categories, refinements, saved generations, and scenarios
 let emailMemory = {
@@ -10892,8 +11019,8 @@ app.post('/api/classifier-v3/suggest-batch', async (req, res) => {
       ? Object.fromEntries(guidelinesPayload.categories.map(c => [c.name, c.notes || '']))
       : {};
 
-    // Dynamic batch size: at most 50 batches, or 1 email per batch if fewer than 50 emails
-    const BATCH = input.length < 50 ? 1 : Math.ceil(input.length / 50);
+    // Dynamic batch size: at most 20 batches, or 1 email per batch if fewer than 20 emails
+    const BATCH = input.length < 20 ? 1 : Math.ceil(input.length / 20);
     const totalBatches = Math.ceil(input.length / BATCH);
     
     console.log(`[ClassifierV3] Processing ${input.length} emails in ${totalBatches} batches (batch size: ${BATCH})`);
@@ -11018,8 +11145,8 @@ app.post('/api/classifier-v4/suggest-batch', async (req, res) => {
       ? Object.fromEntries(guidelinesPayload.categories.map(c => [c.name, c.notes || '']))
       : {};
 
-    // Dynamic batch size: at most 50 batches, or 1 email per batch if fewer than 50 emails
-    const BATCH = input.length < 50 ? 1 : Math.ceil(input.length / 50);
+    // Dynamic batch size: at most 20 batches, or 1 email per batch if fewer than 20 emails
+    const BATCH = input.length < 20 ? 1 : Math.ceil(input.length / 20);
     const totalBatches = Math.ceil(input.length / BATCH);
     
     console.log(`[ClassifierV4] Processing ${input.length} emails in ${totalBatches} batches (batch size: ${BATCH})`);

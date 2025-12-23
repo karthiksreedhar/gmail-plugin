@@ -2755,7 +2755,9 @@
                 <button class="refresh-btn" onclick="window.location.href='/seed.html'" title="Seed initial categories from important inbox">Seed Categories</button>
                 <button class="generate-btn" onclick="loadPriorityToday()" title="Load important emails from the past day">Load Today</button>
                 <button class="generate-btn" onclick="openTestClassifier()" title="Run classifier evaluation on labeled emails">Test Classifier</button>
-                            </div>
+                <!-- Feature extension point: header actions -->
+                <div id="feature-header-actions" style="display:flex; gap:12px;"></div>
+            </div>
             <div class="header-buttons">
                 <button class="view-saved-generations-btn" onclick="showViewSavedGenerationsModal()">View Saved Generations</button>
                 <button class="view-refinements-btn" onclick="showViewRefinementsModal()">View Refinements</button>
@@ -2906,7 +2908,148 @@
         </div>
     </div>
 
+    <!-- Feature extension point: modals container -->
+    <div id="feature-modals"></div>
+
     <script>
+        /**
+         * EMAIL ASSISTANT FEATURE API
+         * Provides utilities for custom features to integrate with the UI
+         */
+        window.EmailAssistant = {
+            // Core data access
+            getEmails: () => allEmails || [],
+            getCurrentFilter: () => currentFilter,
+            getCurrentUser: () => document.getElementById('currentUser')?.textContent || '',
+            
+            // UI manipulation
+            addHeaderButton(label, handler, options = {}) {
+                const container = document.getElementById('feature-header-actions');
+                if (!container) return null;
+                
+                const btn = document.createElement('button');
+                btn.className = options.className || 'generate-btn';
+                btn.textContent = label;
+                btn.onclick = handler;
+                if (options.style) Object.assign(btn.style, options.style);
+                
+                container.appendChild(btn);
+                return btn;
+            },
+            
+            addEmailAction(name, handler) {
+                // Store action for use when rendering email items
+                if (!window._featureEmailActions) window._featureEmailActions = [];
+                window._featureEmailActions.push({ name, handler });
+            },
+            
+            showModal(content, title = 'Feature Modal') {
+                const container = document.getElementById('feature-modals');
+                if (!container) return;
+                
+                const modal = document.createElement('div');
+                modal.className = 'modal';
+                modal.style.display = 'block';
+                modal.innerHTML = `
+                    <div class="modal-content">
+                        <div class="modal-header">
+                            <h2 class="modal-title">${title}</h2>
+                            <button class="close" onclick="this.closest('.modal').remove()">&times;</button>
+                        </div>
+                        <div style="padding: 20px;">
+                            ${content}
+                        </div>
+                    </div>
+                `;
+                container.appendChild(modal);
+                
+                // Close on background click
+                modal.addEventListener('click', (e) => {
+                    if (e.target === modal) modal.remove();
+                });
+                
+                return modal;
+            },
+            
+            // API helpers
+            async apiCall(endpoint, options = {}) {
+                const response = await fetch(endpoint, {
+                    method: options.method || 'GET',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        ...(options.headers || {})
+                    },
+                    body: options.body ? JSON.stringify(options.body) : undefined
+                });
+                return response.json();
+            },
+            
+            // Event system
+            on(event, handler) {
+                if (!window._featureEventHandlers) window._featureEventHandlers = {};
+                if (!window._featureEventHandlers[event]) window._featureEventHandlers[event] = [];
+                window._featureEventHandlers[event].push(handler);
+            },
+            
+            trigger(event, data) {
+                if (!window._featureEventHandlers || !window._featureEventHandlers[event]) return;
+                window._featureEventHandlers[event].forEach(handler => {
+                    try { handler(data); } catch (e) { console.error('Feature event handler error:', e); }
+                });
+            },
+            
+            // Utility functions
+            showSuccess: (msg) => showSuccessPopup(msg, 'Success'),
+            showError: (msg) => showErrorPopup(msg, 'Error'),
+            showConfirm: (msg, onConfirm) => showConfirmPopup(msg, onConfirm),
+            
+            // Re-export useful existing functions
+            loadEmails,
+            displayEmails,
+            filterByCategory,
+            openEmailThread
+        };
+        
+        /**
+         * FEATURE LOADER
+         * Dynamically loads frontend scripts for installed features
+         */
+        async function loadFeatures() {
+            try {
+                const response = await fetch('/api/features');
+                const data = await response.json();
+                
+                if (!data.success || !data.features || data.features.length === 0) {
+                    console.log('No features to load');
+                    return;
+                }
+                
+                console.log(`Loading ${data.features.length} feature(s)`);
+                
+                for (const feature of data.features) {
+                    try {
+                        // Check if feature has frontend component
+                        const scriptPath = `/data/features/${feature.id}/frontend.js`;
+                        const script = document.createElement('script');
+                        script.src = scriptPath;
+                        script.onerror = () => {
+                            console.log(`No frontend script for feature: ${feature.name}`);
+                        };
+                        script.onload = () => {
+                            console.log(`✓ Loaded frontend for feature: ${feature.name}`);
+                            // Trigger feature loaded event
+                            window.EmailAssistant.trigger('featureLoaded', feature);
+                        };
+                        document.head.appendChild(script);
+                    } catch (error) {
+                        console.error(`Failed to load feature ${feature.name}:`, error);
+                    }
+                }
+            } catch (error) {
+                console.error('Failed to load features:', error);
+            }
+        }
+
         let allEmails = [];
         let currentFilter = 'all';
         let currentCategoriesOrder = [];
@@ -15367,6 +15510,7 @@ async function renderEmailNotesPreview(el, emailId) {
             // Run initializers, then load Priority Today first with popup,
             // then load the regular emails list.
             loadCurrentUser();
+            loadFeatures(); // Load feature plugins
             initSearchBar();
             showFlashFromQuery();
             (async () => {
