@@ -533,9 +533,12 @@
         return null;
       }
       
-      const fromText = fromElement.textContent.trim();
+      let fromText = fromElement.textContent.trim();
       const subject = subjectElement.textContent.trim();
       const date = dateElement ? dateElement.textContent.trim() : '';
+      
+      // Clean up fromText by removing "Open in Inbox" link text
+      fromText = fromText.replace(/\s*Open in Inbox\s*$/, '').trim();
       
       // Extract sender name and email
       let senderName = fromText;
