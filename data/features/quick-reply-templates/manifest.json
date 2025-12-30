@@ -1,0 +1,13 @@
+{
+  "id": "quick-reply-templates",
+  "name": "Quick Reply Templates",
+  "version": "1.0.0",
+  "description": "Create and use pre-defined email response templates based on categories with [SENDER NAME] placeholder support",
+  "author": "Gmail Plugin Team",
+  "backend": "backend.js",
+  "frontend": "frontend.js",
+  "permissions": [
+    "emails:read",
+    "api:custom"
+  ]
+}
