@@ -319,10 +319,11 @@
         API.showError(`Saved ${savedCount} templates, but ${errorCount} failed. Please try again.`);
       }
       
-      // Reload templates and refresh Quick Reply buttons on email cards
+      // Reload templates and refresh the UI to show Quick Reply buttons
+      // while preserving Priority Today email states
       setTimeout(async () => {
         await loadTemplates();
-        addQuickReplyButtons();
+        await refreshUIWithPreservedPriorityEmails();
       }, 100);
       
     } catch (error) {
@@ -945,6 +946,57 @@
     } catch (error) {
       console.error('Quick Reply Templates: Error opening generate modal:', error);
       API.showError('Failed to open response with template.');
+    }
+  }
+  
+  // Refresh UI while preserving Priority Today email categories
+  async function refreshUIWithPreservedPriorityEmails() {
+    try {
+      console.log('Quick Reply Templates: Refreshing UI while preserving Priority Today states');
+      
+      // Step 1: Save current Priority Today email states
+      let savedPriorityStates = null;
+      if (typeof window.priorityTodayEmails !== 'undefined' && Array.isArray(window.priorityTodayEmails)) {
+        savedPriorityStates = window.priorityTodayEmails.map(email => ({
+          id: email.id,
+          subject: email.subject,
+          from: email.from,
+          category: email._cat || email.category,
+          _cat: email._cat,
+          _catReason: email._catReason,
+          // Preserve all original data
+          ...email
+        }));
+        console.log('Quick Reply Templates: Saved', savedPriorityStates.length, 'Priority Today email states');
+      }
+      
+      // Step 2: Refresh main emails to get Quick Reply buttons without affecting priority emails
+      if (typeof window.loadEmails === 'function') {
+        await window.loadEmails();
+      }
+      
+      // Step 3: Restore Priority Today emails with preserved states
+      if (savedPriorityStates && savedPriorityStates.length > 0) {
+        // Restore the priority emails array with preserved categories
+        window.priorityTodayEmails = savedPriorityStates;
+        
+        // Re-render the Priority Today section with preserved categories
+        if (typeof window.renderPriorityToday === 'function') {
+          window.renderPriorityToday();
+        }
+        
+        console.log('Quick Reply Templates: Restored Priority Today emails with preserved categories');
+      }
+      
+      // Step 4: Add Quick Reply buttons to the refreshed email list
+      addQuickReplyButtons();
+      
+      console.log('Quick Reply Templates: UI refresh complete with preserved Priority Today states');
+      
+    } catch (error) {
+      console.error('Quick Reply Templates: Error refreshing UI with preserved states:', error);
+      // Fallback to simple button refresh
+      addQuickReplyButtons();
     }
   }
   
