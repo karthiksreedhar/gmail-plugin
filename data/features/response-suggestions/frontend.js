@@ -185,7 +185,12 @@
     isAnalyzing = true;
     
     try {
-      // Show loading state
+      // Show loading overlay with custom message
+      if (typeof showLoadingOverlay === 'function') {
+        showLoadingOverlay('Finding emails requiring response…', 'Analyzing email threads for urgent responses…', false);
+      }
+      
+      // Show loading state for refresh button if it exists
       const refreshBtn = document.getElementById('refreshResponseSuggestions');
       if (refreshBtn) {
         refreshBtn.textContent = 'Analyzing...';
@@ -204,21 +209,28 @@
         
         renderResponseSuggestions();
         
-        // Show success message if suggestions found
-        if (responseSuggestions.length > 0) {
+        // Show success message if suggestions found (only when not on initial load)
+        if (responseSuggestions.length > 0 && refreshBtn) {
           API.showSuccess(`Found ${responseSuggestions.length} email${responseSuggestions.length === 1 ? '' : 's'} that need${responseSuggestions.length === 1 ? 's' : ''} your response!`);
-        } else {
-          API.showSuccess('No urgent email responses needed at this time.');
         }
       } else {
         console.error('Response Suggestions: Analysis failed:', response.error);
-        API.showError('Failed to analyze emails for response suggestions. Please try again.');
+        if (refreshBtn) { // Only show error if user manually triggered
+          API.showError('Failed to analyze emails for response suggestions. Please try again.');
+        }
       }
     } catch (error) {
       console.error('Response Suggestions: Error during analysis:', error);
-      API.showError('An error occurred while analyzing emails. Please try again.');
+      if (document.getElementById('refreshResponseSuggestions')) { // Only show error if user manually triggered
+        API.showError('An error occurred while analyzing emails. Please try again.');
+      }
     } finally {
       isAnalyzing = false;
+      
+      // Hide loading overlay
+      if (typeof hideLoadingOverlay === 'function') {
+        hideLoadingOverlay();
+      }
       
       // Reset refresh button
       const refreshBtn = document.getElementById('refreshResponseSuggestions');
@@ -323,25 +335,24 @@
     }
   }
   
-  // Add header button for manual refresh
-  API.addHeaderButton('Analyze Responses', analyzeResponseSuggestions, {
-    className: 'generate-btn',
-    style: { background: '#ff9800' }
+  // Load suggestions when emails are loaded and auto-analyze
+  API.on('emailsLoaded', () => {
+    loadResponseSuggestions();
+    // Auto-analyze immediately when emails are loaded
+    setTimeout(() => {
+      console.log('Response Suggestions: Auto-analyzing after emails loaded...');
+      analyzeResponseSuggestions();
+    }, 500);
   });
-  
-  // Load suggestions when emails are loaded
-  API.on('emailsLoaded', loadResponseSuggestions);
   
   // Load suggestions on feature initialization
   loadResponseSuggestions();
   
-  // Auto-analyze on page load (after a short delay to let other systems initialize)
+  // Auto-analyze on page load (immediate for fresh page loads)
   setTimeout(() => {
-    if (responseSuggestions.length === 0) {
-      console.log('Response Suggestions: Auto-analyzing on page load...');
-      analyzeResponseSuggestions();
-    }
-  }, 2000);
+    console.log('Response Suggestions: Auto-analyzing on page load...');
+    analyzeResponseSuggestions();
+  }, 1000);
   
   console.log('Response Suggestions: Frontend loaded successfully');
 })();
