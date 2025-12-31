@@ -1,0 +1,14 @@
+{
+  "id": "reclassification-suggestions",
+  "name": "Email Reclassification Suggestions",
+  "version": "1.0.0",
+  "description": "Suggests reclassification of recently added emails when new categories are created",
+  "author": "Gmail Plugin Team",
+  "backend": "backend.js",
+  "frontend": "frontend.js",
+  "permissions": [
+    "emails:read",
+    "emails:write",
+    "api:custom"
+  ]
+}
