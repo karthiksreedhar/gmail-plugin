@@ -28,8 +28,8 @@ When your \`backend.js\` module's \`initialize()\` function is called, it receiv
   express: Express,                // Express module for middleware
   
   // Database helpers (MongoDB Atlas)
-  getUserDoc: async (collection, userEmail) => {},  // Get user-specific data
-  setUserDoc: async (collection, userEmail, data) => {},  // Save user-specific data
+  getUserDoc: async (collection, userEmail) => {},  // Get user-specific document from MongoDB
+  setUserDoc: async (collection, userEmail, data) => {},  // Save user-specific document to MongoDB
   
   // AI/API clients
   openai: OpenAI,                  // OpenAI client instance
@@ -87,6 +87,99 @@ app.post('/api/{your-feature-id}/endpoint', async (req, res) => {
 
 RULE: All your routes MUST start with \`/api/{your-feature-id}/\` to avoid conflicts.
 
+MONGODB DATABASE SCHEMA & COLLECTIONS
+
+The system uses MongoDB Atlas. All documents are keyed by \`userEmail\` for per-user data isolation.
+
+Available Collections:
+
+1. **priority_emails** - Main email list (approved/categorized emails)
+   \`\`\`javascript
+   // Get emails
+   const doc = await getUserDoc('priority_emails', userEmail);
+   const emails = doc?.emails || [];
+   
+   // Email object structure:
+   {
+     id: "abc123",                    // Gmail message ID
+     threadId: "thread123",           // Gmail thread ID
+     subject: "Meeting tomorrow",     // Email subject
+     from: "John Doe <john@example.com>", // Original sender
+     originalFrom: "john@example.com", // Sender email only
+     to: "user@example.com",          // Recipient
+     date: "2025-01-05T10:30:00Z",    // ISO date string
+     snippet: "Hi, just wanted to...", // Preview text
+     body: "Full email body...",       // Full HTML/text body
+     category: "Work",                 // Assigned category
+     _cat: "Work",                     // Alternative category field
+     _catReason: "Contains work-related keywords" // Classification reason
+   }
+   \`\`\`
+
+2. **categories** - User's category names
+   \`\`\`javascript
+   const doc = await getUserDoc('categories', userEmail);
+   const categories = doc?.categories || [];
+   // Returns: ["Work", "Personal", "Student Interest", "Other", ...]
+   \`\`\`
+
+3. **category_guidelines** - How categories are defined
+   \`\`\`javascript
+   const doc = await getUserDoc('category_guidelines', userEmail);
+   const guidelines = doc?.guidelines || {};
+   // Returns: { "Work": "Emails about projects...", "Personal": "..." }
+   \`\`\`
+
+4. **category_summaries** - Summary descriptions for each category
+   \`\`\`javascript
+   const doc = await getUserDoc('category_summaries', userEmail);
+   const summaries = doc?.summaries || {};
+   \`\`\`
+
+5. **response_emails** - Previously generated email responses
+   \`\`\`javascript
+   const doc = await getUserDoc('response_emails', userEmail);
+   const responses = doc?.responses || [];
+   // Response structure: { originalEmailId, response, timestamp }
+   \`\`\`
+
+6. **email_threads** - Email conversation threads
+   \`\`\`javascript
+   const doc = await getUserDoc('email_threads', userEmail);
+   const threads = doc?.threads || [];
+   // Thread structure: { threadId, messages: [...], subject, participants }
+   \`\`\`
+
+7. **notes** - User notes attached to emails or general
+   \`\`\`javascript
+   const doc = await getUserDoc('notes', userEmail);
+   const notes = doc?.notes || [];
+   \`\`\`
+
+EXAMPLE: Reading and Filtering Emails from MongoDB
+\`\`\`javascript
+// In backend.js initialize function:
+app.get('/api/my-feature/emails-by-category', async (req, res) => {
+  try {
+    const user = getCurrentUser();
+    const { category } = req.query;
+    
+    // Get all priority emails from MongoDB
+    const doc = await getUserDoc('priority_emails', user);
+    const allEmails = doc?.emails || [];
+    
+    // Filter by category
+    const filtered = category 
+      ? allEmails.filter(e => (e.category || e._cat) === category)
+      : allEmails;
+    
+    res.json({ success: true, emails: filtered, count: filtered.length });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+\`\`\`
+
 FRONTEND INTEGRATION POINTS
 ===========================
 
@@ -137,6 +230,156 @@ window.EmailAssistant = {
   refreshEmails: async () => void,
   loadEmailThread: async (emailId) => object,
   deleteEmail: async (emailId) => void
+}
+\`\`\`
+
+EMAIL CARD DOM STRUCTURE (CRITICAL for category-specific buttons)
+
+Each email in the list is rendered with this DOM structure:
+
+\`\`\`html
+<div class="email-item" onclick="openEmailThread(...)">
+  <div class="email-header">
+    <span class="email-from">Sender Name &lt;email@example.com&gt;</span>
+    <span class="email-date">Jan 5, 2025</span>
+  </div>
+  <div class="email-subject">Email Subject Line</div>
+  <div class="email-snippet">Preview of the email body...</div>
+  <div class="email-categories">
+    <!-- Category pills - use these to detect the email's category -->
+    <span class="email-category">Category Name</span>
+    <span class="email-category">Another Category</span>
+  </div>
+  <div class="email-actions">
+    <!-- This is where you add custom buttons -->
+    <button class="delete-thread-btn">Delete</button>
+  </div>
+</div>
+\`\`\`
+
+ADDING BUTTONS TO SPECIFIC EMAIL CATEGORIES (Common Pattern)
+
+To add a button only to emails of a certain category, use this pattern:
+
+\`\`\`javascript
+// Function to add buttons to email cards based on category
+function addCategoryButtons() {
+  try {
+    // Remove existing buttons first to prevent duplicates
+    const existingButtons = document.querySelectorAll('.my-feature-btn');
+    existingButtons.forEach(btn => btn.remove());
+    
+    // Get all email items
+    const emailItems = document.querySelectorAll('.email-item');
+    
+    emailItems.forEach((emailItem) => {
+      // Get email categories from the category pills
+      const categoryPills = emailItem.querySelectorAll('.email-category');
+      const emailCategories = Array.from(categoryPills).map(pill => 
+        pill.textContent.trim()
+      );
+      
+      // Check if email has the target category
+      const hasTargetCategory = emailCategories.includes('Your Target Category');
+      
+      if (hasTargetCategory) {
+        // Find the actions container
+        const actionsContainer = emailItem.querySelector('.email-actions');
+        if (!actionsContainer) return;
+        
+        // Create your button
+        const myButton = document.createElement('button');
+        myButton.className = 'my-feature-btn';
+        myButton.textContent = 'My Action';
+        myButton.style.cssText = \`
+          background: #007bff;
+          color: white;
+          border: none;
+          padding: 8px 12px;
+          border-radius: 4px;
+          cursor: pointer;
+          font-size: 14px;
+          margin-right: 8px;
+        \`;
+        
+        // Add click handler (prevent opening the email)
+        myButton.addEventListener('click', (e) => {
+          e.stopPropagation(); // IMPORTANT: Prevent email from opening
+          handleMyAction(emailItem, emailCategories);
+        });
+        
+        // Insert before delete button
+        const deleteBtn = actionsContainer.querySelector('.delete-thread-btn');
+        if (deleteBtn) {
+          actionsContainer.insertBefore(myButton, deleteBtn);
+        } else {
+          actionsContainer.appendChild(myButton);
+        }
+      }
+    });
+  } catch (error) {
+    console.error('MyFeature: Error adding buttons:', error);
+  }
+}
+
+// CRITICAL: Call button function multiple ways to ensure buttons appear
+function initialize() {
+  // 1. Listen for emailsLoaded event
+  API.on('emailsLoaded', addCategoryButtons);
+  
+  // 2. Add buttons immediately (emails may already be loaded)
+  setTimeout(() => addCategoryButtons(), 100);
+  
+  // 3. Periodic refresh (most reliable for dynamic content)
+  setInterval(() => addCategoryButtons(), 2000);
+  
+  // 4. Hook into displayEmails if it exists
+  if (typeof window.displayEmails === 'function') {
+    const originalDisplayEmails = window.displayEmails;
+    window.displayEmails = async function(...args) {
+      const result = await originalDisplayEmails.apply(this, args);
+      setTimeout(() => addCategoryButtons(), 50);
+      return result;
+    };
+  }
+}
+\`\`\`
+
+EXTRACTING EMAIL DATA FROM DOM
+
+\`\`\`javascript
+function extractEmailData(emailItem) {
+  const fromElement = emailItem.querySelector('.email-from');
+  const subjectElement = emailItem.querySelector('.email-subject');
+  const dateElement = emailItem.querySelector('.email-date');
+  const categoryPills = emailItem.querySelectorAll('.email-category');
+  
+  const fromText = fromElement ? fromElement.textContent.trim() : '';
+  const subject = subjectElement ? subjectElement.textContent.trim() : '';
+  const date = dateElement ? dateElement.textContent.trim() : '';
+  const categories = Array.from(categoryPills).map(pill => pill.textContent.trim());
+  
+  // Parse sender name and email from "Name <email@domain.com>" format
+  let senderName = fromText;
+  let senderEmail = fromText;
+  
+  const emailMatch = fromText.match(/^([^<]+)<([^>]+)>/);
+  if (emailMatch) {
+    senderName = emailMatch[1].trim();
+    senderEmail = emailMatch[2].trim();
+  } else if (fromText.includes('@')) {
+    senderEmail = fromText;
+    senderName = fromText.split('@')[0];
+  }
+  
+  return {
+    senderName,
+    senderEmail,
+    subject,
+    date,
+    categories,
+    from: fromText
+  };
 }
 \`\`\`
 

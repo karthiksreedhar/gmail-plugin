@@ -26,7 +26,8 @@ const COLLECTIONS = [
   'test_emails',
   'user_state',
   'classifier_log',
-  'priority_emails'
+  'priority_emails',
+  'precategorized_emails'
 ];
 
 async function initMongo() {

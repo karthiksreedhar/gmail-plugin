@@ -16,8 +16,18 @@
     <!-- Header -->
     <header class="header">
       <div class="header-left">
-        <h1>🔧 Feature Generator Agent</h1>
-        <span class="subtitle">AI-powered Gmail Plugin feature generator</span>
+        <h1 id="headerTitle">🔧 Feature Generator Agent</h1>
+        <span id="headerSubtitle" class="subtitle">AI-powered Gmail Plugin feature generator</span>
+      </div>
+      <div class="header-center">
+        <div class="mode-toggle">
+          <button id="chatModeBtn" class="mode-btn" data-mode="chat">
+            <span>💬</span> Chat
+          </button>
+          <button id="generateModeBtn" class="mode-btn active" data-mode="generate">
+            <span>🔧</span> Generate Feature
+          </button>
+        </div>
       </div>
       <div class="header-right">
         <button id="newSessionBtn" class="btn btn-secondary" title="Start a new session">

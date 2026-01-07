@@ -1,5 +1,6 @@
 /**
  * Feature Generator Agent - Frontend Application
+ * Supports both "Chat" mode (email assistant) and "Generate Feature" mode
  */
 
 // State
@@ -9,6 +10,7 @@ let currentFeatureId = null;
 let currentFileName = 'manifest.json';
 let updatedFiles = [];
 let isGenerating = false;
+let currentMode = localStorage.getItem('featureGeneratorMode') || 'generate'; // 'chat' or 'generate'
 
 // DOM Elements
 const chatMessages = document.getElementById('chatMessages');
@@ -23,11 +25,39 @@ const currentFileNameEl = document.getElementById('currentFileName');
 const fileContent = document.getElementById('fileContent');
 const copyFileBtn = document.getElementById('copyFileBtn');
 const toastContainer = document.getElementById('toastContainer');
+const chatModeBtn = document.getElementById('chatModeBtn');
+const generateModeBtn = document.getElementById('generateModeBtn');
+const headerTitle = document.getElementById('headerTitle');
+const headerSubtitle = document.getElementById('headerSubtitle');
+
+// Welcome messages for each mode
+const WELCOME_MESSAGES = {
+  generate: `Welcome! I can generate Gmail Plugin features for you.
+
+**Describe your feature idea** and I'll create the necessary files:
+- \`manifest.json\` - Feature metadata
+- \`backend.js\` - Server-side routes and logic
+- \`frontend.js\` - UI components and interactions
+- \`README.md\` - Documentation
+
+After testing, come back and tell me about any issues - I'll help fix them!`,
+
+  chat: `Welcome to Email Assistant! 💬
+
+I have access to your Gmail Plugin data and can help you:
+- **Analyze your emails** by category, sender, or content
+- **Find specific emails** or conversations
+- **Get insights** about your email patterns
+- **Answer questions** about your inbox
+
+Just ask me anything about your emails!`
+};
 
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
   initializeSession();
   setupEventListeners();
+  setMode(currentMode);
 });
 
 // Initialize or restore session
@@ -136,6 +166,10 @@ function setupEventListeners() {
   // New session button
   newSessionBtn.addEventListener('click', handleNewSession);
   
+  // Mode toggle buttons
+  chatModeBtn.addEventListener('click', () => setMode('chat'));
+  generateModeBtn.addEventListener('click', () => setMode('generate'));
+  
   // File tabs
   fileTabs.forEach(tab => {
     tab.addEventListener('click', () => {
@@ -157,6 +191,46 @@ function setupEventListeners() {
   });
 }
 
+// Set mode (chat or generate)
+function setMode(mode) {
+  currentMode = mode;
+  localStorage.setItem('featureGeneratorMode', mode);
+  
+  // Update toggle button states
+  chatModeBtn.classList.toggle('active', mode === 'chat');
+  generateModeBtn.classList.toggle('active', mode === 'generate');
+  
+  // Update body class for styling
+  document.body.classList.toggle('chat-mode', mode === 'chat');
+  
+  // Update header
+  if (mode === 'chat') {
+    headerTitle.textContent = '💬 Email Assistant';
+    headerSubtitle.textContent = 'Ask questions about your emails';
+    messageInput.placeholder = 'Ask about your emails... (e.g., "How many emails do I have in each category?")';
+    sendBtn.querySelector('.btn-text').textContent = 'Send';
+    sendBtn.querySelector('.btn-loading').innerHTML = '<span class="spinner"></span> Thinking...';
+    // Hide preview section in chat mode
+    previewSection.style.display = 'none';
+  } else {
+    headerTitle.textContent = '🔧 Feature Generator Agent';
+    headerSubtitle.textContent = 'AI-powered Gmail Plugin feature generator';
+    messageInput.placeholder = "Describe your feature... (e.g., 'Create a feature that shows email statistics by category with a chart')";
+    sendBtn.querySelector('.btn-text').textContent = 'Generate';
+    sendBtn.querySelector('.btn-loading').innerHTML = '<span class="spinner"></span> Generating...';
+    // Show preview if we have files
+    if (currentFiles && Object.keys(currentFiles).length > 0) {
+      previewSection.style.display = 'flex';
+    }
+  }
+  
+  // Update welcome message if chat is empty (only welcome message)
+  if (chatMessages.children.length <= 1) {
+    chatMessages.innerHTML = '';
+    addMessage('assistant', WELCOME_MESSAGES[mode]);
+  }
+}
+
 // Handle send message
 async function handleSend() {
   const message = messageInput.value.trim();
@@ -175,7 +249,10 @@ async function handleSend() {
   const loadingMsg = addLoadingMessage();
   
   try {
-    const response = await fetch('/api/chat', {
+    // Use different endpoints based on mode
+    const endpoint = currentMode === 'chat' ? '/api/email-chat' : '/api/chat';
+    
+    const response = await fetch(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ sessionId, message })
@@ -187,26 +264,29 @@ async function handleSend() {
     loadingMsg.remove();
     
     if (data.success) {
-      // Update state
-      currentFiles = data.files;
-      currentFeatureId = data.featureId;
-      updatedFiles = data.updatedFiles || [];
-      
       // Add assistant response
       addMessage('assistant', data.response);
       
-      // Show/update preview
-      showPreview();
-      updateFileTabs();
-      
-      // Select first file or first updated file
-      if (updatedFiles.length > 0) {
-        selectFile(updatedFiles[0]);
-      } else {
-        selectFile('manifest.json');
+      // Handle generate mode specific logic
+      if (currentMode === 'generate' && data.files) {
+        // Update state
+        currentFiles = data.files;
+        currentFeatureId = data.featureId;
+        updatedFiles = data.updatedFiles || [];
+        
+        // Show/update preview
+        showPreview();
+        updateFileTabs();
+        
+        // Select first file or first updated file
+        if (updatedFiles.length > 0) {
+          selectFile(updatedFiles[0]);
+        } else {
+          selectFile('manifest.json');
+        }
+        
+        showToast('Files generated successfully!', 'success');
       }
-      
-      showToast('Files generated successfully!', 'success');
     } else {
       addMessage('assistant', `**Error:** ${data.error}\n\nPlease try again or rephrase your request.`);
       showToast(data.error, 'error');
@@ -225,7 +305,8 @@ async function handleSend() {
 async function handleNewSession() {
   if (isGenerating) return;
   
-  if (currentFiles && Object.keys(currentFiles).length > 0) {
+  // Only confirm if in generate mode with files
+  if (currentMode === 'generate' && currentFiles && Object.keys(currentFiles).length > 0) {
     if (!confirm('Start a new session? Current files will be lost if not downloaded.')) {
       return;
     }
@@ -248,17 +329,9 @@ async function handleNewSession() {
   // Create new session
   await createNewSession();
   
-  // Reset UI
+  // Reset UI with mode-appropriate welcome message
   chatMessages.innerHTML = '';
-  addMessage('assistant', `Welcome! I can generate Gmail Plugin features for you.
-
-**Describe your feature idea** and I'll create the necessary files:
-- \`manifest.json\` - Feature metadata
-- \`backend.js\` - Server-side routes and logic
-- \`frontend.js\` - UI components and interactions
-- \`README.md\` - Documentation
-
-After testing, come back and tell me about any issues - I'll help fix them!`);
+  addMessage('assistant', WELCOME_MESSAGES[currentMode]);
   
   previewSection.style.display = 'none';
   
@@ -331,8 +404,11 @@ function addLoadingMessage() {
   
   const contentDiv = document.createElement('div');
   contentDiv.className = 'message-content loading-message';
+  
+  // Different loading text based on mode
+  const loadingText = currentMode === 'chat' ? 'Thinking' : 'Generating files';
   contentDiv.innerHTML = `
-    <span>Generating files</span>
+    <span>${loadingText}</span>
     <div class="loading-dots">
       <span></span>
       <span></span>

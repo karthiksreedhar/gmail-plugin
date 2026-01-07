@@ -12041,77 +12041,183 @@ app.get('/api/priority-today', async (req, res) => {
         // Filter to only new emails and sort by date ascending (earliest first)
         const newEmails = pool.filter(e => e && e.id && !existingIds.has(e.id));
         newEmails.sort((a, b) => new Date(a.date || 0) - new Date(b.date || 0));
+
+        // Check for pre-categorized emails (cached classification results from precategorize script)
+        let precategorizedMap = {};
+        try {
+          console.log(`[priority-today] Looking up precategorized cache for user: ${CURRENT_USER_EMAIL}`);
+          const precatDoc = await getUserDoc('precategorized_emails', CURRENT_USER_EMAIL);
+          if (precatDoc && Array.isArray(precatDoc.emails)) {
+            precatDoc.emails.forEach(e => {
+              if (e && e.id && e.suggestedCategories) {
+                precategorizedMap[e.id] = e;
+              }
+            });
+            console.log(`[priority-today] Loaded ${Object.keys(precategorizedMap).length} pre-categorized emails from cache for user ${CURRENT_USER_EMAIL}`);
+            // Log a sample of cached IDs
+            const sampleIds = Object.keys(precategorizedMap).slice(0, 5);
+            console.log(`[priority-today] Sample cached IDs: ${sampleIds.join(', ')}`);
+          } else {
+            console.log(`[priority-today] No precategorized cache found for user ${CURRENT_USER_EMAIL} (doc exists: ${!!precatDoc}, has emails: ${!!(precatDoc && precatDoc.emails)})`);
+          }
+        } catch (precatErr) {
+          console.warn('Failed to load pre-categorized emails:', precatErr?.message || precatErr);
+        }
+
+        // Take first 50 earliest emails not in database, prioritizing pre-categorized ones
+        const precategorizedIds = new Set(Object.keys(precategorizedMap));
+        const precategorizedEmails = newEmails.filter(e => precategorizedIds.has(e.id));
+        const uncategorizedEmails = newEmails.filter(e => !precategorizedIds.has(e.id));
         
-        // Take first 50 earliest emails not in database
-        const pick = newEmails.slice(0, 50).map((e, idx) => {
+        console.log(`[priority-today] Found ${precategorizedEmails.length} pre-categorized emails and ${uncategorizedEmails.length} uncategorized emails`);
+        
+        // FAST PATH: If we have enough pre-categorized emails, use them directly without running classifier
+        const categoriesX = __getCategoriesList();
+        
+        if (precategorizedEmails.length >= 50) {
+          // Use ONLY pre-categorized emails - no classifier needed!
+          console.log(`[priority-today] FAST PATH: Using ${Math.min(50, precategorizedEmails.length)} pre-categorized emails directly (no classifier)`);
+          
+          const fastEmails = precategorizedEmails.slice(0, 50).map(e => {
+            const cached = precategorizedMap[e.id] || {};
+            const body = (typeof e?.body === 'string' && e.body) ? e.body : (typeof e?.snippet === 'string' ? e.snippet : '');
+            const snippet = e?.snippet || (body ? String(body).slice(0, 100) + (String(body).length > 100 ? '...' : '') : 'No content available');
+            
+            // Get cached categories, fallback to 'Other' if needed
+            const suggs = Array.isArray(cached.suggestedCategories) && cached.suggestedCategories.length > 0 
+              ? cached.suggestedCategories 
+              : ['Other'];
+            const reasons = (cached.suggestedReasons && typeof cached.suggestedReasons === 'object') 
+              ? cached.suggestedReasons 
+              : { [suggs[0]]: 'Pre-categorized' };
+            
+            return {
+              id: e?.id || `local-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+              subject: e?.subject || 'No Subject',
+              from: e?.from || e?.originalFrom || 'Unknown Sender',
+              date: e?.date || new Date().toISOString(),
+              threadId: e?.threadId || '',
+              body,
+              snippet,
+              source: 'local-priority',
+              webUrl: e?.webUrl || '',
+              suggestedCategories: suggs.slice(0, 2),
+              suggestedReasons: reasons,
+              category: suggs[0] || 'Other'
+            };
+          });
+          
+          return res.json({ success: true, emails: fastEmails, fromCache: fastEmails.length, freshlyClassified: 0 });
+        }
+        
+        // SLOW PATH: Not enough pre-categorized, need to run classifier on some
+        // Combine: pre-categorized first, then uncategorized, limited to 50
+        const combined = [...precategorizedEmails, ...uncategorizedEmails].slice(0, 50);
+        
+        // Build output, using cached suggestions for pre-categorized emails directly
+        const needsClassification = [];
+        const alreadyClassified = [];
+        
+        for (const e of combined) {
           const body = (typeof e?.body === 'string' && e.body) ? e.body : (typeof e?.snippet === 'string' ? e.snippet : '');
           const snippet = e?.snippet || (body ? String(body).slice(0, 100) + (String(body).length > 100 ? '...' : '') : 'No content available');
-          return {
-            id: e?.id || `local-${Date.now()}-${idx}`,
+          
+          const baseEmail = {
+            id: e?.id || `local-${Date.now()}-${Math.random().toString(36).slice(2)}`,
             subject: e?.subject || 'No Subject',
             from: e?.from || e?.originalFrom || 'Unknown Sender',
             date: e?.date || new Date().toISOString(),
             threadId: e?.threadId || '',
             body,
             snippet,
-            category: 'Other',
             source: 'local-priority',
             webUrl: e?.webUrl || ''
           };
-        });
-
-        // Use classifier-v4 to get suggestions
-        try {
-          const resp = await fetch(`${BASE_URL}/api/classifier-v4/suggest-batch`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              emails: pick.map(e => ({
-                id: e.id,
-                subject: e.subject,
-                body: e.body || e.snippet || '',
-                from: e.from
-              }))
-            })
-          });
-          if (resp.ok) {
-            const data = await resp.json().catch(() => ({}));
-            const results = (data && data.results && typeof data.results === 'object') ? data.results : {};
-            const categoriesX = __getCategoriesList();
-            const enriched = await Promise.all(pick.map(async (e) => {
-              const r = results[e.id] || {};
-              const sugg = r && r.suggestion ? r.suggestion : '';
-              const contenders = Array.isArray(r.contenders) ? r.contenders : [];
-              const reasons = (r && typeof r.rationales === 'object') ? r.rationales : {};
-              const chosen = sugg || contenders[0] || (categoriesX.find(c => normalizeKey(c) === 'other') || 'Other');
-              
-              // Write to classifier log (await to ensure it completes before response)
-              const rationale = r.explanation || reasons[chosen] || 'No rationale provided';
-              await writeClassifierLog(e.id, e.subject, e.from, chosen, rationale, new Date().toISOString());
-              
-              return {
-                ...e,
-                suggestedCategories: sugg ? [sugg, ...contenders.filter(c => c && c !== sugg)].slice(0, 2) : contenders.slice(0, 2),
-                suggestedReasons: reasons,
-                category: chosen
-              };
-            }));
-            return res.json({ success: true, emails: enriched });
+          
+          // Check if this email is in the pre-categorized cache
+          const cached = precategorizedMap[e.id];
+          if (cached) {
+            // Use cached classification directly - no need to run classifier
+            const suggs = Array.isArray(cached.suggestedCategories) && cached.suggestedCategories.length > 0
+              ? cached.suggestedCategories
+              : ['Other'];
+            const reasons = (cached.suggestedReasons && typeof cached.suggestedReasons === 'object') ? cached.suggestedReasons : {};
+            const chosen = suggs[0] || 'Other';
+            
+            console.log(`[priority-today] Using cached classification for "${baseEmail.subject.slice(0, 60)}..." -> ${chosen}`);
+            
+            alreadyClassified.push({
+              ...baseEmail,
+              suggestedCategories: suggs.slice(0, 2),
+              suggestedReasons: reasons,
+              category: chosen
+            });
+          } else {
+            // Needs classification
+            needsClassification.push(baseEmail);
           }
-        } catch (_) {
-          // fall through to simple fallback
         }
-
-        // Fallback: default all to "Other" with a clear explanation
-        const categoriesX = __getCategoriesList();
-        const otherCat = categoriesX.find(c => normalizeKey(c) === 'other') || 'Other';
-        const fallback = pick.map(e => ({
-          ...e,
-          suggestedCategories: [otherCat],
-          suggestedReasons: { [otherCat]: 'No confident category match found (local test mode)' },
-          category: otherCat
-        }));
-        return res.json({ success: true, emails: fallback });
+        
+        console.log(`[priority-today] ${alreadyClassified.length} emails from cache, ${needsClassification.length} need classification`);
+        
+        // Only run classifier on emails that aren't in the cache
+        let classifiedEmails = [];
+        if (needsClassification.length > 0) {
+          try {
+            const resp = await fetch(`${BASE_URL}/api/classifier-v4/suggest-batch`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                emails: needsClassification.map(e => ({
+                  id: e.id,
+                  subject: e.subject,
+                  body: e.body || e.snippet || '',
+                  from: e.from
+                }))
+              })
+            });
+            if (resp.ok) {
+              const data = await resp.json().catch(() => ({}));
+              const results = (data && data.results && typeof data.results === 'object') ? data.results : {};
+              
+              classifiedEmails = await Promise.all(needsClassification.map(async (e) => {
+                const r = results[e.id] || {};
+                const sugg = r && r.suggestion ? r.suggestion : '';
+                const contenders = Array.isArray(r.contenders) ? r.contenders : [];
+                const reasons = (r && typeof r.rationales === 'object') ? r.rationales : {};
+                const chosen = sugg || contenders[0] || (categoriesX.find(c => normalizeKey(c) === 'other') || 'Other');
+                
+                // Write to classifier log
+                const rationale = r.explanation || reasons[chosen] || 'No rationale provided';
+                await writeClassifierLog(e.id, e.subject, e.from, chosen, rationale, new Date().toISOString());
+                
+                return {
+                  ...e,
+                  suggestedCategories: sugg ? [sugg, ...contenders.filter(c => c && c !== sugg)].slice(0, 2) : contenders.slice(0, 2),
+                  suggestedReasons: reasons,
+                  category: chosen
+                };
+              }));
+            }
+          } catch (classifyErr) {
+            console.warn('[priority-today] Classifier failed for uncached emails:', classifyErr?.message || classifyErr);
+            // Fallback: default uncached to "Other"
+            const otherCat = categoriesX.find(c => normalizeKey(c) === 'other') || 'Other';
+            classifiedEmails = needsClassification.map(e => ({
+              ...e,
+              suggestedCategories: [otherCat],
+              suggestedReasons: { [otherCat]: 'No confident category match found' },
+              category: otherCat
+            }));
+          }
+        }
+        
+        // Combine cached + newly classified, maintaining original order
+        const allEmails = [...alreadyClassified, ...classifiedEmails];
+        // Sort by date ascending (earliest first) to match original behavior
+        allEmails.sort((a, b) => new Date(a.date) - new Date(b.date));
+        
+        return res.json({ success: true, emails: allEmails, fromCache: alreadyClassified.length, freshlyClassified: classifiedEmails.length });
     }
     
     // If no data from MongoDB or local file, continue to Gmail API
