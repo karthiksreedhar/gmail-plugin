@@ -214,6 +214,50 @@ body.chat-mode .mode-btn.active[data-mode="chat"] {
   overflow: hidden;
 }
 
+/* User Selector */
+.user-selector {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 20px;
+  background: var(--bg-card);
+  border-bottom: 1px solid var(--border-color);
+}
+
+.user-selector label {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.user-dropdown {
+  flex: 1;
+  max-width: 300px;
+  padding: 8px 12px;
+  font-size: 0.9rem;
+  color: var(--text-primary);
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.user-dropdown:hover {
+  border-color: var(--border-light);
+}
+
+.user-dropdown:focus {
+  outline: none;
+  border-color: var(--primary-color);
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.2);
+}
+
+.user-dropdown option {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+}
+
 .chat-messages {
   flex: 1;
   overflow-y: auto;

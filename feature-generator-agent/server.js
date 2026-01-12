@@ -628,38 +628,43 @@ function formatEmailDataContext(data) {
   return lines.join('\n');
 }
 
-// Load and format data for ALL users (with optional logging)
-async function loadAllUsersData(logger = null) {
-  const allUsersContext = [];
+// Load and format data for specified users (with optional logging)
+async function loadUsersData(users, logger = null) {
+  const usersContext = [];
   let totalEmails = 0;
   
-  for (const userEmail of AVAILABLE_USERS) {
+  for (const userEmail of users) {
     try {
       const userData = await loadUserEmailData(userEmail, logger);
       const userContext = formatEmailDataContext(userData);
       totalEmails += (userData.priorityEmails?.length || 0);
       
-      allUsersContext.push(`\n${'='.repeat(60)}\n## USER: ${userEmail}\n${'='.repeat(60)}\n${userContext}`);
+      usersContext.push(`\n${'='.repeat(60)}\n## USER: ${userEmail}\n${'='.repeat(60)}\n${userContext}`);
     } catch (error) {
       console.error(`Error loading data for ${userEmail}:`, error);
-      if (logger) logger.logError(`loadAllUsersData:${userEmail}`, error);
-      allUsersContext.push(`\n${'='.repeat(60)}\n## USER: ${userEmail}\n${'='.repeat(60)}\n**Error loading data for this user**`);
+      if (logger) logger.logError(`loadUsersData:${userEmail}`, error);
+      usersContext.push(`\n${'='.repeat(60)}\n## USER: ${userEmail}\n${'='.repeat(60)}\n**Error loading data for this user**`);
     }
   }
   
-  const contextString = allUsersContext.join('\n');
+  const contextString = usersContext.join('\n');
   
   // Log data summary if logger provided
   if (logger) {
-    logger.logDataSummary(totalEmails, contextString.length, [...AVAILABLE_USERS]);
+    logger.logDataSummary(totalEmails, contextString.length, [...users]);
   }
   
   return contextString;
 }
 
+// Load and format data for ALL users (with optional logging) - legacy wrapper
+async function loadAllUsersData(logger = null) {
+  return loadUsersData(AVAILABLE_USERS, logger);
+}
+
 // Email Chat endpoint
 app.post('/api/email-chat', async (req, res) => {
-  const { sessionId, message } = req.body;
+  const { sessionId, message, userEmail } = req.body;
   
   // Initialize operations logger
   const logger = new OperationsLogger();
@@ -678,19 +683,23 @@ app.post('/api/email-chat', async (req, res) => {
     });
   }
   
+  // Validate userEmail if provided
+  const selectedUser = userEmail && AVAILABLE_USERS.includes(userEmail) ? userEmail : null;
+  const usersToQuery = selectedUser ? [selectedUser] : AVAILABLE_USERS;
+  
   try {
     console.log(`\n${'='.repeat(50)}`);
-    console.log(`EMAIL CHAT - Loading data for all users: ${AVAILABLE_USERS.join(', ')}`);
+    console.log(`EMAIL CHAT - Loading data for: ${usersToQuery.join(', ')}`);
     console.log(`Message: ${message.substring(0, 100)}...`);
     console.log('='.repeat(50));
     
-    // Load email data for ALL users (with logging)
-    const allUsersDataContext = await loadAllUsersData(logger);
+    // Load email data for selected user(s) (with logging)
+    const dataContext = await loadUsersData(usersToQuery, logger);
     
-    // Build system prompt with data for all users
+    // Build system prompt with data for selected user(s)
     const systemPrompt = EMAIL_CHAT_SYSTEM_PROMPT
-      .replace('{{AVAILABLE_USERS}}', AVAILABLE_USERS.map(u => `- ${u}`).join('\n'))
-      .replace('{{DATA_CONTEXT}}', allUsersDataContext);
+      .replace('{{AVAILABLE_USERS}}', usersToQuery.map(u => `- ${u}`).join('\n'))
+      .replace('{{DATA_CONTEXT}}', dataContext);
     
     // Create chat model
     const modelName = 'claude-sonnet-4-20250514';

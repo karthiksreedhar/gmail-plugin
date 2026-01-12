@@ -40,6 +40,15 @@
     <main class="main-content">
       <!-- Chat Section -->
       <section class="chat-section">
+        <!-- User Selection (for Chat mode) -->
+        <div id="userSelector" class="user-selector" style="display: none;">
+          <label for="selectedUser">Query data for:</label>
+          <select id="selectedUser" class="user-dropdown">
+            <option value="ks4190@columbia.edu">ks4190@columbia.edu</option>
+            <option value="lc3251@columbia.edu">lc3251@columbia.edu</option>
+          </select>
+        </div>
+        
         <div id="chatMessages" class="chat-messages">
           <!-- Welcome message -->
           <div class="message assistant-message">

@@ -29,6 +29,8 @@ const chatModeBtn = document.getElementById('chatModeBtn');
 const generateModeBtn = document.getElementById('generateModeBtn');
 const headerTitle = document.getElementById('headerTitle');
 const headerSubtitle = document.getElementById('headerSubtitle');
+const userSelector = document.getElementById('userSelector');
+const selectedUserDropdown = document.getElementById('selectedUser');
 
 // Welcome messages for each mode
 const WELCOME_MESSAGES = {
@@ -203,6 +205,11 @@ function setMode(mode) {
   // Update body class for styling
   document.body.classList.toggle('chat-mode', mode === 'chat');
   
+  // Show/hide user selector based on mode
+  if (userSelector) {
+    userSelector.style.display = mode === 'chat' ? 'flex' : 'none';
+  }
+  
   // Update header
   if (mode === 'chat') {
     headerTitle.textContent = '💬 Email Assistant';
@@ -252,10 +259,16 @@ async function handleSend() {
     // Use different endpoints based on mode
     const endpoint = currentMode === 'chat' ? '/api/email-chat' : '/api/chat';
     
+    // Build request body - include selected user for chat mode
+    const requestBody = { sessionId, message };
+    if (currentMode === 'chat' && selectedUserDropdown) {
+      requestBody.userEmail = selectedUserDropdown.value;
+    }
+    
     const response = await fetch(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ sessionId, message })
+      body: JSON.stringify(requestBody)
     });
     
     const data = await response.json();
