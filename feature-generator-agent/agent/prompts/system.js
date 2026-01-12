@@ -465,6 +465,24 @@ RULES:
 })();
 \`\`\`
 
+
+Backend Rules:
+1. Route Naming: All routes MUST start with \`/api/{your-feature-id}/\`
+2. Error Handling: Always wrap async code in try/catch blocks
+3. Response Format: Use consistent JSON format: \`{ success: boolean, data?: any, error?: string }\`
+4. User Context: Use \`getCurrentUser()\` to get current user for data operations
+5. Database Collections: Name collections as \`{feature_id}_data\` for clarity
+6. Logging: Log all significant operations to console with feature name prefix
+7. No Core Modifications: Do NOT modify server.js, db.js, or any core files
+
+Frontend Rules:
+1. IIFE Wrapper: Always wrap code in \`(function() { ... })()\`
+2. API Check: Verify \`window.EmailAssistant\` exists before using
+3. Event Cleanup: Remove event listeners if feature can be reloaded
+4. UI Consistency: Use existing styles and patterns (Bootstrap classes, etc.)
+5. Error Handling: Show user-friendly error messages via \`API.showError()\`
+6. No Global Pollution: Avoid adding variables to global scope (except if needed for modals)
+7. No Core Modifications: Do NOT modify index.html or core UI files
 RULES:
 - Must be wrapped in IIFE: \`(function() { ... })()\`
 - Check for \`window.EmailAssistant\` availability first
@@ -472,7 +490,155 @@ RULES:
 - Log loading status to console
 - Clean up event listeners if feature is reloaded
 
+OPENAI API TOKEN LIMITS & BATCHING (CRITICAL)
+
+**NEVER send all emails to OpenAI in a single API call!** This will exceed token limits and cause errors.
+
+Token Limit Constants - USE THESE IN ALL FEATURES:
+\`\`\`javascript
+const EMAILS_PER_BATCH = 30;  // Max emails per OpenAI call (conservative, works with all models)
+const MAX_BATCHES = 5;        // Maximum number of batches to process
+const MAX_TOTAL_EMAILS = EMAILS_PER_BATCH * MAX_BATCHES; // = 150 emails maximum
+\`\`\`
+
+MANDATORY BATCHING PATTERN - Use this when processing emails with OpenAI:
+\`\`\`javascript
+async function processEmailsWithAI(emails, openai, task) {
+  const EMAILS_PER_BATCH = 30;
+  const MAX_BATCHES = 5;
+  const MAX_TOTAL_EMAILS = EMAILS_PER_BATCH * MAX_BATCHES;
+  
+  // Limit total emails
+  const limitedEmails = emails.slice(0, MAX_TOTAL_EMAILS);
+  
+  // Split into batches
+  const batches = [];
+  for (let i = 0; i < limitedEmails.length; i += EMAILS_PER_BATCH) {
+    batches.push(limitedEmails.slice(i, i + EMAILS_PER_BATCH));
+  }
+  
+  // Limit to MAX_BATCHES
+  const batchesToProcess = batches.slice(0, MAX_BATCHES);
+  
+  console.log(\`Processing \${limitedEmails.length} emails in \${batchesToProcess.length} batches\`);
+  
+  const allResults = [];
+  
+  for (let i = 0; i < batchesToProcess.length; i++) {
+    const batch = batchesToProcess[i];
+    console.log(\`Processing batch \${i + 1}/\${batchesToProcess.length} (\${batch.length} emails)\`);
+    
+    try {
+      // Prepare email data for prompt (use minimal fields to save tokens)
+      const emailSummaries = batch.map(e => ({
+        id: e.id,
+        subject: e.subject,
+        from: e.from || e.originalFrom,
+        category: e.category || e._cat,
+        snippet: (e.snippet || '').substring(0, 150) // Truncate snippets
+      }));
+      
+      const response = await openai.chat.completions.create({
+        model: 'gpt-4o-mini', // Use efficient model
+        messages: [
+          { role: 'system', content: \`You are analyzing emails. \${task}\` },
+          { role: 'user', content: JSON.stringify(emailSummaries) }
+        ],
+        temperature: 0.3,
+        max_tokens: 2000
+      });
+      
+      const result = response.choices[0].message.content;
+      allResults.push({ batch: i + 1, result, emailCount: batch.length });
+      
+    } catch (error) {
+      // CRITICAL: Handle token limit errors gracefully
+      if (error.code === 'context_length_exceeded' || 
+          error.message?.includes('maximum context length') ||
+          error.message?.includes('token')) {
+        console.error(\`Batch \${i + 1} exceeded token limit, trying smaller batch...\`);
+        
+        // Try with half the batch
+        const smallerBatch = batch.slice(0, Math.floor(batch.length / 2));
+        try {
+          const emailSummaries = smallerBatch.map(e => ({
+            id: e.id,
+            subject: e.subject,
+            from: e.from || e.originalFrom,
+            category: e.category || e._cat
+            // Omit snippet to save more tokens
+          }));
+          
+          const retryResponse = await openai.chat.completions.create({
+            model: 'gpt-4o-mini',
+            messages: [
+              { role: 'system', content: \`You are analyzing emails. \${task}\` },
+              { role: 'user', content: JSON.stringify(emailSummaries) }
+            ],
+            temperature: 0.3,
+            max_tokens: 1500
+          });
+          
+          allResults.push({ 
+            batch: i + 1, 
+            result: retryResponse.choices[0].message.content, 
+            emailCount: smallerBatch.length,
+            wasRetried: true 
+          });
+        } catch (retryError) {
+          console.error(\`Batch \${i + 1} failed even with smaller size:\`, retryError.message);
+          allResults.push({ batch: i + 1, error: retryError.message, emailCount: 0 });
+        }
+      } else {
+        console.error(\`Batch \${i + 1} failed:\`, error.message);
+        allResults.push({ batch: i + 1, error: error.message, emailCount: 0 });
+      }
+    }
+    
+    // Add delay between batches to avoid rate limits
+    if (i < batchesToProcess.length - 1) {
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+  }
+  
+  return {
+    totalEmails: limitedEmails.length,
+    totalBatches: batchesToProcess.length,
+    results: allResults,
+    successfulBatches: allResults.filter(r => !r.error).length
+  };
+}
+\`\`\`
+
+TOKEN LIMIT RULES (MANDATORY):
+1. **NEVER** send more than 30 emails per OpenAI API call
+2. **ALWAYS** use batching for any feature that processes multiple emails
+3. **ALWAYS** handle token limit errors with retry logic
+4. **LIMIT** total emails to 150 maximum (30 × 5 batches)
+5. **USE** minimal email fields (id, subject, from, category, truncated snippet)
+6. **PREFER** gpt-4o-mini for cost efficiency
+7. **ADD** delays between batches to avoid rate limits
+
 IMPLEMENTATION RULES
+
+Backend Rules:
+1. Route Naming: All routes MUST start with \`/api/{your-feature-id}/\`
+2. Error Handling: Always wrap async code in try/catch blocks
+3. Response Format: Use consistent JSON format: \`{ success: boolean, data?: any, error?: string }\`
+4. User Context: Use \`getCurrentUser()\` to get current user for data operations
+5. Database Collections: Name collections as \`{feature_id}_data\` for clarity
+6. Logging: Log all significant operations to console with feature name prefix
+7. No Core Modifications: Do NOT modify server.js, db.js, or any core files
+8. **OpenAI Batching: ALWAYS use the batching pattern above for email processing**
+
+Frontend Rules:
+1. IIFE Wrapper: Always wrap code in \`(function() { ... })()\`
+2. API Check: Verify \`window.EmailAssistant\` exists before using
+3. Event Cleanup: Remove event listeners if feature can be reloaded
+4. UI Consistency: Use existing styles and patterns (Bootstrap classes, etc.)
+5. Error Handling: Show user-friendly error messages via \`API.showError()\`
+6. No Global Pollution: Avoid adding variables to global scope (except if needed for modals)
+7. No Core Modifications: Do NOT modify index.html or core UI files
 ====================
 
 Backend Rules:

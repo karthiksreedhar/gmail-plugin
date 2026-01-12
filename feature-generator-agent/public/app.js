@@ -264,8 +264,9 @@ async function handleSend() {
     loadingMsg.remove();
     
     if (data.success) {
-      // Add assistant response
-      addMessage('assistant', data.response);
+      // Add assistant response (with operations log for chat mode)
+      const operationsLog = (currentMode === 'chat') ? data.operationsLog : null;
+      addMessage('assistant', data.response, true, operationsLog);
       
       // Handle generate mode specific logic
       if (currentMode === 'generate' && data.files) {
@@ -368,8 +369,17 @@ function handleDownload() {
   showToast('Download started!', 'success');
 }
 
-// Add message to chat
-function addMessage(role, content, scroll = true) {
+// Add message to chat (with optional operations log)
+function addMessage(role, content, scroll = true, operationsLog = null) {
+  // If there's an operations log, add it as a separate element BEFORE the message
+  if (operationsLog && role === 'assistant') {
+    const logEntry = document.createElement('div');
+    logEntry.className = 'operations-log-entry';
+    const logDiv = renderOperationsLog(operationsLog);
+    logEntry.appendChild(logDiv);
+    chatMessages.appendChild(logEntry);
+  }
+  
   const messageDiv = document.createElement('div');
   messageDiv.className = `message ${role}-message`;
   
@@ -391,6 +401,347 @@ function addMessage(role, content, scroll = true) {
   }
   
   return messageDiv;
+}
+
+// Render operations log as expandable component
+function renderOperationsLog(log) {
+  const container = document.createElement('div');
+  container.className = 'operations-log';
+  
+  // Calculate summary stats
+  const mongoCount = log.mongoQueries?.count || 0;
+  const mongoTime = log.mongoQueries?.totalDuration || 0;
+  const apiCount = log.apiCalls?.count || 0;
+  const apiTime = log.apiCalls?.totalDuration || 0;
+  const totalTime = log.totalDuration || 0;
+  const hasErrors = (log.errors?.length || 0) > 0;
+  
+  // Create collapsed header
+  const header = document.createElement('div');
+  header.className = 'operations-log-header';
+  header.innerHTML = `
+    <span class="operations-log-icon">🔍</span>
+    <span class="operations-log-summary">
+      View Operations Log 
+      <span class="operations-log-stats">(${mongoCount} queries, ${apiCount} API call${apiCount !== 1 ? 's' : ''}, ${formatDuration(totalTime)})</span>
+    </span>
+    <span class="operations-log-toggle">▶</span>
+    ${hasErrors ? '<span class="operations-log-error-badge">⚠</span>' : ''}
+  `;
+  
+  // Create expandable content
+  const content = document.createElement('div');
+  content.className = 'operations-log-content';
+  content.style.display = 'none';
+  
+  // Build the log tree
+  let contentHTML = '';
+  
+  // MongoDB Queries Section
+  if (mongoCount > 0) {
+    contentHTML += `
+      <div class="log-section">
+        <div class="log-section-header">
+          <span class="log-section-icon">📊</span>
+          <span class="log-section-title">MongoDB Queries</span>
+          <span class="log-section-stats">${mongoCount} queries, ${formatDuration(mongoTime)}</span>
+        </div>
+        <div class="log-section-items" id="mongo-queries-list">
+    `;
+    
+    for (let i = 0; i < log.mongoQueries.queries.length; i++) {
+      const query = log.mongoQueries.queries[i];
+      const statusIcon = query.success ? '✅' : '❌';
+      const durationClass = query.duration > 100 ? 'slow' : query.duration > 50 ? 'medium' : 'fast';
+      const hasPreview = query.resultPreview != null;
+      contentHTML += `
+        <div class="log-item clickable ${query.success ? '' : 'error'}" data-type="mongo" data-index="${i}">
+          <span class="log-item-icon">${statusIcon}</span>
+          <span class="log-item-collection">${query.collection}</span>
+          <span class="log-item-user">(${truncateEmail(query.userEmail)})</span>
+          <span class="log-item-result">${query.resultCount} items</span>
+          <span class="log-item-duration ${durationClass}">${query.duration}ms</span>
+          ${hasPreview ? '<span class="log-item-expand">👁️</span>' : ''}
+        </div>
+        <div class="log-item-details" id="mongo-detail-${i}" style="display: none;"></div>
+      `;
+    }
+    
+    contentHTML += `
+        </div>
+      </div>
+    `;
+  }
+  
+  // API Calls Section
+  if (apiCount > 0) {
+    contentHTML += `
+      <div class="log-section">
+        <div class="log-section-header">
+          <span class="log-section-icon">🤖</span>
+          <span class="log-section-title">Anthropic API Call</span>
+          <span class="log-section-stats">${formatDuration(apiTime)}</span>
+        </div>
+        <div class="log-section-items" id="api-calls-list">
+    `;
+    
+    for (let i = 0; i < log.apiCalls.calls.length; i++) {
+      const call = log.apiCalls.calls[i];
+      const statusIcon = call.success ? '✅' : '❌';
+      const hasDetails = call.details && (call.details.systemPrompt || call.details.userMessage || call.details.response);
+      contentHTML += `
+        <div class="log-item clickable api-call-item ${call.success ? '' : 'error'}" data-type="api" data-index="${i}">
+          <span class="log-item-icon">${statusIcon}</span>
+          <span class="log-item-label">Model:</span>
+          <span class="log-item-value">${call.model}</span>
+          ${hasDetails ? '<span class="log-item-expand">👁️ View Details</span>' : ''}
+        </div>
+        <div class="log-item-details api-details" id="api-detail-${i}" style="display: none;"></div>
+        <div class="log-item">
+          <span class="log-item-icon">📥</span>
+          <span class="log-item-label">Input tokens:</span>
+          <span class="log-item-value">~${call.inputTokens?.toLocaleString() || 0}</span>
+        </div>
+        <div class="log-item">
+          <span class="log-item-icon">📤</span>
+          <span class="log-item-label">Output tokens:</span>
+          <span class="log-item-value">~${call.outputTokens?.toLocaleString() || 0}</span>
+        </div>
+        <div class="log-item">
+          <span class="log-item-icon">⏱️</span>
+          <span class="log-item-label">Latency:</span>
+          <span class="log-item-value">${formatDuration(call.duration)}</span>
+        </div>
+      `;
+    }
+    
+    contentHTML += `
+        </div>
+      </div>
+    `;
+  }
+  
+  // Data Summary Section
+  if (log.dataSummary) {
+    contentHTML += `
+      <div class="log-section">
+        <div class="log-section-header">
+          <span class="log-section-icon">📈</span>
+          <span class="log-section-title">Data Summary</span>
+        </div>
+        <div class="log-section-items">
+          <div class="log-item">
+            <span class="log-item-icon">📧</span>
+            <span class="log-item-label">Total emails loaded:</span>
+            <span class="log-item-value">${log.dataSummary.totalEmails?.toLocaleString() || 0}</span>
+          </div>
+          <div class="log-item">
+            <span class="log-item-icon">📏</span>
+            <span class="log-item-label">Context size:</span>
+            <span class="log-item-value">${formatBytes(log.dataSummary.contextSize || 0)}</span>
+          </div>
+          <div class="log-item">
+            <span class="log-item-icon">👥</span>
+            <span class="log-item-label">Users queried:</span>
+            <span class="log-item-value">${log.dataSummary.usersQueried?.join(', ') || 'None'}</span>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+  
+  // Errors Section (if any)
+  if (hasErrors) {
+    contentHTML += `
+      <div class="log-section error-section">
+        <div class="log-section-header">
+          <span class="log-section-icon">⚠️</span>
+          <span class="log-section-title">Errors</span>
+          <span class="log-section-stats">${log.errors.length} error${log.errors.length !== 1 ? 's' : ''}</span>
+        </div>
+        <div class="log-section-items">
+    `;
+    
+    for (const error of log.errors) {
+      contentHTML += `
+        <div class="log-item error">
+          <span class="log-item-icon">❌</span>
+          <span class="log-item-label">${error.operation}:</span>
+          <span class="log-item-value">${error.message}</span>
+        </div>
+      `;
+    }
+    
+    contentHTML += `
+        </div>
+      </div>
+    `;
+  }
+  
+  // Total timing
+  contentHTML += `
+    <div class="log-footer">
+      <span class="log-footer-label">Total execution time:</span>
+      <span class="log-footer-value">${formatDuration(totalTime)}</span>
+    </div>
+  `;
+  
+  content.innerHTML = contentHTML;
+  
+  // Toggle functionality
+  header.addEventListener('click', () => {
+    const isExpanded = content.style.display !== 'none';
+    content.style.display = isExpanded ? 'none' : 'block';
+    header.querySelector('.operations-log-toggle').textContent = isExpanded ? '▶' : '▼';
+    header.classList.toggle('expanded', !isExpanded);
+  });
+  
+  container.appendChild(header);
+  container.appendChild(content);
+  
+  // Add click handlers for expandable items after content is added to DOM
+  setTimeout(() => {
+    // MongoDB query click handlers
+    const mongoItems = content.querySelectorAll('.log-item.clickable[data-type="mongo"]');
+    mongoItems.forEach((item, idx) => {
+      item.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const index = parseInt(item.dataset.index);
+        const query = log.mongoQueries.queries[index];
+        const detailDiv = content.querySelector(`#mongo-detail-${index}`);
+        
+        if (detailDiv.style.display === 'none') {
+          detailDiv.innerHTML = renderMongoQueryDetails(query);
+          detailDiv.style.display = 'block';
+          item.classList.add('expanded');
+        } else {
+          detailDiv.style.display = 'none';
+          item.classList.remove('expanded');
+        }
+      });
+    });
+    
+    // API call click handlers
+    const apiItems = content.querySelectorAll('.log-item.clickable[data-type="api"]');
+    apiItems.forEach((item, idx) => {
+      item.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const index = parseInt(item.dataset.index);
+        const call = log.apiCalls.calls[index];
+        const detailDiv = content.querySelector(`#api-detail-${index}`);
+        
+        if (detailDiv.style.display === 'none') {
+          detailDiv.innerHTML = renderApiCallDetails(call);
+          detailDiv.style.display = 'block';
+          item.classList.add('expanded');
+        } else {
+          detailDiv.style.display = 'none';
+          item.classList.remove('expanded');
+        }
+      });
+    });
+  }, 0);
+  
+  return container;
+}
+
+// Render MongoDB query details
+function renderMongoQueryDetails(query) {
+  let html = '<div class="detail-content">';
+  html += `<div class="detail-header">📊 MongoDB Query: ${query.collection}</div>`;
+  html += `<div class="detail-row"><strong>User:</strong> ${query.userEmail}</div>`;
+  html += `<div class="detail-row"><strong>Timestamp:</strong> ${query.timestamp}</div>`;
+  html += `<div class="detail-row"><strong>Duration:</strong> ${query.duration}ms</div>`;
+  html += `<div class="detail-row"><strong>Result Count:</strong> ${query.resultCount} items</div>`;
+  
+  if (query.resultPreview) {
+    html += `<div class="detail-section">`;
+    html += `<div class="detail-section-title">Result Preview:</div>`;
+    html += `<pre class="detail-code">${escapeHtml(JSON.stringify(query.resultPreview, null, 2))}</pre>`;
+    html += `</div>`;
+  }
+  
+  if (query.error) {
+    html += `<div class="detail-error">Error: ${escapeHtml(query.error)}</div>`;
+  }
+  
+  html += '</div>';
+  return html;
+}
+
+// Render API call details
+function renderApiCallDetails(call) {
+  let html = '<div class="detail-content api-detail-content">';
+  html += `<div class="detail-header">🤖 Anthropic API Call</div>`;
+  html += `<div class="detail-row"><strong>Model:</strong> ${call.model}</div>`;
+  html += `<div class="detail-row"><strong>Timestamp:</strong> ${call.timestamp}</div>`;
+  html += `<div class="detail-row"><strong>Duration:</strong> ${formatDuration(call.duration)}</div>`;
+  html += `<div class="detail-row"><strong>Input Tokens:</strong> ~${call.inputTokens?.toLocaleString() || 0}</div>`;
+  html += `<div class="detail-row"><strong>Output Tokens:</strong> ~${call.outputTokens?.toLocaleString() || 0}</div>`;
+  
+  if (call.details) {
+    if (call.details.userMessage) {
+      html += `<div class="detail-section">`;
+      html += `<div class="detail-section-title">📥 User Message:</div>`;
+      html += `<pre class="detail-code user-message">${escapeHtml(call.details.userMessage)}</pre>`;
+      html += `</div>`;
+    }
+    
+    if (call.details.systemPrompt) {
+      html += `<div class="detail-section collapsible">`;
+      html += `<div class="detail-section-title clickable-title" onclick="this.parentElement.classList.toggle('open')">📋 System Prompt (click to expand) <span class="toggle-icon">▶</span></div>`;
+      html += `<pre class="detail-code system-prompt">${escapeHtml(call.details.systemPrompt)}</pre>`;
+      html += `</div>`;
+    }
+    
+    if (call.details.response) {
+      html += `<div class="detail-section">`;
+      html += `<div class="detail-section-title">📤 AI Response:</div>`;
+      html += `<pre class="detail-code ai-response">${escapeHtml(call.details.response)}</pre>`;
+      html += `</div>`;
+    }
+  }
+  
+  if (call.error) {
+    html += `<div class="detail-error">Error: ${escapeHtml(call.error)}</div>`;
+  }
+  
+  html += '</div>';
+  return html;
+}
+
+// Helper: Escape HTML for safe display
+function escapeHtml(text) {
+  if (!text) return '';
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
+// Helper: Format duration in ms to human readable
+function formatDuration(ms) {
+  if (ms < 1000) return `${ms}ms`;
+  return `${(ms / 1000).toFixed(1)}s`;
+}
+
+// Helper: Format bytes to human readable
+function formatBytes(bytes) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+// Helper: Truncate email for display
+function truncateEmail(email) {
+  if (!email) return 'unknown';
+  const parts = email.split('@');
+  if (parts[0].length > 10) {
+    return parts[0].substring(0, 10) + '...@' + parts[1];
+  }
+  return email;
 }
 
 // Add loading message
