@@ -14,7 +14,7 @@ const { FeatureGeneratorAgent } = require('./agent');
 const { ChatAnthropic } = require('@langchain/anthropic');
 
 // Import database module from parent directory
-const { initMongo, getUserDoc, getDb } = require('../db');
+const { initMongo, getUserDoc, getDb, setUserDoc } = require('../db');
 
 // =====================================================
 // OPERATIONS LOGGING INFRASTRUCTURE
@@ -489,6 +489,7 @@ const EMAIL_CHAT_SYSTEM_PROMPT = `You are an intelligent Email Assistant with ac
 3. **Get insights** - Provide statistics and patterns about email habits
 4. **Review responses** - Look at draft responses and sent emails
 5. **Answer questions** - Answer any questions about the email data
+6. **Modify data** - Add categories, update guidelines, modify email classifications, add notes
 
 AVAILABLE USERS IN THE SYSTEM:
 {{AVAILABLE_USERS}}
@@ -511,10 +512,43 @@ When answering questions:
 - Response emails show what the user has drafted or sent
 - Format your responses nicely with markdown
 
+**MODIFICATION CAPABILITIES:**
+You can modify the database when users request changes. When a user asks you to make changes (add categories, update guidelines, etc.), you MUST respond with BOTH:
+
+1. A conversational response explaining what you'll do
+2. A JSON modification block in this exact format:
+
+\`\`\`json
+{
+  "modifications": [
+    {
+      "type": "addCategory|removeCategory|updateGuideline|updateSummary|addNote|updateEmailCategory",
+      "collection": "categories|category_guidelines|category_summaries|notes|response_emails",
+      "userEmail": "user@example.com",
+      "description": "Human readable description of the change",
+      "data": {
+        "category": "New Category Name",
+        "guideline": "Category guideline text",
+        "summary": "Category summary text",
+        "note": "Note text",
+        "emailId": "email123",
+        "newCategory": "Category Name"
+      }
+    }
+  ]
+}
+\`\`\`
+
+**Example modification types:**
+- "Add category 'Travel Plans'" → type: "addCategory"
+- "Update Research guideline to include conference papers" → type: "updateGuideline" 
+- "Change email abc123 to Important category" → type: "updateEmailCategory"
+- "Add note about this conversation" → type: "addNote"
+
 DATA FOR SELECTED USER(S):
 {{DATA_CONTEXT}}
 
-Remember: You're analyzing real email data. Be accurate and helpful!`;
+Remember: You're analyzing real email data. Be accurate and helpful! When making modifications, always explain what you're doing and format the JSON modification block correctly.`;
 
 // Helper to load user email data (with optional logging)
 async function loadUserEmailData(userEmail, logger = null) {
@@ -714,6 +748,205 @@ async function loadAllUsersData(logger = null) {
   return loadUsersData(AVAILABLE_USERS, logger);
 }
 
+// =====================================================
+// MODIFICATION PARSING AND EXECUTION
+// =====================================================
+
+function parseModificationsFromResponse(responseContent, defaultUserEmail) {
+  const modifications = [];
+  
+  try {
+    // Look for JSON blocks in the response
+    const jsonRegex = /```json\s*(\{[\s\S]*?\})\s*```/g;
+    let match;
+    
+    while ((match = jsonRegex.exec(responseContent)) !== null) {
+      try {
+        const parsed = JSON.parse(match[1]);
+        if (parsed.modifications && Array.isArray(parsed.modifications)) {
+          for (const mod of parsed.modifications) {
+            // Validate and normalize modification
+            if (mod.type && mod.collection && mod.description && mod.data) {
+              modifications.push({
+                ...mod,
+                userEmail: mod.userEmail || defaultUserEmail,
+                id: uuidv4(),
+                timestamp: new Date().toISOString()
+              });
+            }
+          }
+        }
+      } catch (parseError) {
+        console.error('Failed to parse modification JSON:', parseError);
+      }
+    }
+  } catch (error) {
+    console.error('Error parsing modifications:', error);
+  }
+  
+  return modifications;
+}
+
+async function validateModification(modification) {
+  const errors = [];
+  
+  // Validate required fields
+  if (!modification.type) errors.push('Missing modification type');
+  if (!modification.collection) errors.push('Missing collection name');
+  if (!modification.userEmail) errors.push('Missing user email');
+  if (!modification.data) errors.push('Missing modification data');
+  
+  // Validate user email exists in system
+  if (modification.userEmail && !AVAILABLE_USERS.includes(modification.userEmail)) {
+    errors.push(`User ${modification.userEmail} not found in system`);
+  }
+  
+  // Validate modification type
+  const validTypes = ['addCategory', 'removeCategory', 'updateGuideline', 'updateSummary', 'addNote', 'updateEmailCategory'];
+  if (modification.type && !validTypes.includes(modification.type)) {
+    errors.push(`Invalid modification type: ${modification.type}`);
+  }
+  
+  // Type-specific validation
+  switch (modification.type) {
+    case 'addCategory':
+      if (!modification.data.category) errors.push('Missing category name');
+      // Check if category already exists
+      try {
+        const categoriesDoc = await getUserDoc('categories', modification.userEmail);
+        const existingCategories = categoriesDoc?.categories || [];
+        if (existingCategories.includes(modification.data.category)) {
+          errors.push(`Category '${modification.data.category}' already exists`);
+        }
+      } catch (err) {
+        errors.push('Unable to check existing categories');
+      }
+      break;
+      
+    case 'removeCategory':
+      if (!modification.data.category) errors.push('Missing category name');
+      break;
+      
+    case 'updateGuideline':
+      if (!modification.data.category) errors.push('Missing category name');
+      if (!modification.data.guideline) errors.push('Missing guideline text');
+      break;
+      
+    case 'updateSummary':
+      if (!modification.data.category) errors.push('Missing category name');
+      if (!modification.data.summary) errors.push('Missing summary text');
+      break;
+      
+    case 'addNote':
+      if (!modification.data.note) errors.push('Missing note text');
+      break;
+      
+    case 'updateEmailCategory':
+      if (!modification.data.emailId) errors.push('Missing email ID');
+      if (!modification.data.newCategory) errors.push('Missing new category');
+      break;
+  }
+  
+  return errors;
+}
+
+async function executeModification(modification) {
+  const result = {
+    success: false,
+    id: modification.id,
+    type: modification.type,
+    description: modification.description,
+    error: null,
+    changesPreview: null
+  };
+  
+  try {
+    const { userEmail, type, collection, data } = modification;
+    
+    switch (type) {
+      case 'addCategory':
+        // Add category to categories collection
+        const categoriesDoc = await getUserDoc('categories', userEmail) || { categories: [] };
+        const updatedCategories = [...(categoriesDoc.categories || []), data.category];
+        await setUserDoc('categories', userEmail, { categories: updatedCategories });
+        result.success = true;
+        result.changesPreview = `Added category '${data.category}' to categories list`;
+        break;
+        
+      case 'removeCategory':
+        // Remove category from categories collection
+        const currentCategoriesDoc = await getUserDoc('categories', userEmail) || { categories: [] };
+        const filteredCategories = (currentCategoriesDoc.categories || []).filter(cat => cat !== data.category);
+        await setUserDoc('categories', userEmail, { categories: filteredCategories });
+        result.success = true;
+        result.changesPreview = `Removed category '${data.category}' from categories list`;
+        break;
+        
+      case 'updateGuideline':
+        // Update category guideline
+        const guidelinesDoc = await getUserDoc('category_guidelines', userEmail) || { guidelines: {} };
+        const updatedGuidelines = { ...(guidelinesDoc.guidelines || {}), [data.category]: data.guideline };
+        await setUserDoc('category_guidelines', userEmail, { guidelines: updatedGuidelines });
+        result.success = true;
+        result.changesPreview = `Updated guideline for '${data.category}': ${data.guideline.substring(0, 100)}...`;
+        break;
+        
+      case 'updateSummary':
+        // Update category summary
+        const summariesDoc = await getUserDoc('category_summaries', userEmail) || { summaries: {} };
+        const updatedSummaries = { ...(summariesDoc.summaries || {}), [data.category]: data.summary };
+        await setUserDoc('category_summaries', userEmail, { summaries: updatedSummaries });
+        result.success = true;
+        result.changesPreview = `Updated summary for '${data.category}': ${data.summary.substring(0, 100)}...`;
+        break;
+        
+      case 'addNote':
+        // Add note to notes collection
+        const notesDoc = await getUserDoc('notes', userEmail) || { notes: [] };
+        const newNote = {
+          id: uuidv4(),
+          text: data.note,
+          timestamp: new Date().toISOString()
+        };
+        const updatedNotes = [...(notesDoc.notes || []), newNote];
+        await setUserDoc('notes', userEmail, { notes: updatedNotes });
+        result.success = true;
+        result.changesPreview = `Added note: ${data.note.substring(0, 100)}...`;
+        break;
+        
+      case 'updateEmailCategory':
+        // Update email category in response_emails collection
+        const responseEmailsDoc = await getUserDoc('response_emails', userEmail);
+        if (responseEmailsDoc && responseEmailsDoc.emails) {
+          const updatedEmails = responseEmailsDoc.emails.map(email => {
+            if (email.id === data.emailId) {
+              return { ...email, category: data.newCategory };
+            }
+            return email;
+          });
+          await setUserDoc('response_emails', userEmail, { emails: updatedEmails });
+          result.success = true;
+          result.changesPreview = `Updated email '${data.emailId}' to category '${data.newCategory}'`;
+        } else {
+          throw new Error('Email not found or invalid email collection structure');
+        }
+        break;
+        
+      default:
+        throw new Error(`Unsupported modification type: ${type}`);
+    }
+    
+    // Log successful modification
+    console.log(`✅ Executed modification: ${type} for ${userEmail}`);
+    
+  } catch (error) {
+    result.error = error.message;
+    console.error(`❌ Failed to execute modification ${modification.id}:`, error);
+  }
+  
+  return result;
+}
+
 // Email Chat endpoint
 app.post('/api/email-chat', async (req, res) => {
   const { sessionId, message, userEmail } = req.body;
@@ -787,7 +1020,14 @@ app.post('/api/email-chat', async (req, res) => {
     
     const assistantResponse = response.content;
     
+    // Parse for modifications
+    const modifications = parseModificationsFromResponse(assistantResponse, usersToQuery[0]);
+    const hasModifications = modifications.length > 0;
+    
     console.log('Email Chat Response generated successfully');
+    if (hasModifications) {
+      console.log(`📝 Found ${modifications.length} modification(s) in response`);
+    }
     
     // Get the operations log
     const operationsLog = logger.getLog();
@@ -801,7 +1041,9 @@ app.post('/api/email-chat', async (req, res) => {
       success: true,
       response: assistantResponse,
       availableUsers: AVAILABLE_USERS,
-      operationsLog
+      operationsLog,
+      modifications: hasModifications ? modifications : undefined,
+      requiresConfirmation: hasModifications
     });
     
   } catch (error) {
@@ -812,6 +1054,102 @@ app.post('/api/email-chat', async (req, res) => {
       success: false,
       error: error.message || 'Failed to process email chat',
       operationsLog: logger.getLog()
+    });
+  }
+});
+
+// Execute confirmed modifications
+app.post('/api/email-chat-confirm', async (req, res) => {
+  const { modifications } = req.body;
+  
+  if (!modifications || !Array.isArray(modifications) || modifications.length === 0) {
+    return res.status(400).json({
+      success: false,
+      error: 'No modifications provided'
+    });
+  }
+  
+  if (!mongoInitialized) {
+    return res.status(503).json({
+      success: false,
+      error: 'Database connection not ready'
+    });
+  }
+  
+  const results = [];
+  let successCount = 0;
+  let errorCount = 0;
+  
+  try {
+    console.log(`\n🔧 EXECUTING CONFIRMED MODIFICATIONS: ${modifications.length} changes`);
+    
+    // Process each modification
+    for (const modification of modifications) {
+      // Validate modification before execution
+      const validationErrors = await validateModification(modification);
+      
+      if (validationErrors.length > 0) {
+        const result = {
+          success: false,
+          id: modification.id,
+          type: modification.type,
+          description: modification.description,
+          error: `Validation failed: ${validationErrors.join(', ')}`,
+          validationErrors
+        };
+        results.push(result);
+        errorCount++;
+        console.log(`❌ Validation failed for ${modification.id}: ${validationErrors.join(', ')}`);
+      } else {
+        // Execute the modification
+        const result = await executeModification(modification);
+        results.push(result);
+        
+        if (result.success) {
+          successCount++;
+          console.log(`✅ ${result.description}`);
+        } else {
+          errorCount++;
+          console.log(`❌ ${result.description}: ${result.error}`);
+        }
+      }
+    }
+    
+    console.log(`\n📊 MODIFICATION RESULTS: ${successCount} success, ${errorCount} errors`);
+    
+    // Log to audit trail (simple console logging for now)
+    const auditEntry = {
+      timestamp: new Date().toISOString(),
+      totalModifications: modifications.length,
+      successCount,
+      errorCount,
+      modifications: results.map(r => ({
+        id: r.id,
+        type: r.type,
+        success: r.success,
+        description: r.description
+      }))
+    };
+    console.log(`📋 AUDIT LOG:`, JSON.stringify(auditEntry, null, 2));
+    
+    res.json({
+      success: true,
+      message: `Processed ${modifications.length} modifications: ${successCount} successful, ${errorCount} failed`,
+      results,
+      summary: {
+        totalModifications: modifications.length,
+        successCount,
+        errorCount
+      }
+    });
+    
+  } catch (error) {
+    console.error('Error executing modifications:', error);
+    
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to execute modifications',
+      results
     });
   }
 });

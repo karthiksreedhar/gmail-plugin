@@ -277,29 +277,34 @@ async function handleSend() {
     loadingMsg.remove();
     
     if (data.success) {
-      // Add assistant response (with operations log for chat mode)
-      const operationsLog = (currentMode === 'chat') ? data.operationsLog : null;
-      addMessage('assistant', data.response, true, operationsLog);
-      
-      // Handle generate mode specific logic
-      if (currentMode === 'generate' && data.files) {
-        // Update state
-        currentFiles = data.files;
-        currentFeatureId = data.featureId;
-        updatedFiles = data.updatedFiles || [];
+      // Check if this requires confirmation (chat mode with modifications)
+      if (currentMode === 'chat' && data.requiresConfirmation && data.modifications) {
+        showModificationConfirmation(data.response, data.modifications, data.operationsLog);
+      } else {
+        // Add assistant response (with operations log for chat mode)
+        const operationsLog = (currentMode === 'chat') ? data.operationsLog : null;
+        addMessage('assistant', data.response, true, operationsLog);
         
-        // Show/update preview
-        showPreview();
-        updateFileTabs();
-        
-        // Select first file or first updated file
-        if (updatedFiles.length > 0) {
-          selectFile(updatedFiles[0]);
-        } else {
-          selectFile('manifest.json');
+        // Handle generate mode specific logic
+        if (currentMode === 'generate' && data.files) {
+          // Update state
+          currentFiles = data.files;
+          currentFeatureId = data.featureId;
+          updatedFiles = data.updatedFiles || [];
+          
+          // Show/update preview
+          showPreview();
+          updateFileTabs();
+          
+          // Select first file or first updated file
+          if (updatedFiles.length > 0) {
+            selectFile(updatedFiles[0]);
+          } else {
+            selectFile('manifest.json');
+          }
+          
+          showToast('Files generated successfully!', 'success');
         }
-        
-        showToast('Files generated successfully!', 'success');
       }
     } else {
       addMessage('assistant', `**Error:** ${data.error}\n\nPlease try again or rephrase your request.`);
@@ -1119,6 +1124,320 @@ function showToast(message, type = 'success') {
     toast.style.animation = 'slideIn 0.3s ease reverse';
     setTimeout(() => toast.remove(), 300);
   }, 3000);
+}
+
+// =====================================================
+// MODIFICATION CONFIRMATION SYSTEM
+// =====================================================
+
+// Show modification confirmation dialog
+function showModificationConfirmation(aiResponse, modifications, operationsLog) {
+  // First add the AI response to chat
+  addMessage('assistant', aiResponse, true, operationsLog);
+  
+  // Create and show confirmation modal
+  const modal = createConfirmationModal(modifications);
+  document.body.appendChild(modal);
+  
+  // Show the modal
+  setTimeout(() => {
+    modal.classList.add('show');
+  }, 10);
+}
+
+// Create the confirmation modal
+function createConfirmationModal(modifications) {
+  const modal = document.createElement('div');
+  modal.className = 'confirmation-modal-overlay';
+  
+  const modalContent = document.createElement('div');
+  modalContent.className = 'confirmation-modal';
+  
+  // Header
+  const header = document.createElement('div');
+  header.className = 'confirmation-modal-header';
+  header.innerHTML = `
+    <span class="confirmation-icon">⚠️</span>
+    <h3>Database Modification Required</h3>
+    <p>I want to make ${modifications.length} change${modifications.length !== 1 ? 's' : ''} to your email data.</p>
+  `;
+  
+  // Summary of changes
+  const summary = document.createElement('div');
+  summary.className = 'confirmation-summary';
+  summary.innerHTML = `
+    <h4>Changes to be made:</h4>
+    <ul class="changes-list">
+      ${modifications.map(mod => `
+        <li class="change-item">
+          <span class="change-type">${getChangeTypeIcon(mod.type)}</span>
+          <span class="change-description">${mod.description}</span>
+        </li>
+      `).join('')}
+    </ul>
+  `;
+  
+  // Actions
+  const actions = document.createElement('div');
+  actions.className = 'confirmation-actions';
+  
+  const showDetailsBtn = document.createElement('button');
+  showDetailsBtn.className = 'btn-secondary show-details-btn';
+  showDetailsBtn.innerHTML = '🔍 Show Details';
+  showDetailsBtn.addEventListener('click', () => {
+    showModificationDetails(modifications);
+  });
+  
+  const cancelBtn = document.createElement('button');
+  cancelBtn.className = 'btn-secondary';
+  cancelBtn.innerHTML = '✕ Cancel';
+  cancelBtn.addEventListener('click', () => {
+    closeConfirmationModal(modal);
+  });
+  
+  const approveBtn = document.createElement('button');
+  approveBtn.className = 'btn-primary approve-btn';
+  approveBtn.innerHTML = '✓ Approve Changes';
+  approveBtn.addEventListener('click', () => {
+    executeConfirmedModifications(modifications, modal);
+  });
+  
+  actions.appendChild(showDetailsBtn);
+  actions.appendChild(cancelBtn);
+  actions.appendChild(approveBtn);
+  
+  // Assemble modal
+  modalContent.appendChild(header);
+  modalContent.appendChild(summary);
+  modalContent.appendChild(actions);
+  modal.appendChild(modalContent);
+  
+  // Click outside to close
+  modal.addEventListener('click', (e) => {
+    if (e.target === modal) {
+      closeConfirmationModal(modal);
+    }
+  });
+  
+  return modal;
+}
+
+// Show modification details in the left sidebar
+function showModificationDetails(modifications) {
+  // Show the preview section for details
+  previewSection.style.display = 'flex';
+  
+  // Update header
+  const previewHeader = previewSection.querySelector('.preview-header h2');
+  previewHeader.textContent = '🔍 Modification Details';
+  
+  // Hide download button, add close button
+  downloadBtn.style.display = 'none';
+  
+  // Add close button if not already present
+  let closeBtn = previewSection.querySelector('.close-details-btn');
+  if (!closeBtn) {
+    closeBtn = document.createElement('button');
+    closeBtn.className = 'close-details-btn';
+    closeBtn.innerHTML = '✕ Close Details';
+    closeBtn.addEventListener('click', closeModificationDetails);
+    previewSection.querySelector('.preview-actions').appendChild(closeBtn);
+  }
+  closeBtn.style.display = 'inline-flex';
+  
+  // Update badge to show modification count
+  featureIdBadge.textContent = `${modifications.length} modification${modifications.length !== 1 ? 's' : ''}`;
+  
+  // Hide file tabs
+  const fileTabsEl = previewSection.querySelector('.file-tabs');
+  fileTabsEl.style.display = 'none';
+  
+  // Update file content header
+  currentFileNameEl.textContent = 'Modification Details';
+  copyFileBtn.style.display = 'none';
+  
+  // Render the modification details in the preview area
+  const detailsContainer = document.createElement('div');
+  detailsContainer.className = 'modification-details-preview';
+  detailsContainer.innerHTML = renderModificationDetailsHTML(modifications);
+  
+  // Clear and add to file content
+  fileContent.innerHTML = '';
+  fileContent.appendChild(detailsContainer);
+}
+
+// Render modification details as HTML
+function renderModificationDetailsHTML(modifications) {
+  let html = '<div class="modification-details-content">';
+  
+  html += `<div class="details-header">
+    <h3>📝 Changes to be made</h3>
+    <p>These operations will be executed on your MongoDB database:</p>
+  </div>`;
+  
+  for (let i = 0; i < modifications.length; i++) {
+    const mod = modifications[i];
+    const icon = getChangeTypeIcon(mod.type);
+    
+    html += `<div class="modification-item">
+      <div class="modification-header">
+        <span class="modification-icon">${icon}</span>
+        <span class="modification-title">${mod.description}</span>
+      </div>
+      
+      <div class="modification-details">
+        <div class="detail-row">
+          <span class="detail-label">Type:</span>
+          <span class="detail-value">${mod.type}</span>
+        </div>
+        <div class="detail-row">
+          <span class="detail-label">Collection:</span>
+          <span class="detail-value">${mod.collection}</span>
+        </div>
+        <div class="detail-row">
+          <span class="detail-label">User:</span>
+          <span class="detail-value">${mod.userEmail}</span>
+        </div>
+      </div>
+      
+      <div class="modification-data">
+        <div class="data-header">Data to be modified:</div>
+        <pre class="data-preview">${JSON.stringify(mod.data, null, 2)}</pre>
+      </div>
+      
+      <div class="impact-assessment">
+        ${renderImpactAssessment(mod)}
+      </div>
+    </div>`;
+  }
+  
+  html += '</div>';
+  
+  return html;
+}
+
+// Render impact assessment for a modification
+function renderImpactAssessment(mod) {
+  let impact = '';
+  
+  switch (mod.type) {
+    case 'addCategory':
+      impact = `<span class="impact-low">Low impact:</span> Adds new category "${mod.data.category}" to your categories list.`;
+      break;
+    case 'removeCategory':
+      impact = `<span class="impact-medium">Medium impact:</span> Removes category "${mod.data.category}". Emails in this category may become uncategorized.`;
+      break;
+    case 'updateGuideline':
+      impact = `<span class="impact-low">Low impact:</span> Updates classification guideline for "${mod.data.category}" category.`;
+      break;
+    case 'updateSummary':
+      impact = `<span class="impact-low">Low impact:</span> Updates summary description for "${mod.data.category}" category.`;
+      break;
+    case 'addNote':
+      impact = `<span class="impact-low">Low impact:</span> Adds a new note to your notes collection.`;
+      break;
+    case 'updateEmailCategory':
+      impact = `<span class="impact-medium">Medium impact:</span> Changes email "${mod.data.emailId}" to category "${mod.data.newCategory}".`;
+      break;
+    default:
+      impact = `<span class="impact-unknown">Unknown impact:</span> Please review the modification details carefully.`;
+  }
+  
+  return `<div class="impact-info">${impact}</div>`;
+}
+
+// Get icon for change type
+function getChangeTypeIcon(type) {
+  const icons = {
+    'addCategory': '➕',
+    'removeCategory': '🗑️', 
+    'updateGuideline': '📝',
+    'updateSummary': '📄',
+    'addNote': '📓',
+    'updateEmailCategory': '🔄'
+  };
+  return icons[type] || '⚙️';
+}
+
+// Close modification details
+function closeModificationDetails() {
+  previewSection.style.display = 'none';
+  
+  // Hide close button
+  const closeBtn = previewSection.querySelector('.close-details-btn');
+  if (closeBtn) {
+    closeBtn.style.display = 'none';
+  }
+  
+  // Restore file tabs visibility and download button
+  const fileTabsEl = previewSection.querySelector('.file-tabs');
+  fileTabsEl.style.display = 'flex';
+  downloadBtn.style.display = 'inline-flex';
+  copyFileBtn.style.display = 'inline-flex';
+  
+  // Reset preview header
+  const previewHeader = previewSection.querySelector('.preview-header h2');
+  previewHeader.textContent = '📁 Generated Files';
+}
+
+// Execute confirmed modifications
+async function executeConfirmedModifications(modifications, modal) {
+  // Show loading state on approve button
+  const approveBtn = modal.querySelector('.approve-btn');
+  const originalText = approveBtn.innerHTML;
+  approveBtn.innerHTML = '<span class="spinner"></span> Executing...';
+  approveBtn.disabled = true;
+  
+  try {
+    const response = await fetch('/api/email-chat-confirm', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ modifications })
+    });
+    
+    const data = await response.json();
+    
+    if (data.success) {
+      // Close modal
+      closeConfirmationModal(modal);
+      
+      // Show success message
+      const successCount = data.summary?.successCount || 0;
+      const errorCount = data.summary?.errorCount || 0;
+      
+      let message = `✅ Executed ${successCount} modification${successCount !== 1 ? 's' : ''}`;
+      if (errorCount > 0) {
+        message += `, ${errorCount} failed`;
+      }
+      
+      addMessage('assistant', message);
+      showToast(`${successCount} changes applied successfully!`, 'success');
+      
+      // Log detailed results
+      console.log('Modification results:', data.results);
+      
+    } else {
+      throw new Error(data.error || 'Failed to execute modifications');
+    }
+  } catch (error) {
+    console.error('Error executing modifications:', error);
+    
+    // Restore button state
+    approveBtn.innerHTML = originalText;
+    approveBtn.disabled = false;
+    
+    // Show error
+    addMessage('assistant', `❌ **Error executing changes:** ${error.message}`);
+    showToast('Failed to execute changes', 'error');
+  }
+}
+
+// Close confirmation modal
+function closeConfirmationModal(modal) {
+  modal.classList.remove('show');
+  setTimeout(() => {
+    modal.remove();
+  }, 300);
 }
 
 // Export for debugging
