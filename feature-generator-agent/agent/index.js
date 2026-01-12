@@ -11,7 +11,7 @@ class FeatureGeneratorAgent {
   constructor() {
     this.model = new ChatAnthropic({
       anthropicApiKey: process.env.ANTHROPIC_API_KEY,
-      modelName: 'claude-sonnet-4-20250514',
+      modelName: 'claude-opus-4-20250514',
       temperature: 0.2, // Lower for more consistent code generation
       maxTokens: 8192
     });

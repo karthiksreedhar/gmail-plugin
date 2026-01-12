@@ -484,33 +484,34 @@ const AVAILABLE_USERS = ['ks4190@columbia.edu', 'lc3251@columbia.edu'];
 // Email chat system prompt
 const EMAIL_CHAT_SYSTEM_PROMPT = `You are an intelligent Email Assistant with access to email data from the Gmail Plugin system. You can help users:
 
-1. **Analyze emails** - Count, summarize, or analyze emails by category, sender, date, etc.
+1. **Analyze emails** - Count, summarize, or analyze email threads and conversations
 2. **Find emails** - Search for specific emails based on criteria
 3. **Get insights** - Provide statistics and patterns about email habits
-4. **Answer questions** - Answer any questions about the email data
+4. **Review responses** - Look at draft responses and sent emails
+5. **Answer questions** - Answer any questions about the email data
 
 AVAILABLE USERS IN THE SYSTEM:
 {{AVAILABLE_USERS}}
 
-You have access to email data for ALL of the above users. When the user asks about a specific user's data, look at the data for that user in the context below.
+You have access to email data for the user(s) listed above. 
 
 AVAILABLE DATA FOR EACH USER:
-- **Priority Emails**: The main list of categorized emails
+- **Email Threads**: Conversation threads with full context (PRIMARY SOURCE)
+- **Response Emails**: Draft and sent email responses (PRIMARY SOURCE)
 - **Categories**: The categories defined by the user
 - **Category Guidelines**: How emails are classified
-- **Response Emails**: Previous email responses
-- **Email Threads**: Conversation threads
+- **Category Summaries**: Summary of what each category contains
 - **Notes**: User notes
 
 When answering questions:
 - Be helpful and conversational
 - Provide specific numbers when asked for counts
 - Quote email subjects or snippets when relevant
-- If asking about a specific user, use that user's data section
-- If no user is specified, you can ask which user they want to know about, or show data for all users
+- Email threads contain the full conversation context
+- Response emails show what the user has drafted or sent
 - Format your responses nicely with markdown
 
-DATA FOR ALL USERS:
+DATA FOR SELECTED USER(S):
 {{DATA_CONTEXT}}
 
 Remember: You're analyzing real email data. Be accurate and helpful!`;
@@ -527,10 +528,6 @@ async function loadUserEmailData(userEmail, logger = null) {
     getUserDoc;
   
   try {
-    // Load priority emails
-    const priorityDoc = await getDoc('priority_emails', userEmail);
-    data.priorityEmails = priorityDoc?.emails || [];
-    
     // Load categories
     const categoriesDoc = await getDoc('categories', userEmail);
     data.categories = categoriesDoc?.categories || [];
@@ -543,13 +540,28 @@ async function loadUserEmailData(userEmail, logger = null) {
     const summariesDoc = await getDoc('category_summaries', userEmail);
     data.categorySummaries = summariesDoc?.summaries || {};
     
-    // Load response emails (limited)
-    const responsesDoc = await getDoc('response_emails', userEmail);
-    data.responseEmails = (responsesDoc?.responses || []).slice(0, 50);
-    
-    // Load email threads (limited)
+    // Load email threads - PRIMARY SOURCE for email conversations
     const threadsDoc = await getDoc('email_threads', userEmail);
-    data.emailThreads = (threadsDoc?.threads || []).slice(0, 30);
+    data.emailThreads = threadsDoc?.threads || [];
+    
+    // Load response emails - PRIMARY SOURCE for sent/draft responses  
+    const responsesDoc = await getDoc('response_emails', userEmail);
+    data.responseEmails = responsesDoc?.emails || responsesDoc?.responses || [];
+    
+    // Create category mapping from response emails to threads
+    const emailIdToCategoryMap = {};
+    console.log(`Creating category mapping for ${userEmail}: ${data.responseEmails.length} response emails`);
+    for (const email of data.responseEmails) {
+      if (email.id && (email.category || email.categories)) {
+        emailIdToCategoryMap[email.id] = {
+          category: email.category,
+          categories: email.categories || [email.category].filter(Boolean)
+        };
+        console.log(`Mapped ${email.id} -> ${email.category}`);
+      }
+    }
+    console.log(`Created ${Object.keys(emailIdToCategoryMap).length} category mappings`);
+    data.emailIdToCategoryMap = emailIdToCategoryMap;
     
     // Load notes
     const notesDoc = await getDoc('notes', userEmail);
@@ -572,46 +584,6 @@ function formatEmailDataContext(data) {
     lines.push(`**Categories (${data.categories.length}):** ${data.categories.join(', ')}`);
   }
   
-  // Priority emails summary
-  if (data.priorityEmails && data.priorityEmails.length > 0) {
-    lines.push(`\n**Priority Emails: ${data.priorityEmails.length} total**`);
-    
-    // Count by category
-    const categoryCount = {};
-    for (const email of data.priorityEmails) {
-      const cat = email.category || email._cat || 'Uncategorized';
-      categoryCount[cat] = (categoryCount[cat] || 0) + 1;
-    }
-    lines.push('Breakdown by category:');
-    for (const [cat, count] of Object.entries(categoryCount).sort((a, b) => b[1] - a[1])) {
-      lines.push(`- ${cat}: ${count} emails`);
-    }
-    
-    // Recent emails
-    lines.push('\n**Recent Emails (last 10):**');
-    const recentEmails = data.priorityEmails.slice(0, 10);
-    for (const email of recentEmails) {
-      const from = email.from || email.originalFrom || 'Unknown';
-      const subject = email.subject || 'No Subject';
-      const category = email.category || email._cat || 'Uncategorized';
-      const date = email.date || 'Unknown date';
-      lines.push(`- **${subject}** from ${from} [${category}] (${date})`);
-    }
-    
-    // Full email list for searching
-    lines.push('\n**All Emails (for search):**');
-    lines.push('```json');
-    lines.push(JSON.stringify(data.priorityEmails.map(e => ({
-      id: e.id,
-      subject: e.subject,
-      from: e.from || e.originalFrom,
-      category: e.category || e._cat,
-      date: e.date,
-      snippet: e.snippet?.substring(0, 100)
-    })), null, 2).substring(0, 15000)); // Limit size
-    lines.push('```');
-  }
-  
   // Category guidelines
   if (data.categoryGuidelines && Object.keys(data.categoryGuidelines).length > 0) {
     lines.push('\n**Category Guidelines:**');
@@ -620,9 +592,87 @@ function formatEmailDataContext(data) {
     }
   }
   
+  // Category summaries
+  if (data.categorySummaries && Object.keys(data.categorySummaries).length > 0) {
+    lines.push('\n**Category Summaries:**');
+    for (const [cat, summary] of Object.entries(data.categorySummaries)) {
+      lines.push(`- **${cat}**: ${summary}`);
+    }
+  }
+  
+  // Email threads (PRIMARY SOURCE)
+  if (data.emailThreads && data.emailThreads.length > 0) {
+    lines.push(`\n**Email Threads: ${data.emailThreads.length} conversations**`);
+    
+    // Recent threads summary
+    lines.push('\n**Recent Conversations (last 15):**');
+    const recentThreads = data.emailThreads.slice(0, 15);
+    for (const thread of recentThreads) {
+      const subject = thread.subject || 'No Subject';
+      const from = thread.from || thread.originalFrom || 'Unknown';
+      
+      // Get category from response emails mapping using responseId or thread id
+      const responseId = thread.responseId || thread.id;
+      const categoryInfo = data.emailIdToCategoryMap?.[responseId];
+      const category = categoryInfo?.category || thread.category || thread._cat || 'Uncategorized';
+      
+      const messageCount = thread.messages?.length || 1;
+      lines.push(`- **${subject}** from ${from} [${category}] (${messageCount} messages)`);
+    }
+    
+    // Full threads data for searching
+    lines.push('\n**All Email Threads (for search):**');
+    lines.push('```json');
+    lines.push(JSON.stringify(data.emailThreads.map(t => {
+      const responseId = t.responseId || t.id;
+      const categoryInfo = data.emailIdToCategoryMap?.[responseId];
+      return {
+        id: t.id,
+        responseId: responseId,
+        subject: t.subject,
+        from: t.from || t.originalFrom,
+        category: categoryInfo?.category || t.category || t._cat || 'Uncategorized',
+        categories: categoryInfo?.categories || (t.category ? [t.category] : []),
+        messageCount: t.messages?.length || 1,
+        snippet: t.snippet?.substring(0, 150) || t.messages?.[0]?.snippet?.substring(0, 150)
+      };
+    }), null, 2).substring(0, 20000)); // Limit size
+    lines.push('```');
+  }
+  
+  // Response emails (PRIMARY SOURCE)
+  if (data.responseEmails && data.responseEmails.length > 0) {
+    lines.push(`\n**Response Emails: ${data.responseEmails.length} responses**`);
+    
+    // Recent responses summary
+    lines.push('\n**Recent Responses (last 10):**');
+    const recentResponses = data.responseEmails.slice(0, 10);
+    for (const resp of recentResponses) {
+      const subject = resp.subject || 'No Subject';
+      const to = resp.to || 'Unknown recipient';
+      const status = resp.status || resp.type || 'draft';
+      lines.push(`- **${subject}** to ${to} (${status})`);
+    }
+    
+    // Full response data for searching
+    lines.push('\n**All Response Emails (for search):**');
+    lines.push('```json');
+    lines.push(JSON.stringify(data.responseEmails.map(r => ({
+      id: r.id,
+      subject: r.subject,
+      to: r.to,
+      status: r.status || r.type,
+      bodyPreview: r.body?.substring(0, 200) || r.draftBody?.substring(0, 200)
+    })), null, 2).substring(0, 15000)); // Limit size
+    lines.push('```');
+  }
+  
   // Notes
   if (data.notes && data.notes.length > 0) {
     lines.push(`\n**User Notes: ${data.notes.length} notes**`);
+    for (const note of data.notes.slice(0, 10)) {
+      lines.push(`- ${note.text || note.content || JSON.stringify(note).substring(0, 100)}`);
+    }
   }
   
   return lines.join('\n');
@@ -631,13 +681,15 @@ function formatEmailDataContext(data) {
 // Load and format data for specified users (with optional logging)
 async function loadUsersData(users, logger = null) {
   const usersContext = [];
-  let totalEmails = 0;
+  let totalThreads = 0;
+  let totalResponses = 0;
   
   for (const userEmail of users) {
     try {
       const userData = await loadUserEmailData(userEmail, logger);
       const userContext = formatEmailDataContext(userData);
-      totalEmails += (userData.priorityEmails?.length || 0);
+      totalThreads += (userData.emailThreads?.length || 0);
+      totalResponses += (userData.responseEmails?.length || 0);
       
       usersContext.push(`\n${'='.repeat(60)}\n## USER: ${userEmail}\n${'='.repeat(60)}\n${userContext}`);
     } catch (error) {
@@ -649,9 +701,9 @@ async function loadUsersData(users, logger = null) {
   
   const contextString = usersContext.join('\n');
   
-  // Log data summary if logger provided
+  // Log data summary if logger provided (total items = threads + responses)
   if (logger) {
-    logger.logDataSummary(totalEmails, contextString.length, [...users]);
+    logger.logDataSummary(totalThreads + totalResponses, contextString.length, [...users]);
   }
   
   return contextString;
@@ -702,7 +754,7 @@ app.post('/api/email-chat', async (req, res) => {
       .replace('{{DATA_CONTEXT}}', dataContext);
     
     // Create chat model
-    const modelName = 'claude-sonnet-4-20250514';
+    const modelName = 'claude-opus-4-20250514';
     const model = new ChatAnthropic({
       modelName,
       anthropicApiKey: process.env.ANTHROPIC_API_KEY,
