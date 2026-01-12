@@ -382,17 +382,11 @@ function handleDownload() {
   showToast('Download started!', 'success');
 }
 
+// Store the current operations log for display in preview panel
+let currentOperationsLog = null;
+
 // Add message to chat (with optional operations log)
 function addMessage(role, content, scroll = true, operationsLog = null) {
-  // If there's an operations log, add it as a separate element BEFORE the message
-  if (operationsLog && role === 'assistant') {
-    const logEntry = document.createElement('div');
-    logEntry.className = 'operations-log-entry';
-    const logDiv = renderOperationsLog(operationsLog);
-    logEntry.appendChild(logDiv);
-    chatMessages.appendChild(logEntry);
-  }
-  
   const messageDiv = document.createElement('div');
   messageDiv.className = `message ${role}-message`;
   
@@ -404,6 +398,20 @@ function addMessage(role, content, scroll = true, operationsLog = null) {
   contentDiv.className = 'message-content';
   contentDiv.innerHTML = formatMarkdown(content);
   
+  // Add operations log button AFTER the message content (for assistant messages in chat mode)
+  if (operationsLog && role === 'assistant') {
+    const logButton = document.createElement('button');
+    logButton.className = 'view-operations-btn';
+    logButton.innerHTML = '🔍 View Operations Log';
+    logButton.addEventListener('click', () => {
+      showOperationsLogInPreview(operationsLog);
+    });
+    contentDiv.appendChild(logButton);
+    
+    // Store the log for reference
+    currentOperationsLog = operationsLog;
+  }
+  
   messageDiv.appendChild(avatar);
   messageDiv.appendChild(contentDiv);
   
@@ -414,6 +422,188 @@ function addMessage(role, content, scroll = true, operationsLog = null) {
   }
   
   return messageDiv;
+}
+
+// Show operations log in the preview panel (left side)
+function showOperationsLogInPreview(log) {
+  currentOperationsLog = log;
+  
+  // Show the preview section
+  previewSection.style.display = 'flex';
+  
+  // Update header
+  const previewHeader = previewSection.querySelector('.preview-header h2');
+  previewHeader.textContent = '🔍 Operations Log';
+  
+  // Hide download button, add close button
+  downloadBtn.style.display = 'none';
+  
+  // Add close button if not already present
+  let closeBtn = previewSection.querySelector('.close-operations-btn');
+  if (!closeBtn) {
+    closeBtn = document.createElement('button');
+    closeBtn.className = 'close-operations-btn';
+    closeBtn.innerHTML = '✕ Close';
+    closeBtn.addEventListener('click', closeOperationsLog);
+    previewSection.querySelector('.preview-actions').appendChild(closeBtn);
+  }
+  closeBtn.style.display = 'inline-flex';
+  
+  // Update badge to show summary
+  const mongoCount = log.mongoQueries?.count || 0;
+  const apiCount = log.apiCalls?.count || 0;
+  const totalTime = log.totalDuration || 0;
+  featureIdBadge.textContent = `${mongoCount} queries, ${apiCount} API call${apiCount !== 1 ? 's' : ''}, ${formatDuration(totalTime)}`;
+  
+  // Hide file tabs
+  const fileTabsEl = previewSection.querySelector('.file-tabs');
+  fileTabsEl.style.display = 'none';
+  
+  // Update file content header
+  currentFileNameEl.textContent = 'Operations Summary';
+  copyFileBtn.style.display = 'none';
+  
+  // Render the log content in the preview area
+  const codeElement = fileContent.querySelector('code');
+  codeElement.className = '';
+  codeElement.innerHTML = '';
+  
+  // Create and append the operations log HTML
+  const logContainer = document.createElement('div');
+  logContainer.className = 'operations-log-preview';
+  logContainer.innerHTML = renderOperationsLogHTML(log);
+  
+  // Clear and add to file content
+  fileContent.innerHTML = '';
+  fileContent.appendChild(logContainer);
+  
+  // Add click handlers after rendering
+  setTimeout(() => addOperationsLogClickHandlers(logContainer, log), 0);
+}
+
+// Render operations log as HTML string for preview panel
+function renderOperationsLogHTML(log) {
+  const mongoCount = log.mongoQueries?.count || 0;
+  const mongoTime = log.mongoQueries?.totalDuration || 0;
+  const apiCount = log.apiCalls?.count || 0;
+  const apiTime = log.apiCalls?.totalDuration || 0;
+  const totalTime = log.totalDuration || 0;
+  const hasErrors = (log.errors?.length || 0) > 0;
+  
+  let html = '';
+  
+  // MongoDB Queries Section
+  if (mongoCount > 0) {
+    html += `<div class="log-section"><div class="log-section-header"><span class="log-section-icon">📊</span><span class="log-section-title">MongoDB Queries</span><span class="log-section-stats">${mongoCount} queries, ${formatDuration(mongoTime)}</span></div><div class="log-section-items">`;
+    
+    for (let i = 0; i < log.mongoQueries.queries.length; i++) {
+      const query = log.mongoQueries.queries[i];
+      const statusIcon = query.success ? '✅' : '❌';
+      const durationClass = query.duration > 100 ? 'slow' : query.duration > 50 ? 'medium' : 'fast';
+      const hasPreview = query.resultPreview != null;
+      html += `<div class="log-item clickable ${query.success ? '' : 'error'}" data-type="mongo" data-index="${i}"><span class="log-item-icon">${statusIcon}</span><span class="log-item-collection">${query.collection}</span><span class="log-item-user">(${truncateEmail(query.userEmail)})</span><span class="log-item-result">${query.resultCount} items</span><span class="log-item-duration ${durationClass}">${query.duration}ms</span>${hasPreview ? '<span class="log-item-expand">👁️</span>' : ''}</div><div class="log-item-details" id="mongo-detail-${i}" style="display: none;"></div>`;
+    }
+    
+    html += `</div></div>`;
+  }
+  
+  // API Calls Section
+  if (apiCount > 0) {
+    html += `<div class="log-section"><div class="log-section-header"><span class="log-section-icon">🤖</span><span class="log-section-title">Anthropic API Call</span><span class="log-section-stats">${formatDuration(apiTime)}</span></div><div class="log-section-items">`;
+    
+    for (let i = 0; i < log.apiCalls.calls.length; i++) {
+      const call = log.apiCalls.calls[i];
+      const statusIcon = call.success ? '✅' : '❌';
+      const hasDetails = call.details && (call.details.systemPrompt || call.details.userMessage || call.details.response);
+      html += `<div class="log-item clickable api-call-item ${call.success ? '' : 'error'}" data-type="api" data-index="${i}"><span class="log-item-icon">${statusIcon}</span><span class="log-item-label">Model:</span><span class="log-item-value">${call.model}</span>${hasDetails ? '<span class="log-item-expand">👁️ View Details</span>' : ''}</div><div class="log-item-details api-details" id="api-detail-${i}" style="display: none;"></div><div class="log-item"><span class="log-item-icon">📥</span><span class="log-item-label">Input:</span><span class="log-item-value">~${call.inputTokens?.toLocaleString() || 0}</span></div><div class="log-item"><span class="log-item-icon">📤</span><span class="log-item-label">Output:</span><span class="log-item-value">~${call.outputTokens?.toLocaleString() || 0}</span></div><div class="log-item"><span class="log-item-icon">⏱️</span><span class="log-item-label">Latency:</span><span class="log-item-value">${formatDuration(call.duration)}</span></div>`;
+    }
+    
+    html += `</div></div>`;
+  }
+  
+  // Data Summary Section
+  if (log.dataSummary) {
+    html += `<div class="log-section"><div class="log-section-header"><span class="log-section-icon">📈</span><span class="log-section-title">Data Summary</span></div><div class="log-section-items"><div class="log-item"><span class="log-item-icon">📧</span><span class="log-item-label">Emails:</span><span class="log-item-value">${log.dataSummary.totalEmails?.toLocaleString() || 0}</span></div><div class="log-item"><span class="log-item-icon">📏</span><span class="log-item-label">Context:</span><span class="log-item-value">${formatBytes(log.dataSummary.contextSize || 0)}</span></div><div class="log-item"><span class="log-item-icon">👥</span><span class="log-item-label">Users:</span><span class="log-item-value">${log.dataSummary.usersQueried?.join(', ') || 'None'}</span></div></div></div>`;
+  }
+  
+  // Errors Section
+  if (hasErrors) {
+    html += `<div class="log-section error-section"><div class="log-section-header"><span class="log-section-icon">⚠️</span><span class="log-section-title">Errors</span><span class="log-section-stats">${log.errors.length}</span></div><div class="log-section-items">`;
+    for (const error of log.errors) {
+      html += `<div class="log-item error"><span class="log-item-icon">❌</span><span class="log-item-label">${error.operation}:</span><span class="log-item-value">${error.message}</span></div>`;
+    }
+    html += `</div></div>`;
+  }
+  
+  // Total timing footer
+  html += `<div class="log-footer"><span class="log-footer-label">Total:</span><span class="log-footer-value">${formatDuration(totalTime)}</span></div>`;
+  
+  return html;
+}
+
+// Close the operations log panel
+function closeOperationsLog() {
+  previewSection.style.display = 'none';
+  currentOperationsLog = null;
+  
+  // Hide close button
+  const closeBtn = previewSection.querySelector('.close-operations-btn');
+  if (closeBtn) {
+    closeBtn.style.display = 'none';
+  }
+  
+  // Restore file tabs visibility and download button for when returning to generate mode
+  const fileTabsEl = previewSection.querySelector('.file-tabs');
+  fileTabsEl.style.display = 'flex';
+  downloadBtn.style.display = 'inline-flex';
+  copyFileBtn.style.display = 'inline-flex';
+  
+  // Reset preview header
+  const previewHeader = previewSection.querySelector('.preview-header h2');
+  previewHeader.textContent = '📁 Generated Files';
+}
+
+// Add click handlers for operations log items in preview
+function addOperationsLogClickHandlers(container, log) {
+  // MongoDB query click handlers
+  const mongoItems = container.querySelectorAll('.log-item.clickable[data-type="mongo"]');
+  mongoItems.forEach((item) => {
+    item.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const index = parseInt(item.dataset.index);
+      const query = log.mongoQueries.queries[index];
+      const detailDiv = container.querySelector(`#mongo-detail-${index}`);
+      
+      if (detailDiv.style.display === 'none') {
+        detailDiv.innerHTML = renderMongoQueryDetails(query);
+        detailDiv.style.display = 'block';
+        item.classList.add('expanded');
+      } else {
+        detailDiv.style.display = 'none';
+        item.classList.remove('expanded');
+      }
+    });
+  });
+  
+  // API call click handlers
+  const apiItems = container.querySelectorAll('.log-item.clickable[data-type="api"]');
+  apiItems.forEach((item) => {
+    item.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const index = parseInt(item.dataset.index);
+      const call = log.apiCalls.calls[index];
+      const detailDiv = container.querySelector(`#api-detail-${index}`);
+      
+      if (detailDiv.style.display === 'none') {
+        detailDiv.innerHTML = renderApiCallDetails(call);
+        detailDiv.style.display = 'block';
+        item.classList.add('expanded');
+      } else {
+        detailDiv.style.display = 'none';
+        item.classList.remove('expanded');
+      }
+    });
+  });
 }
 
 // Render operations log as expandable component

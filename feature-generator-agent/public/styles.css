@@ -1040,13 +1040,88 @@ body.chat-mode .mode-btn.active[data-mode="chat"] {
   color: var(--error-color);
 }
 
-/* Message text container */
-.message-text {
-  /* Ensures proper spacing when operations log is above */
+/* View Operations Log Button */
+.view-operations-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 12px;
+  padding: 8px 14px;
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  width: fit-content;
 }
 
-.operations-log + .message-text {
-  margin-top: 12px;
+.view-operations-btn:hover {
+  color: var(--text-primary);
+  background: var(--bg-tertiary);
+  border-color: var(--primary-color);
+}
+
+/* Operations Log Preview Panel */
+.operations-log-preview {
+  padding: 4px;
+  background: var(--bg-secondary);
+  min-height: 100%;
+  line-height: 1.2;
+}
+
+.operations-log-preview .log-section {
+  margin-bottom: 4px;
+  background: var(--bg-tertiary);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.operations-log-preview .log-section:last-of-type {
+  margin-bottom: 0;
+}
+
+.operations-log-preview .log-section-header {
+  padding: 4px 8px;
+}
+
+.operations-log-preview .log-section-items {
+  padding: 2px 8px;
+  background: var(--bg-secondary);
+}
+
+.operations-log-preview .log-item {
+  padding: 1px 0;
+  line-height: 1.3;
+}
+
+.operations-log-preview .log-footer {
+  margin-top: 4px;
+  padding: 4px 8px;
+  background: var(--bg-tertiary);
+}
+
+/* Close button for operations log */
+.close-operations-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 12px;
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.close-operations-btn:hover {
+  color: var(--text-primary);
+  background: var(--border-color);
 }
 
 /* Responsive adjustments */
