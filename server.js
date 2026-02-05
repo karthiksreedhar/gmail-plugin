@@ -10877,6 +10877,265 @@ Return ONLY JSON matching {"category":"<name>"} with the category chosen from th
   }
 });
 
+/**
+ * Background Email Refresh (Vercel Cron)
+ * GET /api/background-refresh
+ * 
+ * Called automatically by Vercel Cron every 10 minutes
+ * Fetches latest emails for all users and auto-categorizes them
+ */
+app.get('/api/background-refresh', async (req, res) => {
+  try {
+    console.log('\n=== Background Refresh Started ===');
+    console.log(`Time: ${new Date().toISOString()}`);
+    
+    // Verify cron secret for security (optional)
+    const authHeader = req.headers.authorization;
+    const cronSecret = process.env.CRON_SECRET;
+    
+    if (cronSecret && authHeader !== `Bearer ${cronSecret}`) {
+      // Allow Vercel's internal cron calls
+      const isVercelCron = req.headers['x-vercel-cron'] === '1';
+      if (!isVercelCron) {
+        return res.status(401).json({ error: 'Unauthorized' });
+      }
+    }
+
+    // List of users to refresh (hardcoded for now, can be made dynamic)
+    const users = ['ks4190@columbia.edu', 'lc3251@columbia.edu'];
+    const results = [];
+
+    for (const userEmail of users) {
+      try {
+        console.log(`\n--- Processing user: ${userEmail} ---`);
+        
+        // Switch context to this user
+        const previousUser = CURRENT_USER_EMAIL;
+        CURRENT_USER_EMAIL = normalizeUserEmailForData(userEmail);
+        SENDING_EMAIL = CURRENT_USER_EMAIL;
+
+        // Reinitialize Gmail for this user
+        gmailAuth = null;
+        gmail = null;
+        await initializeGmailAPI();
+
+        if (!gmail) {
+          console.log(`Skipping ${userEmail} - Gmail not authenticated`);
+          results.push({ userEmail, success: false, reason: 'Not authenticated' });
+          continue;
+        }
+
+        // Find latest email in database
+        const responses = loadResponseEmails() || [];
+        const threads = loadEmailThreads() || [];
+        const unreplied = loadUnrepliedEmails() || [];
+        
+        let latestDate = null;
+        [responses, threads, unreplied].forEach(collection => {
+          collection.forEach(item => {
+            if (item && item.date) {
+              const d = new Date(item.date);
+              if (!latestDate || d > latestDate) latestDate = d;
+            }
+          });
+        });
+
+        // Build Gmail query (emails since last fetch, max 50)
+        const formatDateForGmail = (d) => {
+          const y = d.getFullYear();
+          const m = String(d.getMonth() + 1).padStart(2, '0');
+          const day = String(d.getDate()).padStart(2, '0');
+          return `${y}/${m}/${day}`;
+        };
+        
+        let searchQuery;
+        if (latestDate) {
+          const after = formatDateForGmail(latestDate);
+          searchQuery = `in:inbox is:important after:${after}`;
+        } else {
+          // First run - get last 25 emails
+          searchQuery = 'in:inbox is:important';
+        }
+
+        const emailMessages = await searchGmailEmails(searchQuery, latestDate ? 50 : 25);
+        console.log(`Found ${emailMessages.length} new emails`);
+
+        if (emailMessages.length === 0) {
+          results.push({ userEmail, success: true, newEmails: 0 });
+          continue;
+        }
+
+        // Expand to full email objects
+        const newEmails = [];
+        const existingIds = new Set([
+          ...responses.map(e => e.id),
+          ...threads.flatMap(t => t.messages?.map(m => m.id) || []),
+          ...unreplied.map(e => e.id)
+        ].filter(Boolean));
+
+        for (const msg of emailMessages) {
+          try {
+            if (existingIds.has(msg.id)) continue;
+            
+            const emailData = await getGmailEmail(msg.id);
+            newEmails.push({
+              id: emailData.id,
+              subject: emailData.subject,
+              from: emailData.from,
+              date: emailData.date,
+              threadId: emailData.threadId || '',
+              body: emailData.body,
+              snippet: emailData.snippet || (emailData.body ? String(emailData.body).slice(0, 100) : ''),
+              webUrl: emailData.webUrl || ''
+            });
+          } catch (err) {
+            console.error(`Failed to fetch email ${msg.id}:`, err.message);
+          }
+        }
+
+        console.log(`${newEmails.length} truly new emails after dedup`);
+
+        if (newEmails.length === 0) {
+          results.push({ userEmail, success: true, newEmails: 0 });
+          continue;
+        }
+
+        // Classify using v4 classifier
+        const classifyResp = await fetch(`${BASE_URL}/api/classifier-v4/suggest-batch`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            emails: newEmails.map(e => ({
+              id: e.id,
+              subject: e.subject,
+              body: e.body,
+              from: e.from
+            }))
+          })
+        });
+
+        let classifications = {};
+        if (classifyResp.ok) {
+          const data = await classifyResp.json();
+          classifications = data.results || {};
+        }
+
+        // Auto-add to database
+        const categoriesX = loadCategoriesList() || [];
+        let addedCount = 0;
+
+        for (const email of newEmails) {
+          const classified = classifications[email.id] || {};
+          const category = classified.suggestion || 
+                          (categoriesX.find(c => normalizeKey(c) === 'other') || 'Other');
+          
+          // Add to response_emails
+          const meEmail = SENDING_EMAIL || CURRENT_USER_EMAIL;
+          const responseEmail = {
+            id: email.id,
+            subject: email.subject,
+            from: meEmail,
+            originalFrom: email.from,
+            date: email.date,
+            seededOriginalOnly: true,
+            category: category,
+            categories: [category],
+            body: email.body || '(auto-fetched)',
+            snippet: email.snippet,
+            originalBody: email.body || '',
+            webUrl: email.webUrl || '',
+            autoFetched: true,
+            fetchedAt: new Date().toISOString()
+          };
+
+          responses.push(responseEmail);
+
+          // Add minimal thread
+          const threadId = `thread-${email.threadId || email.id}`;
+          threads.push({
+            id: threadId,
+            subject: email.subject,
+            originalFrom: email.from,
+            from: meEmail,
+            date: email.date,
+            responseId: email.id,
+            messages: [{
+              id: `original-${email.id}`,
+              from: email.from,
+              to: [meEmail],
+              date: email.date,
+              subject: email.subject.replace(/^Re:\s*/i, ''),
+              body: email.body || 'Original email content not available',
+              isResponse: false
+            }]
+          });
+
+          // Log classification
+          await writeClassifierLog(
+            email.id,
+            email.subject,
+            email.from,
+            category,
+            classified.explanation || 'Auto-classified by background refresh',
+            new Date().toISOString()
+          );
+
+          addedCount++;
+        }
+
+        // Persist updated collections
+        await saveResponseEmailsStore(responses);
+        await saveEmailThreadsStore(threads);
+
+        // Update categories list if needed
+        const newCats = new Set(newEmails.map(e => {
+          const c = classifications[e.id];
+          return c?.suggestion || '';
+        }).filter(Boolean));
+        
+        if (newCats.size > 0) {
+          const currentCats = loadCategoriesList();
+          const toAdd = Array.from(newCats).filter(nc => 
+            !currentCats.some(c => c.toLowerCase() === nc.toLowerCase())
+          );
+          if (toAdd.length) {
+            await saveCategoriesList([...currentCats, ...toAdd]);
+          }
+        }
+
+        console.log(`Added ${addedCount} new emails for ${userEmail}`);
+        results.push({ userEmail, success: true, newEmails: addedCount });
+
+        // Restore previous user context
+        CURRENT_USER_EMAIL = previousUser;
+        SENDING_EMAIL = previousUser;
+
+      } catch (userErr) {
+        console.error(`Error processing ${userEmail}:`, userErr);
+        results.push({ userEmail, success: false, error: userErr.message });
+      }
+    }
+
+    console.log('\n=== Background Refresh Complete ===');
+    console.log(`Processed ${users.length} users`);
+    console.log(`Total new emails: ${results.reduce((sum, r) => sum + (r.newEmails || 0), 0)}`);
+
+    return res.json({
+      success: true,
+      timestamp: new Date().toISOString(),
+      results
+    });
+
+  } catch (error) {
+    console.error('Background refresh failed:', error);
+    return res.status(500).json({ 
+      success: false, 
+      error: 'Background refresh failed',
+      details: error.message 
+    });
+  }
+});
+
 // Serve the main HTML file
 /**
  * Classifier V3 (batched) helpers and endpoints
