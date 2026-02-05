@@ -5064,6 +5064,101 @@ app.post('/api/add-email-threads', async (req, res) => {
   }
 });
 
+// API endpoint to update a single email's category
+app.put('/api/email/:emailId/category', async (req, res) => {
+  try {
+    const emailId = req.params.emailId;
+    const { category: newCategory } = req.body;
+
+    if (!emailId) {
+      return res.status(400).json({
+        success: false,
+        error: 'Email ID is required'
+      });
+    }
+
+    if (!newCategory || typeof newCategory !== 'string' || !newCategory.trim()) {
+      return res.status(400).json({
+        success: false,
+        error: 'Category name is required'
+      });
+    }
+
+    const trimmedCategory = newCategory.trim();
+    console.log(`Updating category for email ${emailId} to: ${trimmedCategory}`);
+
+    // Load existing response emails
+    const existingResponseEmails = loadResponseEmails();
+    
+    // Find the email to update
+    const emailIndex = existingResponseEmails.findIndex(email => email.id === emailId);
+    
+    if (emailIndex === -1) {
+      return res.status(404).json({
+        success: false,
+        error: 'Email not found'
+      });
+    }
+
+    const oldCategory = existingResponseEmails[emailIndex].category;
+    
+    // Update the email's category
+    existingResponseEmails[emailIndex].category = trimmedCategory;
+    // Clear categories array since we're using single category only
+    existingResponseEmails[emailIndex].categories = [trimmedCategory];
+
+    // Save updated response emails to MongoDB
+    const paths = getCurrentUserPaths();
+    if (!fs.existsSync(paths.USER_DATA_DIR)) {
+      fs.mkdirSync(paths.USER_DATA_DIR, { recursive: true });
+    }
+    
+    await saveResponseEmailsStore(existingResponseEmails);
+
+    // Update categories list to include new category if it doesn't exist
+    let categoriesList = loadCategoriesList();
+    if (!categoriesList || categoriesList.length === 0) {
+      categoriesList = getCurrentCategoriesFromResponses();
+    }
+    
+    const categoryExists = categoriesList.some(
+      c => String(c).toLowerCase() === trimmedCategory.toLowerCase()
+    );
+    
+    if (!categoryExists) {
+      categoriesList.push(trimmedCategory);
+      await saveCategoriesList(categoriesList);
+    }
+
+    // Calculate category counts for LHS menu update
+    const categoryCounts = {};
+    existingResponseEmails.forEach(email => {
+      const cat = email.category || 'Other';
+      categoryCounts[cat] = (categoryCounts[cat] || 0) + 1;
+    });
+
+    console.log(`Successfully updated email category from "${oldCategory}" to "${trimmedCategory}"`);
+    
+    res.json({
+      success: true,
+      email: {
+        id: emailId,
+        category: trimmedCategory,
+        oldCategory: oldCategory
+      },
+      categoryCounts: categoryCounts,
+      message: `Email category updated to "${trimmedCategory}"`
+    });
+
+  } catch (error) {
+    console.error('Error updating email category:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to update email category: ' + error.message
+    });
+  }
+});
+
 // API endpoint to delete an email thread
 app.delete('/api/email-thread/:emailId', async (req, res) => {
   try {

@@ -2862,6 +2862,11 @@
                     </div>
 
                     <div class="new-user-form-group">
+                        <label for="newUserRefreshRate">Refresh Rate (Daily) <span class="new-user-required">*</span></label>
+                        <input type="number" id="newUserRefreshRate" placeholder="Enter number 1-10" min="1" max="10" step="1" required>
+                    </div>
+
+                    <div class="new-user-form-group">
                         <label>Google Cloud Platform Credentials <span class="new-user-required">*</span></label>
                         <div class="file-upload-section" id="fileUploadSection">
                             <input type="file" id="credentialsFile" class="file-upload-input" accept=".json" onchange="handleFileSelect(event)">
@@ -3429,17 +3434,279 @@ function getCategoryBadgeStyle(category) {
     return `background: ${bg}; color: ${fg};`;
 }
 
-// Make category pills clickable to open Category Notes modal from main list
-function onCategoryPillClick(ev) {
+// Make category pills clickable to edit category inline
+function onCategoryPillClick(ev, emailId, currentCategory) {
     try {
         if (ev && ev.stopPropagation) ev.stopPropagation();
-        const el = ev && (ev.currentTarget || ev.target);
-        const cat = el ? (el.textContent || '').trim() : '';
-        if (cat) {
-            // Reuse the same modal/workflow as "Edit Categories & Notes → See Notes"
-            showCategoryNotesModal(cat);
+        const pillElement = ev && (ev.currentTarget || ev.target);
+        if (pillElement && emailId && currentCategory) {
+            showInlineCategoryEditor(pillElement, emailId, currentCategory);
         }
-    } catch (_) {}
+    } catch (e) {
+        console.error('onCategoryPillClick failed:', e);
+    }
+}
+
+// Show inline category editor with autocomplete
+function showInlineCategoryEditor(pillElement, emailId, currentCategory) {
+    try {
+        // Remove any existing editor
+        const existingEditor = document.getElementById('inlineCategoryEditor');
+        if (existingEditor) {
+            existingEditor.remove();
+        }
+
+        // Create input element
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.id = 'inlineCategoryEditor';
+        input.value = currentCategory;
+        input.style.cssText = `
+            padding: 6px 10px;
+            border: 1px solid #4285f4;
+            border-radius: 14px;
+            font-size: 16px;
+            color: #333;
+            background: #fff;
+            box-shadow: 0 0 0 2px rgba(66,133,244,0.15);
+            outline: none;
+            min-width: 180px;
+            max-width: 320px;
+        `;
+
+        // Create autocomplete dropdown
+        const dropdown = document.createElement('div');
+        dropdown.id = 'categoryAutocomplete';
+        dropdown.style.cssText = `
+            position: absolute;
+            z-index: 1200;
+            background: #ffffff;
+            border: 1px solid #e9ecef;
+            border-radius: 6px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.12);
+            max-height: 200px;
+            overflow-y: auto;
+            min-width: 200px;
+            display: none;
+        `;
+
+        // Position dropdown relative to pill
+        const rect = pillElement.getBoundingClientRect();
+        dropdown.style.top = (rect.bottom + window.scrollY + 4) + 'px';
+        dropdown.style.left = (rect.left + window.scrollX) + 'px';
+
+        // Replace pill with input
+        const parent = pillElement.parentElement;
+        parent.insertBefore(input, pillElement);
+        parent.insertBefore(dropdown, pillElement);
+        pillElement.style.display = 'none';
+
+        // Focus input and select text
+        input.focus();
+        input.select();
+
+        let activeIndex = -1;
+
+        // Filter and show suggestions
+        const filterSuggestions = () => {
+            const query = input.value.toLowerCase().trim();
+            const categories = Array.isArray(currentCategoriesOrder) ? currentCategoriesOrder : [];
+            const matches = categories.filter(cat => 
+                cat && cat.toLowerCase().includes(query)
+            );
+
+            dropdown.innerHTML = '';
+            activeIndex = -1;
+
+            if (matches.length === 0) {
+                dropdown.style.display = 'none';
+                return;
+            }
+
+            matches.forEach((cat, i) => {
+                const item = document.createElement('div');
+                item.className = 'priority-cat-item';
+                item.style.cssText = `
+                    padding: 8px 10px;
+                    font-size: 13px;
+                    cursor: pointer;
+                `;
+                item.textContent = cat;
+                
+                item.addEventListener('mousedown', (e) => {
+                    e.preventDefault();
+                    applyCategory(cat);
+                });
+                
+                item.addEventListener('mouseover', () => {
+                    activeIndex = i;
+                    updateActiveItem();
+                });
+                
+                dropdown.appendChild(item);
+            });
+
+            dropdown.style.display = 'block';
+            if (matches.length > 0) {
+                activeIndex = 0;
+                updateActiveItem();
+            }
+        };
+
+        const updateActiveItem = () => {
+            const items = dropdown.querySelectorAll('.priority-cat-item');
+            items.forEach((item, i) => {
+                if (i === activeIndex) {
+                    item.style.background = '#f5f7ff';
+                } else {
+                    item.style.background = '';
+                }
+            });
+        };
+
+        const applyCategory = async (newCategory) => {
+            try {
+                const trimmed = newCategory.trim();
+                if (!trimmed || trimmed === currentCategory) {
+                    cancelEdit();
+                    return;
+                }
+
+                // Call API to update category
+                await updateEmailCategory(emailId, trimmed, currentCategory);
+                
+                // Cleanup
+                cancelEdit();
+            } catch (e) {
+                console.error('applyCategory failed:', e);
+                showErrorPopup('Failed to update category. Please try again.', 'Update Failed');
+                cancelEdit();
+            }
+        };
+
+        const cancelEdit = () => {
+            input.remove();
+            dropdown.remove();
+            pillElement.style.display = '';
+        };
+
+        // Handle input events
+        input.addEventListener('input', filterSuggestions);
+        input.addEventListener('focus', filterSuggestions);
+        
+        input.addEventListener('keydown', (ev) => {
+            const items = dropdown.querySelectorAll('.priority-cat-item');
+            
+            if (ev.key === 'ArrowDown') {
+                ev.preventDefault();
+                if (items.length > 0) {
+                    activeIndex = Math.min(items.length - 1, activeIndex + 1);
+                    updateActiveItem();
+                    items[activeIndex].scrollIntoView({ block: 'nearest' });
+                }
+            } else if (ev.key === 'ArrowUp') {
+                ev.preventDefault();
+                if (items.length > 0) {
+                    activeIndex = Math.max(0, activeIndex - 1);
+                    updateActiveItem();
+                    items[activeIndex].scrollIntoView({ block: 'nearest' });
+                }
+            } else if (ev.key === 'Enter') {
+                ev.preventDefault();
+                if (items.length > 0 && activeIndex >= 0) {
+                    const selectedCat = items[activeIndex].textContent;
+                    applyCategory(selectedCat);
+                } else {
+                    // Allow creating new category
+                    applyCategory(input.value);
+                }
+            } else if (ev.key === 'Escape') {
+                ev.preventDefault();
+                cancelEdit();
+            }
+        });
+
+        input.addEventListener('blur', () => {
+            // Small timeout to allow dropdown click to register
+            setTimeout(() => {
+                if (document.activeElement !== input) {
+                    cancelEdit();
+                }
+            }, 150);
+        });
+
+    } catch (e) {
+        console.error('showInlineCategoryEditor failed:', e);
+    }
+}
+
+// Update email category via API and refresh UI
+async function updateEmailCategory(emailId, newCategory, oldCategory) {
+    try {
+        console.log(`Updating category for ${emailId}: "${oldCategory}" -> "${newCategory}"`);
+
+        const response = await fetch(`/api/email/${encodeURIComponent(emailId)}/category`, {
+            method: 'PUT',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                category: newCategory
+            })
+        });
+
+        const data = await response.json();
+
+        if (!response.ok || !data.success) {
+            throw new Error(data.error || 'Failed to update category');
+        }
+
+        console.log('Category updated successfully:', data);
+
+        // Update the email in allEmails array
+        const emailToUpdate = allEmails.find(e => e.id === emailId);
+        if (emailToUpdate) {
+            emailToUpdate.category = newCategory;
+            emailToUpdate.categories = [newCategory];
+        }
+
+        // Update LHS menu with new counts
+        const categoryCounts = data.categoryCounts || {};
+        await loadCurrentCategories();
+        populateCategories(allEmails);
+
+        // Re-display emails to show updated category pill
+        if (currentFilter === 'all') {
+            displayEmails(allEmails);
+        } else if (currentFilter === oldCategory) {
+            // If we're filtered by the old category, switch to the new category view
+            filterByCategory(newCategory);
+        } else if (currentFilter === newCategory) {
+            // If we're already on the new category, just refresh
+            const filteredEmails = allEmails.filter(email => {
+                const arr = Array.isArray(email?.categories) && email.categories.length
+                    ? email.categories
+                    : (email?.category ? [email.category] : []);
+                return arr.some(c => String(c || '').toLowerCase() === String(newCategory || '').toLowerCase());
+            });
+            displayEmails(filteredEmails);
+        } else {
+            // Otherwise, just refresh current view
+            const filteredEmails = allEmails.filter(email => {
+                const arr = Array.isArray(email?.categories) && email.categories.length
+                    ? email.categories
+                    : (email?.category ? [email.category] : []);
+                return arr.some(c => String(c || '').toLowerCase() === String(currentFilter || '').toLowerCase());
+            });
+            displayEmails(filteredEmails);
+        }
+
+        showSuccessPopup(`Category updated to "${newCategory}"`, 'Category Updated');
+    } catch (e) {
+        console.error('updateEmailCategory failed:', e);
+        showErrorPopup('Failed to update category. Please try again.', 'Update Failed');
+        throw e;
+    }
 }
 
         function filterByCategory(category) {
@@ -3500,8 +3767,8 @@ function onCategoryPillClick(ev) {
 const pillsHtml = catNames.map(cat => {
     const cls = `category-${String(cat).toLowerCase().replace(/\s+/g, '-')}`;
     const style = getCategoryBadgeStyle(cat);
-    // Make pill clickable to view/add notes for this category (stop parent click)
-    return `<span class="email-category ${cls}" style="${style}" onclick="onCategoryPillClick(event)">${cat}</span>`;
+    // Make pill clickable to edit category inline (stop parent click)
+    return `<span class="email-category ${cls}" style="${style}; cursor: pointer;" onclick="onCategoryPillClick(event, '${email.id}', '${String(cat).replace(/'/g, "\\'")}')">${cat}</span>`;
 }).join(' ');
                 
                 // Get the original sender from email data
@@ -7019,11 +7286,19 @@ function mapToCurrentCategory(name) {
             
             const email = document.getElementById('newUserEmail').value.trim();
             const name = document.getElementById('newUserName').value.trim();
+            const refreshRate = document.getElementById('newUserRefreshRate').value.trim();
             const projectId = document.getElementById('gcpProjectId').value.trim();
             const notes = document.getElementById('additionalNotes').value.trim();
             
             if (!email) {
                 showErrorPopup('Email address is required!', 'Missing Information');
+                return;
+            }
+            
+            // Validate refresh rate
+            const refreshRateNum = parseInt(refreshRate, 10);
+            if (!refreshRate || isNaN(refreshRateNum) || refreshRateNum < 1 || refreshRateNum > 10) {
+                showErrorPopup('Refresh rate must be a number between 1 and 10!', 'Invalid Refresh Rate');
                 return;
             }
             

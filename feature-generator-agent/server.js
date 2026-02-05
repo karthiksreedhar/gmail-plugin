@@ -545,10 +545,102 @@ You can modify the database when users request changes. When a user asks you to 
 - "Change email abc123 to Important category" → type: "updateEmailCategory"
 - "Add note about this conversation" → type: "addNote"
 
+**CATEGORY SUGGESTION WORKFLOW:**
+When the user asks you to create/suggest new categories AND show emails that would fit them (e.g., "create categories X and Y and suggest emails for them", "please create categories Research and Travel and suggest emails"), you MUST:
+
+1. **IMPORTANT: Look specifically at emails currently in the "Other" or "Uncategorized" category** - these are emails that don't fit existing categories
+2. Analyze which of those "Other" emails would fit better into the new requested categories
+3. Provide suggested emails that would be good candidates to move from "Other" to the new categories
+
+Include BOTH in your response:
+1. A conversational response explaining the new categories and why these emails fit
+2. A JSON category suggestions block in this exact format:
+
+\`\`\`json
+{
+  "categorySuggestions": {
+    "action": "createCategories",
+    "categories": [
+      {
+        "name": "Category Name",
+        "description": "Brief description of what this category is for",
+        "guideline": "Guideline for classifying emails into this category",
+        "suggestedEmails": [
+          {
+            "id": "email_id_from_data",
+            "subject": "Email Subject",
+            "from": "sender@example.com",
+            "date": "2024-01-15",
+            "snippet": "Brief preview of the email content...",
+            "reason": "Why this email fits this category better than Other"
+          }
+        ]
+      }
+    ]
+  }
+}
+\`\`\`
+
+**IMPORTANT RULES FOR CATEGORY SUGGESTIONS:**
+- ONLY suggest emails that are currently categorized as "Other" or "Uncategorized"
+- Use the actual email IDs from the data (thread id or responseId)
+- Include 5-10 of the most relevant emails per category
+- Always explain WHY each email fits the new category in the "reason" field
+- Make sure the email data (subject, from, date, snippet) matches the actual email
+
+The frontend will show a RHS panel with:
+- Tabs to switch between the new categories
+- List of emails from "Other" that would fit each category
+- Checkboxes (selected by default) to include/exclude emails
+- Click on emails to see full thread content
+- Approve button to create categories and move selected emails
+
+**EMAIL LIST DISPLAY:**
+When the user asks to see, show, list, or find emails (e.g., "show me my emails", "list emails from category X", "find emails about Y"), you MUST include BOTH:
+
+1. A conversational response summarizing what you found
+2. A JSON email list block in this exact format:
+
+\`\`\`json
+{
+  "emailList": {
+    "title": "Title for the email list (e.g., 'Emails in Research category')",
+    "count": 5,
+    "emails": [
+      {
+        "id": "thread_id_here",
+        "subject": "Email Subject",
+        "from": "sender@example.com",
+        "date": "2024-01-15",
+        "category": "Category Name",
+        "snippet": "Brief preview of email content...",
+        "messageCount": 3,
+        "messages": [
+          {
+            "from": "sender@example.com",
+            "to": "recipient@example.com",
+            "date": "2024-01-15T10:30:00Z",
+            "body": "Full message body text here..."
+          }
+        ]
+      }
+    ]
+  }
+}
+\`\`\`
+
+**IMPORTANT RULES FOR EMAIL LISTS:**
+- Show each EMAIL THREAD only ONCE - do NOT show duplicate entries for the same conversation
+- Group all messages in a thread together under one email entry
+- Use the thread's most recent date as the "date" field
+- The "messageCount" should reflect how many messages are in that thread
+- Limit results to 10-15 most relevant threads to keep the list manageable
+- Sort by date (most recent first) unless the user requests otherwise
+
 DATA FOR SELECTED USER(S):
 {{DATA_CONTEXT}}
 
-Remember: You're analyzing real email data. Be accurate and helpful! When making modifications, always explain what you're doing and format the JSON modification block correctly.`;
+Remember: You're analyzing real email data. Be accurate and helpful! When making modifications, always explain what you're doing and format the JSON modification block correctly. When showing emails, always include the emailList JSON block.`;
 
 // Helper to load user email data (with optional logging)
 async function loadUserEmailData(userEmail, logger = null) {
@@ -947,6 +1039,126 @@ async function executeModification(modification) {
   return result;
 }
 
+// Detect if user is asking for emails
+function isEmailListQuery(message) {
+  const lowerMessage = message.toLowerCase();
+  const emailKeywords = [
+    'show me', 'list', 'display', 'see my', 'view', 'find', 'get',
+    'emails', 'email', 'inbox', 'messages', 'threads', 'conversations'
+  ];
+  const emailPatterns = [
+    /show\s+(me\s+)?(my\s+)?emails?/i,
+    /list\s+(my\s+)?emails?/i,
+    /what\s+(are\s+)?(my\s+)?emails?/i,
+    /display\s+(my\s+)?emails?/i,
+    /see\s+(my\s+)?emails?/i,
+    /view\s+(my\s+)?emails?/i,
+    /find\s+(my\s+)?emails?/i,
+    /get\s+(my\s+)?emails?/i,
+    /emails?\s+(in|from|about|for)/i,
+    /show\s+inbox/i,
+    /what.*inbox/i,
+    /recent\s+emails?/i,
+    /my\s+emails?/i,
+    /all\s+emails?/i
+  ];
+  
+  return emailPatterns.some(pattern => pattern.test(lowerMessage));
+}
+
+// Build email list from loaded user data
+function buildEmailListFromData(userData, title = 'Your Emails') {
+  const emails = [];
+  const seenIds = new Set();
+  
+  // Get emails from threads
+  if (userData.emailThreads && userData.emailThreads.length > 0) {
+    for (const thread of userData.emailThreads) {
+      if (seenIds.has(thread.id)) continue;
+      seenIds.add(thread.id);
+      
+      const responseId = thread.responseId || thread.id;
+      const categoryInfo = userData.emailIdToCategoryMap?.[responseId];
+      
+      emails.push({
+        id: thread.id,
+        subject: thread.subject || 'No Subject',
+        from: thread.from || thread.originalFrom || 'Unknown',
+        date: thread.date || thread.internalDate || '',
+        category: categoryInfo?.category || thread.category || thread._cat || 'Uncategorized',
+        snippet: thread.snippet || thread.messages?.[0]?.snippet || '',
+        messageCount: thread.messages?.length || 1,
+        messages: thread.messages?.map(m => ({
+          from: m.from || thread.from || 'Unknown',
+          to: m.to || '',
+          date: m.date || '',
+          body: m.body || m.snippet || ''
+        })) || []
+      });
+    }
+  }
+  
+  // Sort by date (most recent first)
+  emails.sort((a, b) => {
+    const dateA = new Date(a.date || 0);
+    const dateB = new Date(b.date || 0);
+    return dateB - dateA;
+  });
+  
+  // Limit to 15 emails
+  const limitedEmails = emails.slice(0, 15);
+  
+  return {
+    title,
+    count: limitedEmails.length,
+    emails: limitedEmails
+  };
+}
+
+// Parse email list from AI response
+function parseEmailListFromResponse(responseContent) {
+  try {
+    const jsonRegex = /```json\s*(\{[\s\S]*?\})\s*```/g;
+    let match;
+    
+    while ((match = jsonRegex.exec(responseContent)) !== null) {
+      try {
+        const parsed = JSON.parse(match[1]);
+        if (parsed.emailList && parsed.emailList.emails) {
+          return parsed.emailList;
+        }
+      } catch (parseError) {
+        // Continue to next match
+      }
+    }
+  } catch (error) {
+    console.error('Error parsing email list from response:', error);
+  }
+  return null;
+}
+
+// Parse category suggestions from AI response
+function parseCategorySuggestionsFromResponse(responseContent) {
+  try {
+    const jsonRegex = /```json\s*(\{[\s\S]*?\})\s*```/g;
+    let match;
+    
+    while ((match = jsonRegex.exec(responseContent)) !== null) {
+      try {
+        const parsed = JSON.parse(match[1]);
+        if (parsed.categorySuggestions && parsed.categorySuggestions.categories) {
+          return parsed.categorySuggestions;
+        }
+      } catch (parseError) {
+        // Continue to next match
+      }
+    }
+  } catch (error) {
+    console.error('Error parsing category suggestions from response:', error);
+  }
+  return null;
+}
+
 // Email Chat endpoint
 app.post('/api/email-chat', async (req, res) => {
   const { sessionId, message, userEmail } = req.body;
@@ -972,6 +1184,10 @@ app.post('/api/email-chat', async (req, res) => {
   const selectedUser = userEmail && AVAILABLE_USERS.includes(userEmail) ? userEmail : null;
   const usersToQuery = selectedUser ? [selectedUser] : AVAILABLE_USERS;
   
+  // Detect if this is an email list query
+  const isEmailQuery = isEmailListQuery(message);
+  console.log(`📧 Email list query detected: ${isEmailQuery}`);
+  
   try {
     console.log(`\n${'='.repeat(50)}`);
     console.log(`EMAIL CHAT - Loading data for: ${usersToQuery.join(', ')}`);
@@ -979,6 +1195,11 @@ app.post('/api/email-chat', async (req, res) => {
     console.log('='.repeat(50));
     
     // Load email data for selected user(s) (with logging)
+    // Store the raw data for potential email list building
+    let rawUserData = null;
+    if (isEmailQuery) {
+      rawUserData = await loadUserEmailData(usersToQuery[0], logger);
+    }
     const dataContext = await loadUsersData(usersToQuery, logger);
     
     // Build system prompt with data for selected user(s)
@@ -1029,6 +1250,26 @@ app.post('/api/email-chat', async (req, res) => {
       console.log(`📝 Found ${modifications.length} modification(s) in response`);
     }
     
+    // ONLY use AI-generated email list - the AI knows which specific emails match the user's query
+    // Do NOT use database fallback as it would show random/generic emails instead of the relevant ones
+    let emailList = parseEmailListFromResponse(assistantResponse);
+    
+    if (emailList) {
+      console.log('📧 Using AI-generated email list:', emailList.count, 'emails');
+    } else if (isEmailQuery) {
+      console.log('📧 AI did not include email list JSON block - the chat response may describe emails in prose format');
+    }
+    
+    if (emailList) {
+      console.log(`📧 Email list: ${emailList.count} emails`);
+    }
+    
+    // Parse for category suggestions
+    const categorySuggestions = parseCategorySuggestionsFromResponse(assistantResponse);
+    if (categorySuggestions) {
+      console.log(`📂 Category suggestions: ${categorySuggestions.categories.length} categories`);
+    }
+    
     // Get the operations log
     const operationsLog = logger.getLog();
     
@@ -1043,7 +1284,10 @@ app.post('/api/email-chat', async (req, res) => {
       availableUsers: AVAILABLE_USERS,
       operationsLog,
       modifications: hasModifications ? modifications : undefined,
-      requiresConfirmation: hasModifications
+      requiresConfirmation: hasModifications,
+      emailList: emailList || undefined,
+      categorySuggestions: categorySuggestions || undefined,
+      isEmailQuery
     });
     
   } catch (error) {
@@ -1054,6 +1298,184 @@ app.post('/api/email-chat', async (req, res) => {
       success: false,
       error: error.message || 'Failed to process email chat',
       operationsLog: logger.getLog()
+    });
+  }
+});
+
+// Execute category suggestions (create categories + move selected emails)
+app.post('/api/email-chat-category-suggestions', async (req, res) => {
+  const { categorySuggestions, userEmail } = req.body;
+  
+  if (!categorySuggestions || !categorySuggestions.categories || categorySuggestions.categories.length === 0) {
+    return res.status(400).json({
+      success: false,
+      error: 'No category suggestions provided'
+    });
+  }
+  
+  if (!mongoInitialized) {
+    return res.status(503).json({
+      success: false,
+      error: 'Database connection not ready'
+    });
+  }
+  
+  const targetUser = userEmail || AVAILABLE_USERS[0];
+  const results = {
+    categoriesCreated: [],
+    emailsMoved: [],
+    errors: []
+  };
+  
+  try {
+    console.log(`\n📂 EXECUTING CATEGORY SUGGESTIONS for ${targetUser}`);
+    console.log(`   Categories to create: ${categorySuggestions.categories.map(c => c.name).join(', ')}`);
+    console.log(`   Input data structure:`, JSON.stringify(categorySuggestions, null, 2));
+    
+    // Step 1: Create the new categories
+    const categoriesDoc = await getUserDoc('categories', targetUser) || { categories: [] };
+    const existingCategories = categoriesDoc.categories || [];
+    const newCategories = [...existingCategories];
+    
+    for (const cat of categorySuggestions.categories) {
+      if (!existingCategories.includes(cat.name)) {
+        newCategories.push(cat.name);
+        results.categoriesCreated.push(cat.name);
+        console.log(`   ✅ Adding category: ${cat.name}`);
+      } else {
+        console.log(`   ⏭️ Category already exists: ${cat.name}`);
+        results.categoriesCreated.push(cat.name); // Still count as "created" for user feedback
+      }
+    }
+    
+    // Save updated categories
+    if (results.categoriesCreated.length > 0) {
+      await setUserDoc('categories', targetUser, { categories: newCategories });
+      console.log(`   💾 Saved categories to database`);
+    }
+    
+    // Step 2: Add guidelines for new categories
+    const guidelinesDoc = await getUserDoc('category_guidelines', targetUser) || { guidelines: {} };
+    const updatedGuidelines = { ...(guidelinesDoc.guidelines || {}) };
+    
+    for (const cat of categorySuggestions.categories) {
+      if (cat.guideline) {
+        updatedGuidelines[cat.name] = cat.guideline;
+        console.log(`   📝 Added guideline for: ${cat.name}`);
+      }
+    }
+    
+    await setUserDoc('category_guidelines', targetUser, { guidelines: updatedGuidelines });
+    
+    // Step 3: Add summaries for new categories
+    const summariesDoc = await getUserDoc('category_summaries', targetUser) || { summaries: {} };
+    const updatedSummaries = { ...(summariesDoc.summaries || {}) };
+    
+    for (const cat of categorySuggestions.categories) {
+      if (cat.description) {
+        updatedSummaries[cat.name] = cat.description;
+        console.log(`   📄 Added summary for: ${cat.name}`);
+      }
+    }
+    
+    await setUserDoc('category_summaries', targetUser, { summaries: updatedSummaries });
+    
+    // Step 4: Move selected emails to new categories
+    console.log(`\n📧 MOVING EMAILS:`);
+    const responseEmailsDoc = await getUserDoc('response_emails', targetUser);
+    console.log(`   Loaded response emails doc:`, responseEmailsDoc ? 'SUCCESS' : 'FAILED');
+    
+    if (responseEmailsDoc && responseEmailsDoc.emails) {
+      const updatedEmails = [...responseEmailsDoc.emails];
+      console.log(`   Found ${updatedEmails.length} emails in database`);
+      
+      // Debug: Log all email IDs in database
+      console.log(`   Sample email IDs in DB: ${updatedEmails.slice(0, 5).map(e => e.id).join(', ')}`);
+      
+      for (const cat of categorySuggestions.categories) {
+        console.log(`\n   Processing category: ${cat.name}`);
+        console.log(`   Selected emails: ${cat.selectedEmails || 'NONE'}`);
+        
+        if (cat.selectedEmails && cat.selectedEmails.length > 0) {
+          for (const emailId of cat.selectedEmails) {
+            console.log(`     Looking for email ID: ${emailId}`);
+            
+            // Handle ID format mismatch: threads use "thread-" prefix, response emails don't
+            const originalEmailId = emailId.startsWith('thread-') ? emailId.replace('thread-', '') : emailId;
+            console.log(`     Normalized email ID: ${originalEmailId}`);
+            
+            const emailIndex = updatedEmails.findIndex(e => e.id === originalEmailId);
+            
+            if (emailIndex !== -1) {
+              const oldCategory = updatedEmails[emailIndex].category;
+              const emailSubject = updatedEmails[emailIndex].subject;
+              
+              // Move emails from any category to new categories (allow reorganization)
+              updatedEmails[emailIndex] = {
+                ...updatedEmails[emailIndex],
+                category: cat.name
+              };
+              results.emailsMoved.push({
+                emailId: originalEmailId,
+                subject: emailSubject,
+                from: oldCategory || 'Uncategorized',
+                to: cat.name
+              });
+              console.log(`     ✅ Moved email "${emailSubject}" from "${oldCategory || 'Uncategorized'}" to "${cat.name}"`);
+            } else {
+              console.log(`     ❌ Email ${originalEmailId} not found in database`);
+              results.errors.push(`Email ${originalEmailId} not found in database`);
+            }
+          }
+        } else {
+          console.log(`   No emails selected for category: ${cat.name}`);
+        }
+      }
+      
+      // Save updated emails if any were moved
+      if (results.emailsMoved.length > 0) {
+        await setUserDoc('response_emails', targetUser, { emails: updatedEmails });
+        console.log(`   💾 Saved updated emails to database`);
+      } else {
+        console.log(`   No emails to save (none were moved)`);
+      }
+    } else {
+      const errorMsg = 'No response emails found in database or invalid structure';
+      console.log(`   ❌ ${errorMsg}`);
+      results.errors.push(errorMsg);
+    }
+    
+    console.log(`\n📊 CATEGORY SUGGESTION RESULTS:`);
+    console.log(`   Categories created: ${results.categoriesCreated.length}`);
+    console.log(`   Emails moved: ${results.emailsMoved.length}`);
+    console.log(`   Errors: ${results.errors.length}`);
+    
+    if (results.errors.length > 0) {
+      console.log(`   Error details:`, results.errors);
+    }
+    
+    res.json({
+      success: true,
+      message: `Created ${results.categoriesCreated.length} categories and moved ${results.emailsMoved.length} emails`,
+      results,
+      summary: {
+        categoriesCreated: results.categoriesCreated.length,
+        emailsMoved: results.emailsMoved.length,
+        errors: results.errors.length
+      },
+      debug: {
+        inputCategories: categorySuggestions.categories.length,
+        totalSelectedEmails: categorySuggestions.categories.reduce((sum, cat) => sum + (cat.selectedEmails?.length || 0), 0)
+      }
+    });
+    
+  } catch (error) {
+    console.error('Error executing category suggestions:', error);
+    
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to execute category suggestions',
+      results
     });
   }
 });
@@ -1150,6 +1572,167 @@ app.post('/api/email-chat-confirm', async (req, res) => {
       success: false,
       error: error.message || 'Failed to execute modifications',
       results
+    });
+  }
+});
+
+// =====================================================
+// CATEGORY MIGRATION SUGGESTIONS API
+// =====================================================
+
+// Get "Other" emails and suggest better category assignments
+app.post('/api/category-suggestions', async (req, res) => {
+  const { userEmail, requestedCategories } = req.body;
+  
+  // Initialize operations logger
+  const logger = new OperationsLogger();
+  
+  if (!mongoInitialized) {
+    return res.status(503).json({
+      success: false,
+      error: 'Database connection not ready'
+    });
+  }
+  
+  // Validate user email
+  const targetUser = userEmail && AVAILABLE_USERS.includes(userEmail) ? userEmail : AVAILABLE_USERS[0];
+  
+  try {
+    console.log(`\n📂 GENERATING CATEGORY SUGGESTIONS for ${targetUser}`);
+    
+    // Load user's current categories and "Other" emails
+    const userData = await loadUserEmailData(targetUser, logger);
+    
+    // Find emails currently in "Other" category
+    const otherEmails = userData.responseEmails.filter(email => 
+      email.category === 'Other' || email.category === 'Uncategorized' || !email.category
+    );
+    
+    console.log(`   Found ${otherEmails.length} emails in "Other" category`);
+    console.log(`   Sample "Other" emails:`, otherEmails.slice(0, 3).map(e => `${e.id} (${e.category || 'NO_CATEGORY'}) - ${e.subject}`));
+    
+    // Debug: Also show some emails from other categories to verify filtering
+    const nonOtherEmails = userData.responseEmails.filter(email => 
+      email.category !== 'Other' && email.category !== 'Uncategorized' && email.category
+    ).slice(0, 3);
+    console.log(`   Sample non-Other emails:`, nonOtherEmails.map(e => `${e.id} (${e.category}) - ${e.subject}`));
+    
+    if (otherEmails.length === 0) {
+      return res.json({
+        success: true,
+        message: 'No emails in "Other" category to categorize',
+        suggestions: { categories: [] },
+        operationsLog: logger.getLog()
+      });
+    }
+    
+    // Use AI to analyze these emails and suggest category assignments
+    const modelName = 'claude-opus-4-20250514';
+    const model = new ChatAnthropic({
+      modelName,
+      anthropicApiKey: process.env.ANTHROPIC_API_KEY,
+      temperature: 0.3,
+      maxTokens: 3000
+    });
+    
+    // Create prompt for AI category suggestion
+    const analysisPrompt = `You are analyzing emails currently categorized as "Other" to suggest better category assignments.
+
+EXISTING CATEGORIES: ${userData.categories.join(', ')}
+
+EMAILS IN "OTHER" CATEGORY (${otherEmails.length} emails):
+${otherEmails.slice(0, 20).map((email, i) => `
+${i + 1}. ID: ${email.id}
+   Subject: ${email.subject}
+   From: ${email.from}
+   Snippet: ${(email.snippet || '').substring(0, 200)}
+`).join('')}
+
+TASK: Analyze these "Other" emails and suggest 2-4 new category names that would better organize them. For each suggested category:
+
+1. Choose a clear, descriptive name
+2. Identify which emails from the "Other" list would fit
+3. Explain why those emails belong together
+
+${requestedCategories ? `USER REQUESTED THESE CATEGORIES: ${requestedCategories.join(', ')} - prioritize these if they make sense for the emails.` : ''}
+
+Respond with ONLY this JSON format (no other text):
+
+{
+  "suggestions": {
+    "categories": [
+      {
+        "name": "Category Name",
+        "description": "What this category is for",
+        "guideline": "How to classify emails into this category",
+        "confidence": 0.8,
+        "suggestedEmails": [
+          {
+            "id": "email_id_from_above",
+            "subject": "Email Subject",
+            "from": "sender@example.com", 
+            "date": "date_from_email",
+            "snippet": "Brief preview...",
+            "reason": "Why this email fits this category"
+          }
+        ]
+      }
+    ]
+  }
+}
+
+IMPORTANT:
+- Only suggest emails that are actually in the "Other" list above
+- Use the exact email IDs from the list
+- Suggest 3-8 emails per category (the best examples)
+- Make sure category names are professional and descriptive
+- High confidence (0.7+) suggestions only`;
+
+    // Call AI for category suggestions
+    const apiStartTime = Date.now();
+    let aiResponse;
+    try {
+      aiResponse = await model.invoke([
+        { role: 'user', content: analysisPrompt }
+      ]);
+      
+      const apiDuration = Date.now() - apiStartTime;
+      const inputTokens = Math.ceil(analysisPrompt.length / 4);
+      const outputTokens = Math.ceil((aiResponse.content?.length || 0) / 4);
+      
+      logger.logApiCall(modelName, inputTokens, outputTokens, apiDuration, true, null, null, analysisPrompt, aiResponse.content);
+    } catch (apiError) {
+      const apiDuration = Date.now() - apiStartTime;
+      logger.logApiCall(modelName, 0, 0, apiDuration, false, apiError, null, analysisPrompt, null);
+      logger.logError('Category suggestions API call', apiError);
+      throw apiError;
+    }
+    
+    // Parse AI response
+    let suggestions;
+    try {
+      suggestions = JSON.parse(aiResponse.content);
+      console.log(`   AI suggested ${suggestions.suggestions.categories.length} categories`);
+    } catch (parseError) {
+      console.error('Failed to parse AI suggestions:', parseError);
+      throw new Error('AI response was not valid JSON');
+    }
+    
+    res.json({
+      success: true,
+      suggestions: suggestions.suggestions,
+      otherEmailsCount: otherEmails.length,
+      operationsLog: logger.getLog()
+    });
+    
+  } catch (error) {
+    console.error('Error generating category suggestions:', error);
+    logger.logError('category-suggestions endpoint', error);
+    
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to generate category suggestions',
+      operationsLog: logger.getLog()
     });
   }
 });

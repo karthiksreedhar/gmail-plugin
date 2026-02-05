@@ -119,6 +119,52 @@
           <pre id="fileContent"><code></code></pre>
         </div>
       </section>
+
+      <!-- RHS Category Suggestion Panel -->
+      <section id="rhsCategorySuggestionPanel" class="rhs-category-panel" style="display: none;">
+        <div class="rhs-panel-header">
+          <div class="rhs-panel-title">
+            <h3>📂 Category Suggestions</h3>
+            <button id="rhsCloseBtn" class="btn-icon close-btn" title="Close panel">✕</button>
+          </div>
+          <div class="rhs-panel-subtitle">
+            <span id="rhsPanelInfo">Organize your "Other" emails</span>
+          </div>
+        </div>
+
+        <div class="rhs-panel-content">
+          <!-- Category suggestion tabs -->
+          <div id="rhsCategoryTabs" class="rhs-category-tabs">
+            <!-- Tab buttons will be dynamically generated -->
+          </div>
+
+          <!-- Category panels with email lists -->
+          <div id="rhsCategoryPanels" class="rhs-category-panels">
+            <!-- Category panels will be dynamically generated -->
+          </div>
+
+          <!-- Email thread detail viewer -->
+          <div id="rhsThreadViewer" class="rhs-thread-viewer" style="display: none;">
+            <div class="rhs-thread-header">
+              <h4 id="rhsThreadSubject">Email Thread</h4>
+              <button id="rhsThreadCloseBtn" class="btn-icon">✕</button>
+            </div>
+            <div id="rhsThreadContent" class="rhs-thread-content">
+              <!-- Thread content will be dynamically generated -->
+            </div>
+          </div>
+        </div>
+
+        <!-- RHS Panel Actions -->
+        <div class="rhs-panel-actions">
+          <button id="rhsCancelBtn" class="btn btn-secondary">
+            <span>✕</span> Cancel
+          </button>
+          <button id="rhsApproveBtn" class="btn btn-primary">
+            <span>✓</span> Create & Move (<span id="selectedEmailCount">0</span>)
+          </button>
+        </div>
+      </section>
     </main>
 
     <!-- Footer -->
