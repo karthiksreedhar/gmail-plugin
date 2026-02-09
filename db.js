@@ -27,7 +27,8 @@ const COLLECTIONS = [
   'user_state',
   'classifier_log',
   'priority_emails',
-  'precategorized_emails'
+  'precategorized_emails',
+  'oauth_tokens'
 ];
 
 async function initMongo() {
@@ -106,4 +107,21 @@ module.exports = {
   setUserDoc,
   warmCacheForUser,
   getCachedDoc,
+  async getOAuthTokens(userEmail) {
+    const doc = await getUserDoc('oauth_tokens', userEmail);
+    if (!doc) return null;
+    const { userEmail: _u, _id, _updatedAt, ...tokens } = doc;
+    return tokens;
+  },
+  async setOAuthTokens(userEmail, tokens) {
+    return setUserDoc('oauth_tokens', userEmail, tokens);
+  },
+  async getAllOAuthUsers() {
+    const db = getDb();
+    const docs = await db.collection('oauth_tokens').find({}).toArray();
+    return docs.map(doc => {
+      const { userEmail, _id, _updatedAt, ...rest } = doc;
+      return { userEmail, tokens: rest, _updatedAt };
+    });
+  },
 };

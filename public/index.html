@@ -2728,6 +2728,19 @@
     </style>
 </head>
 <body>
+    <script>
+        function checkAuth() {
+            fetch('/api/check-auth')
+                .then(res => res.json())
+                .then(data => {
+                    if (!data.authenticated) {
+                        window.location.href = '/api/auth/start';
+                    }
+                })
+                .catch(console.error);
+        }
+        checkAuth();
+    </script>
     <div class="gmail-container">
         <!-- Header -->
         <div class="header">
@@ -2751,9 +2764,12 @@
                 <button class="save-scenario-btn" onclick="saveScenario()">Save Scenario</button>
                 <button class="load-scenario-btn" onclick="showLoadScenarioModal()">Load Scenario</button>
             </div>
-            <div style="flex:1; display:flex; justify-content:center; gap:12px;">
+            <div style="flex:1; display:flex; justify-content:center; gap:12px; align-items:center;">
+                <div id="refreshStatus" style="font-size: 12px; color: #555; text-align: right; margin-right: 10px; line-height: 1.2;">
+                    <div>Last refreshed: <span id="lastRefreshTime">...</span></div>
+                    <div>Next refresh: <span id="nextRefreshTime">...</span></div>
+                </div>
                 <button class="refresh-btn" onclick="window.location.href='/seed.html'" title="Seed initial categories from important inbox">Seed Categories</button>
-                <button class="generate-btn" onclick="loadPriorityToday()" title="Load important emails from the past day">Load Today</button>
                 <button class="generate-btn" onclick="openTestClassifier()" title="Run classifier evaluation on labeled emails">Test Classifier</button>
                 <!-- Feature extension point: header actions -->
                 <div id="feature-header-actions" style="display:flex; gap:12px;"></div>
@@ -2812,8 +2828,6 @@
 
                 <!-- Email List -->
                 <div class="email-list">
-                    <!-- Priority Today (light yellow) will render here -->
-                    <div id="priorityContainer"></div>
                     <div id="emailContainer">
                         <div class="loading">Loading emails...</div>
                     </div>
@@ -15781,17 +15795,40 @@ async function renderEmailNotesPreview(el, emailId) {
             } catch (_) {}
         }
 
+        function pollRefreshStatus() {
+            function fetchStatus() {
+                fetch('/api/refresh-status')
+                    .then(res => res.json())
+                    .then(data => {
+                        const lastEl = document.getElementById('lastRefreshTime');
+                        const nextEl = document.getElementById('nextRefreshTime');
+                        if (lastEl && data.lastRefreshed) {
+                            lastEl.textContent = new Date(data.lastRefreshed).toLocaleTimeString();
+                        } else if (lastEl) {
+                            lastEl.textContent = 'Never';
+                        }
+                        if (nextEl && data.nextRefresh) {
+                            nextEl.textContent = new Date(data.nextRefresh).toLocaleTimeString();
+                        } else if (nextEl) {
+                            nextEl.textContent = 'Pending';
+                        }
+                    })
+                    .catch(e => console.error('Failed to fetch refresh status', e));
+            }
+            fetchStatus();
+            setInterval(fetchStatus, 30000); // Poll every 30s
+        }
+
         document.addEventListener('DOMContentLoaded', function() {
-            // Run initializers, then load Priority Today first with popup,
-            // then load the regular emails list.
+            // Run initializers
             loadCurrentUser();
             loadFeatures(); // Load feature plugins
             initSearchBar();
             showFlashFromQuery();
+            pollRefreshStatus();
+            
+            // Load regular emails list (which now includes approved emails from background refresh)
             (async () => {
-                try {
-                    await loadPriorityToday();
-                } catch (_){}
                 try {
                     await loadEmails();
                 } catch (_){}

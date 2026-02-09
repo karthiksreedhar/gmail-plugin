@@ -163,7 +163,7 @@ let SENDING_EMAIL = process.env.SENDING_EMAIL || process.env.CURRENT_USER_EMAIL 
  */
 function getDisplayNameForUser(email) {
   try {
-    const e = String(email || '').toLowerCase().trim();
+    const e = String(email || '').toLowerCase().atrim();
     // Known users
     if (e === 'ks4190@columbia.edu') return 'Karthik Sreedhar';
     if (e === 'lc3251@columbia.edu') return 'Lydia Chilton';
@@ -10884,7 +10884,157 @@ Return ONLY JSON matching {"category":"<name>"} with the category chosen from th
  * Called automatically by Vercel Cron every 10 minutes
  * Fetches latest emails for all users and auto-categorizes them
  */
+/**
+ * Auth check endpoint
+ */
+app.get('/api/check-auth', (req, res) => {
+  res.json({ authenticated: !!gmail });
+});
+
+/**
+ * Refresh status endpoint
+ */
+app.get('/api/refresh-status', async (req, res) => {
+  try {
+    const doc = await getUserDoc('refresh_status', CURRENT_USER_EMAIL);
+    res.json(doc || { lastRefreshed: null, nextRefresh: null });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+/**
+ * Background Email Refresh (Vercel Cron)
+ * GET /api/background-refresh
+ */
 app.get('/api/background-refresh', async (req, res) => {
+  try {
+    console.log('\n=== Background Refresh Started (New Logic) ===');
+    const cronSecret = process.env.CRON_SECRET;
+    const authHeader = req.headers.authorization;
+    if (cronSecret && authHeader !== `Bearer ${cronSecret}`) {
+      if (req.headers['x-vercel-cron'] !== '1') {
+        return res.status(401).json({ error: 'Unauthorized' });
+      }
+    }
+
+    // List of users to refresh
+    const users = ['ks4190@columbia.edu', 'lc3251@columbia.edu'];
+    if (!users.includes(CURRENT_USER_EMAIL)) users.push(CURRENT_USER_EMAIL);
+    const uniqueUsers = [...new Set(users)];
+
+    const results = [];
+
+    for (const userEmail of uniqueUsers) {
+      try {
+        console.log(`\n--- Processing user: ${userEmail} ---`);
+        
+        // 1. Switch context
+        const previousUser = CURRENT_USER_EMAIL;
+        CURRENT_USER_EMAIL = normalizeUserEmailForData(userEmail);
+        SENDING_EMAIL = CURRENT_USER_EMAIL;
+        
+        gmailAuth = null; 
+        gmail = null;
+        await initializeGmailAPI();
+
+        if (!gmail) {
+          console.log(`Skipping ${userEmail} - Gmail not authenticated`);
+          results.push({ userEmail, success: false, reason: 'Not authenticated' });
+          CURRENT_USER_EMAIL = previousUser;
+          SENDING_EMAIL = previousUser;
+          continue;
+        }
+
+        // 2. Check refresh status for "First Run" logic
+        const statusDoc = await getUserDoc('refresh_status', userEmail);
+        const isFirstRun = !statusDoc || !statusDoc.initialLoadComplete;
+        
+        let limit = 10;
+        if (isFirstRun) {
+            if (['ks4190@columbia.edu', 'lc3251@columbia.edu'].includes(userEmail)) {
+                limit = 25;
+            } else {
+                limit = 50;
+            }
+            console.log(`[Background Refresh] First run for ${userEmail}. Fetching ${limit} emails.`);
+        } else {
+            limit = 10;
+            console.log(`[Background Refresh] Subsequent run for ${userEmail}. Fetching ${limit} emails.`);
+        }
+
+        // 3. Fetch from Inbox
+        const messages = await searchGmailEmails('in:inbox', limit);
+        
+        // 4. Process emails
+        const currentResponses = loadResponseEmails() || [];
+        const newEmails = [];
+
+        for (const msg of messages) {
+            try {
+                if (currentResponses.some(r => r.id === msg.id)) continue;
+                
+                const fullMsg = await getGmailEmail(msg.id);
+                const category = categorizeEmail(fullMsg.subject, fullMsg.body, fullMsg.from);
+                
+                // Add to response_emails as approved
+                newEmails.push({
+                    id: fullMsg.id,
+                    subject: fullMsg.subject,
+                    from: fullMsg.from,
+                    originalFrom: fullMsg.from,
+                    date: fullMsg.date,
+                    body: fullMsg.body || '(auto-fetched)',
+                    snippet: fullMsg.snippet,
+                    category: category,
+                    categories: [category],
+                    source: 'background-refresh',
+                    autoFetched: true,
+                    fetchedAt: new Date().toISOString(),
+                    seededOriginalOnly: true // Mark as seeded so it behaves like approved items
+                });
+            } catch (err) {
+                console.error(`Error processing msg ${msg.id}:`, err);
+            }
+        }
+
+        // 5. Save if new emails found
+        if (newEmails.length > 0) {
+            console.log(`[Background Refresh] Saving ${newEmails.length} new emails for ${userEmail}`);
+            const updated = [...currentResponses, ...newEmails];
+            await saveResponseEmailsStore(updated);
+        }
+
+        // 6. Update Status
+        const now = new Date();
+        const next = new Date(now.getTime() + 10 * 60000); // +10 mins
+        await setUserDoc('refresh_status', userEmail, {
+            lastRefreshed: now.toISOString(),
+            nextRefresh: next.toISOString(),
+            initialLoadComplete: true
+        });
+
+        results.push({ userEmail, success: true, newEmails: newEmails.length });
+        
+        // Restore context
+        CURRENT_USER_EMAIL = previousUser;
+        SENDING_EMAIL = previousUser;
+
+      } catch (userErr) {
+        console.error(`Error processing ${userEmail}:`, userErr);
+        results.push({ userEmail, success: false, error: userErr.message });
+      }
+    }
+
+    res.json({ success: true, results });
+
+  } catch (error) {
+    console.error('Background refresh failed:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/background-refresh-legacy', async (req, res) => {
   try {
     console.log('\n=== Background Refresh Started ===');
     console.log(`Time: ${new Date().toISOString()}`);
