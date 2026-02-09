@@ -132,6 +132,180 @@ function initializeFeatures() {
   }
 }
 
+// API endpoint to check auth status
+app.get('/api/check-auth', (req, res) => {
+  res.json({ authenticated: !!gmail });
+});
+
+// API endpoint to get refresh status
+app.get('/api/refresh-status', async (req, res) => {
+  try {
+    const doc = await getUserDoc('user_state', CURRENT_USER_EMAIL);
+    res.json({ 
+      success: true, 
+      lastRefresh: doc?.last_refresh || null,
+      nextRefresh: doc?.last_refresh ? new Date(new Date(doc.last_refresh).getTime() + 10 * 60000).toISOString() : null
+    });
+  } catch (error) {
+    console.error('Error getting refresh status:', error);
+    res.status(500).json({ success: false, error: 'Failed to get status' });
+  }
+});
+
+// API endpoint to initialize inbox on first load
+app.post('/api/initialize-inbox', async (req, res) => {
+  try {
+    if (!gmail) {
+      return res.status(401).json({ success: false, error: 'Gmail not authenticated' });
+    }
+
+    const doc = await getUserDoc('user_state', CURRENT_USER_EMAIL);
+    
+    // If already initialized, skip
+    if (doc && doc.initial_load_complete) {
+      return res.json({ success: true, message: 'Already initialized' });
+    }
+
+    const isExistingUser = ['ks4190@columbia.edu', 'lc3251@columbia.edu'].includes(CURRENT_USER_EMAIL);
+    const limit = isExistingUser ? 25 : 50;
+    
+    console.log(`Initializing inbox for ${CURRENT_USER_EMAIL} (Existing: ${isExistingUser}, Limit: ${limit})`);
+
+    // Fetch emails
+    const messages = await searchGmailEmails('in:inbox', limit);
+    const newEmails = [];
+
+    for (const msg of messages) {
+      try {
+        const fullMsg = await getGmailEmail(msg.id);
+        
+        // Categorize
+        let category = 'Other'; // Default for new users
+        if (isExistingUser) {
+          category = categorizeEmail(fullMsg.subject || '', fullMsg.body || '', fullMsg.from || '');
+        }
+
+        newEmails.push({
+          id: fullMsg.id,
+          subject: fullMsg.subject,
+          from: fullMsg.from,
+          date: fullMsg.date,
+          body: fullMsg.body,
+          snippet: fullMsg.snippet,
+          category: category,
+          categories: [category],
+          source: 'init-fetch'
+        });
+      } catch (e) {
+        console.error(`Failed to process init email ${msg.id}:`, e);
+      }
+    }
+
+    // Save to DB (unreplied_emails)
+    // We append to existing to be safe, though for new users it'll be empty
+    const currentUnreplied = loadUnrepliedEmails();
+    const existingIds = new Set(currentUnreplied.map(e => e.id));
+    const toAdd = newEmails.filter(e => !existingIds.has(e.id));
+    
+    if (toAdd.length > 0) {
+      await saveUnrepliedEmailsStore([...currentUnreplied, ...toAdd]);
+    }
+
+    // Update state
+    await setUserDoc('user_state', CURRENT_USER_EMAIL, {
+      ...doc,
+      initial_load_complete: true,
+      last_refresh: new Date().toISOString()
+    });
+
+    res.json({ success: true, count: toAdd.length, message: 'Initialization complete' });
+
+  } catch (error) {
+    console.error('Error initializing inbox:', error);
+    res.status(500).json({ success: false, error: 'Initialization failed' });
+  }
+});
+
+// API endpoint for background refresh (can be called by cron or client)
+app.get('/api/background-refresh', async (req, res) => {
+  try {
+    if (!gmail) {
+      return res.status(401).json({ success: false, error: 'Gmail not authenticated' });
+    }
+
+    console.log(`[BackgroundRefresh] Starting refresh for ${CURRENT_USER_EMAIL}`);
+
+    // Get last refresh time or latest email date
+    const doc = await getUserDoc('user_state', CURRENT_USER_EMAIL);
+    // Default to 10 mins ago if no last refresh
+    let since = new Date(Date.now() - 10 * 60000); 
+    
+    // Better: find latest email in DB to fetch "newer than"
+    const unreplied = loadUnrepliedEmails();
+    if (unreplied.length > 0) {
+      const dates = unreplied.map(e => new Date(e.date).getTime()).filter(t => !isNaN(t));
+      if (dates.length > 0) {
+        since = new Date(Math.max(...dates));
+      }
+    }
+
+    // Convert to seconds for Gmail query
+    const afterSeconds = Math.floor(since.getTime() / 1000) + 1; // +1 to avoid dupes of the exact same second
+    const query = `in:inbox after:${afterSeconds}`;
+    
+    console.log(`[BackgroundRefresh] Fetching with query: ${query}`);
+    
+    const messages = await searchGmailEmails(query, 20); // Cap at 20 per refresh to be safe
+    const newEmails = [];
+
+    for (const msg of messages) {
+      try {
+        const fullMsg = await getGmailEmail(msg.id);
+        
+        // Categorize using existing patterns
+        const category = categorizeEmail(fullMsg.subject || '', fullMsg.body || '', fullMsg.from || '');
+
+        newEmails.push({
+          id: fullMsg.id,
+          subject: fullMsg.subject,
+          from: fullMsg.from,
+          date: fullMsg.date,
+          body: fullMsg.body,
+          snippet: fullMsg.snippet,
+          category: category,
+          categories: [category],
+          source: 'background-refresh'
+        });
+      } catch (e) {
+        console.error(`Failed to process refresh email ${msg.id}:`, e);
+      }
+    }
+
+    // Save
+    const existingIds = new Set(unreplied.map(e => e.id));
+    const toAdd = newEmails.filter(e => !existingIds.has(e.id));
+    
+    if (toAdd.length > 0) {
+      await saveUnrepliedEmailsStore([...unreplied, ...toAdd]);
+      console.log(`[BackgroundRefresh] Added ${toAdd.length} new emails`);
+    } else {
+      console.log(`[BackgroundRefresh] No new emails found`);
+    }
+
+    // Update timestamp
+    await setUserDoc('user_state', CURRENT_USER_EMAIL, {
+      ...doc,
+      last_refresh: new Date().toISOString()
+    });
+
+    res.json({ success: true, count: toAdd.length, lastRefresh: new Date().toISOString() });
+
+  } catch (error) {
+    console.error('Error in background refresh:', error);
+    res.status(500).json({ success: false, error: 'Refresh failed' });
+  }
+});
+
 // API endpoint to list loaded features
 app.get('/api/features', (req, res) => {
   res.json({

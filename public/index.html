@@ -2729,17 +2729,79 @@
 </head>
 <body>
     <script>
-        function checkAuth() {
-            fetch('/api/check-auth')
-                .then(res => res.json())
-                .then(data => {
-                    if (!data.authenticated) {
-                        window.location.href = '/api/auth/start';
-                    }
-                })
-                .catch(console.error);
+        async function checkAuthAndInit() {
+            try {
+                const res = await fetch('/api/check-auth');
+                const data = await res.json();
+                
+                if (!data.authenticated) {
+                    window.location.href = '/api/auth/start';
+                    return;
+                }
+
+                // Authenticated, now initialize inbox
+                const initRes = await fetch('/api/initialize-inbox', { method: 'POST' });
+                const initData = await initRes.json();
+                console.log('Inbox init:', initData);
+
+                // Start background polling
+                startBackgroundPolling();
+                
+                // Load main emails
+                loadEmails();
+            } catch (e) {
+                console.error('Auth/Init failed:', e);
+            }
         }
-        checkAuth();
+
+        function startBackgroundPolling() {
+            // Poll status every minute
+            updateRefreshStatus();
+            setInterval(updateRefreshStatus, 60000);
+
+            // Trigger background refresh every 5 minutes (client-side driver)
+            setInterval(async () => {
+                try {
+                    console.log('Triggering background refresh...');
+                    const res = await fetch('/api/background-refresh');
+                    const data = await res.json();
+                    if (data.success && data.count > 0) {
+                        // Reload list if new emails found
+                        loadEmails();
+                    }
+                    updateRefreshStatus();
+                } catch (e) {
+                    console.error('Background refresh failed:', e);
+                }
+            }, 5 * 60 * 1000); 
+        }
+
+        async function updateRefreshStatus() {
+            try {
+                const res = await fetch('/api/refresh-status');
+                const data = await res.json();
+                
+                if (data.success && data.lastRefresh) {
+                    const last = new Date(data.lastRefresh);
+                    const next = data.nextRefresh ? new Date(data.nextRefresh) : new Date(last.getTime() + 10 * 60000);
+                    
+                    const timeStr = last.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                    const nextStr = next.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                    
+                    const statusEl = document.getElementById('refreshStatus');
+                    if (statusEl) {
+                        statusEl.innerHTML = `
+                            <div>Last refreshed: ${timeStr}</div>
+                            <div>Next refresh: ${nextStr}</div>
+                        `;
+                    }
+                }
+            } catch (e) {
+                console.error('Status update failed:', e);
+            }
+        }
+
+        checkAuthAndInit();
     </script>
     <div class="gmail-container">
         <!-- Header -->
