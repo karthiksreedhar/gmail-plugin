@@ -3798,8 +3798,6 @@ async function updateEmailCategory(emailId, newCategory, oldCategory) {
                 document.getElementById('currentFilter').textContent = 'All Emails';
                 displayEmails(allEmails);
                 updateDisplayStats(allEmails);
-                // Show all priority cards when viewing all
-                try { renderPriorityToday(); } catch (_) {}
             } else {
                 const filteredEmails = allEmails.filter(email => {
                     const arr = Array.isArray(email?.categories) && email.categories.length
@@ -3812,8 +3810,6 @@ async function updateEmailCategory(emailId, newCategory, oldCategory) {
                 document.getElementById('currentFilter').textContent = category;
                 displayEmails(filteredEmails);
                 updateDisplayStats(filteredEmails);
-                // Filter yellow priority cards to the selected category
-                try { renderPriorityToday(category); } catch (_) {}
             }
         }
 
@@ -7682,128 +7678,7 @@ async function classifyPriorityEmails() {
     }
 }
 
-function renderPriorityToday(filterCategory) {
-    const host = document.getElementById('priorityContainer');
-    if (!host) return;
-    host.innerHTML = '';
-
-    // Compute filtered list based on optional category (match on suggested or user-typed category)
-    let list = Array.isArray(priorityTodayEmails) ? priorityTodayEmails.slice() : [];
-    if (filterCategory && String(filterCategory).toLowerCase() !== 'all') {
-        const target = String(filterCategory || '').trim().toLowerCase();
-        list = list.filter(e => String((e && (e._cat || e.category)) || 'Other').trim().toLowerCase() === target);
-    }
-
-    if (!Array.isArray(list) || list.length === 0) {
-        // nothing to render
-        return;
-    }
-
-    // Title row
-    const header = document.createElement('div');
-    header.style.display = 'flex';
-    header.style.alignItems = 'center';
-    header.style.justifyContent = 'space-between';
-    header.style.padding = '8px 28px 0 28px';
-    header.innerHTML = `
-        <div style="color:#5f6368; font-size:12px; text-transform:uppercase; letter-spacing:0.4px;">
-            Priority Today — ${list.length} email${list.length===1?'':'s'}
-        </div>
-        <div></div>
-    `;
-    host.appendChild(header);
-
-    // Cards
-    list.forEach((email, idx) => {
-        if (window.skippedPriorityIds && window.skippedPriorityIds.has(email.id)) { return; }
-        const card = document.createElement('div');
-        card.className = 'priority-card';
-        card.setAttribute('data-pri-id', email.id);
-
-        const from = String(email.from || 'Unknown Sender');
-        const subj = String(email.subject || 'No Subject');
-        const date = String(email.date || '');
-        
-        // Strip HTML tags from body to prevent style injection and layout issues
-        const rawBody = (typeof email.body === 'string' ? email.body : (email.snippet || ''));
-        const cleanBody = rawBody.replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' ');
-        const previewText = cleanBody
-                            .replace(/\s+/g, ' ')
-                            .trim()
-                            .slice(0, 200) + ((cleanBody && cleanBody.length > 200) ? '…' : '');
-
-        const initialCat = email._cat || email.category || 'Other';
-
-        card.innerHTML = `
-            <div class="priority-card-left">
-                <button class="priority-approve-btn-circle" title="Approve to Database">✓</button>
-                <button class="priority-trash-btn" title="Skip">Skip</button>
-            </div>
-            <div class="priority-card-content">
-                        <div class="priority-header">
-                            <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px;">
-                                <div class="priority-title" style="flex: 1; padding-right: 0;">${escapeHtml(subj)}</div>
-                                <div style="font-size: 16px; color: #5f6368; white-space: nowrap; font-weight: 500; display:flex; align-items:center; gap:8px;">
-                                    ${new Date(date).toLocaleString()} 
-                                    ${gmailLinkHtml(email)}
-                                    ${email.__isNew || window.recentlyAddedEmailIds?.has(email.id) ? '' : `<span style="font-size: 11px; color: #9aa0a6; font-weight: 400;">${escapeHtml(email.id || '')}</span>`}
-                                </div>
-                            </div>
-                        </div>
-                <div class="priority-meta">${escapeHtml(from)}</div>
-                <div class="priority-preview">${escapeHtml(previewText)}</div>
-                <div class="priority-category-editor" style="position:relative;">
-                    <span style="font-size:12px; color:#555;">Category:</span>
-                    <input type="text" class="priority-cat-input" value="${escapeHtml(initialCat)}" placeholder="Type a category…">
-                    ${email._catReason ? `<span class="priority-cat-reason-inline" title="${escapeHtml(email._catReason)}">${escapeHtml(email._catReason)}</span>` : ''}
-                </div>
-            </div>
-        `;
-
-        // Open thread on card click
-        card.addEventListener('click', (ev) => {
-            // ignore clicks on buttons or input
-            const t = ev.target;
-            if (t && (t.classList.contains('priority-approve-btn') || t.classList.contains('priority-trash-btn') || t.classList.contains('priority-cat-input') || (t.closest && t.closest('.priority-cat-suggest')))) {
-                return;
-            }
-            openEmailThread(email.id, email.subject);
-        });
-
-        // Wire Approve/Trash
-        const approveBtn = card.querySelector('.priority-approve-btn-circle');
-        const trashBtn = card.querySelector('.priority-trash-btn');
-        const catInput = card.querySelector('.priority-cat-input');
-
-// Prevent card click when interacting within the category editor
-        const editorEl = card.querySelector('.priority-category-editor');
-        if (editorEl) {
-            editorEl.addEventListener('click', (ev) => ev.stopPropagation());
-            editorEl.addEventListener('mousedown', (ev) => ev.stopPropagation());
-        }
-
-        // Prevent card click on the circular approve button
-        if (approveBtn) {
-            approveBtn.addEventListener('click', async (ev) => {
-                ev.stopPropagation();
-                await approvePriorityEmail(email, catInput ? catInput.value.trim() : (email._cat || email.category || 'Other'), card);
-            });
-        }
-        if (trashBtn) {
-            trashBtn.addEventListener('click', async (ev) => {
-                ev.stopPropagation();
-                await trashPriorityEmail(email, card);
-            });
-        }
-
-        // Category input: suggestions dropdown from currentCategoriesOrder (type-ahead)
-        if (catInput) {
-            setupPriorityCategorySuggestions(catInput, email);
-        }
-
-        host.appendChild(card);
-    });
-}
+// renderPriorityToday removed
 
 function setupPriorityCategorySuggestions(inputEl, email) {
     // Avoid double-binding on the same element
