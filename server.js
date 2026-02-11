@@ -1,4 +1,5 @@
 const express = require('express');
+const session = require('express-session');
 const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
@@ -149,6 +150,22 @@ app.get('/api/features', (req, res) => {
 app.use(cors());
 // Increase JSON body size limit to accommodate facet-analysis payloads from the client
 app.use(express.json({ limit: '10mb' }));
+
+app.use(session({
+    secret: require('crypto').randomBytes(64).toString('hex'),
+    resave: false,
+    saveUninitialized: true,
+    cookie: { secure: false } // Set to true if using https
+}));
+
+app.use((req, res, next) => {
+    if (req.session.user || req.path === '/login.html' || req.path.startsWith('/api/auth') || req.path === '/oauth2callback') {
+        next();
+    } else {
+        res.redirect('/login.html');
+    }
+});
+
 app.use(express.static('public'));
 app.use('/data', express.static('data')); // Serve feature scripts and data files
 
@@ -2812,67 +2829,49 @@ app.post('/api/auth/callback', async (req, res) => {
 
 // Handle OAuth2 callback redirect from Google
 app.get('/oauth2callback', async (req, res) => {
-  try {
-    const { code, error } = req.query;
-    
-    if (error) {
-      console.error('OAuth error:', error);
-      return res.send(`
-        <html>
-          <head><title>Authentication Error</title></head>
-          <body style="font-family: Arial, sans-serif; padding: 40px; text-align: center;">
-            <h2>❌ Authentication Error</h2>
-            <p>There was an error during authentication: ${error}</p>
-            <p>Please close this window and try again.</p>
-          </body>
-        </html>
-      `);
+    try {
+        const { code, error } = req.query;
+
+        if (error) {
+            console.error('OAuth error:', error);
+            return res.send('Authentication Error');
+        }
+
+        if (!code) {
+            return res.send('No authorization code received from Google.');
+        }
+
+        const { tokens } = await gmailAuth.getToken(code);
+        gmailAuth.setCredentials(tokens);
+        gmail = google.gmail({ version: 'v1', auth: gmailAuth });
+
+        const oauth2 = google.oauth2({
+            auth: gmailAuth,
+            version: 'v2'
+        });
+        const { data } = await oauth2.userinfo.get();
+        const userEmail = data.email;
+
+        const userDataDir = path.join(__dirname, 'data', userEmail);
+        if (!fs.existsSync(userDataDir)) {
+            fs.mkdirSync(userDataDir, { recursive: true });
+        }
+
+        req.session.user = { email: userEmail, tokens };
+        CURRENT_USER_EMAIL = userEmail;
+        SENDING_EMAIL = userEmail;
+
+
+        // Save tokens for future use
+        const paths = getCurrentUserPaths();
+        fs.writeFileSync(paths.TOK_ENS_PATH, JSON.stringify(tokens, null, 2));
+
+
+        res.redirect('/');
+    } catch (error) {
+        console.error('Error in OAuth callback:', error);
+        res.send('An unexpected error occurred during authentication.');
     }
-    
-    if (!code) {
-      return res.send(`
-        <html>
-          <head><title>Authentication Error</title></head>
-          <body style="font-family: Arial, sans-serif; padding: 40px; text-align: center;">
-            <h2>❌ No Authorization Code</h2>
-            <p>No authorization code received from Google.</p>
-            <p>Please close this window and try again.</p>
-          </body>
-        </html>
-      `);
-    }
-    
-    // Handle the OAuth callback
-    const success = await handleGmailAuthCallback(code);
-    
-    if (success) {
-      // Redirect back to the main app automatically upon successful authentication
-      return res.redirect('/');
-    } else {
-      res.send(`
-        <html>
-          <head><title>Authentication Failed</title></head>
-          <body style="font-family: Arial, sans-serif; padding: 40px; text-align: center;">
-            <h2>❌ Authentication Failed</h2>
-            <p>There was an error processing your authentication.</p>
-            <p>Please close this window and try again.</p>
-          </body>
-        </html>
-      `);
-    }
-  } catch (error) {
-    console.error('Error in OAuth callback:', error);
-    res.send(`
-      <html>
-        <head><title>Authentication Error</title></head>
-        <body style="font-family: Arial, sans-serif; padding: 40px; text-align: center;">
-          <h2>❌ Authentication Error</h2>
-          <p>An unexpected error occurred during authentication.</p>
-          <p>Please close this window and try again.</p>
-        </body>
-      </html>
-    `);
-  }
 });
 
 /**

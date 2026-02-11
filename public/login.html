@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login - Gmail Plugin</title>
+    <style>
+        body {
+            font-family: 'Google Sans', 'Roboto', Arial, sans-serif;
+            background-color: #f8f9fa;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+        }
+        .login-container {
+            background: white;
+            padding: 40px;
+            border-radius: 8px;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+            text-align: center;
+        }
+        .login-btn {
+            background-color: #4285F4;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            font-size: 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: background-color 0.3s;
+        }
+        .login-btn:hover {
+            background-color: #3367d6;
+        }
+    </style>
+</head>
+<body>
+    <div class="login-container">
+        <h1>Welcome to your Email Assistant</h1>
+        <p>Please log in with your Gmail account to continue.</p>
+        <button class="login-btn" onclick="login()">Login with Gmail</button>
+    </div>
+    <script>
+        function login() {
+            window.location.href = '/api/auth/start';
+        }
+    </script>
+</body>
+</html>
