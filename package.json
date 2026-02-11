@@ -4,8 +4,8 @@
   "description": "Gmail plugin for email categorization and response generation",
   "main": "index.js",
   "scripts": {
-    "start": "node server.js",
-    "dev": "node server.js",
+    "start": "node api/index.js",
+    "dev": "node api/index.js",
     "migrate:mongo": "node scripts/migrate-to-mongo.js",
     "eval:classifier": "node scripts/evaluate-classifier.js",
     "eval:classifier-simple": "node scripts/evaluate-classifier-simple.js",
