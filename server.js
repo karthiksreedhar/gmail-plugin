@@ -1,4 +1,4 @@
-const x =;
+console.log('server.js is being executed');
 const express = require('express');
 const cookieSession = require('cookie-session');
 const cors = require('cors');
