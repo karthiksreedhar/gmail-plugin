@@ -395,94 +395,28 @@ function getSeedProgressForUser(email) {
 
 // Initialize Gmail API
 async function initializeGmailAPI() {
+    console.log('Attempting to initialize Gmail API...');
     try {
-        const paths = getCurrentUserPaths();
-
-        // In a serverless environment, the filesystem is read-only.
-        // We will rely on environment variables for the credentials.
-        console.log('Initializing Gmail API...');
-        console.log('GOOGLE_CLIENT_ID:', process.env.GOOGLE_CLIENT_ID ? 'found' : 'missing');
-        console.log('GOOGLE_CLIENT_SECRET:', process.env.GOOGLE_CLIENT_SECRET ? 'found' : 'missing');
-        console.log('GCP_OAUTH_KEYS:', process.env.GCP_OAUTH_KEYS ? 'found' : 'missing');
-
         if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
-            console.log('Using GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET for authentication.');
+            console.log('Found GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET. Using them for authentication.');
             gmailAuth = new google.auth.OAuth2(
                 process.env.GOOGLE_CLIENT_ID,
                 process.env.GOOGLE_CLIENT_SECRET,
                 process.env.GOOGLE_REDIRECT_URI
             );
 
-            if (process.env.GMAIL_TOKENS) {
-                try {
-                    const tokens = JSON.parse(process.env.GMAIL_TOKENS);
-                    gmailAuth.setCredentials(tokens);
-                    await gmailAuth.getAccessToken();
-                    gmail = google.gmail({ version: 'v1', auth: gmailAuth });
-                    console.log('Gmail API initialized successfully from environment variables.');
-                    return true;
-                } catch (error) {
-                    console.log('Gmail tokens from environment variables are invalid, re-authentication is required.');
-                }
-            }
-            gmail = google.gmail({ version: 'v1', auth: gmailAuth });
-            return false;
-        } else if (process.env.GCP_OAUTH_KEYS) {
-            console.log('Using GCP_OAUTH_KEYS for authentication.');
-            const credentials = JSON.parse(process.env.GCP_OAUTH_KEYS);
-            const { client_id, client_secret, redirect_uris } = credentials.installed || credentials.web;
-            gmailAuth = new google.auth.OAuth2(client_id, client_secret, redirect_uris[0]);
+            // The GMAIL_TOKENS logic is for persistent sessions, which we are not using in this simplified version.
+            // We will always require a new authentication flow.
 
-            if (process.env.GMAIL_TOKENS) {
-                try {
-                    const tokens = JSON.parse(process.env.GMAIL_TOKENS);
-                    gmailAuth.setCredentials(tokens);
-                    await gmailAuth.getAccessToken();
-                    gmail = google.gmail({ version: 'v1', auth: gmailAuth });
-                    console.log('Gmail API initialized successfully from environment variables.');
-                    return true;
-                } catch (error) {
-                    console.log('Gmail tokens from environment variables are invalid, re-authentication is required.');
-                }
-            }
             gmail = google.gmail({ version: 'v1', auth: gmailAuth });
+            console.log('Gmail API initialized. Ready for authentication flow.');
+            return true; // Indicates that the auth object is ready, but not yet authenticated.
+        } else {
+            console.error('Missing GOOGLE_CLIENT_ID or GOOGLE_CLIENT_SECRET environment variables. Gmail API cannot be initialized.');
             return false;
         }
-
-        // Fallback to filesystem for local development
-        let credentialsPath = paths.OAUTH_KEYS_PATH;
-        if (!fs.existsSync(credentialsPath)) {
-            const rootCredentialsPath = path.join(__dirname, 'gcp-oauth.keys.json');
-            if (fs.existsSync(rootCredentialsPath)) {
-                credentialsPath = rootCredentialsPath;
-            } else {
-                console.warn(`OAuth keys file not found for user ${CURRENT_USER_EMAIL}. Gmail API will not be available.`);
-                return false;
-            }
-        }
-
-        const credentials = JSON.parse(fs.readFileSync(credentialsPath, 'utf8'));
-        const { client_id, client_secret, redirect_uris } = credentials.installed || credentials.web;
-        gmailAuth = new google.auth.OAuth2(client_id, client_secret, redirect_uris[0]);
-
-        if (fs.existsSync(paths.TOKENS_PATH)) {
-            try {
-                const tokens = JSON.parse(fs.readFileSync(paths.TOKENS_PATH, 'utf8'));
-                gmailAuth.setCredentials(tokens);
-                await gmailAuth.getAccessToken();
-                gmail = google.gmail({ version: 'v1', auth: gmailAuth });
-                console.log(`Gmail API initialized successfully with existing tokens for ${CURRENT_USER_EMAIL}`);
-                return true;
-            } catch (error) {
-                console.log(`Existing tokens are invalid or unreadable for ${CURRENT_USER_EMAIL}, need to re-authenticate`);
-            }
-        }
-
-        gmail = google.gmail({ version: 'v1', auth: gmailAuth });
-        console.log(`Gmail API initialized for ${CURRENT_USER_EMAIL}, but authentication required`);
-        return false;
     } catch (error) {
-        console.error(`A critical error occurred during Gmail API initialization for ${CURRENT_USER_EMAIL}:`, error);
+        console.error('A critical error occurred during Gmail API initialization:', error);
         return false;
     }
 }
@@ -2841,11 +2775,14 @@ app.get('/api/auth', (req, res) => {
 
 // Convenience endpoint: 302 redirect to Gmail OAuth consent
 app.get('/api/auth/start', (req, res) => {
+  console.log('/api/auth/start endpoint called');
   try {
     const authUrl = getGmailAuthUrl();
     if (!authUrl) {
+      console.error('Gmail authentication not available, authUrl is null');
       return res.status(500).json({ error: 'Gmail authentication not available' });
     }
+    console.log('Redirecting to auth URL:', authUrl);
     return res.redirect(authUrl);
   } catch (error) {
     console.error('Error redirecting to auth URL:', error);
