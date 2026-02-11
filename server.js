@@ -396,53 +396,68 @@ function getSeedProgressForUser(email) {
 
 // Initialize Gmail API
 async function initializeGmailAPI() {
-  try {
-    const paths = getCurrentUserPaths();
-    
-    // Load OAuth credentials - check user-specific path first, then fallback to root
-    let credentialsPath = paths.OAUTH_KEYS_PATH;
-    if (!fs.existsSync(credentialsPath)) {
-      // Fallback to root directory for backward compatibility
-      const rootCredentialsPath = path.join(__dirname, 'gcp-oauth.keys.json');
-      if (fs.existsSync(rootCredentialsPath)) {
-        credentialsPath = rootCredentialsPath;
-        console.log(`Using OAuth keys from root directory for user ${CURRENT_USER_EMAIL}`);
-      } else {
-        console.warn(`OAuth keys file not found for user ${CURRENT_USER_EMAIL}. Gmail API will not be available.`);
-        return false;
-      }
-    } else {
-      console.log(`Using user-specific OAuth keys for ${CURRENT_USER_EMAIL}`);
-    }
+    try {
+        const paths = getCurrentUserPaths();
 
-    const credentials = JSON.parse(fs.readFileSync(credentialsPath, 'utf8'));
-    const { client_id, client_secret, redirect_uris } = credentials.installed || credentials.web;
+        // In a serverless environment, the filesystem is read-only.
+        // We will rely on environment variables for the credentials.
+        if (process.env.GCP_OAUTH_KEYS) {
+            const credentials = JSON.parse(process.env.GCP_OAUTH_KEYS);
+            const { client_id, client_secret, redirect_uris } = credentials.installed || credentials.web;
+            gmailAuth = new google.auth.OAuth2(client_id, client_secret, redirect_uris[0]);
 
-    gmailAuth = new google.auth.OAuth2(client_id, client_secret, redirect_uris[0]);
+            if (process.env.GMAIL_TOKENS) {
+                try {
+                    const tokens = JSON.parse(process.env.GMAIL_TOKENS);
+                    gmailAuth.setCredentials(tokens);
+                    await gmailAuth.getAccessToken();
+                    gmail = google.gmail({ version: 'v1', auth: gmailAuth });
+                    console.log('Gmail API initialized successfully from environment variables.');
+                    return true;
+                } catch (error) {
+                    console.log('Gmail tokens from environment variables are invalid, re-authentication is required.');
+                }
+            }
+            gmail = google.gmail({ version: 'v1', auth: gmailAuth });
+            return false;
+        }
 
-    // Load existing tokens if available
-    if (fs.existsSync(paths.TOKENS_PATH)) {
-      const tokens = JSON.parse(fs.readFileSync(paths.TOKENS_PATH, 'utf8'));
-      gmailAuth.setCredentials(tokens);
-      
-      // Check if tokens are still valid
-      try {
-        await gmailAuth.getAccessToken();
+        // Fallback to filesystem for local development
+        let credentialsPath = paths.OAUTH_KEYS_PATH;
+        if (!fs.existsSync(credentialsPath)) {
+            const rootCredentialsPath = path.join(__dirname, 'gcp-oauth.keys.json');
+            if (fs.existsSync(rootCredentialsPath)) {
+                credentialsPath = rootCredentialsPath;
+            } else {
+                console.warn(`OAuth keys file not found for user ${CURRENT_USER_EMAIL}. Gmail API will not be available.`);
+                return false;
+            }
+        }
+
+        const credentials = JSON.parse(fs.readFileSync(credentialsPath, 'utf8'));
+        const { client_id, client_secret, redirect_uris } = credentials.installed || credentials.web;
+        gmailAuth = new google.auth.OAuth2(client_id, client_secret, redirect_uris[0]);
+
+        if (fs.existsSync(paths.TOKENS_PATH)) {
+            try {
+                const tokens = JSON.parse(fs.readFileSync(paths.TOKENS_PATH, 'utf8'));
+                gmailAuth.setCredentials(tokens);
+                await gmailAuth.getAccessToken();
+                gmail = google.gmail({ version: 'v1', auth: gmailAuth });
+                console.log(`Gmail API initialized successfully with existing tokens for ${CURRENT_USER_EMAIL}`);
+                return true;
+            } catch (error) {
+                console.log(`Existing tokens are invalid or unreadable for ${CURRENT_USER_EMAIL}, need to re-authenticate`);
+            }
+        }
+
         gmail = google.gmail({ version: 'v1', auth: gmailAuth });
-        console.log(`Gmail API initialized successfully with existing tokens for ${CURRENT_USER_EMAIL}`);
-        return true;
-      } catch (error) {
-        console.log(`Existing tokens are invalid for ${CURRENT_USER_EMAIL}, need to re-authenticate`);
-      }
+        console.log(`Gmail API initialized for ${CURRENT_USER_EMAIL}, but authentication required`);
+        return false;
+    } catch (error) {
+        console.error(`A critical error occurred during Gmail API initialization for ${CURRENT_USER_EMAIL}:`, error);
+        return false;
     }
-
-    gmail = google.gmail({ version: 'v1', auth: gmailAuth });
-    console.log(`Gmail API initialized for ${CURRENT_USER_EMAIL}, but authentication required`);
-    return false;
-  } catch (error) {
-    console.error(`Error initializing Gmail API for ${CURRENT_USER_EMAIL}:`, error);
-    return false;
-  }
 }
 
 // Get Gmail authentication URL
