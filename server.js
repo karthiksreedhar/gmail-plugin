@@ -1,5 +1,5 @@
 const express = require('express');
-const session = require('express-session');
+const cookieSession = require('cookie-session');
 const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
@@ -151,11 +151,10 @@ app.use(cors());
 // Increase JSON body size limit to accommodate facet-analysis payloads from the client
 app.use(express.json({ limit: '10mb' }));
 
-app.use(session({
-    secret: require('crypto').randomBytes(64).toString('hex'),
-    resave: false,
-    saveUninitialized: true,
-    cookie: { secure: false } // Set to true if using https
+app.use(cookieSession({
+    name: 'session',
+    keys: [require('crypto').randomBytes(64).toString('hex')],
+    maxAge: 24 * 60 * 60 * 1000 // 24 hours
 }));
 
 app.use((req, res, next) => {
