@@ -400,7 +400,28 @@ async function initializeGmailAPI() {
 
         // In a serverless environment, the filesystem is read-only.
         // We will rely on environment variables for the credentials.
-        if (process.env.GCP_OAUTH_KEYS) {
+        if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
+            gmailAuth = new google.auth.OAuth2(
+                process.env.GOOGLE_CLIENT_ID,
+                process.env.GOOGLE_CLIENT_SECRET,
+                process.env.GOOGLE_REDIRECT_URI
+            );
+
+            if (process.env.GMAIL_TOKENS) {
+                try {
+                    const tokens = JSON.parse(process.env.GMAIL_TOKENS);
+                    gmailAuth.setCredentials(tokens);
+                    await gmailAuth.getAccessToken();
+                    gmail = google.gmail({ version: 'v1', auth: gmailAuth });
+                    console.log('Gmail API initialized successfully from environment variables.');
+                    return true;
+                } catch (error) {
+                    console.log('Gmail tokens from environment variables are invalid, re-authentication is required.');
+                }
+            }
+            gmail = google.gmail({ version: 'v1', auth: gmailAuth });
+            return false;
+        } else if (process.env.GCP_OAUTH_KEYS) {
             const credentials = JSON.parse(process.env.GCP_OAUTH_KEYS);
             const { client_id, client_secret, redirect_uris } = credentials.installed || credentials.web;
             gmailAuth = new google.auth.OAuth2(client_id, client_secret, redirect_uris[0]);
