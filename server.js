@@ -400,7 +400,13 @@ async function initializeGmailAPI() {
 
         // In a serverless environment, the filesystem is read-only.
         // We will rely on environment variables for the credentials.
+        console.log('Initializing Gmail API...');
+        console.log('GOOGLE_CLIENT_ID:', process.env.GOOGLE_CLIENT_ID ? 'found' : 'missing');
+        console.log('GOOGLE_CLIENT_SECRET:', process.env.GOOGLE_CLIENT_SECRET ? 'found' : 'missing');
+        console.log('GCP_OAUTH_KEYS:', process.env.GCP_OAUTH_KEYS ? 'found' : 'missing');
+
         if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
+            console.log('Using GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET for authentication.');
             gmailAuth = new google.auth.OAuth2(
                 process.env.GOOGLE_CLIENT_ID,
                 process.env.GOOGLE_CLIENT_SECRET,
@@ -422,6 +428,7 @@ async function initializeGmailAPI() {
             gmail = google.gmail({ version: 'v1', auth: gmailAuth });
             return false;
         } else if (process.env.GCP_OAUTH_KEYS) {
+            console.log('Using GCP_OAUTH_KEYS for authentication.');
             const credentials = JSON.parse(process.env.GCP_OAUTH_KEYS);
             const { client_id, client_secret, redirect_uris } = credentials.installed || credentials.web;
             gmailAuth = new google.auth.OAuth2(client_id, client_secret, redirect_uris[0]);
