@@ -2864,7 +2864,9 @@ app.get('/oauth2callback', async (req, res) => {
 
         // Save tokens for future use
         const paths = getCurrentUserPaths();
-        fs.writeFileSync(paths.TOK_ENS_PATH, JSON.stringify(tokens, null, 2));
+        if (fs.existsSync(paths.USER_DATA_DIR)) {
+            fs.writeFileSync(paths.TOKENS_PATH, JSON.stringify(tokens, null, 2));
+        }
 
 
         res.redirect('/');
