@@ -9,7 +9,7 @@ const { google } = require('googleapis');
 require('dotenv').config();
 
 // MongoDB (Atlas) connection helper
-const { initMongo, getUserDoc, setUserDoc, warmCacheForUser, getCachedDoc } = require('./db');
+const { initMongo, getUserDoc, setUserDoc, warmCacheForUser, getCachedDoc } = require('../db');
 
 /**
  * Initialize OpenAI client using environment variable
