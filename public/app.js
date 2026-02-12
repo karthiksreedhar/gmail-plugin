@@ -1,4 +1,4 @@
-        /**
+/**
          * EMAIL ASSISTANT FEATURE API
          * Provides utilities for custom features to integrate with the UI
          */
@@ -4476,6 +4476,160 @@ function mapToCurrentCategory(name) {
         let hiddenThreads = new Set();
         let lastThreadDateFilter = null;
 
+        /* ===== Priority Today (important emails) ===== */
+let priorityTodayEmails = [];
+let priorityCatDropdown = null; // active dropdown element
+let priorityCatActiveIndex = -1;
+
+async function loadPriorityToday() {
+    try {
+        // Show loading popup as requested
+        showLoadingOverlay('Loading emails from downloaded set…', 'Fetching important emails from downloaded set…', false);
+
+        // Ensure we have the current categories ordering for suggestions
+        await loadCurrentCategories();
+
+        const resp = await fetch('/api/priority-today');
+        const data = await resp.json().catch(() => ({}));
+
+        if (resp.status === 401 && data && data.needsAuth) {
+            hideLoadingOverlay();
+            // Kick off auth flow; index.html already handles startAuthentication UI
+            await startAuthentication();
+            return;
+        }
+
+        priorityTodayEmails = Array.isArray(data.emails) ? data.emails : [];
+        
+        // Read from classifier log to get categories and rationales
+        try {
+            console.log('[PriorityToday] Reading in classifier results.....');
+            updateLoadingOverlayMessage('Loading Priority Emails from Today…', 'Reading classifier results from log…');
+            const logResp = await fetch('/api/classifier-log');
+            const logData = await logResp.json().catch(() => ({}));
+            
+            if (logResp.ok && logData.success && Array.isArray(logData.entries)) {
+                // Map log entries to emails by ID
+                const logByEmailId = new Map();
+                logData.entries.forEach(entry => {
+                    if (entry.emailId && entry.emailId !== 'N/A') {
+                        logByEmailId.set(entry.emailId, entry);
+                    }
+                });
+                
+                // Enrich emails with log data - MARK EMAILS THAT HAVE LOG DATA
+                priorityTodayEmails = priorityTodayEmails.map(email => {
+                    const logEntry = logByEmailId.get(email.id);
+                    if (logEntry) {
+                        return {
+                            ...email,
+                            _cat: logEntry.suggestedCategory || email.category || email._cat || 'Other',
+                            _catReason: logEntry.rationale || email._catReason || 'Categorized by backend classifier',
+                            category: logEntry.suggestedCategory || email.category || 'Other',
+                            _hasLogData: true // Mark that this email has classifier log data
+                        };
+                    }
+                    return email;
+                });
+                
+                console.log(`[PriorityToday] Enriched ${priorityTodayEmails.length} emails with ${logData.entries.length} log entries`);
+            }
+        } catch (logErr) {
+            console.warn('[PriorityToday] Failed to read classifier log, using backend categories:', logErr);
+        }
+        // Step 2 message: Suggesting categories using the same classifier as Load More/Test Classifier
+        try { updateLoadingOverlayMessage('Loading Priority Emails from Today…', 'Suggesting categories for emails…'); } catch (_) {}
+        // Two-stage categorization: keyword search (primary) + classifier validation (secondary)
+        try {
+            const list = Array.isArray(priorityTodayEmails) ? priorityTodayEmails : [];
+        list.forEach(e => {
+            // PRIORITY: If email has log data from classifier, DON'T overwrite it
+            if (e._hasLogData) {
+                console.log(`[PriorityToday] Email "${e.subject}" has log data - preserving _cat="${e._cat}" and _catReason="${e._catReason}"`);
+                return; // Skip re-categorization to preserve log data
+            }
+            
+            // Priority 0: Use backend-provided category if it exists and is not 'Other'
+            const backendCategory = String(e.category || '').trim();
+            const hasValidBackendCategory = backendCategory && backendCategory.toLowerCase() !== 'other';
+            
+            if (hasValidBackendCategory) {
+                // Backend already categorized this email - use it directly
+                e._cat = backendCategory;
+                e._catReason = 'Categorized by backend classifier';
+                console.log(`[PriorityToday] Using backend category for "${e.subject}": _cat="${e._cat}"`);
+                return; // Skip frontend re-categorization
+            }
+            
+            // Stage 1: Keyword search - check if any category name appears in subject/body/sender
+            let keywordCategory = 'Other';
+            const searchText = [
+                String(e.subject || ''),
+                String(e.body || ''),
+                String(e.from || '')
+            ].join(' ').toLowerCase();
+            
+            // Check each category name (from currentCategoriesOrder)
+            const categories = Array.isArray(currentCategoriesOrder) ? currentCategoriesOrder : [];
+            for (const cat of categories) {
+                const catName = String(cat || '').toLowerCase();
+                if (catName && searchText.includes(catName)) {
+                    keywordCategory = cat;
+                    break; // Use first match
+                }
+            }
+            
+            // Stage 2: Get classifier suggestion
+            const classifierTop = (Array.isArray(e?.suggestedCategories) && e.suggestedCategories.length) ? e.suggestedCategories[0] : '';
+            const classifierCategory = classifierTop ? mapToCurrentCategory(classifierTop) : '';
+                
+                // REC LETTER OVERRIDE: If classifier suggests "Rec letter", always use that regardless of keyword search
+                const recLetterRegex = /rec\s*letter/i;
+                const isRecLetter = recLetterRegex.test(classifierTop || '');
+                
+                if (isRecLetter) {
+                    // Force use of classifier's Rec Letter suggestion, bypass keyword comparison
+                    e._cat = mapToCurrentCategory(classifierTop);
+                    const sr = e?.suggestedReasons;
+                    let reason = '';
+                    if (sr && typeof sr === 'object' && !Array.isArray(sr)) {
+                        if (classifierTop && sr[classifierTop]) reason = String(sr[classifierTop]);
+                    } else if (Array.isArray(sr) && Array.isArray(e?.suggestedCategories)) {
+                        reason = String(sr[0] || '');
+                    }
+                    e._catReason = reason || 'Classified as Rec Letter by AI (recommendation letter detected)';
+                    console.log(`[PriorityToday] Rec Letter override applied for "${e.subject}" - bypassed keyword search`);
+                } else {
+                    // Normal comparison logic for non-rec-letter emails
+                    const keywordNorm = String(keywordCategory || '').toLowerCase();
+                    
+                    // Extract classifier reason and category directly
+                    const sr = e?.suggestedReasons;
+                    let reason = '';
+                    if (sr && typeof sr === 'object' && !Array.isArray(sr)) {
+                        if (classifierTop && sr[classifierTop]) reason = String(sr[classifierTop]);
+                    } else if (Array.isArray(sr) && Array.isArray(e?.suggestedCategories)) {
+                        reason = String(sr[0] || '');
+                    }
+                    
+                    // Use classifier category directly without mapping to preserve new category names
+                    const finalCat = classifierTop || classifierCategory || keywordCategory || 'Other';
+                    e._cat = finalCat;
+                    e._catReason = reason || (classifierTop ? 'Suggested by classifier' : 'Suggested via keyword search');
+                    
+                    console.log(`[PriorityToday] Processed "${e.subject}": _cat="${e._cat}", _catReason="${e._catReason}"`);
+                }
+            });
+        } catch (_) {}
+        renderPriorityToday();
+    } catch (e) {
+        console.error('loadPriorityToday failed:', e);
+        priorityTodayEmails = [];
+        renderPriorityToday();
+    } finally {
+        try { hideLoadingOverlay(); } catch(_) {}
+    }
+}
 
 /* Use the same batched classifier as Load More/Test Classifier to assign categories
    to priority emails. Results are stored on each email as _cat so the existing UI
@@ -4530,6 +4684,360 @@ async function classifyPriorityEmails() {
         });
     } catch (e) {
         console.warn('classifyPriorityEmails failed:', e);
+    }
+}
+
+function renderPriorityToday(filterCategory) {
+    const host = document.getElementById('priorityContainer');
+    if (!host) return;
+    host.innerHTML = '';
+
+    // Compute filtered list based on optional category (match on suggested or user-typed category)
+    let list = Array.isArray(priorityTodayEmails) ? priorityTodayEmails.slice() : [];
+    if (filterCategory && String(filterCategory).toLowerCase() !== 'all') {
+        const target = String(filterCategory || '').trim().toLowerCase();
+        list = list.filter(e => String((e && (e._cat || e.category)) || 'Other').trim().toLowerCase() === target);
+    }
+
+    if (!Array.isArray(list) || list.length === 0) {
+        // nothing to render
+        return;
+    }
+
+    // Title row
+    const header = document.createElement('div');
+    header.style.display = 'flex';
+    header.style.alignItems = 'center';
+    header.style.justifyContent = 'space-between';
+    header.style.padding = '8px 28px 0 28px';
+    header.innerHTML = `
+        <div style="color:#5f6368; font-size:12px; text-transform:uppercase; letter-spacing:0.4px;">
+            Priority Today — ${list.length} email${list.length===1?'':'s'}
+        </div>
+        <div></div>
+    `;
+    host.appendChild(header);
+
+    // Cards
+    list.forEach((email, idx) => {
+        if (window.skippedPriorityIds && window.skippedPriorityIds.has(email.id)) { return; }
+        const card = document.createElement('div');
+        card.className = 'priority-card';
+        card.setAttribute('data-pri-id', email.id);
+
+        const from = String(email.from || 'Unknown Sender');
+        const subj = String(email.subject || 'No Subject');
+        const date = String(email.date || '');
+        
+        // Strip HTML tags from body to prevent style injection and layout issues
+        const rawBody = (typeof email.body === 'string' ? email.body : (email.snippet || ''));
+        const cleanBody = rawBody.replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' ');
+        const previewText = cleanBody
+                            .replace(/\s+/g, ' ')
+                            .trim()
+                            .slice(0, 200) + ((cleanBody && cleanBody.length > 200) ? '…' : '');
+
+        const initialCat = email._cat || email.category || 'Other';
+
+        card.innerHTML = `
+            <div class="priority-card-left">
+                <button class="priority-approve-btn-circle" title="Approve to Database">✓</button>
+                <button class="priority-trash-btn" title="Skip">Skip</button>
+            </div>
+            <div class="priority-card-content">
+                        <div class="priority-header">
+                            <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px;">
+                                <div class="priority-title" style="flex: 1; padding-right: 0;">${escapeHtml(subj)}</div>
+                                <div style="font-size: 16px; color: #5f6368; white-space: nowrap; font-weight: 500; display:flex; align-items:center; gap:8px;">
+                                    ${new Date(date).toLocaleString()} 
+                                    ${gmailLinkHtml(email)}
+                                    ${email.__isNew || window.recentlyAddedEmailIds?.has(email.id) ? '' : `<span style="font-size: 11px; color: #9aa0a6; font-weight: 400;">${escapeHtml(email.id || '')}</span>`}
+                                </div>
+                            </div>
+                        </div>
+                <div class="priority-meta">${escapeHtml(from)}</div>
+                <div class="priority-preview">${escapeHtml(previewText)}</div>
+                <div class="priority-category-editor" style="position:relative;">
+                    <span style="font-size:12px; color:#555;">Category:</span>
+                    <input type="text" class="priority-cat-input" value="${escapeHtml(initialCat)}" placeholder="Type a category…">
+                    ${email._catReason ? `<span class="priority-cat-reason-inline" title="${escapeHtml(email._catReason)}">${escapeHtml(email._catReason)}</span>` : ''}
+                </div>
+            </div>
+        `;
+
+        // Open thread on card click
+        card.addEventListener('click', (ev) => {
+            // ignore clicks on buttons or input
+            const t = ev.target;
+            if (t && (t.classList.contains('priority-approve-btn') || t.classList.contains('priority-trash-btn') || t.classList.contains('priority-cat-input') || (t.closest && t.closest('.priority-cat-suggest')))) {
+                return;
+            }
+            openEmailThread(email.id, email.subject);
+        });
+
+        // Wire Approve/Trash
+        const approveBtn = card.querySelector('.priority-approve-btn-circle');
+        const trashBtn = card.querySelector('.priority-trash-btn');
+        const catInput = card.querySelector('.priority-cat-input');
+
+// Prevent card click when interacting within the category editor
+        const editorEl = card.querySelector('.priority-category-editor');
+        if (editorEl) {
+            editorEl.addEventListener('click', (ev) => ev.stopPropagation());
+            editorEl.addEventListener('mousedown', (ev) => ev.stopPropagation());
+        }
+
+        // Prevent card click on the circular approve button
+        if (approveBtn) {
+            approveBtn.addEventListener('click', async (ev) => {
+                ev.stopPropagation();
+                await approvePriorityEmail(email, catInput ? catInput.value.trim() : (email._cat || email.category || 'Other'), card);
+            });
+        }
+        if (trashBtn) {
+            trashBtn.addEventListener('click', async (ev) => {
+                ev.stopPropagation();
+                await trashPriorityEmail(email, card);
+            });
+        }
+
+        // Category input: suggestions dropdown from currentCategoriesOrder (type-ahead)
+        if (catInput) {
+            setupPriorityCategorySuggestions(catInput, email);
+        }
+
+        host.appendChild(card);
+    });
+}
+
+function setupPriorityCategorySuggestions(inputEl, email) {
+    // Avoid double-binding on the same element
+    if (inputEl.__catSuggestSetup) return;
+    inputEl.__catSuggestSetup = true;
+
+    let dropdown = null;
+    let activeIndex = -1;
+
+    const ensureDropdown = () => {
+        if (!dropdown) {
+            dropdown = document.createElement('div');
+            dropdown.className = 'priority-cat-suggest';
+            dropdown.style.display = 'none';
+            // Ensure parent is a positioning context for absolute dropdown
+            const parent = inputEl.parentElement || inputEl;
+            try {
+                if (getComputedStyle(parent).position === 'static') {
+                    parent.style.position = 'relative';
+                }
+            } catch (_) {}
+            parent.appendChild(dropdown);
+        }
+        return dropdown;
+    };
+
+    const hideDropdown = () => {
+        if (dropdown) dropdown.style.display = 'none';
+    };
+
+    const filterList = () => {
+        const dd = ensureDropdown();
+        const q = String(inputEl.value || '').toLowerCase().trim();
+        const list = Array.isArray(currentCategoriesOrder) ? currentCategoriesOrder.slice() : [];
+        const matches = list
+            .filter(c => !q || String(c).toLowerCase().includes(q))
+            .slice(0, 8);
+
+        dd.innerHTML = '';
+        activeIndex = -1;
+
+        if (matches.length === 0) {
+            dd.style.display = 'none';
+            return;
+        }
+
+        matches.forEach((name, i) => {
+            const item = document.createElement('div');
+            item.className = 'priority-cat-item' + (i === 0 ? ' active' : '');
+            if (i === 0) activeIndex = 0;
+            item.textContent = name;
+            item.addEventListener('mousedown', (ev) => {
+                ev.preventDefault();
+                inputEl.value = name;
+                try { if (email) email._cat = String(name || '').trim(); } catch(_) {}
+                hideDropdown();
+            });
+            dd.appendChild(item);
+        });
+        dd.style.display = 'block';
+    };
+
+    inputEl.addEventListener('input', filterList);
+    inputEl.addEventListener('input', () => {
+        try {
+            if (email) email._cat = String(inputEl.value || '').trim();
+            const reasonEl = inputEl.closest('.priority-card')?.querySelector('.priority-cat-reason, .priority-cat-reason-inline');
+            if (reasonEl) reasonEl.style.display = 'none';
+        } catch(_) {}
+    });
+    inputEl.addEventListener('focus', filterList);
+    inputEl.addEventListener('blur', () => {
+        // small timeout to allow mousedown on item
+        setTimeout(hideDropdown, 120);
+    });
+
+    inputEl.addEventListener('keydown', (ev) => {
+        if (!dropdown || dropdown.style.display === 'none') return;
+        const items = Array.from(dropdown.querySelectorAll('.priority-cat-item'));
+        if (!items.length) return;
+
+        if (ev.key === 'ArrowDown') {
+            ev.preventDefault();
+            activeIndex = Math.min(items.length - 1, activeIndex + 1);
+            items.forEach((it, idx) => it.classList.toggle('active', idx === activeIndex));
+            items[Math.max(0, activeIndex)].scrollIntoView({ block: 'nearest' });
+        } else if (ev.key === 'ArrowUp') {
+            ev.preventDefault();
+            activeIndex = Math.max(0, activeIndex - 1);
+            items.forEach((it, idx) => it.classList.toggle('active', idx === activeIndex));
+            items[Math.max(0, activeIndex)].scrollIntoView({ block: 'nearest' });
+        } else if (ev.key === 'Enter') {
+            ev.preventDefault();
+            const active = items[activeIndex] || items[0];
+            if (active) {
+                inputEl.value = active.textContent || inputEl.value;
+                try { if (email) email._cat = String(active.textContent || inputEl.value || '').trim(); } catch(_) {}
+                hideDropdown();
+            }
+        } else if (ev.key === 'Escape') {
+            ev.preventDefault();
+            hideDropdown();
+        }
+    });
+}
+
+// Track recently added emails for yellow highlighting
+window.recentlyAddedEmailIds = window.recentlyAddedEmailIds || new Set();
+
+function showStatsBarFlashMessage(message, isSuccess = true) {
+    try {
+        // Remove any existing flash message
+        const existing = document.getElementById('statsBarFlashMessage');
+        if (existing) existing.remove();
+
+        // Create flash message element
+        const flash = document.createElement('div');
+        flash.id = 'statsBarFlashMessage';
+        flash.textContent = message;
+        flash.style.padding = '8px 16px';
+        flash.style.borderRadius = '6px';
+        flash.style.fontSize = '14px';
+        flash.style.fontWeight = '500';
+        flash.style.transition = 'opacity 0.3s ease';
+        
+        if (isSuccess) {
+            flash.style.background = '#d4edda';
+            flash.style.color = '#155724';
+            flash.style.border = '1px solid #c3e6cb';
+        } else {
+            flash.style.background = '#f8d7da';
+            flash.style.color = '#721c24';
+            flash.style.border = '1px solid #f5c6cb';
+        }
+
+        // Insert into stats bar between stats-info and search-bar
+        const statsBar = document.querySelector('.stats-bar');
+        const searchBar = document.querySelector('.search-bar');
+        if (statsBar && searchBar) {
+            statsBar.insertBefore(flash, searchBar);
+        }
+
+        // Fade out and remove after 1.5 seconds
+        setTimeout(() => {
+            flash.style.opacity = '0';
+            setTimeout(() => {
+                try { flash.remove(); } catch(_) {}
+            }, 300);
+        }, 1500);
+    } catch (e) {
+        console.error('showStatsBarFlashMessage failed:', e);
+    }
+}
+
+async function approvePriorityEmail(email, categoryValue, cardEl) {
+    try {
+        const primary = String(categoryValue || '').trim() || 'Other';
+        const payload = {
+            id: email.id,
+            subject: email.subject || 'No Subject',
+            from: email.from || 'Unknown Sender',
+            date: email.date || new Date().toISOString(),
+            body: email.body || email.snippet || '',
+            snippet: email.snippet || (email.body ? String(email.body).slice(0, 100) + (email.body.length > 100 ? '...' : '') : ''),
+            category: primary
+        };
+
+        // Persist
+        const resp = await fetch('/api/add-approved-email', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email: payload })
+        });
+        const data = await resp.json().catch(() => ({}));
+        if (!resp.ok || !data.success) {
+            throw new Error(data.error || 'Failed to approve email');
+        }
+
+        // Remove yellow card from priority section
+        try { cardEl.remove(); } catch(_){}
+        // Also remove from local priority list
+        priorityTodayEmails = priorityTodayEmails.filter(e => e.id !== email.id);
+
+        // Mark as recently added for yellow highlighting
+        window.recentlyAddedEmailIds.add(email.id);
+
+        // Refresh main list so the email appears (will be yellow initially)
+        try { await loadEmails(); } catch(_) {}
+
+        // Show flash message
+        showStatsBarFlashMessage('Email approved and added to database', true);
+
+        // After 1.5 seconds, remove yellow highlighting
+        setTimeout(() => {
+            window.recentlyAddedEmailIds.delete(email.id);
+            // Find the email item and update its background
+            const emailItems = document.querySelectorAll('.email-item');
+            emailItems.forEach(item => {
+                // Check if this is the recently added email by looking for matching content
+                const itemSubject = item.querySelector('.email-subject');
+                if (itemSubject && itemSubject.textContent === payload.subject) {
+                    item.style.transition = 'background-color 0.3s ease';
+                    item.style.backgroundColor = '';
+                }
+            });
+        }, 1500);
+    } catch (e) {
+        console.error('approvePriorityEmail failed:', e);
+        showStatsBarFlashMessage('Failed to approve email. Please try again.', false);
+    }
+}
+
+async function trashPriorityEmail(email, cardEl) {
+    try {
+        // Ephemeral skip: do NOT persist to hidden-inbox.
+        // Just hide in this session so a page refresh will load it again.
+        window.skippedPriorityIds = window.skippedPriorityIds || new Set();
+        if (email && email.id) {
+            try { window.skippedPriorityIds.add(email.id); } catch(_){}
+        }
+
+        // Remove from UI and local array
+        try { cardEl.remove(); } catch(_){}
+        priorityTodayEmails = priorityTodayEmails.filter(e => e.id !== email.id);
+    } catch (e) {
+        console.error('trashPriorityEmail failed:', e);
+        // Still remove visually
+        try { cardEl.remove(); } catch(_){}
+        priorityTodayEmails = priorityTodayEmails.filter(e => e.id !== email.id);
     }
 }
         /* ===== Load Today (Threads + Inbox) ===== */
