@@ -4,6 +4,9 @@ const path = require('path');
 const fs = require('fs');
 const OpenAI = require('openai');
 const { google } = require('googleapis');
+const cookieParser = require('cookie-parser');
+const session = require('express-session');
+const crypto = require('crypto');
 require('dotenv').config();
 
 // MongoDB (Atlas) connection helper
@@ -149,7 +152,31 @@ app.get('/api/features', (req, res) => {
 app.use(cors());
 // Increase JSON body size limit to accommodate facet-analysis payloads from the client
 app.use(express.json({ limit: '10mb' }));
-app.use(express.static('public'));
+if (process.env.NODE_ENV === 'production') {
+  app.set('trust proxy', 1);
+}
+app.use(cookieParser());
+app.use(session({
+  secret: process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex'),
+  resave: false,
+  saveUninitialized: false,
+  cookie: { secure: process.env.NODE_ENV === 'production', httpOnly: true, maxAge: 24 * 60 * 60 * 1000 } // 1 day
+}));
+
+// Helper to check if user is logged in
+function isLoggedIn(req) {
+  return req.session && req.session.userEmail;
+}
+
+// Force Gmail auth for app entry points
+app.use((req, res, next) => {
+  if ((req.path === '/' || req.path === '/index.html' || req.path === '/login') && !isLoggedIn(req)) {
+    return res.redirect('/api/auth/login');
+  }
+  return next();
+});
+
+app.use(express.static('public', { index: false }));
 app.use('/data', express.static('data')); // Serve feature scripts and data files
 
 // Current user - can be changed via API (loaded from .env if present)
@@ -434,7 +461,8 @@ function getGmailAuthUrl() {
   
   const scopes = [
     'https://www.googleapis.com/auth/gmail.readonly',
-    'https://www.googleapis.com/auth/gmail.send'
+    'https://www.googleapis.com/auth/gmail.send',
+    'https://www.googleapis.com/auth/userinfo.email'
   ];
 
   return gmailAuth.generateAuthUrl({
@@ -456,28 +484,42 @@ function gmailAuthRedirectOrJson(req, res, status = 401, message = 'Gmail authen
   }
 }
 
-// Handle OAuth callback and save tokens
-async function handleGmailAuthCallback(code) {
+// Exchange OAuth code for tokens and identify the user
+async function exchangeAuthCodeForTokens(code) {
   try {
     const { tokens } = await gmailAuth.getToken(code);
     gmailAuth.setCredentials(tokens);
-    // Initialize Gmail client immediately after setting credentials
-    gmail = google.gmail({ version: 'v1', auth: gmailAuth });
-    
-    const paths = getCurrentUserPaths();
-    
-    // Save tokens for future use
-    if (!fs.existsSync(paths.USER_DATA_DIR)) {
-      fs.mkdirSync(paths.USER_DATA_DIR, { recursive: true });
-    }
-    fs.writeFileSync(paths.TOKENS_PATH, JSON.stringify(tokens, null, 2));
-    
-    console.log('Gmail authentication successful, tokens saved');
-    return true;
+
+    const oauth2 = google.oauth2({ version: 'v2', auth: gmailAuth });
+    const userInfo = await oauth2.userinfo.get();
+    const userEmail = userInfo.data.email || null;
+
+    return { tokens, userEmail };
   } catch (error) {
     console.error('Error handling Gmail auth callback:', error);
-    return false;
+    return { tokens: null, userEmail: null, error };
   }
+}
+
+async function finalizeLoginForUser(userEmail, tokens) {
+  const normalizedEmail = normalizeUserEmailForData(userEmail);
+  const paths = getUserPaths(normalizedEmail);
+
+  if (!fs.existsSync(paths.USER_DATA_DIR)) {
+    fs.mkdirSync(paths.USER_DATA_DIR, { recursive: true });
+  }
+  fs.writeFileSync(paths.TOKENS_PATH, JSON.stringify(tokens, null, 2));
+
+  CURRENT_USER_EMAIL = normalizedEmail;
+  SENDING_EMAIL = normalizedEmail;
+
+  // Warm Mongo cache for new/current user
+  await warmCacheForUser(CURRENT_USER_EMAIL);
+
+  // Reinitialize Gmail API for this user
+  gmailAuth = null;
+  gmail = null;
+  await initializeGmailAPI();
 }
 
 // Search Gmail for emails with pagination support
@@ -2767,22 +2809,131 @@ app.post('/api/upload-oauth-keys', async (req, res) => {
 });
 
 // Gmail authentication endpoints
-app.get('/api/auth', (req, res) => {
-  try {
+
+// Login endpoint: redirect to Gmail OAuth consent
+app.get('/api/auth/login', (req, res) => {
+  (async () => {
+    if (!gmailAuth) {
+      await initializeGmailAPI();
+    }
     const authUrl = getGmailAuthUrl();
     if (!authUrl) {
-      return res.status(500).json({ error: 'Gmail authentication not available' });
+      return res.status(500).send(`
+        <html>
+          <head><title>Authentication Unavailable</title></head>
+          <body style="font-family: Arial, sans-serif; padding: 40px; text-align: center;">
+            <h2>❌ Gmail Authentication Not Available</h2>
+            <p>OAuth credentials are missing or misconfigured on the server.</p>
+          </body>
+        </html>
+      `);
     }
-    res.json({ authUrl });
+    return res.redirect(authUrl);
+  })().catch(err => {
+    console.error('Error starting auth flow:', err);
+    res.status(500).json({ error: 'Gmail authentication not available' });
+  });
+});
+
+// OAuth2 callback handler
+app.get('/oauth2callback', async (req, res) => {
+  try {
+    const { code, error } = req.query;
+
+    if (error) {
+      console.error('OAuth error:', error);
+      return res.send(`
+        <html>
+          <head><title>Authentication Error</title></head>
+          <body style="font-family: Arial, sans-serif; padding: 40px; text-align: center;">
+            <h2>❌ Authentication Error</h2>
+            <p>There was an error during authentication: ${error}</p>
+            <p>Please close this window and try again.</p>
+          </body>
+        </html>
+      `);
+    }
+
+    if (!code) {
+      return res.send(`
+        <html>
+          <head><title>Authentication Error</title></head>
+          <body style="font-family: Arial, sans-serif; padding: 40px; text-align: center;">
+            <h2>❌ No Authorization Code</h2>
+            <p>No authorization code received from Google.</p>
+            <p>Please close this window and try again.</p>
+          </body>
+        </html>
+      `);
+    }
+
+    // Exchange code for tokens and get user email
+    const { tokens, userEmail } = await exchangeAuthCodeForTokens(code);
+    if (!tokens || !userEmail) {
+      return res.send(`
+        <html>
+          <head><title>Authentication Failed</title></head>
+          <body style="font-family: Arial, sans-serif; padding: 40px; text-align: center;">
+            <h2>❌ Authentication Failed</h2>
+            <p>There was an error processing your authentication.</p>
+            <p>Please close this window and try again.</p>
+          </body>
+        </html>
+      `);
+    }
+
+    // Save user email in session
+    const normalizedEmail = normalizeUserEmailForData(userEmail);
+    req.session.userEmail = normalizedEmail;
+
+    await finalizeLoginForUser(userEmail, tokens);
+
+    // Redirect to main app page
+    res.redirect('/');
   } catch (error) {
-    console.error('Error getting auth URL:', error);
-    res.status(500).json({ error: 'Failed to get authentication URL' });
+    console.error('Error in OAuth callback:', error);
+    res.send(`
+      <html>
+        <head><title>Authentication Error</title></head>
+        <body style="font-family: Arial, sans-serif; padding: 40px; text-align: center;">
+          <h2>❌ Authentication Error</h2>
+          <p>An unexpected error occurred during authentication.</p>
+          <p>Please close this window and try again.</p>
+        </body>
+      </html>
+    `);
   }
 });
 
+// Logout endpoint: clear session and redirect to login
+app.get('/api/auth/logout', (req, res) => {
+  req.session.destroy(() => {
+    res.clearCookie('connect.sid');
+    res.redirect('/');
+  });
+});
+
+// Auth status endpoint: returns logged in user email or null
+app.get('/api/auth/status', (req, res) => {
+  if (isLoggedIn(req)) {
+    res.json({ loggedIn: true, userEmail: req.session.userEmail });
+  } else {
+    res.json({ loggedIn: false, userEmail: null });
+  }
+});
 // Convenience endpoint: 302 redirect to Gmail OAuth consent
 app.get('/api/auth/start', (req, res) => {
   try {
+    if (!gmailAuth) {
+      // Best-effort initialize auth for this request
+      return initializeGmailAPI().then(() => {
+        const authUrl = getGmailAuthUrl();
+        if (!authUrl) {
+          return res.status(500).json({ error: 'Gmail authentication not available' });
+        }
+        return res.redirect(authUrl);
+      });
+    }
     const authUrl = getGmailAuthUrl();
     if (!authUrl) {
       return res.status(500).json({ error: 'Gmail authentication not available' });
@@ -2797,81 +2948,19 @@ app.get('/api/auth/start', (req, res) => {
 app.post('/api/auth/callback', async (req, res) => {
   try {
     const { code } = req.body;
-    const success = await handleGmailAuthCallback(code);
-    
-    if (success) {
-      res.json({ success: true, message: 'Authentication successful' });
-    } else {
-      res.status(400).json({ success: false, error: 'Authentication failed' });
+    const { tokens, userEmail } = await exchangeAuthCodeForTokens(code);
+    if (!tokens || !userEmail) {
+      return res.status(400).json({ success: false, error: 'Authentication failed' });
     }
+
+    const normalizedEmail = normalizeUserEmailForData(userEmail);
+    req.session.userEmail = normalizedEmail;
+    await finalizeLoginForUser(userEmail, tokens);
+
+    res.json({ success: true, message: 'Authentication successful', userEmail: normalizedEmail });
   } catch (error) {
     console.error('Error handling auth callback:', error);
     res.status(500).json({ success: false, error: 'Authentication failed' });
-  }
-});
-
-// Handle OAuth2 callback redirect from Google
-app.get('/oauth2callback', async (req, res) => {
-  try {
-    const { code, error } = req.query;
-    
-    if (error) {
-      console.error('OAuth error:', error);
-      return res.send(`
-        <html>
-          <head><title>Authentication Error</title></head>
-          <body style="font-family: Arial, sans-serif; padding: 40px; text-align: center;">
-            <h2>❌ Authentication Error</h2>
-            <p>There was an error during authentication: ${error}</p>
-            <p>Please close this window and try again.</p>
-          </body>
-        </html>
-      `);
-    }
-    
-    if (!code) {
-      return res.send(`
-        <html>
-          <head><title>Authentication Error</title></head>
-          <body style="font-family: Arial, sans-serif; padding: 40px; text-align: center;">
-            <h2>❌ No Authorization Code</h2>
-            <p>No authorization code received from Google.</p>
-            <p>Please close this window and try again.</p>
-          </body>
-        </html>
-      `);
-    }
-    
-    // Handle the OAuth callback
-    const success = await handleGmailAuthCallback(code);
-    
-    if (success) {
-      // Redirect back to the main app automatically upon successful authentication
-      return res.redirect('/');
-    } else {
-      res.send(`
-        <html>
-          <head><title>Authentication Failed</title></head>
-          <body style="font-family: Arial, sans-serif; padding: 40px; text-align: center;">
-            <h2>❌ Authentication Failed</h2>
-            <p>There was an error processing your authentication.</p>
-            <p>Please close this window and try again.</p>
-          </body>
-        </html>
-      `);
-    }
-  } catch (error) {
-    console.error('Error in OAuth callback:', error);
-    res.send(`
-      <html>
-        <head><title>Authentication Error</title></head>
-        <body style="font-family: Arial, sans-serif; padding: 40px; text-align: center;">
-          <h2>❌ Authentication Error</h2>
-          <p>An unexpected error occurred during authentication.</p>
-          <p>Please close this window and try again.</p>
-        </body>
-      </html>
-    `);
   }
 });
 
@@ -12570,7 +12659,6 @@ app.get('/api/priority-today', async (req, res) => {
 });
 
 app.get('/', async (req, res) => {
-  // localized-test: do not force Gmail auth; just serve the app
   return res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 

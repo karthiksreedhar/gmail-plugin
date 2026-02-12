@@ -194,13 +194,24 @@ window.__categoryChats = window.__categoryChats || {};
             container.innerHTML = '<div class="loading">Loading emails...</div>';
 
             try {
+                // Check auth status first
+                const authStatusResp = await fetch('/api/auth/status');
+                const authStatus = await authStatusResp.json();
+
+                if (!authStatusResp.ok || !authStatus.loggedIn) {
+                    // Show login UI
+                    document.getElementById('loginScreen').style.display = 'flex';
+                    document.getElementById('appContainer').style.display = 'none';
+                    return;
+                } else {
+                    // Show App UI
+                    document.getElementById('loginScreen').style.display = 'none';
+                    document.getElementById('appContainer').style.display = 'flex';
+                }
+
                 console.log('Fetching emails from /api/response-emails...');
                 const response = await fetch('/api/response-emails');
-                console.log('Response status:', response.status);
                 const data = await response.json();
-                console.log('Response data:', JSON.stringify(data, null, 2));
-                console.log('data.emails exists:', !!data.emails);
-                console.log('data.emails length:', data.emails ? data.emails.length : 'undefined');
 
                 if (response.status === 401 && data.needsAuth) {
                     // Authentication required - automatically start authentication
@@ -232,40 +243,8 @@ window.__categoryChats = window.__categoryChats || {};
 
         async function startAuthentication() {
             try {
-                const response = await fetch('/api/auth');
-                const data = await response.json();
-                
-                if (data.authUrl) {
-                    // Open Google OAuth in a new window
-                    const authWindow = window.open(data.authUrl, 'gmail-auth', 'width=500,height=600');
-                    
-                    // Show instructions
-                    const container = document.getElementById('emailContainer');
-                    container.innerHTML = `
-                        <div class="loading">
-                            <h3>🔐 Authentication in Progress</h3>
-                            <p>1. Complete the authentication in the popup window</p>
-                            <p>2. Copy the authorization code from the final page</p>
-                            <p>3. Paste it below and click "Complete Authentication"</p>
-                            <br>
-                            <input type="text" id="authCode" placeholder="Paste authorization code here" style="
-                                width: 300px; 
-                                padding: 10px; 
-                                border: 1px solid #ddd; 
-                                border-radius: 4px;
-                                margin-right: 10px;
-                            ">
-                            <button onclick="completeAuthentication()" style="
-                                background: #34a853; 
-                                color: white; 
-                                border: none; 
-                                padding: 10px 20px; 
-                                border-radius: 4px; 
-                                cursor: pointer;
-                            ">Complete Authentication</button>
-                        </div>
-                    `;
-                }
+                // Redirect to login endpoint to start OAuth flow
+                window.location.href = '/api/auth/login';
             } catch (error) {
                 console.error('Error starting authentication:', error);
                 showErrorPopup('Failed to start authentication. Please try again.', 'Authentication Error');
@@ -12863,6 +12842,14 @@ async function renderEmailNotesPreview(el, emailId) {
         }
 
         document.addEventListener('DOMContentLoaded', function() {
+            // Wire up login button
+            const loginBtn = document.getElementById('loginBtn');
+            if (loginBtn) {
+                loginBtn.onclick = () => {
+                    window.location.href = '/api/auth/login';
+                };
+            }
+
             // Run initializers, then load Priority Today first with popup,
             // then load the regular emails list.
             loadCurrentUser();
@@ -12870,9 +12857,6 @@ async function renderEmailNotesPreview(el, emailId) {
             initSearchBar();
             showFlashFromQuery();
             (async () => {
-                try {
-                    await loadPriorityToday();
-                } catch (_){}
                 try {
                     await loadEmails();
                 } catch (_){}
@@ -12882,10 +12866,19 @@ async function renderEmailNotesPreview(el, emailId) {
         // Load current user on page load
         async function loadCurrentUser() {
             try {
-                const response = await fetch('/api/current-user');
-                const data = await response.json();
-                document.getElementById('currentUser').textContent = data.currentUser;
-                window.currentUserDisplayName = data.displayName || displayNameFromEmail(data.currentUser);
+                // First check auth status to get the logged in email
+                const authStatusResp = await fetch('/api/auth/status');
+                const authStatus = await authStatusResp.json();
+
+                if (authStatus.loggedIn && authStatus.userEmail) {
+                    document.getElementById('currentUser').textContent = authStatus.userEmail;
+                    window.currentUserDisplayName = displayNameFromEmail(authStatus.userEmail);
+                } else {
+                    const response = await fetch('/api/current-user');
+                    const data = await response.json();
+                    document.getElementById('currentUser').textContent = data.currentUser;
+                    window.currentUserDisplayName = data.displayName || displayNameFromEmail(data.currentUser);
+                }
             } catch (error) {
                 console.error('Error loading current user:', error);
             }
