@@ -57,3 +57,8 @@ Thumbs.db
 
 # Backup files
 *.backup*
+
+# Vercel
+.vercel
+.next
+gmail-feed/.next
