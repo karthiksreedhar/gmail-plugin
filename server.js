@@ -3575,6 +3575,9 @@ app.get('/api/auto-sync/status', (req, res) => {
     : new Date(Date.now() + AUTO_SYNC_INTERVAL_MS).toISOString();
   return res.json({
     success: true,
+    runtime: process.env.VERCEL ? 'vercel' : 'local',
+    hostname: process.env.VERCEL_URL || process.env.HOSTNAME || 'unknown',
+    now: new Date().toISOString(),
     intervalMs: AUTO_SYNC_INTERVAL_MS,
     nextRunAt,
     running: autoSyncRunning,
