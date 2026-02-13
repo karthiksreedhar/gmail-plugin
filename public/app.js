@@ -139,6 +139,12 @@
         let allEmails = [];
         let currentFilter = 'all';
         let currentCategoriesOrder = [];
+        const UI_AUTO_SYNC_INTERVAL_MS = 5 * 60 * 1000;
+        let uiAutoSyncTimer = null;
+        let uiAutoSyncCountdownTimer = null;
+        let uiNextSyncAt = null;
+        let uiAutoSyncInFlight = false;
+        let isAuthenticatedUser = false;
         window.currentUserDisplayName = window.currentUserDisplayName || '';
 window.__categoryChats = window.__categoryChats || {};
         function displayNameFromEmail(email) {
@@ -189,6 +195,89 @@ window.__categoryChats = window.__categoryChats || {};
             }
         }
 
+        function updateAutoSyncBanner(text, isError = false) {
+            const banner = document.getElementById('autoSyncBanner');
+            if (!banner) return;
+            if (!text) {
+                banner.style.display = 'none';
+                banner.textContent = '';
+                return;
+            }
+            banner.style.display = 'block';
+            banner.textContent = text;
+            if (isError) {
+                banner.style.background = '#fdecea';
+                banner.style.color = '#8b1a1a';
+                banner.style.borderBottom = '1px solid #f5c6cb';
+            } else {
+                banner.style.background = '#e8f0fe';
+                banner.style.color = '#1a3f8b';
+                banner.style.borderBottom = '1px solid #c7d7ff';
+            }
+        }
+
+        function stopUiAutoSyncTimers() {
+            if (uiAutoSyncTimer) {
+                clearInterval(uiAutoSyncTimer);
+                uiAutoSyncTimer = null;
+            }
+            if (uiAutoSyncCountdownTimer) {
+                clearInterval(uiAutoSyncCountdownTimer);
+                uiAutoSyncCountdownTimer = null;
+            }
+            uiNextSyncAt = null;
+        }
+
+        function startUiAutoSyncCountdown() {
+            if (!isAuthenticatedUser) return;
+            if (uiAutoSyncCountdownTimer) clearInterval(uiAutoSyncCountdownTimer);
+            const render = () => {
+                if (!uiNextSyncAt) return;
+                const remainMs = Math.max(0, uiNextSyncAt - Date.now());
+                const totalSec = Math.ceil(remainMs / 1000);
+                const mins = Math.floor(totalSec / 60);
+                const secs = totalSec % 60;
+                const mm = String(mins).padStart(2, '0');
+                const ss = String(secs).padStart(2, '0');
+                updateAutoSyncBanner(`Next UI update in ${mm}:${ss}.`);
+            };
+            render();
+            uiAutoSyncCountdownTimer = setInterval(render, 1000);
+        }
+
+        async function triggerUiAutoSync(reason) {
+            if (!isAuthenticatedUser || uiAutoSyncInFlight) return;
+            uiAutoSyncInFlight = true;
+            try {
+                await fetch('/api/auto-sync/run', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ reason: reason || 'ui-interval' })
+                });
+                await loadEmails();
+                uiNextSyncAt = Date.now() + UI_AUTO_SYNC_INTERVAL_MS;
+                startUiAutoSyncCountdown();
+            } catch (e) {
+                updateAutoSyncBanner('Auto update failed. Retrying in 5 minutes.', true);
+            } finally {
+                uiAutoSyncInFlight = false;
+            }
+        }
+
+        function initializeUiAutoSync() {
+            stopUiAutoSyncTimers();
+            if (!isAuthenticatedUser) {
+                updateAutoSyncBanner('');
+                return;
+            }
+            updateAutoSyncBanner('UI updating in 5 minutes.');
+            uiNextSyncAt = Date.now() + UI_AUTO_SYNC_INTERVAL_MS;
+            startUiAutoSyncCountdown();
+            uiAutoSyncTimer = setInterval(() => {
+                triggerUiAutoSync('ui-interval');
+            }, UI_AUTO_SYNC_INTERVAL_MS);
+        }
+
         async function loadEmails() {
             const container = document.getElementById('emailContainer');
             container.innerHTML = '<div class="loading">Loading emails...</div>';
@@ -199,11 +288,15 @@ window.__categoryChats = window.__categoryChats || {};
                 const authStatus = await authStatusResp.json();
 
                 if (!authStatusResp.ok || !authStatus.loggedIn) {
+                    isAuthenticatedUser = false;
                     // Show login UI
                     document.getElementById('loginScreen').style.display = 'flex';
                     document.getElementById('appContainer').style.display = 'none';
+                    stopUiAutoSyncTimers();
+                    updateAutoSyncBanner('');
                     return;
                 } else {
+                    isAuthenticatedUser = true;
                     // Show App UI
                     document.getElementById('loginScreen').style.display = 'none';
                     document.getElementById('appContainer').style.display = 'flex';
@@ -12858,7 +12951,15 @@ async function renderEmailNotesPreview(el, emailId) {
             showFlashFromQuery();
             (async () => {
                 try {
+                    try {
+                        await fetch('/api/auto-sync/run', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ reason: 'initial-page-load' })
+                        });
+                    } catch (_) {}
                     await loadEmails();
+                    initializeUiAutoSync();
                 } catch (_){}
             })();
         });

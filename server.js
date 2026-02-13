@@ -10,7 +10,7 @@ const crypto = require('crypto');
 require('dotenv').config();
 
 // MongoDB (Atlas) connection helper
-const { initMongo, getUserDoc, setUserDoc, warmCacheForUser, getCachedDoc } = require('./db');
+const { initMongo, getDb, getUserDoc, setUserDoc, warmCacheForUser, getCachedDoc } = require('./db');
 
 /**
  * Initialize OpenAI client using environment variable
@@ -2573,6 +2573,425 @@ function keywordCategorizeUnreplied(subject, body, from) {
   }
 }
 
+const AUTO_SYNC_INTERVAL_MS = 5 * 60 * 1000;
+const AUTO_SYNC_BACKFILL_COUNT = 50;
+let autoSyncRunning = false;
+let autoSyncLastRunAt = null;
+let autoSyncLastSummary = null;
+const perUserAutoSyncLocks = new Set();
+
+function getMessageHeader(headers, headerName) {
+  const list = Array.isArray(headers) ? headers : [];
+  const hit = list.find(h => String(h?.name || '').toLowerCase() === String(headerName || '').toLowerCase());
+  return hit && typeof hit.value === 'string' ? hit.value : '';
+}
+
+function parseOAuthCredentialsForUser(userEmail) {
+  const paths = getUserPaths(userEmail);
+  const envClientId = process.env.GOOGLE_CLIENT_ID;
+  const envClientSecret = process.env.GOOGLE_CLIENT_SECRET;
+  const envRedirectUri = process.env.GOOGLE_REDIRECT_URI;
+
+  if (envClientId && envClientSecret && envRedirectUri) {
+    return {
+      clientId: envClientId,
+      clientSecret: envClientSecret,
+      redirectUri: envRedirectUri
+    };
+  }
+
+  let credentialsPath = paths.OAUTH_KEYS_PATH;
+  if (!fs.existsSync(credentialsPath)) {
+    const rootCredentialsPath = path.join(__dirname, 'gcp-oauth.keys.json');
+    if (!fs.existsSync(rootCredentialsPath)) return null;
+    credentialsPath = rootCredentialsPath;
+  }
+
+  try {
+    const credentials = JSON.parse(fs.readFileSync(credentialsPath, 'utf8'));
+    const base = credentials.installed || credentials.web || {};
+    if (!base.client_id || !base.client_secret) return null;
+    const redirectUri = (Array.isArray(base.redirect_uris) && base.redirect_uris[0]) || envRedirectUri || '';
+    if (!redirectUri) return null;
+    return {
+      clientId: base.client_id,
+      clientSecret: base.client_secret,
+      redirectUri
+    };
+  } catch (_) {
+    return null;
+  }
+}
+
+async function buildGmailClientForUser(userEmail) {
+  const normalizedEmail = normalizeUserEmailForData(userEmail);
+  const tokens = await loadStoredTokensForUser(normalizedEmail);
+  if (!tokens) return { gmailClient: null, reason: 'missing_tokens' };
+
+  const oauth = parseOAuthCredentialsForUser(normalizedEmail);
+  if (!oauth) return { gmailClient: null, reason: 'missing_oauth_credentials' };
+
+  const auth = new google.auth.OAuth2(oauth.clientId, oauth.clientSecret, oauth.redirectUri);
+  auth.setCredentials(tokens);
+
+  // Best-effort token refresh. If refresh fails, caller treats this user as skipped.
+  try {
+    await auth.getAccessToken();
+  } catch (e) {
+    return { gmailClient: null, reason: `token_invalid:${e?.message || 'unknown'}` };
+  }
+
+  return {
+    gmailClient: google.gmail({ version: 'v1', auth }),
+    reason: null
+  };
+}
+
+async function readUserArrayDoc(collection, userEmail, field, filePath) {
+  const normalizedEmail = normalizeUserEmailForData(userEmail);
+  try {
+    const doc = await getUserDoc(collection, normalizedEmail);
+    if (doc && Array.isArray(doc[field])) return doc[field];
+  } catch (_) {}
+  try {
+    if (filePath && fs.existsSync(filePath)) {
+      const parsed = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+      if (parsed && Array.isArray(parsed[field])) return parsed[field];
+    }
+  } catch (_) {}
+  return [];
+}
+
+async function writeUserArrayDoc(collection, userEmail, field, value, filePath) {
+  const normalizedEmail = normalizeUserEmailForData(userEmail);
+  const safeValue = Array.isArray(value) ? value : [];
+  try {
+    await setUserDoc(collection, normalizedEmail, { [field]: safeValue });
+    return true;
+  } catch (_) {}
+  try {
+    if (filePath) {
+      const dir = path.dirname(filePath);
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(filePath, JSON.stringify({ [field]: safeValue }, null, 2));
+      return true;
+    }
+  } catch (_) {}
+  return false;
+}
+
+function pickCurrentCategoriesForUser(rawCategories) {
+  const categories = Array.isArray(rawCategories) ? rawCategories.filter(Boolean) : [];
+  if (categories.length) return categories;
+  return CANONICAL_CATEGORIES.slice();
+}
+
+function keywordCategoryBase(subject, body, from) {
+  const textSubj = String(subject || '').toLowerCase();
+  const textBody = String(body || '').toLowerCase();
+  const textFrom = String(from || '').toLowerCase();
+  const allText = `${subject || ''} ${body || ''}`;
+  if (/rec\s*letter/i.test(allText)) return 'Rec Letter';
+
+  const map = getKeywordCategoryMap();
+  const scores = {};
+  Object.keys(map).forEach(c => { scores[c] = 0; });
+
+  const countHits = (needle, hay) => {
+    if (!needle || !hay) return 0;
+    const esc = needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const re = new RegExp(`\\b${esc}\\b`, 'g');
+    const m = hay.match(re);
+    return m ? m.length : 0;
+  };
+
+  for (const [cat, keywords] of Object.entries(map)) {
+    for (const kw of keywords) {
+      const score = countHits(kw, textSubj) * 2 + countHits(kw, textBody) + countHits(kw, textFrom);
+      if (score) scores[cat] += score;
+    }
+  }
+
+  let best = 'Personal & Life Management';
+  let bestScore = -1;
+  for (const [cat, score] of Object.entries(scores)) {
+    if (score > bestScore) {
+      best = cat;
+      bestScore = score;
+    }
+  }
+  if (bestScore <= 0) return 'Personal & Life Management';
+  return best;
+}
+
+function classifySyncedEmailForUser(email, currentCategories) {
+  const wanted = keywordCategoryBase(email.subject || '', email.body || '', email.from || '');
+  return matchToCurrentCategory(wanted, currentCategories) || wanted || 'Other';
+}
+
+function isOlderThan24Hours(dateLike) {
+  const d = new Date(dateLike);
+  if (!(d instanceof Date) || Number.isNaN(d.getTime())) return true;
+  return (Date.now() - d.getTime()) > (24 * 60 * 60 * 1000);
+}
+
+function getLatestThreadDateFromStore(threads) {
+  let latest = null;
+  for (const t of (Array.isArray(threads) ? threads : [])) {
+    const d = new Date(t?.date || 0);
+    if (!Number.isNaN(d.getTime()) && (!latest || d > latest)) latest = d;
+  }
+  return latest;
+}
+
+async function fetchInboxCandidatesForUser(gmailClient, latestStoredDate, forceBackfill) {
+  const dedupedByThread = [];
+  const seenThreadIds = new Set();
+  const maxResults = forceBackfill ? 200 : 100;
+
+  let query = 'in:inbox';
+  if (!forceBackfill && latestStoredDate) {
+    const sinceSec = Math.max(0, Math.floor(latestStoredDate.getTime() / 1000) - 120);
+    query = `in:inbox after:${sinceSec}`;
+  }
+
+  const listResp = await gmailClient.users.messages.list({
+    userId: 'me',
+    q: query,
+    maxResults
+  });
+  const refs = Array.isArray(listResp?.data?.messages) ? listResp.data.messages : [];
+  if (!refs.length) return [];
+
+  for (const ref of refs) {
+    if (!ref?.id) continue;
+    const threadId = String(ref.threadId || ref.id);
+    if (seenThreadIds.has(threadId)) continue;
+    seenThreadIds.add(threadId);
+
+    try {
+      const msgResp = await gmailClient.users.messages.get({
+        userId: 'me',
+        id: ref.id,
+        format: 'full'
+      });
+      const msg = msgResp?.data || {};
+      const headers = msg?.payload?.headers || [];
+      const subject = getMessageHeader(headers, 'Subject') || 'No Subject';
+      const from = getMessageHeader(headers, 'From') || 'Unknown Sender';
+      const date = getMessageHeader(headers, 'Date') || new Date(Number(msg?.internalDate || Date.now())).toISOString();
+      const body = extractEmailBody(msg?.payload) || msg?.snippet || '';
+      const snippet = msg?.snippet || (body ? String(body).slice(0, 100) + (String(body).length > 100 ? '...' : '') : 'No content available');
+      const webUrl = (() => {
+        try {
+          const rfc = getMessageHeader(headers, 'Message-ID');
+          if (!rfc) return '';
+          return `https://mail.google.com/mail/u/0/#search/rfc822msgid%3A${encodeURIComponent(rfc)}`;
+        } catch {
+          return '';
+        }
+      })();
+
+      dedupedByThread.push({
+        id: String(msg?.id || ref.id),
+        threadId,
+        subject,
+        from,
+        date: new Date(date).toISOString(),
+        body: body || 'No content available',
+        snippet,
+        webUrl
+      });
+
+      if (forceBackfill && dedupedByThread.length >= AUTO_SYNC_BACKFILL_COUNT) break;
+    } catch (e) {
+      console.warn(`[AutoSync] Failed to load message ${ref.id}:`, e?.message || e);
+    }
+  }
+
+  dedupedByThread.sort((a, b) => new Date(b.date) - new Date(a.date));
+  return forceBackfill ? dedupedByThread.slice(0, AUTO_SYNC_BACKFILL_COUNT) : dedupedByThread;
+}
+
+async function syncUserInboxFromGmail(userEmail, opts = {}) {
+  const normalizedEmail = normalizeUserEmailForData(userEmail);
+  if (perUserAutoSyncLocks.has(normalizedEmail)) {
+    return { success: true, userEmail: normalizedEmail, skipped: true, reason: 'sync_already_running', added: 0 };
+  }
+
+  perUserAutoSyncLocks.add(normalizedEmail);
+  try {
+    const paths = getUserPaths(normalizedEmail);
+    const { gmailClient, reason } = await buildGmailClientForUser(normalizedEmail);
+    if (!gmailClient) {
+      return { success: false, userEmail: normalizedEmail, skipped: true, reason, added: 0 };
+    }
+
+    const [threads, responses, categories, hiddenThreads] = await Promise.all([
+      readUserArrayDoc('email_threads', normalizedEmail, 'threads', paths.EMAIL_THREADS_PATH),
+      readUserArrayDoc('response_emails', normalizedEmail, 'emails', paths.RESPONSE_EMAILS_PATH),
+      readUserArrayDoc('categories', normalizedEmail, 'categories', paths.CATEGORIES_PATH),
+      getUserDoc('hidden_threads', normalizedEmail).catch(() => null)
+    ]);
+
+    const hiddenThreadIds = new Set((hiddenThreads?.hidden || []).map(h => h && h.id).filter(Boolean));
+    const hiddenResponseIds = new Set((hiddenThreads?.hidden || []).flatMap(h => (h && Array.isArray(h.responseIds) ? h.responseIds : [])));
+    const currentCategories = pickCurrentCategoriesForUser(categories);
+
+    const existingResponseIds = new Set((responses || []).map(r => r && r.id).filter(Boolean));
+    const existingThreadIds = new Set((threads || []).map(t => t && t.id).filter(Boolean));
+    const latestStoredDate = getLatestThreadDateFromStore(threads);
+    const forceBackfill = !!opts.forceBackfill || !latestStoredDate || isOlderThan24Hours(latestStoredDate);
+
+    const candidates = await fetchInboxCandidatesForUser(gmailClient, latestStoredDate, forceBackfill);
+    if (!candidates.length) {
+      return {
+        success: true,
+        userEmail: normalizedEmail,
+        skipped: false,
+        forceBackfill,
+        fetched: 0,
+        added: 0
+      };
+    }
+
+    const meEmail = normalizedEmail;
+    let added = 0;
+    const nextThreads = Array.isArray(threads) ? threads.slice() : [];
+    const nextResponses = Array.isArray(responses) ? responses.slice() : [];
+
+    for (const email of candidates) {
+      if (!email?.id) continue;
+      const persistedThreadId = `thread-${email.threadId || email.id}`;
+      if (hiddenThreadIds.has(persistedThreadId) || hiddenResponseIds.has(email.id)) continue;
+      if (existingResponseIds.has(email.id)) continue;
+
+      const category = classifySyncedEmailForUser(email, currentCategories);
+      const categoriesArr = [category];
+
+      nextResponses.push({
+        id: email.id,
+        subject: email.subject || 'No Subject',
+        from: meEmail,
+        originalFrom: email.from || 'Unknown Sender',
+        date: email.date || new Date().toISOString(),
+        seededOriginalOnly: true,
+        category,
+        categories: categoriesArr,
+        body: email.body || '(synced item)',
+        snippet: email.snippet || 'No content available',
+        originalBody: email.body || '',
+        webUrl: email.webUrl || ''
+      });
+      existingResponseIds.add(email.id);
+
+      if (!existingThreadIds.has(persistedThreadId)) {
+        nextThreads.push({
+          id: persistedThreadId,
+          subject: email.subject || 'No Subject',
+          originalFrom: email.from || 'Unknown Sender',
+          from: meEmail,
+          date: email.date || new Date().toISOString(),
+          responseId: email.id,
+          messages: [
+            {
+              id: `original-${email.id}`,
+              from: email.from || 'Unknown Sender',
+              to: [meEmail],
+              date: email.date || new Date().toISOString(),
+              subject: String(email.subject || '').replace(/^Re:\s*/i, ''),
+              body: email.body || 'Original email content not available',
+              isResponse: false
+            }
+          ]
+        });
+        existingThreadIds.add(persistedThreadId);
+      }
+
+      added++;
+    }
+
+    if (added > 0) {
+      await Promise.all([
+        writeUserArrayDoc('email_threads', normalizedEmail, 'threads', nextThreads, paths.EMAIL_THREADS_PATH),
+        writeUserArrayDoc('response_emails', normalizedEmail, 'emails', nextResponses, paths.RESPONSE_EMAILS_PATH)
+      ]);
+    }
+
+    return {
+      success: true,
+      userEmail: normalizedEmail,
+      skipped: false,
+      forceBackfill,
+      fetched: candidates.length,
+      added
+    };
+  } catch (e) {
+    return {
+      success: false,
+      userEmail: normalizedEmail,
+      skipped: false,
+      reason: e?.message || String(e),
+      added: 0
+    };
+  } finally {
+    perUserAutoSyncLocks.delete(normalizedEmail);
+  }
+}
+
+async function getAllAutoSyncUsers() {
+  try {
+    await initMongo();
+    const db = getDb();
+    const rows = await db.collection('oauth_tokens').find({}).project({ userEmail: 1 }).toArray();
+    const users = Array.from(new Set(rows.map(r => normalizeUserEmailForData(r?.userEmail)).filter(Boolean)));
+    return users;
+  } catch (e) {
+    console.warn('[AutoSync] Failed to load users from oauth_tokens:', e?.message || e);
+    return [];
+  }
+}
+
+async function runAutoSyncForAllUsers(reason = 'interval') {
+  if (autoSyncRunning) return;
+  autoSyncRunning = true;
+  autoSyncLastRunAt = new Date().toISOString();
+  try {
+    const users = await getAllAutoSyncUsers();
+    if (!users.length) {
+      autoSyncLastSummary = { reason, usersProcessed: 0, added: 0, failed: 0, timestamp: new Date().toISOString() };
+      return;
+    }
+    const results = [];
+    for (const userEmail of users) {
+      const out = await syncUserInboxFromGmail(userEmail, { forceBackfill: false });
+      results.push(out);
+    }
+    const added = results.reduce((sum, r) => sum + (Number(r?.added) || 0), 0);
+    const failed = results.filter(r => !r?.success).length;
+    autoSyncLastSummary = {
+      reason,
+      usersProcessed: users.length,
+      added,
+      failed,
+      timestamp: new Date().toISOString()
+    };
+    console.log(`[AutoSync] reason=${reason} users=${users.length} added=${added} failed=${failed}`);
+  } catch (e) {
+    autoSyncLastSummary = {
+      reason,
+      usersProcessed: 0,
+      added: 0,
+      failed: 1,
+      error: e?.message || String(e),
+      timestamp: new Date().toISOString()
+    };
+    console.error('[AutoSync] run failed:', e);
+  } finally {
+    autoSyncRunning = false;
+  }
+}
+
 app.post('/api/unreplied-emails/reclassify', async (req, res) => {
   try {
     // Load current unreplied emails (Inbox data) and category list X
@@ -3059,6 +3478,39 @@ app.get('/api/auth/status', (req, res) => {
     res.json({ loggedIn: true, userEmail });
   } else {
     res.json({ loggedIn: false, userEmail: null });
+  }
+});
+
+app.get('/api/auto-sync/status', (req, res) => {
+  const nextRunAt = autoSyncLastRunAt
+    ? new Date(new Date(autoSyncLastRunAt).getTime() + AUTO_SYNC_INTERVAL_MS).toISOString()
+    : new Date(Date.now() + AUTO_SYNC_INTERVAL_MS).toISOString();
+  return res.json({
+    success: true,
+    intervalMs: AUTO_SYNC_INTERVAL_MS,
+    nextRunAt,
+    running: autoSyncRunning,
+    lastRunAt: autoSyncLastRunAt,
+    lastSummary: autoSyncLastSummary
+  });
+});
+
+app.post('/api/auto-sync/run', async (req, res) => {
+  try {
+    const authUser = getAuthenticatedUserEmail(req);
+    if (!authUser) {
+      return res.status(401).json({ success: false, error: 'Not authenticated' });
+    }
+    const normalizedEmail = normalizeUserEmailForData(authUser);
+    const result = await syncUserInboxFromGmail(normalizedEmail, { forceBackfill: false });
+    return res.json({
+      success: !!result?.success,
+      result,
+      intervalMs: AUTO_SYNC_INTERVAL_MS,
+      nextSuggestedRunAt: new Date(Date.now() + AUTO_SYNC_INTERVAL_MS).toISOString()
+    });
+  } catch (e) {
+    return res.status(500).json({ success: false, error: e?.message || 'Auto sync failed' });
   }
 });
 // Convenience endpoint: 302 redirect to Gmail OAuth consent
@@ -12820,5 +13272,18 @@ app.listen(PORT, async () => {
   } else {
     console.log('Gmail API requires authentication - visit /api/auth to authenticate');
   }
+
+  // Global background sync for all authenticated users (works even when users are not currently logged in)
+  setTimeout(() => {
+    runAutoSyncForAllUsers('startup').catch(err => {
+      console.error('[AutoSync] startup run failed:', err?.message || err);
+    });
+  }, 15000);
+  setInterval(() => {
+    runAutoSyncForAllUsers('interval').catch(err => {
+      console.error('[AutoSync] interval run failed:', err?.message || err);
+    });
+  }, AUTO_SYNC_INTERVAL_MS);
+  console.log(`[AutoSync] Scheduled every ${Math.round(AUTO_SYNC_INTERVAL_MS / 60000)} minutes`);
 });
 // test

@@ -2725,6 +2725,15 @@
             margin-left: 8px;
             font-weight: 500;
         }
+        .auto-sync-banner {
+            background: #e8f0fe;
+            color: #1a3f8b;
+            border-bottom: 1px solid #c7d7ff;
+            padding: 10px 16px;
+            text-align: center;
+            font-size: 14px;
+            font-weight: 500;
+        }
     </style>
 </head>
 <body>
@@ -2760,6 +2769,7 @@
                 <button class="view-refinements-btn" style="background-color: #d93025;" onclick="window.location.href='/api/auth/logout'">Logout</button>
             </div>
         </div>
+        <div id="autoSyncBanner" class="auto-sync-banner" style="display:none;"></div>
 
         <!-- Main Content Area -->
         <div class="main-content">
