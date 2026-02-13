@@ -201,20 +201,26 @@ window.__categoryChats = window.__categoryChats || {};
             const banner = document.getElementById('autoSyncBanner');
             if (!banner) return;
             const mergedText = [text, serverAutoSyncStatusText].filter(Boolean).join(' | ');
-            if (!mergedText) {
+            const fallbackText = isAuthenticatedUser ? 'Auto-sync status loading...' : '';
+            const finalText = mergedText || fallbackText;
+            if (!finalText) {
                 banner.style.display = 'none';
                 banner.textContent = '';
                 return;
             }
             banner.style.display = 'block';
-            banner.textContent = mergedText;
+            banner.textContent = finalText;
+            banner.style.minHeight = '36px';
+            banner.style.lineHeight = '1.3';
+            banner.style.fontWeight = '600';
+            banner.style.textAlign = 'center';
             if (isError) {
-                banner.style.background = '#fdecea';
-                banner.style.color = '#8b1a1a';
+                banner.style.setProperty('background', '#fdecea', 'important');
+                banner.style.setProperty('color', '#8b1a1a', 'important');
                 banner.style.borderBottom = '1px solid #f5c6cb';
             } else {
-                banner.style.background = '#e8f0fe';
-                banner.style.color = '#1a3f8b';
+                banner.style.setProperty('background', '#e8f0fe', 'important');
+                banner.style.setProperty('color', '#1a3f8b', 'important');
                 banner.style.borderBottom = '1px solid #c7d7ff';
             }
         }
