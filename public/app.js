@@ -201,13 +201,13 @@ window.__categoryChats = window.__categoryChats || {};
             const banner = document.getElementById('autoSyncBanner');
             if (!banner) return;
             const mergedText = [text, serverAutoSyncStatusText].filter(Boolean).join(' | ');
-            if (!text) {
+            if (!mergedText) {
                 banner.style.display = 'none';
                 banner.textContent = '';
                 return;
             }
             banner.style.display = 'block';
-            banner.textContent = mergedText || text;
+            banner.textContent = mergedText;
             if (isError) {
                 banner.style.background = '#fdecea';
                 banner.style.color = '#8b1a1a';
@@ -241,12 +241,18 @@ window.__categoryChats = window.__categoryChats || {};
             try {
                 const resp = await fetch('/api/auto-sync/status');
                 const data = await resp.json();
-                if (!resp.ok || !data.success) return;
-                const next = data.nextRunAt ? new Date(data.nextRunAt) : null;
-                const nextTxt = next && !Number.isNaN(next.getTime()) ? `server next ${next.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : '';
-                const countTxt = (typeof data.runCount === 'number') ? `runs ${data.runCount}` : '';
-                const runTxt = data.running ? 'server cron running now' : 'server cron idle';
-                serverAutoSyncStatusText = [runTxt, countTxt, nextTxt].filter(Boolean).join(', ');
+                if (!resp.ok || !data.success) {
+                    serverAutoSyncStatusText = 'server cron status unavailable';
+                } else {
+                    const next = data.nextRunAt ? new Date(data.nextRunAt) : null;
+                    const nextTxt = next && !Number.isNaN(next.getTime()) ? `server next ${next.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : '';
+                    const countTxt = (typeof data.runCount === 'number') ? `runs ${data.runCount}` : '';
+                    const runTxt = data.running ? 'server cron running now' : 'server cron idle';
+                    serverAutoSyncStatusText = [runTxt, countTxt, nextTxt].filter(Boolean).join(', ');
+                }
+            } catch (_) {
+                serverAutoSyncStatusText = 'server cron status unavailable';
+            } finally {
                 if (uiNextSyncAt) {
                     const remainMs = Math.max(0, uiNextSyncAt - Date.now());
                     const totalSec = Math.ceil(remainMs / 1000);
@@ -255,8 +261,10 @@ window.__categoryChats = window.__categoryChats || {};
                     const mm = String(mins).padStart(2, '0');
                     const ss = String(secs).padStart(2, '0');
                     updateAutoSyncBanner(`Next UI update in ${mm}:${ss}.`);
+                } else {
+                    updateAutoSyncBanner('UI update scheduler initializing...');
                 }
-            } catch (_) {}
+            }
         }
 
         function startUiAutoSyncCountdown() {
