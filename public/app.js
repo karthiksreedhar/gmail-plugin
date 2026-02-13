@@ -202,19 +202,21 @@ window.__categoryChats = window.__categoryChats || {};
             const banner = document.getElementById('autoSyncBanner');
             if (!banner) return;
             const mergedText = [text, serverAutoSyncStatusText].filter(Boolean).join(' | ');
-            const fallbackText = isAuthenticatedUser ? 'Auto-sync status loading...' : '';
+            const fallbackText = isAuthenticatedUser ? 'Next update in 5m 00s.' : 'Next update in 5m 00s.';
             const finalText = mergedText || fallbackText;
             if (!finalText) {
                 banner.style.display = 'none';
                 banner.textContent = '';
                 return;
             }
-            banner.style.display = 'block';
+            banner.style.display = 'flex';
             banner.textContent = finalText;
             banner.style.minHeight = '36px';
             banner.style.lineHeight = '1.3';
             banner.style.fontWeight = '600';
             banner.style.textAlign = 'center';
+            banner.style.alignItems = 'center';
+            banner.style.justifyContent = 'center';
             if (isError) {
                 banner.style.setProperty('background', '#fdecea', 'important');
                 banner.style.setProperty('color', '#8b1a1a', 'important');
