@@ -2579,6 +2579,45 @@ let autoSyncRunning = false;
 let autoSyncLastRunAt = null;
 let autoSyncLastSummary = null;
 const perUserAutoSyncLocks = new Set();
+let userContextLockBusy = false;
+const userContextLockQueue = [];
+
+function acquireUserContextLock() {
+  return new Promise(resolve => {
+    if (!userContextLockBusy) {
+      userContextLockBusy = true;
+      resolve();
+      return;
+    }
+    userContextLockQueue.push(resolve);
+  });
+}
+
+function releaseUserContextLock() {
+  const next = userContextLockQueue.shift();
+  if (next) {
+    next();
+    return;
+  }
+  userContextLockBusy = false;
+}
+
+async function runWithUserContext(userEmail, fn) {
+  const normalizedEmail = normalizeUserEmailForData(userEmail);
+  await acquireUserContextLock();
+  const prevCurrentUser = CURRENT_USER_EMAIL;
+  const prevSendingEmail = SENDING_EMAIL;
+  try {
+    CURRENT_USER_EMAIL = normalizedEmail;
+    SENDING_EMAIL = normalizedEmail;
+    await warmCacheForUser(normalizedEmail);
+    return await fn();
+  } finally {
+    CURRENT_USER_EMAIL = prevCurrentUser;
+    SENDING_EMAIL = prevSendingEmail;
+    releaseUserContextLock();
+  }
+}
 
 function getMessageHeader(headers, headerName) {
   const list = Array.isArray(headers) ? headers : [];
@@ -2686,47 +2725,67 @@ function pickCurrentCategoriesForUser(rawCategories) {
   return CANONICAL_CATEGORIES.slice();
 }
 
-function keywordCategoryBase(subject, body, from) {
-  const textSubj = String(subject || '').toLowerCase();
-  const textBody = String(body || '').toLowerCase();
-  const textFrom = String(from || '').toLowerCase();
-  const allText = `${subject || ''} ${body || ''}`;
-  if (/rec\s*letter/i.test(allText)) return 'Rec Letter';
+async function classifySyncedEmailsWithV4ForUser(userEmail, candidates) {
+  const list = Array.isArray(candidates) ? candidates : [];
+  if (!list.length) return { categoriesX: CANONICAL_CATEGORIES.slice(), byId: {} };
 
-  const map = getKeywordCategoryMap();
-  const scores = {};
-  Object.keys(map).forEach(c => { scores[c] = 0; });
-
-  const countHits = (needle, hay) => {
-    if (!needle || !hay) return 0;
-    const esc = needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const re = new RegExp(`\\b${esc}\\b`, 'g');
-    const m = hay.match(re);
-    return m ? m.length : 0;
-  };
-
-  for (const [cat, keywords] of Object.entries(map)) {
-    for (const kw of keywords) {
-      const score = countHits(kw, textSubj) * 2 + countHits(kw, textBody) + countHits(kw, textFrom);
-      if (score) scores[cat] += score;
+  return runWithUserContext(userEmail, async () => {
+    const categoriesX = __getCategoriesList();
+    const byId = {};
+    if (!process.env.OPENAI_API_KEY || !BASE_URL) {
+      const otherCat = categoriesX.find(c => normalizeKey(c) === 'other') || 'Other';
+      list.forEach(e => { byId[e.id] = { category: otherCat, explanation: 'OPENAI_API_KEY missing; defaulted to Other' }; });
+      return { categoriesX, byId };
     }
-  }
 
-  let best = 'Personal & Life Management';
-  let bestScore = -1;
-  for (const [cat, score] of Object.entries(scores)) {
-    if (score > bestScore) {
-      best = cat;
-      bestScore = score;
+    let modelResults = {};
+    try {
+      const resp = await fetch(`${BASE_URL}/api/classifier-v4/suggest-batch`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          emails: list.map(e => ({
+            id: e.id,
+            subject: e.subject || '',
+            body: e.body || e.snippet || '',
+            from: e.from || ''
+          }))
+        })
+      });
+      if (resp.ok) {
+        const data = await resp.json().catch(() => ({}));
+        modelResults = (data && typeof data.results === 'object' && data.results) ? data.results : {};
+      }
+    } catch (_) {}
+
+    const otherCat = categoriesX.find(c => normalizeKey(c) === 'other') || 'Other';
+    for (const e of list) {
+      const r = modelResults[e.id] || {};
+      const suggestionRaw = String(r.suggestion || '').trim();
+      const mappedSuggestion = suggestionRaw
+        ? (matchToCurrentCategory(suggestionRaw, categoriesX) || suggestionRaw)
+        : '';
+
+      let category = mappedSuggestion;
+      if (!category) {
+        const contenders = Array.isArray(r.contenders) ? r.contenders.filter(c => normalizeKey(c) !== 'other') : [];
+        const mappedContender = contenders
+          .map(c => matchToCurrentCategory(c, categoriesX) || c)
+          .find(Boolean);
+        category = mappedContender || otherCat;
+      }
+
+      const rationaleFromCategory = (r.rationales && typeof r.rationales === 'object' && typeof r.rationales[category] === 'string')
+        ? r.rationales[category]
+        : '';
+      byId[e.id] = {
+        category,
+        explanation: String(r.explanation || rationaleFromCategory || '').trim()
+      };
     }
-  }
-  if (bestScore <= 0) return 'Personal & Life Management';
-  return best;
-}
 
-function classifySyncedEmailForUser(email, currentCategories) {
-  const wanted = keywordCategoryBase(email.subject || '', email.body || '', email.from || '');
-  return matchToCurrentCategory(wanted, currentCategories) || wanted || 'Other';
+    return { categoriesX, byId };
+  });
 }
 
 function isOlderThan24Hours(dateLike) {
@@ -2836,7 +2895,14 @@ async function syncUserInboxFromGmail(userEmail, opts = {}) {
 
     const hiddenThreadIds = new Set((hiddenThreads?.hidden || []).map(h => h && h.id).filter(Boolean));
     const hiddenResponseIds = new Set((hiddenThreads?.hidden || []).flatMap(h => (h && Array.isArray(h.responseIds) ? h.responseIds : [])));
-    const currentCategories = pickCurrentCategoriesForUser(categories);
+    const derivedCategoriesFromResponses = Array.from(new Set((responses || []).flatMap(r => {
+      if (!r) return [];
+      const cats = Array.isArray(r.categories) ? r.categories : (r.category ? [r.category] : []);
+      return cats.map(c => String(c || '').trim()).filter(Boolean);
+    })));
+    const currentCategories = pickCurrentCategoriesForUser(
+      (Array.isArray(categories) && categories.length) ? categories : derivedCategoriesFromResponses
+    );
 
     const existingResponseIds = new Set((responses || []).map(r => r && r.id).filter(Boolean));
     const existingThreadIds = new Set((threads || []).map(t => t && t.id).filter(Boolean));
@@ -2855,6 +2921,15 @@ async function syncUserInboxFromGmail(userEmail, opts = {}) {
       };
     }
 
+    const classified = await classifySyncedEmailsWithV4ForUser(normalizedEmail, candidates);
+    const classifiedById = (classified && classified.byId) ? classified.byId : {};
+    const categoriesForUser = (Array.isArray(currentCategories) && currentCategories.length)
+      ? currentCategories
+      : ((classified && Array.isArray(classified.categoriesX) && classified.categoriesX.length)
+        ? classified.categoriesX
+        : CANONICAL_CATEGORIES.slice());
+    const otherCategory = categoriesForUser.find(c => normalizeKey(c) === 'other') || 'Other';
+
     const meEmail = normalizedEmail;
     let added = 0;
     const nextThreads = Array.isArray(threads) ? threads.slice() : [];
@@ -2866,8 +2941,14 @@ async function syncUserInboxFromGmail(userEmail, opts = {}) {
       if (hiddenThreadIds.has(persistedThreadId) || hiddenResponseIds.has(email.id)) continue;
       if (existingResponseIds.has(email.id)) continue;
 
-      const category = classifySyncedEmailForUser(email, currentCategories);
+      const category = (
+        classifiedById[email.id] && classifiedById[email.id].category
+          ? (matchToCurrentCategory(classifiedById[email.id].category, categoriesForUser) || classifiedById[email.id].category)
+          : ''
+      ) || otherCategory;
       const categoriesArr = [category];
+      const syncedAt = new Date().toISOString();
+      const explanation = (classifiedById[email.id] && classifiedById[email.id].explanation) || '';
 
       nextResponses.push({
         id: email.id,
@@ -2881,7 +2962,11 @@ async function syncUserInboxFromGmail(userEmail, opts = {}) {
         body: email.body || '(synced item)',
         snippet: email.snippet || 'No content available',
         originalBody: email.body || '',
-        webUrl: email.webUrl || ''
+        webUrl: email.webUrl || '',
+        source: 'auto-sync-v4',
+        autoSynced: true,
+        autoSyncedAt: syncedAt,
+        autoSyncExplanation: explanation
       });
       existingResponseIds.add(email.id);
 
@@ -2893,6 +2978,9 @@ async function syncUserInboxFromGmail(userEmail, opts = {}) {
           from: meEmail,
           date: email.date || new Date().toISOString(),
           responseId: email.id,
+          source: 'auto-sync-v4',
+          autoSynced: true,
+          autoSyncedAt: syncedAt,
           messages: [
             {
               id: `original-${email.id}`,
@@ -3511,6 +3599,61 @@ app.post('/api/auto-sync/run', async (req, res) => {
     });
   } catch (e) {
     return res.status(500).json({ success: false, error: e?.message || 'Auto sync failed' });
+  }
+});
+
+// Remove previously auto-synced records (for recovery if a bad sync run polluted categories)
+// POST /api/auto-sync/purge
+// body: { all?: boolean } // all=true removes all auto-synced records; default true
+app.post('/api/auto-sync/purge', async (req, res) => {
+  try {
+    const authUser = getAuthenticatedUserEmail(req);
+    if (!authUser) {
+      return res.status(401).json({ success: false, error: 'Not authenticated' });
+    }
+
+    const all = !Object.prototype.hasOwnProperty.call(req.body || {}, 'all') || !!req.body.all;
+    if (!all) {
+      return res.status(400).json({ success: false, error: 'Only full purge is currently supported' });
+    }
+
+    const responses = loadResponseEmails() || [];
+    const threads = loadEmailThreads() || [];
+    const unreplied = loadUnrepliedEmails() || [];
+
+    const isAutoSynced = (x) => !!(x && (x.autoSynced || String(x.source || '').toLowerCase() === 'auto-sync-v4'));
+    const autoResponseIds = new Set((responses || []).filter(isAutoSynced).map(r => r.id).filter(Boolean));
+    const autoThreadIds = new Set((threads || []).filter(isAutoSynced).map(t => t.id).filter(Boolean));
+
+    const cleanedResponses = (responses || []).filter(r => !isAutoSynced(r));
+    const cleanedThreads = (threads || []).filter(t => {
+      if (isAutoSynced(t)) return false;
+      if (t && t.responseId && autoResponseIds.has(t.responseId)) return false;
+      if (Array.isArray(t?.messages) && t.messages.some(m => m && autoResponseIds.has(m.id))) return false;
+      return true;
+    });
+    const cleanedUnreplied = (unreplied || []).filter(u => {
+      if (isAutoSynced(u)) return false;
+      if (u && autoResponseIds.has(u.id)) return false;
+      const tid = u && (u.threadId ? `thread-${u.threadId}` : `thread-${u.id}`);
+      if (tid && autoThreadIds.has(tid)) return false;
+      return true;
+    });
+
+    await saveResponseEmailsStore(cleanedResponses);
+    await saveEmailThreadsStore(cleanedThreads);
+    await saveUnrepliedEmailsStore(cleanedUnreplied);
+
+    return res.json({
+      success: true,
+      removed: {
+        responses: responses.length - cleanedResponses.length,
+        threads: threads.length - cleanedThreads.length,
+        unreplied: unreplied.length - cleanedUnreplied.length
+      }
+    });
+  } catch (e) {
+    return res.status(500).json({ success: false, error: e?.message || 'Failed to purge auto-synced records' });
   }
 });
 // Convenience endpoint: 302 redirect to Gmail OAuth consent
@@ -5773,12 +5916,28 @@ app.put('/api/email/:emailId/category', async (req, res) => {
     const trimmedCategory = newCategory.trim();
     console.log(`Updating category for email ${emailId} to: ${trimmedCategory}`);
 
-    // Load existing response emails
+    // Load existing response emails / threads
     const existingResponseEmails = loadResponseEmails();
+    const existingEmailThreads = loadEmailThreads();
     
-    // Find the email to update
-    const emailIndex = existingResponseEmails.findIndex(email => email.id === emailId);
-    
+    // Find the email to update (id first; fallback via thread linkage)
+    let emailIndex = existingResponseEmails.findIndex(email => email.id === emailId);
+    if (emailIndex === -1) {
+      const thread = (existingEmailThreads || []).find(t =>
+        t && (
+          t.id === emailId ||
+          t.responseId === emailId ||
+          (Array.isArray(t.messages) && t.messages.some(m => m && m.id === emailId))
+        )
+      );
+      const fallbackResponseId = thread?.responseId
+        || ((thread?.messages || []).find(m => m && m.isResponse)?.id)
+        || '';
+      if (fallbackResponseId) {
+        emailIndex = existingResponseEmails.findIndex(email => email.id === fallbackResponseId);
+      }
+    }
+
     if (emailIndex === -1) {
       return res.status(404).json({
         success: false,
@@ -5786,6 +5945,7 @@ app.put('/api/email/:emailId/category', async (req, res) => {
       });
     }
 
+    const resolvedEmailId = existingResponseEmails[emailIndex].id;
     const oldCategory = existingResponseEmails[emailIndex].category;
     
     // Update the email's category
@@ -5828,7 +5988,7 @@ app.put('/api/email/:emailId/category', async (req, res) => {
     res.json({
       success: true,
       email: {
-        id: emailId,
+        id: resolvedEmailId,
         category: trimmedCategory,
         oldCategory: oldCategory
       },
@@ -5865,7 +6025,25 @@ app.delete('/api/email-thread/:emailId', async (req, res) => {
     const existingUnrepliedEmails = loadUnrepliedEmails() || [];
 
     // Find the email to delete from responses (source of truth for subject/originalFrom/date)
-    const emailToDelete = existingResponseEmails.find(email => email.id === emailId);
+    // Fallback: if caller passed a thread id, resolve to responseId.
+    let emailToDelete = existingResponseEmails.find(email => email.id === emailId);
+    let resolvedEmailId = emailId;
+    if (!emailToDelete) {
+      const linkedThread = (existingEmailThreads || []).find(t =>
+        t && (
+          t.id === emailId ||
+          t.responseId === emailId ||
+          (Array.isArray(t.messages) && t.messages.some(m => m && m.id === emailId))
+        )
+      );
+      const fallbackResponseId = linkedThread?.responseId
+        || ((linkedThread?.messages || []).find(m => m && m.isResponse)?.id)
+        || '';
+      if (fallbackResponseId) {
+        resolvedEmailId = fallbackResponseId;
+        emailToDelete = existingResponseEmails.find(email => email.id === fallbackResponseId);
+      }
+    }
 
     if (!emailToDelete) {
       return res.status(404).json({
@@ -5881,7 +6059,7 @@ app.delete('/api/email-thread/:emailId', async (req, res) => {
     const deletedDate = new Date(emailToDelete.date || 0);
 
     // 1) Remove from response emails
-    const updatedResponseEmails = existingResponseEmails.filter(email => email.id !== emailId);
+    const updatedResponseEmails = existingResponseEmails.filter(email => email.id !== resolvedEmailId);
 
     // 2) Remove from email threads:
     //    - direct responseId match
@@ -5890,10 +6068,10 @@ app.delete('/api/email-thread/:emailId', async (req, res) => {
     const updatedEmailThreads = (existingEmailThreads || []).filter(thread => {
       try {
         // Drop if linked by responseId
-        if (thread && thread.responseId === emailId) return false;
+        if (thread && thread.responseId === resolvedEmailId) return false;
 
         // Drop if any message in the thread is the deleted response
-        if (Array.isArray(thread?.messages) && thread.messages.some(m => m && m.id === emailId)) {
+        if (Array.isArray(thread?.messages) && thread.messages.some(m => m && m.id === resolvedEmailId)) {
           return false;
         }
 
@@ -5924,7 +6102,7 @@ app.delete('/api/email-thread/:emailId', async (req, res) => {
       try {
         if (!u) return true;
         // exact id
-        if (u.id === emailId) return false;
+        if (u.id === resolvedEmailId) return false;
 
         const subjMatch = norm(u.subject) === deletedSubjectKey;
 

@@ -300,6 +300,9 @@ window.__categoryChats = window.__categoryChats || {};
                     // Show App UI
                     document.getElementById('loginScreen').style.display = 'none';
                     document.getElementById('appContainer').style.display = 'flex';
+                    if (!uiAutoSyncTimer || !uiAutoSyncCountdownTimer || !uiNextSyncAt) {
+                        initializeUiAutoSync();
+                    }
                 }
 
                 console.log('Fetching emails from /api/response-emails...');
@@ -331,6 +334,9 @@ window.__categoryChats = window.__categoryChats || {};
             } catch (error) {
                 console.error('Error loading emails:', error);
                 container.innerHTML = '<div class="error">Failed to load emails. Please try again.</div>';
+                if (isAuthenticatedUser) {
+                    updateAutoSyncBanner('UI updating in 5 minutes.');
+                }
             }
         }
 
