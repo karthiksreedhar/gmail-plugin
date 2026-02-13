@@ -247,6 +247,60 @@ function getCurrentUserPaths() {
   return getUserPaths(CURRENT_USER_EMAIL);
 }
 
+async function loadStoredTokensForUser(userEmail) {
+  const normalizedEmail = normalizeUserEmailForData(userEmail);
+  try {
+    await initMongo();
+    const doc = await getUserDoc('oauth_tokens', normalizedEmail);
+    if (doc && doc.tokens) {
+      return doc.tokens;
+    }
+  } catch (err) {
+    console.warn(`Mongo token read failed for ${normalizedEmail}, falling back to file:`, err?.message || err);
+  }
+
+  try {
+    const paths = getUserPaths(normalizedEmail);
+    if (fs.existsSync(paths.TOKENS_PATH)) {
+      return JSON.parse(fs.readFileSync(paths.TOKENS_PATH, 'utf8'));
+    }
+  } catch (err) {
+    console.warn(`File token read failed for ${normalizedEmail}:`, err?.message || err);
+  }
+  return null;
+}
+
+async function saveStoredTokensForUser(userEmail, tokens) {
+  const normalizedEmail = normalizeUserEmailForData(userEmail);
+  let saved = false;
+
+  try {
+    await initMongo();
+    await setUserDoc('oauth_tokens', normalizedEmail, { tokens });
+    saved = true;
+  } catch (err) {
+    console.warn(`Mongo token write failed for ${normalizedEmail}, trying file fallback:`, err?.message || err);
+  }
+
+  try {
+    const paths = getUserPaths(normalizedEmail);
+    if (!fs.existsSync(paths.USER_DATA_DIR)) {
+      fs.mkdirSync(paths.USER_DATA_DIR, { recursive: true });
+    }
+    fs.writeFileSync(paths.TOKENS_PATH, JSON.stringify(tokens, null, 2));
+    saved = true;
+  } catch (err) {
+    console.warn(`File token write failed for ${normalizedEmail}:`, err?.message || err);
+  }
+
+  return saved;
+}
+
+async function hasStoredTokensForUser(userEmail) {
+  const tokens = await loadStoredTokensForUser(userEmail);
+  return !!tokens;
+}
+
 /**
  * Helper to write classifier results to MongoDB for audit/debugging
  */
@@ -393,6 +447,9 @@ app.delete('/api/classifier-log', async (req, res) => {
 // Gmail API setup
 let gmailAuth = null;
 let gmail = null;
+let oauthClientId = null;
+let oauthClientSecret = null;
+let oauthConfiguredRedirectUri = null;
 
 // Seed Categories progress tracking (per user)
 const seedProgressByUser = {};
@@ -405,7 +462,51 @@ function getSeedProgressForUser(email) {
 }
 
 // Initialize Gmail API
-async function initializeGmailAPI() {
+function getRequestOrigin(req) {
+  if (!req) return null;
+  const xfProto = req.headers && req.headers['x-forwarded-proto'];
+  const proto = (Array.isArray(xfProto) ? xfProto[0] : xfProto) || req.protocol || 'https';
+  const host = req.get ? req.get('host') : (req.headers ? req.headers.host : null);
+  if (!host) return null;
+  return `${proto}://${host}`;
+}
+
+function resolveOAuthRedirectUriForRequest(req) {
+  const requestOrigin = getRequestOrigin(req);
+  const requestScopedRedirect = requestOrigin ? `${requestOrigin}/api/auth/callback` : null;
+
+  if (!oauthConfiguredRedirectUri) {
+    return requestScopedRedirect || `${BASE_URL}/api/auth/callback`;
+  }
+
+  // In production, prefer the current deployment host if configured redirect host differs.
+  // This avoids cross-app redirects when GOOGLE_REDIRECT_URI points at another Vercel app.
+  if (requestScopedRedirect && process.env.NODE_ENV === 'production') {
+    try {
+      const configuredHost = new URL(oauthConfiguredRedirectUri).host;
+      const requestHost = new URL(requestScopedRedirect).host;
+      if (configuredHost !== requestHost) {
+        console.warn(`GOOGLE_REDIRECT_URI host (${configuredHost}) differs from request host (${requestHost}); using request host callback.`);
+        return requestScopedRedirect;
+      }
+    } catch (_) {
+      return requestScopedRedirect;
+    }
+  }
+
+  return oauthConfiguredRedirectUri;
+}
+
+function buildOAuthClientForRequest(req) {
+  if (!oauthClientId || !oauthClientSecret) return null;
+  const redirectUri = resolveOAuthRedirectUriForRequest(req);
+  gmailAuth = new google.auth.OAuth2(oauthClientId, oauthClientSecret, redirectUri);
+  gmail = google.gmail({ version: 'v1', auth: gmailAuth });
+  return gmailAuth;
+}
+
+// Initialize Gmail API
+async function initializeGmailAPI(req = null) {
   try {
     const paths = getCurrentUserPaths();
     const envClientId = process.env.GOOGLE_CLIENT_ID;
@@ -413,7 +514,10 @@ async function initializeGmailAPI() {
     const envRedirectUri = process.env.GOOGLE_REDIRECT_URI;
 
     if (envClientId && envClientSecret && envRedirectUri) {
-      gmailAuth = new google.auth.OAuth2(envClientId, envClientSecret, envRedirectUri);
+      oauthClientId = envClientId;
+      oauthClientSecret = envClientSecret;
+      oauthConfiguredRedirectUri = envRedirectUri;
+      buildOAuthClientForRequest(req);
       console.log(`Using GOOGLE_* environment variables for OAuth (${CURRENT_USER_EMAIL})`);
     } else {
       // Load OAuth credentials - check user-specific path first, then fallback to root
@@ -434,13 +538,15 @@ async function initializeGmailAPI() {
 
       const credentials = JSON.parse(fs.readFileSync(credentialsPath, 'utf8'));
       const { client_id, client_secret, redirect_uris } = credentials.installed || credentials.web;
-
-      gmailAuth = new google.auth.OAuth2(client_id, client_secret, redirect_uris[0]);
+      oauthClientId = client_id;
+      oauthClientSecret = client_secret;
+      oauthConfiguredRedirectUri = redirect_uris[0];
+      buildOAuthClientForRequest(req);
     }
 
-    // Load existing tokens if available
-    if (fs.existsSync(paths.TOKENS_PATH)) {
-      const tokens = JSON.parse(fs.readFileSync(paths.TOKENS_PATH, 'utf8'));
+    // Load existing tokens if available (Mongo first, then file)
+    const tokens = await loadStoredTokensForUser(CURRENT_USER_EMAIL);
+    if (tokens) {
       gmailAuth.setCredentials(tokens);
       
       // Check if tokens are still valid
@@ -511,12 +617,10 @@ async function exchangeAuthCodeForTokens(code) {
 
 async function finalizeLoginForUser(userEmail, tokens) {
   const normalizedEmail = normalizeUserEmailForData(userEmail);
-  const paths = getUserPaths(normalizedEmail);
-
-  if (!fs.existsSync(paths.USER_DATA_DIR)) {
-    fs.mkdirSync(paths.USER_DATA_DIR, { recursive: true });
+  const tokensSaved = await saveStoredTokensForUser(normalizedEmail, tokens);
+  if (!tokensSaved) {
+    throw new Error(`Failed to persist OAuth tokens for ${normalizedEmail}`);
   }
-  fs.writeFileSync(paths.TOKENS_PATH, JSON.stringify(tokens, null, 2));
 
   CURRENT_USER_EMAIL = normalizedEmail;
   SENDING_EMAIL = normalizedEmail;
@@ -2822,8 +2926,9 @@ app.post('/api/upload-oauth-keys', async (req, res) => {
 app.get('/api/auth/login', (req, res) => {
   (async () => {
     if (!gmailAuth) {
-      await initializeGmailAPI();
+      await initializeGmailAPI(req);
     }
+    buildOAuthClientForRequest(req);
     const authUrl = getGmailAuthUrl();
     if (!authUrl) {
       return res.status(500).send(`
@@ -2846,6 +2951,10 @@ app.get('/api/auth/login', (req, res) => {
 // OAuth2 callback handler (supports both /oauth2callback and /api/auth/callback)
 async function handleOAuthCallback(req, res) {
   try {
+    if (!gmailAuth) {
+      await initializeGmailAPI(req);
+    }
+    buildOAuthClientForRequest(req);
     const { code, error } = req.query;
 
     if (error) {
@@ -2900,12 +3009,14 @@ async function handleOAuthCallback(req, res) {
     res.redirect('/');
   } catch (error) {
     console.error('Error in OAuth callback:', error);
+    const safeMessage = (error && error.message) ? String(error.message) : 'Unknown error';
     res.send(`
       <html>
         <head><title>Authentication Error</title></head>
         <body style="font-family: Arial, sans-serif; padding: 40px; text-align: center;">
           <h2>❌ Authentication Error</h2>
           <p>An unexpected error occurred during authentication.</p>
+          <p><code>${safeMessage}</code></p>
           <p>Please close this window and try again.</p>
         </body>
       </html>
@@ -3507,8 +3618,7 @@ app.post('/api/fetch-more-emails', async (req, res) => {
     }
 
     // Check if we have valid credentials
-    const paths = getCurrentUserPaths();
-    if (!fs.existsSync(paths.TOKENS_PATH)) {
+    if (!(await hasStoredTokensForUser(CURRENT_USER_EMAIL))) {
       const authUrl = getGmailAuthUrl();
       return res.status(401).json({
         success: false,
@@ -12426,8 +12536,7 @@ app.get('/api/priority-today', async (req, res) => {
         error: 'Gmail authentication required'
       });
     }
-    const paths = getCurrentUserPaths();
-    if (!fs.existsSync(paths.TOKENS_PATH)) {
+    if (!(await hasStoredTokensForUser(CURRENT_USER_EMAIL))) {
       const authUrl = getGmailAuthUrl();
       return res.status(401).json({
         success: false,

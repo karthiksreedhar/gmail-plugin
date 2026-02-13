@@ -13,6 +13,7 @@ let _db = null;
 // Shape: { [collection]: { [userEmail]: doc } }
 const _cache = Object.create(null);
 const COLLECTIONS = [
+  'oauth_tokens',
   'response_emails',
   'email_threads',
   'unreplied_emails',
