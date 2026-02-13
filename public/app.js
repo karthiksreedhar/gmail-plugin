@@ -264,9 +264,7 @@ window.__categoryChats = window.__categoryChats || {};
                     const totalSec = Math.ceil(remainMs / 1000);
                     const mins = Math.floor(totalSec / 60);
                     const secs = totalSec % 60;
-                    const mm = String(mins).padStart(2, '0');
-                    const ss = String(secs).padStart(2, '0');
-                    updateAutoSyncBanner(`Next UI update in ${mm}:${ss}.`);
+                    updateAutoSyncBanner(`Next update in ${mins}m ${String(secs).padStart(2, '0')}s.`);
                 } else {
                     updateAutoSyncBanner('UI update scheduler initializing...');
                 }
@@ -282,9 +280,7 @@ window.__categoryChats = window.__categoryChats || {};
                 const totalSec = Math.ceil(remainMs / 1000);
                 const mins = Math.floor(totalSec / 60);
                 const secs = totalSec % 60;
-                const mm = String(mins).padStart(2, '0');
-                const ss = String(secs).padStart(2, '0');
-                updateAutoSyncBanner(`Next UI update in ${mm}:${ss}.`);
+                updateAutoSyncBanner(`Next update in ${mins}m ${String(secs).padStart(2, '0')}s.`);
             };
             render();
             uiAutoSyncCountdownTimer = setInterval(render, 1000);
@@ -315,7 +311,7 @@ window.__categoryChats = window.__categoryChats || {};
                 updateAutoSyncBanner('');
                 return;
             }
-            updateAutoSyncBanner('UI updating in 5 minutes.');
+            updateAutoSyncBanner('Next update in 5m 00s.');
             uiNextSyncAt = Date.now() + UI_AUTO_SYNC_INTERVAL_MS;
             startUiAutoSyncCountdown();
             refreshServerAutoSyncStatus();
