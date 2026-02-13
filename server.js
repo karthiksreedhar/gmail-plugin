@@ -163,9 +163,19 @@ app.use(session({
   cookie: { secure: process.env.NODE_ENV === 'production', httpOnly: true, maxAge: 24 * 60 * 60 * 1000 } // 1 day
 }));
 
+function getAuthenticatedUserEmail(req) {
+  const fromSession = req?.session?.userEmail;
+  const fromCookie = req?.cookies?.user_email;
+  const userEmail = fromSession || fromCookie || null;
+  if (userEmail && req?.session && !req.session.userEmail) {
+    req.session.userEmail = userEmail;
+  }
+  return userEmail;
+}
+
 // Helper to check if user is logged in
 function isLoggedIn(req) {
-  return req.session && req.session.userEmail;
+  return !!getAuthenticatedUserEmail(req);
 }
 
 // Force Gmail auth for app entry points
@@ -2987,6 +2997,12 @@ async function handleOAuthCallback(req, res) {
     // Save user email in session
     const normalizedEmail = normalizeUserEmailForData(userEmail);
     req.session.userEmail = normalizedEmail;
+    res.cookie('user_email', normalizedEmail, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      maxAge: 24 * 60 * 60 * 1000
+    });
 
     await finalizeLoginForUser(userEmail, tokens);
 
@@ -3016,14 +3032,16 @@ app.get('/api/auth/callback', handleOAuthCallback);
 app.get('/api/auth/logout', (req, res) => {
   req.session.destroy(() => {
     res.clearCookie('connect.sid');
+    res.clearCookie('user_email');
     res.redirect('/');
   });
 });
 
 // Auth status endpoint: returns logged in user email or null
 app.get('/api/auth/status', (req, res) => {
-  if (isLoggedIn(req)) {
-    res.json({ loggedIn: true, userEmail: req.session.userEmail });
+  const userEmail = getAuthenticatedUserEmail(req);
+  if (userEmail) {
+    res.json({ loggedIn: true, userEmail });
   } else {
     res.json({ loggedIn: false, userEmail: null });
   }
@@ -3062,6 +3080,12 @@ app.post('/api/auth/callback', async (req, res) => {
 
     const normalizedEmail = normalizeUserEmailForData(userEmail);
     req.session.userEmail = normalizedEmail;
+    res.cookie('user_email', normalizedEmail, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      maxAge: 24 * 60 * 60 * 1000
+    });
     await finalizeLoginForUser(userEmail, tokens);
 
     res.json({ success: true, message: 'Authentication successful', userEmail: normalizedEmail });
