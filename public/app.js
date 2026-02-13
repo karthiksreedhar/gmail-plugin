@@ -319,6 +319,7 @@ window.__categoryChats = window.__categoryChats || {};
             uiNextSyncAt = Date.now() + UI_AUTO_SYNC_INTERVAL_MS;
             startUiAutoSyncCountdown();
             refreshServerAutoSyncStatus();
+            setTimeout(() => { try { refreshServerAutoSyncStatus(); } catch (_) {} }, 1200);
             uiAutoSyncStatusTimer = setInterval(() => {
                 refreshServerAutoSyncStatus();
             }, 30000);
