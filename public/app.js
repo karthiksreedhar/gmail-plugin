@@ -147,6 +147,7 @@
         let uiAutoSyncInFlight = false;
         let isAuthenticatedUser = false;
         let serverAutoSyncStatusText = '';
+        let hardBannerTimer = null;
         window.currentUserDisplayName = window.currentUserDisplayName || '';
 window.__categoryChats = window.__categoryChats || {};
         function displayNameFromEmail(email) {
@@ -240,6 +241,18 @@ window.__categoryChats = window.__categoryChats || {};
             }
             serverAutoSyncStatusText = '';
             uiNextSyncAt = null;
+        }
+
+        function startHardBannerHeartbeat() {
+            if (hardBannerTimer) return;
+            if (!uiNextSyncAt) uiNextSyncAt = Date.now() + UI_AUTO_SYNC_INTERVAL_MS;
+            hardBannerTimer = setInterval(() => {
+                const remainMs = Math.max(0, (uiNextSyncAt || (Date.now() + UI_AUTO_SYNC_INTERVAL_MS)) - Date.now());
+                const totalSec = Math.ceil(remainMs / 1000);
+                const mins = Math.floor(totalSec / 60);
+                const secs = totalSec % 60;
+                updateAutoSyncBanner(`Next update in ${mins}m ${String(secs).padStart(2, '0')}s.`);
+            }, 1000);
         }
 
         async function refreshServerAutoSyncStatus() {
@@ -12987,6 +13000,7 @@ async function renderEmailNotesPreview(el, emailId) {
         }
 
         document.addEventListener('DOMContentLoaded', function() {
+            startHardBannerHeartbeat();
             // Wire up login button
             const loginBtn = document.getElementById('loginBtn');
             if (loginBtn) {

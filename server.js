@@ -13472,6 +13472,9 @@ app.listen(PORT, async () => {
   }
 
   // Global background sync for all authenticated users (works even when users are not currently logged in)
+  runAutoSyncForAllUsers('startup-immediate').catch(err => {
+    console.error('[AutoSync] startup immediate run failed:', err?.message || err);
+  });
   setTimeout(() => {
     runAutoSyncForAllUsers('startup').catch(err => {
       console.error('[AutoSync] startup run failed:', err?.message || err);
