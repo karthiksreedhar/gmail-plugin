@@ -244,8 +244,18 @@ window.__categoryChats = window.__categoryChats || {};
                 if (!resp.ok || !data.success) return;
                 const next = data.nextRunAt ? new Date(data.nextRunAt) : null;
                 const nextTxt = next && !Number.isNaN(next.getTime()) ? `server next ${next.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : '';
+                const countTxt = (typeof data.runCount === 'number') ? `runs ${data.runCount}` : '';
                 const runTxt = data.running ? 'server cron running now' : 'server cron idle';
-                serverAutoSyncStatusText = [runTxt, nextTxt].filter(Boolean).join(', ');
+                serverAutoSyncStatusText = [runTxt, countTxt, nextTxt].filter(Boolean).join(', ');
+                if (uiNextSyncAt) {
+                    const remainMs = Math.max(0, uiNextSyncAt - Date.now());
+                    const totalSec = Math.ceil(remainMs / 1000);
+                    const mins = Math.floor(totalSec / 60);
+                    const secs = totalSec % 60;
+                    const mm = String(mins).padStart(2, '0');
+                    const ss = String(secs).padStart(2, '0');
+                    updateAutoSyncBanner(`Next UI update in ${mm}:${ss}.`);
+                }
             } catch (_) {}
         }
 

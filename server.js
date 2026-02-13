@@ -2578,6 +2578,7 @@ const AUTO_SYNC_BACKFILL_COUNT = 50;
 let autoSyncRunning = false;
 let autoSyncLastRunAt = null;
 let autoSyncLastSummary = null;
+let autoSyncRunCount = 0;
 const perUserAutoSyncLocks = new Set();
 
 function getMessageHeader(headers, headerName) {
@@ -3042,6 +3043,7 @@ async function runAutoSyncForAllUsers(reason = 'interval') {
   if (autoSyncRunning) return;
   autoSyncRunning = true;
   autoSyncLastRunAt = new Date().toISOString();
+  autoSyncRunCount += 1;
   try {
     const users = await getAllAutoSyncUsers();
     if (!users.length) {
@@ -3577,7 +3579,8 @@ app.get('/api/auto-sync/status', (req, res) => {
     nextRunAt,
     running: autoSyncRunning,
     lastRunAt: autoSyncLastRunAt,
-    lastSummary: autoSyncLastSummary
+    lastSummary: autoSyncLastSummary,
+    runCount: autoSyncRunCount
   });
 });
 
@@ -3615,9 +3618,11 @@ app.post('/api/auto-sync/purge', async (req, res) => {
       return res.status(400).json({ success: false, error: 'Only full purge is currently supported' });
     }
 
-    const responses = loadResponseEmails() || [];
-    const threads = loadEmailThreads() || [];
-    const unreplied = loadUnrepliedEmails() || [];
+    const normalizedUser = normalizeUserEmailForData(authUser);
+    const paths = getUserPaths(normalizedUser);
+    const responses = await readUserArrayDoc('response_emails', normalizedUser, 'emails', paths.RESPONSE_EMAILS_PATH);
+    const threads = await readUserArrayDoc('email_threads', normalizedUser, 'threads', paths.EMAIL_THREADS_PATH);
+    const unreplied = await readUserArrayDoc('unreplied_emails', normalizedUser, 'emails', paths.UNREPLIED_EMAILS_PATH);
 
     const isAutoSynced = (x) => !!(x && (x.autoSynced || String(x.source || '').toLowerCase() === 'auto-sync-v4'));
     const autoResponseIds = new Set((responses || []).filter(isAutoSynced).map(r => r.id).filter(Boolean));
@@ -3638,9 +3643,9 @@ app.post('/api/auto-sync/purge', async (req, res) => {
       return true;
     });
 
-    await saveResponseEmailsStore(cleanedResponses);
-    await saveEmailThreadsStore(cleanedThreads);
-    await saveUnrepliedEmailsStore(cleanedUnreplied);
+    await writeUserArrayDoc('response_emails', normalizedUser, 'emails', cleanedResponses, paths.RESPONSE_EMAILS_PATH);
+    await writeUserArrayDoc('email_threads', normalizedUser, 'threads', cleanedThreads, paths.EMAIL_THREADS_PATH);
+    await writeUserArrayDoc('unreplied_emails', normalizedUser, 'emails', cleanedUnreplied, paths.UNREPLIED_EMAILS_PATH);
 
     return res.json({
       success: true,
@@ -5896,6 +5901,7 @@ app.put('/api/email/:emailId/category', async (req, res) => {
   try {
     const emailId = req.params.emailId;
     const { category: newCategory } = req.body;
+    const authUser = getAuthenticatedUserEmail(req);
 
     if (!emailId) {
       return res.status(400).json({
@@ -5910,13 +5916,21 @@ app.put('/api/email/:emailId/category', async (req, res) => {
         error: 'Category name is required'
       });
     }
+    if (!authUser) {
+      return res.status(401).json({
+        success: false,
+        error: 'Not authenticated'
+      });
+    }
 
     const trimmedCategory = newCategory.trim();
     console.log(`Updating category for email ${emailId} to: ${trimmedCategory}`);
+    const normalizedUser = normalizeUserEmailForData(authUser);
+    const paths = getUserPaths(normalizedUser);
 
-    // Load existing response emails / threads
-    const existingResponseEmails = loadResponseEmails();
-    const existingEmailThreads = loadEmailThreads();
+    // Load existing response emails / threads for the authenticated user only
+    const existingResponseEmails = await readUserArrayDoc('response_emails', normalizedUser, 'emails', paths.RESPONSE_EMAILS_PATH);
+    const existingEmailThreads = await readUserArrayDoc('email_threads', normalizedUser, 'threads', paths.EMAIL_THREADS_PATH);
     
     // Find the email to update (id first; fallback via thread linkage)
     let emailIndex = existingResponseEmails.findIndex(email => email.id === emailId);
@@ -5951,18 +5965,19 @@ app.put('/api/email/:emailId/category', async (req, res) => {
     // Clear categories array since we're using single category only
     existingResponseEmails[emailIndex].categories = [trimmedCategory];
 
-    // Save updated response emails to MongoDB
-    const paths = getCurrentUserPaths();
     if (!fs.existsSync(paths.USER_DATA_DIR)) {
       fs.mkdirSync(paths.USER_DATA_DIR, { recursive: true });
     }
-    
-    await saveResponseEmailsStore(existingResponseEmails);
+    await writeUserArrayDoc('response_emails', normalizedUser, 'emails', existingResponseEmails, paths.RESPONSE_EMAILS_PATH);
 
     // Update categories list to include new category if it doesn't exist
-    let categoriesList = loadCategoriesList();
+    let categoriesList = await readUserArrayDoc('categories', normalizedUser, 'categories', paths.CATEGORIES_PATH);
     if (!categoriesList || categoriesList.length === 0) {
-      categoriesList = getCurrentCategoriesFromResponses();
+      categoriesList = Array.from(new Set((existingResponseEmails || []).flatMap(e => {
+        if (!e) return [];
+        const cats = Array.isArray(e.categories) && e.categories.length ? e.categories : (e.category ? [e.category] : []);
+        return cats.map(c => String(c || '').trim()).filter(Boolean);
+      })));
     }
     
     const categoryExists = categoriesList.some(
@@ -5971,7 +5986,7 @@ app.put('/api/email/:emailId/category', async (req, res) => {
     
     if (!categoryExists) {
       categoriesList.push(trimmedCategory);
-      await saveCategoriesList(categoriesList);
+      await writeUserArrayDoc('categories', normalizedUser, 'categories', categoriesList, paths.CATEGORIES_PATH);
     }
 
     // Calculate category counts for LHS menu update
@@ -6007,6 +6022,7 @@ app.put('/api/email/:emailId/category', async (req, res) => {
 app.delete('/api/email-thread/:emailId', async (req, res) => {
   try {
     const emailId = req.params.emailId;
+    const authUser = getAuthenticatedUserEmail(req);
 
     if (!emailId) {
       return res.status(400).json({
@@ -6014,13 +6030,21 @@ app.delete('/api/email-thread/:emailId', async (req, res) => {
         error: 'Email ID is required'
       });
     }
+    if (!authUser) {
+      return res.status(401).json({
+        success: false,
+        error: 'Not authenticated'
+      });
+    }
 
     console.log(`Deleting email thread with ID: ${emailId}`);
+    const normalizedUser = normalizeUserEmailForData(authUser);
+    const paths = getUserPaths(normalizedUser);
 
     // Load existing data
-    const existingResponseEmails = loadResponseEmails();
-    const existingEmailThreads = loadEmailThreads();
-    const existingUnrepliedEmails = loadUnrepliedEmails() || [];
+    const existingResponseEmails = await readUserArrayDoc('response_emails', normalizedUser, 'emails', paths.RESPONSE_EMAILS_PATH);
+    const existingEmailThreads = await readUserArrayDoc('email_threads', normalizedUser, 'threads', paths.EMAIL_THREADS_PATH);
+    const existingUnrepliedEmails = await readUserArrayDoc('unreplied_emails', normalizedUser, 'emails', paths.UNREPLIED_EMAILS_PATH);
 
     // Find the email to delete from responses (source of truth for subject/originalFrom/date)
     // Fallback: if caller passed a thread id, resolve to responseId.
@@ -6125,17 +6149,15 @@ app.delete('/api/email-thread/:emailId', async (req, res) => {
 
     // Save updated data back to files
     try {
-      const paths = getCurrentUserPaths();
-
       // Ensure data directory exists
       if (!fs.existsSync(paths.USER_DATA_DIR)) {
         fs.mkdirSync(paths.USER_DATA_DIR, { recursive: true });
       }
 
       // Save updated stores to MongoDB
-      await saveResponseEmailsStore(updatedResponseEmails);
-      await saveEmailThreadsStore(updatedEmailThreads);
-      await saveUnrepliedEmailsStore(updatedUnrepliedEmails);
+      await writeUserArrayDoc('response_emails', normalizedUser, 'emails', updatedResponseEmails, paths.RESPONSE_EMAILS_PATH);
+      await writeUserArrayDoc('email_threads', normalizedUser, 'threads', updatedEmailThreads, paths.EMAIL_THREADS_PATH);
+      await writeUserArrayDoc('unreplied_emails', normalizedUser, 'emails', updatedUnrepliedEmails, paths.UNREPLIED_EMAILS_PATH);
 
       console.log(`Successfully deleted email across stores: ${emailToDelete.subject}`);
 
