@@ -3056,14 +3056,23 @@ async function runAutoSyncForAllUsers(reason = 'interval') {
       results.push(out);
     }
     const added = results.reduce((sum, r) => sum + (Number(r?.added) || 0), 0);
-    const failed = results.filter(r => !r?.success).length;
+    const failedResults = results.filter(r => !r?.success);
+    const failed = failedResults.length;
+    const failures = failedResults.map(r => ({
+      userEmail: r?.userEmail || 'unknown',
+      reason: r?.reason || 'unknown error'
+    }));
     autoSyncLastSummary = {
       reason,
       usersProcessed: users.length,
       added,
       failed,
+      failures,
       timestamp: new Date().toISOString()
     };
+    if (failures.length) {
+      failures.forEach(f => console.error(`[AutoSync] user=${f.userEmail} failed: ${f.reason}`));
+    }
     console.log(`[AutoSync] reason=${reason} users=${users.length} added=${added} failed=${failed}`);
   } catch (e) {
     autoSyncLastSummary = {
