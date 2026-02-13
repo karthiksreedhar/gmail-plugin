@@ -2579,45 +2579,6 @@ let autoSyncRunning = false;
 let autoSyncLastRunAt = null;
 let autoSyncLastSummary = null;
 const perUserAutoSyncLocks = new Set();
-let userContextLockBusy = false;
-const userContextLockQueue = [];
-
-function acquireUserContextLock() {
-  return new Promise(resolve => {
-    if (!userContextLockBusy) {
-      userContextLockBusy = true;
-      resolve();
-      return;
-    }
-    userContextLockQueue.push(resolve);
-  });
-}
-
-function releaseUserContextLock() {
-  const next = userContextLockQueue.shift();
-  if (next) {
-    next();
-    return;
-  }
-  userContextLockBusy = false;
-}
-
-async function runWithUserContext(userEmail, fn) {
-  const normalizedEmail = normalizeUserEmailForData(userEmail);
-  await acquireUserContextLock();
-  const prevCurrentUser = CURRENT_USER_EMAIL;
-  const prevSendingEmail = SENDING_EMAIL;
-  try {
-    CURRENT_USER_EMAIL = normalizedEmail;
-    SENDING_EMAIL = normalizedEmail;
-    await warmCacheForUser(normalizedEmail);
-    return await fn();
-  } finally {
-    CURRENT_USER_EMAIL = prevCurrentUser;
-    SENDING_EMAIL = prevSendingEmail;
-    releaseUserContextLock();
-  }
-}
 
 function getMessageHeader(headers, headerName) {
   const list = Array.isArray(headers) ? headers : [];
@@ -2728,64 +2689,101 @@ function pickCurrentCategoriesForUser(rawCategories) {
 async function classifySyncedEmailsWithV4ForUser(userEmail, candidates) {
   const list = Array.isArray(candidates) ? candidates : [];
   if (!list.length) return { categoriesX: CANONICAL_CATEGORIES.slice(), byId: {} };
+  const normalizedEmail = normalizeUserEmailForData(userEmail);
+  const paths = getUserPaths(normalizedEmail);
 
-  return runWithUserContext(userEmail, async () => {
-    const categoriesX = __getCategoriesList();
-    const byId = {};
-    if (!process.env.OPENAI_API_KEY || !BASE_URL) {
-      const otherCat = categoriesX.find(c => normalizeKey(c) === 'other') || 'Other';
-      list.forEach(e => { byId[e.id] = { category: otherCat, explanation: 'OPENAI_API_KEY missing; defaulted to Other' }; });
-      return { categoriesX, byId };
-    }
+  const responses = await readUserArrayDoc('response_emails', normalizedEmail, 'emails', paths.RESPONSE_EMAILS_PATH);
+  const categoriesRaw = await readUserArrayDoc('categories', normalizedEmail, 'categories', paths.CATEGORIES_PATH);
+  const summariesDoc = await getUserDoc('category_summaries', normalizedEmail).catch(() => null);
+  const guidelinesDoc = await getUserDoc('category_guidelines', normalizedEmail).catch(() => null);
 
-    let modelResults = {};
-    try {
-      const resp = await fetch(`${BASE_URL}/api/classifier-v4/suggest-batch`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          emails: list.map(e => ({
-            id: e.id,
-            subject: e.subject || '',
-            body: e.body || e.snippet || '',
-            from: e.from || ''
-          }))
-        })
-      });
-      if (resp.ok) {
-        const data = await resp.json().catch(() => ({}));
-        modelResults = (data && typeof data.results === 'object' && data.results) ? data.results : {};
-      }
-    } catch (_) {}
+  const derivedCategories = Array.from(new Set((responses || []).flatMap(r => {
+    if (!r) return [];
+    const cats = Array.isArray(r.categories) ? r.categories : (r.category ? [r.category] : []);
+    return cats.map(c => String(c || '').trim()).filter(Boolean);
+  })));
 
-    const otherCat = categoriesX.find(c => normalizeKey(c) === 'other') || 'Other';
-    for (const e of list) {
-      const r = modelResults[e.id] || {};
-      const suggestionRaw = String(r.suggestion || '').trim();
-      const mappedSuggestion = suggestionRaw
-        ? (matchToCurrentCategory(suggestionRaw, categoriesX) || suggestionRaw)
-        : '';
+  const categoriesX = (() => {
+    const fromSaved = Array.isArray(categoriesRaw) ? categoriesRaw.map(c => String(c || '').trim()).filter(Boolean) : [];
+    const base = fromSaved.length ? fromSaved : derivedCategories;
+    if (!base.length) return CANONICAL_CATEGORIES.slice();
+    return Array.from(new Set(base));
+  })();
 
-      let category = mappedSuggestion;
-      if (!category) {
-        const contenders = Array.isArray(r.contenders) ? r.contenders.filter(c => normalizeKey(c) !== 'other') : [];
-        const mappedContender = contenders
-          .map(c => matchToCurrentCategory(c, categoriesX) || c)
-          .find(Boolean);
-        category = mappedContender || otherCat;
-      }
-
-      const rationaleFromCategory = (r.rationales && typeof r.rationales === 'object' && typeof r.rationales[category] === 'string')
-        ? r.rationales[category]
-        : '';
-      byId[e.id] = {
-        category,
-        explanation: String(r.explanation || rationaleFromCategory || '').trim()
-      };
-    }
-
+  const byId = {};
+  const otherCat = categoriesX.find(c => normalizeKey(c) === 'other') || 'Other';
+  if (!process.env.OPENAI_API_KEY) {
+    list.forEach(e => { byId[e.id] = { category: otherCat, explanation: 'OPENAI_API_KEY missing; defaulted to Other' }; });
     return { categoriesX, byId };
-  });
+  }
+
+  const perCatRows = (() => {
+    const map = new Map();
+    for (const c of categoriesX) map.set(c, []);
+    for (const e of (responses || [])) {
+      if (!e) continue;
+      const cats = Array.isArray(e.categories) && e.categories.length ? e.categories : (e.category ? [e.category] : []);
+      for (const rawName of cats) {
+        const mapped = matchToCurrentCategory(rawName, categoriesX) || rawName;
+        if (!mapped || !map.has(mapped)) continue;
+        map.get(mapped).push({
+          id: e.id,
+          category: mapped,
+          subject: e.subject || '',
+          from: e.originalFrom || e.from || '',
+          snippet: e.snippet || '',
+          body: e.body || ''
+        });
+      }
+    }
+    return Array.from(map.entries()).map(([category, rows]) => ({ category, rows }));
+  })();
+
+  const summaries = (summariesDoc && typeof summariesDoc.summaries === 'object') ? summariesDoc.summaries : {};
+  const guidelinesMap = (guidelinesDoc && Array.isArray(guidelinesDoc.categories))
+    ? Object.fromEntries(guidelinesDoc.categories.map(c => [c.name, c.notes || '']))
+    : {};
+
+  const MAX = 20;
+  const BATCH = list.length < 20 ? 1 : Math.ceil(list.length / 20);
+  const modelResults = {};
+  for (let i = 0; i < list.length; i += BATCH) {
+    const batch = list.slice(i, i + BATCH).map(e => ({
+      id: e.id,
+      subject: e.subject || '',
+      body: e.body || e.snippet || '',
+      from: e.from || ''
+    }));
+    const out = await __v3OpenAIBatchLabel(batch, categoriesX, perCatRows, summaries, guidelinesMap, MAX);
+    Object.assign(modelResults, out || {});
+  }
+
+  for (const e of list) {
+    const r = modelResults[e.id] || {};
+    const suggestionRaw = String(r.suggestion || '').trim();
+    const mappedSuggestion = suggestionRaw
+      ? (matchToCurrentCategory(suggestionRaw, categoriesX) || suggestionRaw)
+      : '';
+
+    let category = mappedSuggestion;
+    if (!category) {
+      const contenders = Array.isArray(r.contenders) ? r.contenders.filter(c => normalizeKey(c) !== 'other') : [];
+      const mappedContender = contenders
+        .map(c => matchToCurrentCategory(c, categoriesX) || c)
+        .find(Boolean);
+      category = mappedContender || otherCat;
+    }
+
+    const rationaleFromCategory = (r.rationales && typeof r.rationales === 'object' && typeof r.rationales[category] === 'string')
+      ? r.rationales[category]
+      : '';
+    byId[e.id] = {
+      category,
+      explanation: String(r.explanation || rationaleFromCategory || '').trim()
+    };
+  }
+
+  return { categoriesX, byId };
 }
 
 function isOlderThan24Hours(dateLike) {

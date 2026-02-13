@@ -142,9 +142,11 @@
         const UI_AUTO_SYNC_INTERVAL_MS = 5 * 60 * 1000;
         let uiAutoSyncTimer = null;
         let uiAutoSyncCountdownTimer = null;
+        let uiAutoSyncStatusTimer = null;
         let uiNextSyncAt = null;
         let uiAutoSyncInFlight = false;
         let isAuthenticatedUser = false;
+        let serverAutoSyncStatusText = '';
         window.currentUserDisplayName = window.currentUserDisplayName || '';
 window.__categoryChats = window.__categoryChats || {};
         function displayNameFromEmail(email) {
@@ -198,13 +200,14 @@ window.__categoryChats = window.__categoryChats || {};
         function updateAutoSyncBanner(text, isError = false) {
             const banner = document.getElementById('autoSyncBanner');
             if (!banner) return;
+            const mergedText = [text, serverAutoSyncStatusText].filter(Boolean).join(' | ');
             if (!text) {
                 banner.style.display = 'none';
                 banner.textContent = '';
                 return;
             }
             banner.style.display = 'block';
-            banner.textContent = text;
+            banner.textContent = mergedText || text;
             if (isError) {
                 banner.style.background = '#fdecea';
                 banner.style.color = '#8b1a1a';
@@ -225,7 +228,25 @@ window.__categoryChats = window.__categoryChats || {};
                 clearInterval(uiAutoSyncCountdownTimer);
                 uiAutoSyncCountdownTimer = null;
             }
+            if (uiAutoSyncStatusTimer) {
+                clearInterval(uiAutoSyncStatusTimer);
+                uiAutoSyncStatusTimer = null;
+            }
+            serverAutoSyncStatusText = '';
             uiNextSyncAt = null;
+        }
+
+        async function refreshServerAutoSyncStatus() {
+            if (!isAuthenticatedUser) return;
+            try {
+                const resp = await fetch('/api/auto-sync/status');
+                const data = await resp.json();
+                if (!resp.ok || !data.success) return;
+                const next = data.nextRunAt ? new Date(data.nextRunAt) : null;
+                const nextTxt = next && !Number.isNaN(next.getTime()) ? `server next ${next.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : '';
+                const runTxt = data.running ? 'server cron running now' : 'server cron idle';
+                serverAutoSyncStatusText = [runTxt, nextTxt].filter(Boolean).join(', ');
+            } catch (_) {}
         }
 
         function startUiAutoSyncCountdown() {
@@ -273,6 +294,10 @@ window.__categoryChats = window.__categoryChats || {};
             updateAutoSyncBanner('UI updating in 5 minutes.');
             uiNextSyncAt = Date.now() + UI_AUTO_SYNC_INTERVAL_MS;
             startUiAutoSyncCountdown();
+            refreshServerAutoSyncStatus();
+            uiAutoSyncStatusTimer = setInterval(() => {
+                refreshServerAutoSyncStatus();
+            }, 30000);
             uiAutoSyncTimer = setInterval(() => {
                 triggerUiAutoSync('ui-interval');
             }, UI_AUTO_SYNC_INTERVAL_MS);
