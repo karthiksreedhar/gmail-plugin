@@ -478,22 +478,7 @@ function resolveOAuthRedirectUriForRequest(req) {
   if (!oauthConfiguredRedirectUri) {
     return requestScopedRedirect || `${BASE_URL}/api/auth/callback`;
   }
-
-  // In production, prefer the current deployment host if configured redirect host differs.
-  // This avoids cross-app redirects when GOOGLE_REDIRECT_URI points at another Vercel app.
-  if (requestScopedRedirect && process.env.NODE_ENV === 'production') {
-    try {
-      const configuredHost = new URL(oauthConfiguredRedirectUri).host;
-      const requestHost = new URL(requestScopedRedirect).host;
-      if (configuredHost !== requestHost) {
-        console.warn(`GOOGLE_REDIRECT_URI host (${configuredHost}) differs from request host (${requestHost}); using request host callback.`);
-        return requestScopedRedirect;
-      }
-    } catch (_) {
-      return requestScopedRedirect;
-    }
-  }
-
+  // Always honor configured redirect URI when present. Google requires exact-match URIs.
   return oauthConfiguredRedirectUri;
 }
 
