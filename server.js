@@ -408,27 +408,35 @@ function getSeedProgressForUser(email) {
 async function initializeGmailAPI() {
   try {
     const paths = getCurrentUserPaths();
-    
-    // Load OAuth credentials - check user-specific path first, then fallback to root
-    let credentialsPath = paths.OAUTH_KEYS_PATH;
-    if (!fs.existsSync(credentialsPath)) {
-      // Fallback to root directory for backward compatibility
-      const rootCredentialsPath = path.join(__dirname, 'gcp-oauth.keys.json');
-      if (fs.existsSync(rootCredentialsPath)) {
-        credentialsPath = rootCredentialsPath;
-        console.log(`Using OAuth keys from root directory for user ${CURRENT_USER_EMAIL}`);
-      } else {
-        console.warn(`OAuth keys file not found for user ${CURRENT_USER_EMAIL}. Gmail API will not be available.`);
-        return false;
-      }
+    const envClientId = process.env.GOOGLE_CLIENT_ID;
+    const envClientSecret = process.env.GOOGLE_CLIENT_SECRET;
+    const envRedirectUri = process.env.GOOGLE_REDIRECT_URI;
+
+    if (envClientId && envClientSecret && envRedirectUri) {
+      gmailAuth = new google.auth.OAuth2(envClientId, envClientSecret, envRedirectUri);
+      console.log(`Using GOOGLE_* environment variables for OAuth (${CURRENT_USER_EMAIL})`);
     } else {
-      console.log(`Using user-specific OAuth keys for ${CURRENT_USER_EMAIL}`);
+      // Load OAuth credentials - check user-specific path first, then fallback to root
+      let credentialsPath = paths.OAUTH_KEYS_PATH;
+      if (!fs.existsSync(credentialsPath)) {
+        // Fallback to root directory for backward compatibility
+        const rootCredentialsPath = path.join(__dirname, 'gcp-oauth.keys.json');
+        if (fs.existsSync(rootCredentialsPath)) {
+          credentialsPath = rootCredentialsPath;
+          console.log(`Using OAuth keys from root directory for user ${CURRENT_USER_EMAIL}`);
+        } else {
+          console.warn(`OAuth credentials missing for ${CURRENT_USER_EMAIL}. Set GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET/GOOGLE_REDIRECT_URI or upload gcp-oauth.keys.json.`);
+          return false;
+        }
+      } else {
+        console.log(`Using user-specific OAuth keys for ${CURRENT_USER_EMAIL}`);
+      }
+
+      const credentials = JSON.parse(fs.readFileSync(credentialsPath, 'utf8'));
+      const { client_id, client_secret, redirect_uris } = credentials.installed || credentials.web;
+
+      gmailAuth = new google.auth.OAuth2(client_id, client_secret, redirect_uris[0]);
     }
-
-    const credentials = JSON.parse(fs.readFileSync(credentialsPath, 'utf8'));
-    const { client_id, client_secret, redirect_uris } = credentials.installed || credentials.web;
-
-    gmailAuth = new google.auth.OAuth2(client_id, client_secret, redirect_uris[0]);
 
     // Load existing tokens if available
     if (fs.existsSync(paths.TOKENS_PATH)) {
@@ -2835,8 +2843,8 @@ app.get('/api/auth/login', (req, res) => {
   });
 });
 
-// OAuth2 callback handler
-app.get('/oauth2callback', async (req, res) => {
+// OAuth2 callback handler (supports both /oauth2callback and /api/auth/callback)
+async function handleOAuthCallback(req, res) {
   try {
     const { code, error } = req.query;
 
@@ -2903,7 +2911,10 @@ app.get('/oauth2callback', async (req, res) => {
       </html>
     `);
   }
-});
+}
+
+app.get('/oauth2callback', handleOAuthCallback);
+app.get('/api/auth/callback', handleOAuthCallback);
 
 // Logout endpoint: clear session and redirect to login
 app.get('/api/auth/logout', (req, res) => {
