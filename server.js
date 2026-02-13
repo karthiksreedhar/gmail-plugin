@@ -2737,7 +2737,7 @@ async function classifySyncedEmailsWithV4ForUser(userEmail, candidates) {
         });
       }
     }
-    return Array.from(map.entries()).map(([category, rows]) => ({ category, rows }));
+    return map;
   })();
 
   const summaries = (summariesDoc && typeof summariesDoc.summaries === 'object') ? summariesDoc.summaries : {};
