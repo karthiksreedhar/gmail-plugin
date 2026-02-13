@@ -3576,6 +3576,7 @@ app.get('/api/auto-sync/status', (req, res) => {
   return res.json({
     success: true,
     runtime: process.env.VERCEL ? 'vercel' : 'local',
+    scheduler: process.env.VERCEL ? 'vercel-cron' : 'local-interval',
     hostname: process.env.VERCEL_URL || process.env.HOSTNAME || 'unknown',
     now: new Date().toISOString(),
     intervalMs: AUTO_SYNC_INTERVAL_MS,
@@ -3585,6 +3586,25 @@ app.get('/api/auto-sync/status', (req, res) => {
     lastSummary: autoSyncLastSummary,
     runCount: autoSyncRunCount
   });
+});
+
+// Vercel Cron endpoint (runs every 5 minutes via vercel.json)
+app.get('/api/cron/auto-sync', async (req, res) => {
+  try {
+    await runAutoSyncForAllUsers('vercel-cron');
+    return res.json({
+      success: true,
+      reason: 'vercel-cron',
+      ranAt: new Date().toISOString(),
+      summary: autoSyncLastSummary
+    });
+  } catch (e) {
+    return res.status(500).json({
+      success: false,
+      reason: 'vercel-cron',
+      error: e?.message || 'Cron run failed'
+    });
+  }
 });
 
 app.post('/api/auto-sync/run', async (req, res) => {
@@ -13459,14 +13479,12 @@ app.get('/', async (req, res) => {
   return res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-// Start server
-app.listen(PORT, async () => {
+async function bootServer() {
   console.log(`Server running on ${BASE_URL}`);
   console.log(`Current user: ${CURRENT_USER_EMAIL}`);
   console.log(`Data directory: ${getCurrentUserPaths().USER_DATA_DIR}`);
   console.log(`Loaded ${emailMemory.scenarios.length} scenarios, ${emailMemory.refinements.length} refinements, ${emailMemory.savedGenerations.length} saved generations`);
-  
-  // Initialize Gmail API on startup
+
   const gmailInitialized = await initializeGmailAPI();
   if (gmailInitialized) {
     console.log('Gmail API ready for use');
@@ -13474,20 +13492,37 @@ app.listen(PORT, async () => {
     console.log('Gmail API requires authentication - visit /api/auth to authenticate');
   }
 
-  // Global background sync for all authenticated users (works even when users are not currently logged in)
-  runAutoSyncForAllUsers('startup-immediate').catch(err => {
-    console.error('[AutoSync] startup immediate run failed:', err?.message || err);
+  if (!process.env.VERCEL) {
+    // Local long-running process: keep interval scheduler.
+    runAutoSyncForAllUsers('startup-immediate').catch(err => {
+      console.error('[AutoSync] startup immediate run failed:', err?.message || err);
+    });
+    setTimeout(() => {
+      runAutoSyncForAllUsers('startup').catch(err => {
+        console.error('[AutoSync] startup run failed:', err?.message || err);
+      });
+    }, 15000);
+    setInterval(() => {
+      runAutoSyncForAllUsers('interval').catch(err => {
+        console.error('[AutoSync] interval run failed:', err?.message || err);
+      });
+    }, AUTO_SYNC_INTERVAL_MS);
+    console.log(`[AutoSync] Local scheduler every ${Math.round(AUTO_SYNC_INTERVAL_MS / 60000)} minutes`);
+  } else {
+    // Vercel serverless: scheduling is done by /api/cron/auto-sync cron invocation.
+    console.log('[AutoSync] Vercel runtime detected; waiting for Vercel Cron to invoke /api/cron/auto-sync');
+  }
+}
+
+if (!process.env.VERCEL) {
+  app.listen(PORT, async () => {
+    await bootServer();
   });
-  setTimeout(() => {
-    runAutoSyncForAllUsers('startup').catch(err => {
-      console.error('[AutoSync] startup run failed:', err?.message || err);
-    });
-  }, 15000);
-  setInterval(() => {
-    runAutoSyncForAllUsers('interval').catch(err => {
-      console.error('[AutoSync] interval run failed:', err?.message || err);
-    });
-  }, AUTO_SYNC_INTERVAL_MS);
-  console.log(`[AutoSync] Scheduled every ${Math.round(AUTO_SYNC_INTERVAL_MS / 60000)} minutes`);
-});
-// test
+} else {
+  // Trigger one-time cold-start initialization for serverless runtime.
+  bootServer().catch(err => {
+    console.error('[Boot] Vercel boot failed:', err?.message || err);
+  });
+}
+
+module.exports = app;
