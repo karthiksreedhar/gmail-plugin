@@ -257,6 +257,21 @@ function getCurrentUserPaths() {
   return getUserPaths(CURRENT_USER_EMAIL);
 }
 
+// Align global user context from authenticated request identity.
+// This is required for serverless invocations where process globals may
+// reset between the OAuth callback request and subsequent API requests.
+app.use((req, res, next) => {
+  try {
+    const authUser = getAuthenticatedUserEmail(req);
+    if (authUser) {
+      const normalizedEmail = normalizeUserEmailForData(authUser);
+      CURRENT_USER_EMAIL = normalizedEmail;
+      SENDING_EMAIL = normalizedEmail;
+    }
+  } catch (_) {}
+  return next();
+});
+
 async function loadStoredTokensForUser(userEmail) {
   const normalizedEmail = normalizeUserEmailForData(userEmail);
   try {
