@@ -2921,6 +2921,64 @@
     <!-- Feature extension point: modals container -->
     <div id="feature-modals"></div>
 
+    <script>
+        // Fallback banner updater (independent from app.js).
+        // Ensures the user always sees "Next update in X minutes" text.
+        (function () {
+            const INTERVAL_MS = 5 * 60 * 1000;
+            let nextUiUpdateAt = Date.now() + INTERVAL_MS;
+            let serverStatusText = '';
+
+            function getBanner() {
+                return document.getElementById('autoSyncBanner');
+            }
+
+            function renderBanner() {
+                const banner = getBanner();
+                if (!banner) return;
+                const remainMs = Math.max(0, nextUiUpdateAt - Date.now());
+                const totalSec = Math.ceil(remainMs / 1000);
+                const mins = Math.floor(totalSec / 60);
+                const secs = totalSec % 60;
+                const left = `Next update in ${mins}m ${String(secs).padStart(2, '0')}s.`;
+                const text = serverStatusText ? `${left} | ${serverStatusText}` : left;
+                banner.textContent = text;
+                banner.style.display = 'block';
+                banner.style.color = '#1a3f8b';
+                banner.style.background = '#e8f0fe';
+                banner.style.borderBottom = '1px solid #c7d7ff';
+            }
+
+            async function refreshServerStatus() {
+                try {
+                    const res = await fetch('/api/auto-sync/status', { cache: 'no-store' });
+                    const data = await res.json();
+                    if (res.ok && data && data.success) {
+                        const runTxt = data.running ? 'server cron running now' : 'server cron idle';
+                        const countTxt = typeof data.runCount === 'number' ? `runs ${data.runCount}` : '';
+                        serverStatusText = [runTxt, countTxt].filter(Boolean).join(', ');
+                    } else {
+                        serverStatusText = 'server cron status unavailable';
+                    }
+                } catch (_) {
+                    serverStatusText = 'server cron status unavailable';
+                }
+                renderBanner();
+            }
+
+            document.addEventListener('DOMContentLoaded', function () {
+                renderBanner();
+                setInterval(function () {
+                    if (Date.now() >= nextUiUpdateAt) {
+                        nextUiUpdateAt = Date.now() + INTERVAL_MS;
+                    }
+                    renderBanner();
+                }, 1000);
+                refreshServerStatus();
+                setInterval(refreshServerStatus, 15000);
+            });
+        })();
+    </script>
     <script src="app.js"></script>
 </body>
 </html>
