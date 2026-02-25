@@ -20,14 +20,22 @@ let getDb = () => { throw new Error('DB module unavailable'); };
 let setUserDoc = async () => false;
 let dbModuleLoadError = null;
 try {
-  const dbModule = require('../db');
+  const dbModule = require('./db');
   initMongo = dbModule.initMongo;
   getUserDoc = dbModule.getUserDoc;
   getDb = dbModule.getDb;
   setUserDoc = dbModule.setUserDoc;
 } catch (error) {
-  dbModuleLoadError = error;
-  console.error('DB module failed to load:', error.message);
+  try {
+    const dbModule = require('../db');
+    initMongo = dbModule.initMongo;
+    getUserDoc = dbModule.getUserDoc;
+    getDb = dbModule.getDb;
+    setUserDoc = dbModule.setUserDoc;
+  } catch (fallbackError) {
+    dbModuleLoadError = fallbackError;
+    console.error('DB module failed to load:', fallbackError.message);
+  }
 }
 
 // =====================================================
