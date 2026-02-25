@@ -2770,7 +2770,9 @@
                 <button class="refresh-btn" onclick="window.location.href='/seed.html'" title="Seed initial categories from important inbox">Seed Categories</button>
                 <button class="generate-btn" onclick="openTestClassifier()" title="Run classifier evaluation on labeled emails">Test Classifier</button>
                 <!-- Feature extension point: header actions -->
-                <div id="feature-header-actions" style="display:flex; gap:12px;"></div>
+                <div id="feature-header-actions" style="display:flex; gap:12px;">
+                    <button id="openFeatureGeneratorBtn" class="generate-btn" type="button" title="Open feature generator">Open Feature Generator</button>
+                </div>
             </div>
             <div class="header-buttons">
                 <button class="view-saved-generations-btn" onclick="showViewSavedGenerationsModal()">View Saved Generations</button>

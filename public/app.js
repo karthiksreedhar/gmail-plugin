@@ -136,6 +136,16 @@
             }
         }
 
+        function openFeatureGenerator() {
+            try {
+                const configuredUrl = localStorage.getItem('featureGeneratorUrl');
+                const targetUrl = configuredUrl || 'http://localhost:5000';
+                window.open(targetUrl, '_blank', 'noopener');
+            } catch (error) {
+                console.error('Failed to open feature generator:', error);
+            }
+        }
+
         let allEmails = [];
         let currentFilter = 'all';
         let currentCategoriesOrder = [];
@@ -13003,6 +13013,10 @@ async function renderEmailNotesPreview(el, emailId) {
 
         document.addEventListener('DOMContentLoaded', function() {
             startHardBannerHeartbeat();
+            const openFeatureGeneratorBtn = document.getElementById('openFeatureGeneratorBtn');
+            if (openFeatureGeneratorBtn) {
+                openFeatureGeneratorBtn.addEventListener('click', openFeatureGenerator);
+            }
             // Wire up login button
             const loginBtn = document.getElementById('loginBtn');
             if (loginBtn) {

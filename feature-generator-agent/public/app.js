@@ -321,7 +321,17 @@ async function handleSend() {
             selectFile('manifest.json');
           }
           
-          showToast('Files generated successfully!', 'success');
+          if (data.publish && data.publish.success) {
+            const publishMsg = data.publish.message || 'Published to main app';
+            addMessage('assistant', `Published feature \`${data.featureId}\` to the main app.\n\n${publishMsg}\n\nRefresh your main email app tab to load the updated feature files.`);
+            showToast('Generated and published to main app', 'success');
+          } else if (data.publish && !data.publish.success) {
+            const err = data.publish.error || 'Publish failed';
+            addMessage('assistant', `Feature files were generated, but publishing to the main app failed.\n\nError: ${err}\n\nYou can still download the ZIP and install manually.`);
+            showToast(`Generated, but publish failed: ${err}`, 'warning');
+          } else {
+            showToast('Files generated successfully!', 'success');
+          }
         }
       }
     } else {

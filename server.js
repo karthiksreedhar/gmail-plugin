@@ -32,16 +32,73 @@ const BASE_URL = process.env.BASE_URL || `http://localhost:${PORT}`;
  * Each feature can register API routes, UI components, and hooks
  */
 const loadedFeatures = [];
+const FEATURE_PUBLISH_TOKEN = String(process.env.FEATURE_PUBLISH_TOKEN || '').trim();
+const FEATURE_PUBLISH_ALLOW_LOCAL_NO_TOKEN =
+  String(process.env.FEATURE_PUBLISH_ALLOW_LOCAL_NO_TOKEN || 'true').toLowerCase() === 'true';
 
-function initializeFeatures() {
-  const featuresDir = path.join(__dirname, 'data', 'features');
-  
-  // Check if features directory exists
-  if (!fs.existsSync(featuresDir)) {
-    console.log('Features directory not found - skipping feature loading');
-    return;
+function getFeatureBaseDir() {
+  return path.join(__dirname, 'data', 'features');
+}
+
+function getAppRouterStack() {
+  return app?._router?.stack || null;
+}
+
+function clearRequireCache(modulePath) {
+  try {
+    const resolved = require.resolve(modulePath);
+    delete require.cache[resolved];
+  } catch (_) {}
+}
+
+function unloadAllFeatures() {
+  const stack = getAppRouterStack();
+  const removableLayers = [];
+
+  for (let i = loadedFeatures.length - 1; i >= 0; i--) {
+    const feature = loadedFeatures[i];
+    try {
+      if (feature.backendModule && typeof feature.backendModule.teardown === 'function') {
+        feature.backendModule.teardown(feature.featureContext || {});
+      }
+    } catch (error) {
+      console.error(`Feature teardown failed for ${feature.id || feature.name}:`, error.message);
+    }
+
+    if (Array.isArray(feature.addedLayers) && feature.addedLayers.length > 0) {
+      removableLayers.push(...feature.addedLayers);
+    }
+    if (feature.backendPath) {
+      clearRequireCache(feature.backendPath);
+    }
   }
 
+  if (stack && removableLayers.length > 0) {
+    for (const layer of removableLayers) {
+      const idx = stack.indexOf(layer);
+      if (idx !== -1) {
+        stack.splice(idx, 1);
+      }
+    }
+  }
+
+  loadedFeatures.length = 0;
+}
+
+function initializeFeatures(options = {}) {
+  const shouldReload = !!options.reload;
+  const featuresDir = getFeatureBaseDir();
+
+  if (shouldReload) {
+    unloadAllFeatures();
+  }
+
+  if (!fs.existsSync(featuresDir)) {
+    console.log('Features directory not found - skipping feature loading');
+    return { loadedCount: 0 };
+  }
+
+  let loadedCount = 0;
   try {
     const featureDirs = fs.readdirSync(featuresDir, { withFileTypes: true })
       .filter(dirent => dirent.isDirectory())
@@ -53,8 +110,6 @@ function initializeFeatures() {
       try {
         const featurePath = path.join(featuresDir, featureName);
         const manifestPath = path.join(featurePath, 'manifest.json');
-        
-        // Skip if no manifest
         if (!fs.existsSync(manifestPath)) {
           console.log(`Skipping ${featureName} - no manifest.json found`);
           return;
@@ -63,16 +118,14 @@ function initializeFeatures() {
         const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
         console.log(`Loading feature: ${manifest.name || featureName} (${manifest.version || '1.0.0'})`);
 
-        // Create feature context with access to server resources
         const featureContext = {
           app,
           express,
-          gmail: () => gmail, // Lazy getter since gmail may not be initialized yet
+          gmail: () => gmail,
           gmailAuth: () => gmailAuth,
           openai,
           fs,
           path,
-          // Database helpers
           getUserDoc,
           setUserDoc,
           loadEmailData,
@@ -84,26 +137,28 @@ function initializeFeatures() {
           saveNotes,
           loadCategoriesList,
           saveCategoriesList,
-          // Email processing helpers
           searchGmailEmails,
           getGmailEmail,
           cleanResponseBody,
           categorizeEmail,
           writeClassifierLog,
-          // Current user context
           getCurrentUser: () => CURRENT_USER_EMAIL,
           getCurrentUserPaths,
-          // Utility functions
           getDisplayNameForUser,
           normalizeUserEmailForData
         };
 
-        // Load backend if specified
+        const stack = getAppRouterStack();
+        const beforeLayers = stack ? stack.slice() : [];
+        let backendModule = null;
+        let backendPath = null;
+
         if (manifest.backend) {
-          const backendPath = path.join(featurePath, manifest.backend);
+          backendPath = path.join(featurePath, manifest.backend);
           if (fs.existsSync(backendPath)) {
             try {
-              const backendModule = require(backendPath);
+              clearRequireCache(backendPath);
+              backendModule = require(backendPath);
               if (typeof backendModule.initialize === 'function') {
                 backendModule.initialize(featureContext);
                 console.log(`  ✓ Backend initialized for ${featureName}`);
@@ -114,15 +169,22 @@ function initializeFeatures() {
           }
         }
 
-        // Track loaded feature
+        const afterLayers = stack ? stack.slice() : [];
+        const addedLayers = afterLayers.filter(layer => !beforeLayers.includes(layer));
+
         loadedFeatures.push({
           id: manifest.id || featureName,
           name: manifest.name || featureName,
           version: manifest.version || '1.0.0',
           manifest,
-          path: featurePath
+          path: featurePath,
+          backendPath,
+          backendModule,
+          featureContext,
+          addedLayers
         });
 
+        loadedCount += 1;
         console.log(`  ✓ Feature ${manifest.name || featureName} loaded successfully`);
       } catch (error) {
         console.error(`Failed to load feature ${featureName}:`, error.message);
@@ -130,9 +192,41 @@ function initializeFeatures() {
     });
 
     console.log(`Successfully loaded ${loadedFeatures.length} features`);
+    return { loadedCount };
   } catch (error) {
     console.error('Error initializing features:', error);
+    return { loadedCount };
   }
+}
+
+function shouldAllowFeaturePublish(req) {
+  const tokenFromHeader = String(req.get('x-feature-publish-token') || '');
+  if (FEATURE_PUBLISH_TOKEN) {
+    return tokenFromHeader && tokenFromHeader === FEATURE_PUBLISH_TOKEN;
+  }
+  if (!FEATURE_PUBLISH_ALLOW_LOCAL_NO_TOKEN) {
+    return false;
+  }
+  const ip = String(req.ip || req.connection?.remoteAddress || '');
+  return ip === '127.0.0.1' || ip === '::1' || ip.endsWith('127.0.0.1');
+}
+
+function sanitizeFeatureId(rawFeatureId) {
+  const featureId = String(rawFeatureId || '').trim();
+  if (!featureId) return null;
+  if (!/^[a-zA-Z0-9._-]+$/.test(featureId)) return null;
+  return featureId;
+}
+
+function resolveFeatureFilePath(featureDir, relativeFilePath) {
+  const rel = String(relativeFilePath || '').trim().replace(/\\/g, '/');
+  if (!rel || rel.startsWith('/') || rel.includes('\0')) return null;
+  const normalized = path.normalize(rel);
+  if (normalized.startsWith('..') || path.isAbsolute(normalized)) return null;
+  const fullPath = path.resolve(featureDir, normalized);
+  const featureDirResolved = path.resolve(featureDir) + path.sep;
+  if (!fullPath.startsWith(featureDirResolved)) return null;
+  return fullPath;
 }
 
 // API endpoint to list loaded features
@@ -162,6 +256,72 @@ app.use(session({
   saveUninitialized: false,
   cookie: { secure: process.env.NODE_ENV === 'production', httpOnly: true, maxAge: 24 * 60 * 60 * 1000 } // 1 day
 }));
+
+// Publish or update generated features and reload feature plugins at runtime.
+app.post('/api/feature-management/publish', (req, res) => {
+  try {
+    if (!shouldAllowFeaturePublish(req)) {
+      return res.status(401).json({
+        success: false,
+        error: 'Unauthorized feature publish request'
+      });
+    }
+
+    const featureId = sanitizeFeatureId(req.body?.featureId);
+    const files = req.body?.files;
+    if (!featureId) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid or missing featureId'
+      });
+    }
+    if (!files || typeof files !== 'object' || Array.isArray(files) || Object.keys(files).length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'files must be a non-empty object of filepath -> content'
+      });
+    }
+
+    const featuresDir = getFeatureBaseDir();
+    const featureDir = path.join(featuresDir, featureId);
+    fs.mkdirSync(featureDir, { recursive: true });
+
+    const writtenFiles = [];
+    for (const [relativePath, rawContent] of Object.entries(files)) {
+      if (typeof rawContent !== 'string') {
+        return res.status(400).json({
+          success: false,
+          error: `Content for file "${relativePath}" must be a string`
+        });
+      }
+      const targetPath = resolveFeatureFilePath(featureDir, relativePath);
+      if (!targetPath) {
+        return res.status(400).json({
+          success: false,
+          error: `Invalid feature file path: ${relativePath}`
+        });
+      }
+      fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+      fs.writeFileSync(targetPath, rawContent, 'utf8');
+      writtenFiles.push(path.relative(featureDir, targetPath).replace(/\\/g, '/'));
+    }
+
+    const { loadedCount } = initializeFeatures({ reload: true });
+    return res.json({
+      success: true,
+      message: `Published ${writtenFiles.length} files for feature ${featureId}`,
+      featureId,
+      writtenFiles,
+      loadedFeaturesCount: loadedCount
+    });
+  } catch (error) {
+    console.error('Feature publish failed:', error);
+    return res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to publish feature'
+    });
+  }
+});
 
 function getAuthenticatedUserEmail(req) {
   const fromSession = req?.session?.userEmail;

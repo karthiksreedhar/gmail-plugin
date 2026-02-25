@@ -193,6 +193,8 @@ async function getUserDocWithLogging(collection, userEmail, logger) {
 
 const app = express();
 const PORT = process.env.PORT || 5000;
+const MAIN_SYSTEM_BASE_URL = String(process.env.MAIN_SYSTEM_BASE_URL || 'http://localhost:3000').replace(/\/+$/, '');
+const FEATURE_PUBLISH_TOKEN = String(process.env.FEATURE_PUBLISH_TOKEN || '').trim();
 
 // Initialize MongoDB connection
 let mongoInitialized = false;
@@ -239,6 +241,44 @@ function getSession(sessionId) {
   const session = sessions.get(sessionId);
   session.lastAccess = Date.now();
   return { session, isNew: false };
+}
+
+async function publishFeatureToMainSystem(featureId, files) {
+  if (!featureId || !files || typeof files !== 'object') {
+    return { success: false, error: 'Missing featureId or files for publish' };
+  }
+
+  const endpoint = `${MAIN_SYSTEM_BASE_URL}/api/feature-management/publish`;
+  const headers = { 'Content-Type': 'application/json' };
+  if (FEATURE_PUBLISH_TOKEN) {
+    headers['x-feature-publish-token'] = FEATURE_PUBLISH_TOKEN;
+  }
+
+  try {
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ featureId, files })
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !data.success) {
+      return {
+        success: false,
+        status: response.status,
+        error: data.error || `Publish failed with status ${response.status}`
+      };
+    }
+    return {
+      success: true,
+      message: data.message || 'Published successfully',
+      writtenFiles: data.writtenFiles || []
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error.message || 'Publish request failed'
+    };
+  }
 }
 
 // API Routes
@@ -318,13 +358,16 @@ app.post('/api/chat', async (req, res) => {
     // Update session with generated files
     session.generatedFiles = result.files;
     
+    const publishResult = await publishFeatureToMainSystem(session.featureId, session.generatedFiles);
+
     // Add assistant response to history
     session.chatHistory.push({
       role: 'assistant',
       content: result.response,
       timestamp: Date.now(),
       filesGenerated: Object.keys(result.files),
-      filesUpdated: result.updatedFiles || []
+      filesUpdated: result.updatedFiles || [],
+      publish: publishResult
     });
 
     res.json({
@@ -334,7 +377,8 @@ app.post('/api/chat', async (req, res) => {
       featureId: result.featureId,
       files: result.files,
       updatedFiles: result.updatedFiles || [],
-      isRefinement
+      isRefinement,
+      publish: publishResult
     });
 
   } catch (error) {
