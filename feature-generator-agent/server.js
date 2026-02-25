@@ -212,10 +212,13 @@ const FEATURE_PUBLISH_TOKEN = String(process.env.FEATURE_PUBLISH_TOKEN || '').tr
 
 // Initialize MongoDB connection
 let mongoInitialized = false;
+let mongoInitError = null;
 initMongo().then(() => {
   mongoInitialized = true;
+  mongoInitError = null;
   console.log('MongoDB connected for Email Chat');
 }).catch(err => {
+  mongoInitError = err;
   console.error('MongoDB connection failed:', err.message);
 });
 
@@ -1234,7 +1237,9 @@ app.post('/api/email-chat', async (req, res) => {
   if (!mongoInitialized) {
     return res.status(503).json({
       success: false,
-      error: 'Database connection not ready. Please try again in a moment.'
+      error: mongoInitError
+        ? `Database unavailable: ${mongoInitError.message}`
+        : 'Database connection not ready. Please try again in a moment.'
     });
   }
   
@@ -1374,7 +1379,9 @@ app.post('/api/email-chat-category-suggestions', async (req, res) => {
   if (!mongoInitialized) {
     return res.status(503).json({
       success: false,
-      error: 'Database connection not ready'
+      error: mongoInitError
+        ? `Database unavailable: ${mongoInitError.message}`
+        : 'Database connection not ready'
     });
   }
   
@@ -1552,7 +1559,9 @@ app.post('/api/email-chat-confirm', async (req, res) => {
   if (!mongoInitialized) {
     return res.status(503).json({
       success: false,
-      error: 'Database connection not ready'
+      error: mongoInitError
+        ? `Database unavailable: ${mongoInitError.message}`
+        : 'Database connection not ready'
     });
   }
   
@@ -1648,7 +1657,9 @@ app.post('/api/category-suggestions', async (req, res) => {
   if (!mongoInitialized) {
     return res.status(503).json({
       success: false,
-      error: 'Database connection not ready'
+      error: mongoInitError
+        ? `Database unavailable: ${mongoInitError.message}`
+        : 'Database connection not ready'
     });
   }
   
@@ -1802,6 +1813,7 @@ app.get('/api/health', (req, res) => {
     status: 'healthy',
     activeSessions: sessions.size,
     mongoConnected: mongoInitialized,
+    mongoInitError: mongoInitError ? mongoInitError.message : null,
     dbModuleLoaded: !dbModuleLoadError,
     dbModuleError: dbModuleLoadError ? dbModuleLoadError.message : null,
     timestamp: new Date().toISOString()
