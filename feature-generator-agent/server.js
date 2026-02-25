@@ -13,8 +13,22 @@ const { v4: uuidv4 } = require('uuid');
 const { FeatureGeneratorAgent } = require('./agent');
 const { ChatAnthropic } = require('@langchain/anthropic');
 
-// Import database module from parent directory
-const { initMongo, getUserDoc, getDb, setUserDoc } = require('../db');
+// Import database module from parent directory (graceful fallback in serverless if unavailable)
+let initMongo = async () => { throw new Error('DB module unavailable'); };
+let getUserDoc = async () => null;
+let getDb = () => { throw new Error('DB module unavailable'); };
+let setUserDoc = async () => false;
+let dbModuleLoadError = null;
+try {
+  const dbModule = require('../db');
+  initMongo = dbModule.initMongo;
+  getUserDoc = dbModule.getUserDoc;
+  getDb = dbModule.getDb;
+  setUserDoc = dbModule.setUserDoc;
+} catch (error) {
+  dbModuleLoadError = error;
+  console.error('DB module failed to load:', error.message);
+}
 
 // =====================================================
 // OPERATIONS LOGGING INFRASTRUCTURE
@@ -1788,6 +1802,8 @@ app.get('/api/health', (req, res) => {
     status: 'healthy',
     activeSessions: sessions.size,
     mongoConnected: mongoInitialized,
+    dbModuleLoaded: !dbModuleLoadError,
+    dbModuleError: dbModuleLoadError ? dbModuleLoadError.message : null,
     timestamp: new Date().toISOString()
   });
 });
