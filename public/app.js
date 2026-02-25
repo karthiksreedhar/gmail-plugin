@@ -136,10 +136,32 @@
             }
         }
 
-        function openFeatureGenerator() {
+        let resolvedFeatureGeneratorUrl = null;
+
+        async function getFeatureGeneratorUrl() {
+            if (resolvedFeatureGeneratorUrl) return resolvedFeatureGeneratorUrl;
             try {
-                const configuredUrl = localStorage.getItem('featureGeneratorUrl');
-                const targetUrl = configuredUrl || 'http://localhost:5000';
+                const resp = await fetch('/api/config/feature-generator-url');
+                const data = await resp.json();
+                if (resp.ok && data && data.success && data.url) {
+                    resolvedFeatureGeneratorUrl = String(data.url).trim();
+                    return resolvedFeatureGeneratorUrl;
+                }
+            } catch (_) {}
+
+            const configuredUrl = localStorage.getItem('featureGeneratorUrl');
+            if (configuredUrl) {
+                resolvedFeatureGeneratorUrl = configuredUrl;
+                return resolvedFeatureGeneratorUrl;
+            }
+
+            resolvedFeatureGeneratorUrl = 'http://localhost:5000';
+            return resolvedFeatureGeneratorUrl;
+        }
+
+        async function openFeatureGenerator() {
+            try {
+                const targetUrl = await getFeatureGeneratorUrl();
                 window.open(targetUrl, '_blank', 'noopener');
             } catch (error) {
                 console.error('Failed to open feature generator:', error);

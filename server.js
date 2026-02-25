@@ -25,6 +25,7 @@ const PORT = parseInt(process.env.PORT, 10) || 3000;
 
 // Base URL for internal API calls (supports deployment environments)
 const BASE_URL = process.env.BASE_URL || `http://localhost:${PORT}`;
+const FEATURE_GENERATOR_URL = String(process.env.FEATURE_GENERATOR_URL || '').trim();
 
 /**
  * FEATURE PLUGIN SYSTEM
@@ -239,6 +240,14 @@ app.get('/api/features', (req, res) => {
       version: f.version,
       description: f.manifest.description || ''
     }))
+  });
+});
+
+// Client config endpoint for hosted feature-generator URL
+app.get('/api/config/feature-generator-url', (req, res) => {
+  res.json({
+    success: true,
+    url: FEATURE_GENERATOR_URL || null
   });
 });
 
