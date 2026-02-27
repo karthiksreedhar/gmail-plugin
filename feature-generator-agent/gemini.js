@@ -5,7 +5,7 @@ function getGeminiApiKey() {
 }
 
 function getGeminiModel() {
-  return String(process.env.GEMINI_MODEL || 'gemini-1.5-pro').trim();
+  return String(process.env.GEMINI_MODEL || 'gemini-1.5-flash').trim();
 }
 
 function normalizeText(content) {
@@ -15,13 +15,73 @@ function normalizeText(content) {
   return String(content);
 }
 
+function normalizeModelName(name) {
+  return String(name || '').trim().replace(/^models\//, '');
+}
+
+let cachedGenerateModels = null;
+let cachedGenerateModelsAt = 0;
+const MODELS_CACHE_TTL_MS = 5 * 60 * 1000;
+
+async function listGenerateContentModels(apiKey, forceRefresh = false) {
+  const now = Date.now();
+  if (!forceRefresh && cachedGenerateModels && (now - cachedGenerateModelsAt) < MODELS_CACHE_TTL_MS) {
+    return cachedGenerateModels;
+  }
+
+  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(apiKey)}`;
+  const response = await fetch(endpoint, { method: 'GET' });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const apiMessage = data?.error?.message || `ListModels failed with status ${response.status}`;
+    throw new Error(apiMessage);
+  }
+
+  const models = Array.isArray(data?.models) ? data.models : [];
+  const supported = models
+    .filter(m => Array.isArray(m?.supportedGenerationMethods) && m.supportedGenerationMethods.includes('generateContent'))
+    .map(m => normalizeModelName(m.name))
+    .filter(Boolean);
+
+  cachedGenerateModels = supported;
+  cachedGenerateModelsAt = now;
+  return supported;
+}
+
+async function resolveGeminiModel(apiKey, preferredModel, forceRefresh = false) {
+  const preferred = normalizeModelName(preferredModel || getGeminiModel());
+  const fallbackOrder = [
+    preferred,
+    'gemini-2.0-flash',
+    'gemini-2.0-flash-lite',
+    'gemini-1.5-flash',
+    'gemini-1.5-pro',
+    'gemini-pro'
+  ]
+    .map(normalizeModelName)
+    .filter(Boolean);
+
+  try {
+    const available = await listGenerateContentModels(apiKey, forceRefresh);
+    if (available.length === 0) {
+      return preferred || 'gemini-1.5-flash';
+    }
+    for (const candidate of fallbackOrder) {
+      if (available.includes(candidate)) return candidate;
+    }
+    return available[0];
+  } catch (_) {
+    return preferred || 'gemini-1.5-flash';
+  }
+}
+
 async function invokeGemini({ messages, model, temperature = 0.2, maxOutputTokens = 2048 }) {
   const apiKey = getGeminiApiKey();
   if (!apiKey) {
     throw new Error('Missing Gemini API key. Set GEMINI_API_KEY (or GOOGLE_API_KEY).');
   }
 
-  const chosenModel = model || getGeminiModel();
+  let chosenModel = await resolveGeminiModel(apiKey, model);
   const systemParts = [];
   const contents = [];
 
@@ -52,13 +112,29 @@ async function invokeGemini({ messages, model, temperature = 0.2, maxOutputToken
     body.systemInstruction = { parts: systemParts };
   }
 
-  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(chosenModel)}:generateContent?key=${encodeURIComponent(apiKey)}`;
-  const response = await fetch(endpoint, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body)
-  });
-  const data = await response.json().catch(() => ({}));
+  async function runGenerateContent(targetModel) {
+    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(targetModel)}:generateContent?key=${encodeURIComponent(apiKey)}`;
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    const data = await response.json().catch(() => ({}));
+    return { response, data, targetModel };
+  }
+
+  let { response, data, targetModel } = await runGenerateContent(chosenModel);
+  if (!response.ok) {
+    const message = String(data?.error?.message || '');
+    const modelError = /not found|not supported|unsupported/i.test(message);
+    if (modelError) {
+      const retryModel = await resolveGeminiModel(apiKey, '', true);
+      if (retryModel && retryModel !== chosenModel) {
+        ({ response, data, targetModel } = await runGenerateContent(retryModel));
+      }
+    }
+  }
+
   if (!response.ok) {
     const apiMessage = data?.error?.message || `Gemini request failed with status ${response.status}`;
     throw new Error(apiMessage);
@@ -69,7 +145,7 @@ async function invokeGemini({ messages, model, temperature = 0.2, maxOutputToken
     ? parts.map(p => p?.text || '').join('\n').trim()
     : '';
 
-  return { content: text };
+  return { content: text, model: targetModel };
 }
 
 module.exports = {
