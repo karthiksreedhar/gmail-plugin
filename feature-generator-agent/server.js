@@ -1,6 +1,6 @@
 /**
  * Feature Generator Agent Server
- * Express server for generating Gmail Plugin features using LangChain + Anthropic
+ * Express server for generating Gmail Plugin features using Gemini
  * Also supports Email Chat mode for querying email data
  */
 
@@ -11,7 +11,7 @@ const path = require('path');
 const archiver = require('archiver');
 const { v4: uuidv4 } = require('uuid');
 const { FeatureGeneratorAgent } = require('./agent');
-const { ChatAnthropic } = require('@langchain/anthropic');
+const { invokeGemini, getGeminiModel } = require('./gemini');
 
 // Import database module from parent directory (graceful fallback in serverless if unavailable)
 let initMongo = async () => { throw new Error('DB module unavailable'); };
@@ -1279,22 +1279,21 @@ app.post('/api/email-chat', async (req, res) => {
       .replace('{{DATA_CONTEXT}}', dataContext);
     
     // Create chat model
-    const modelName = 'claude-opus-4-20250514';
-    const model = new ChatAnthropic({
-      modelName,
-      anthropicApiKey: process.env.ANTHROPIC_API_KEY,
-      temperature: 0.7,
-      maxTokens: 2000
-    });
+    const modelName = getGeminiModel();
     
     // Call the model and track timing
     const apiStartTime = Date.now();
     let response;
     try {
-      response = await model.invoke([
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: message }
-      ]);
+      response = await invokeGemini({
+        model: modelName,
+        temperature: 0.7,
+        maxOutputTokens: 2000,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: message }
+        ]
+      });
       
       const apiDuration = Date.now() - apiStartTime;
       
@@ -1306,7 +1305,7 @@ app.post('/api/email-chat', async (req, res) => {
     } catch (apiError) {
       const apiDuration = Date.now() - apiStartTime;
       logger.logApiCall(modelName, 0, 0, apiDuration, false, apiError, systemPrompt, message, null);
-      logger.logError('Anthropic API call', apiError);
+      logger.logError('Gemini API call', apiError);
       throw apiError;
     }
     
@@ -1704,13 +1703,7 @@ app.post('/api/category-suggestions', async (req, res) => {
     }
     
     // Use AI to analyze these emails and suggest category assignments
-    const modelName = 'claude-opus-4-20250514';
-    const model = new ChatAnthropic({
-      modelName,
-      anthropicApiKey: process.env.ANTHROPIC_API_KEY,
-      temperature: 0.3,
-      maxTokens: 3000
-    });
+    const modelName = getGeminiModel();
     
     // Create prompt for AI category suggestion
     const analysisPrompt = `You are analyzing emails currently categorized as "Other" to suggest better category assignments.
@@ -1769,9 +1762,14 @@ IMPORTANT:
     const apiStartTime = Date.now();
     let aiResponse;
     try {
-      aiResponse = await model.invoke([
-        { role: 'user', content: analysisPrompt }
-      ]);
+      aiResponse = await invokeGemini({
+        model: modelName,
+        temperature: 0.3,
+        maxOutputTokens: 3000,
+        messages: [
+          { role: 'user', content: analysisPrompt }
+        ]
+      });
       
       const apiDuration = Date.now() - apiStartTime;
       const inputTokens = Math.ceil(analysisPrompt.length / 4);

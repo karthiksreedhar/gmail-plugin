@@ -1,19 +1,22 @@
 /**
  * Feature Generator Agent
- * LangChain-based agent for generating Gmail Plugin features
+ * Gemini-based agent for generating Gmail Plugin features
  */
 
-const { ChatAnthropic } = require('@langchain/anthropic');
-const { HumanMessage, SystemMessage, AIMessage } = require('@langchain/core/messages');
 const { systemPrompt, refinementPrompt } = require('./prompts/system');
+const { invokeGemini, getGeminiModel } = require('../gemini');
 
 class FeatureGeneratorAgent {
   constructor() {
-    this.model = new ChatAnthropic({
-      anthropicApiKey: process.env.ANTHROPIC_API_KEY,
-      modelName: 'claude-opus-4-20250514',
-      temperature: 0.2, // Lower for more consistent code generation
-      maxTokens: 8192
+    this.modelName = getGeminiModel();
+  }
+
+  async invoke(messages, temperature = 0.2, maxOutputTokens = 8192) {
+    return invokeGemini({
+      messages,
+      model: this.modelName,
+      temperature,
+      maxOutputTokens
     });
   }
 
@@ -84,8 +87,8 @@ class FeatureGeneratorAgent {
     console.log('\n🔧 Starting feature refinement...');
 
     const messages = [
-      new SystemMessage(refinementPrompt),
-      new HumanMessage(`
+      { role: 'system', content: refinementPrompt },
+      { role: 'user', content: `
 Current Feature ID: ${featureId}
 
 Current Files:
@@ -108,10 +111,10 @@ Respond in this JSON format:
     ...only include files that need changes
   }
 }
-`)
+`}
     ];
 
-    const result = await this.model.invoke(messages);
+    const result = await this.invoke(messages);
     
     // Parse the response
     let parsed;
@@ -169,7 +172,7 @@ Respond in this JSON format:
    */
   async analyzeRequest(featureRequest) {
     const messages = [
-      new SystemMessage(`You are an expert at analyzing feature requests for a Gmail Plugin system.
+      { role: 'system', content: `You are an expert at analyzing feature requests for a Gmail Plugin system.
 Analyze the request and output ONLY a JSON object with these fields:
 {
   "featureId": "lowercase-with-hyphens ID for the feature",
@@ -179,11 +182,11 @@ Analyze the request and output ONLY a JSON object with these fields:
   "needsFrontend": true/false (does it need UI components, buttons, or user interaction?),
   "permissions": ["list of permissions needed: emails:read, emails:write, api:custom"]
 }
-Output ONLY the JSON, no other text.`),
-      new HumanMessage(featureRequest)
+Output ONLY the JSON, no other text.` },
+      { role: 'user', content: featureRequest }
     ];
 
-    const result = await this.model.invoke(messages);
+    const result = await this.invoke(messages, 0.2, 2048);
     
     try {
       const content = result.content;
@@ -236,8 +239,8 @@ Output ONLY the JSON, no other text.`),
    */
   async generateBackend(analysis, featureRequest) {
     const messages = [
-      new SystemMessage(systemPrompt),
-      new HumanMessage(`Generate ONLY the backend.js file for this feature:
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: `Generate ONLY the backend.js file for this feature:
 
 Feature ID: ${analysis.featureId}
 Feature Name: ${analysis.featureName}
@@ -254,10 +257,10 @@ Requirements:
 5. Include proper console logging with the feature name prefix
 6. Return consistent JSON response format: { success: boolean, data?: any, error?: string }
 
-Output ONLY the JavaScript code, no markdown code blocks, no explanation.`)
+Output ONLY the JavaScript code, no markdown code blocks, no explanation.` }
     ];
 
-    const result = await this.model.invoke(messages);
+    const result = await this.invoke(messages);
     return this.cleanCodeResponse(result.content);
   }
 
@@ -266,8 +269,8 @@ Output ONLY the JavaScript code, no markdown code blocks, no explanation.`)
    */
   async generateFrontend(analysis, featureRequest) {
     const messages = [
-      new SystemMessage(systemPrompt),
-      new HumanMessage(`Generate ONLY the frontend.js file for this feature:
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: `Generate ONLY the frontend.js file for this feature:
 
 Feature ID: ${analysis.featureId}
 Feature Name: ${analysis.featureName}
@@ -287,10 +290,10 @@ Requirements:
 8. Include proper console logging with feature name prefix
 9. Listen to events as needed: API.on('emailsLoaded', callback)
 
-Output ONLY the JavaScript code, no markdown code blocks, no explanation.`)
+Output ONLY the JavaScript code, no markdown code blocks, no explanation.` }
     ];
 
-    const result = await this.model.invoke(messages);
+    const result = await this.invoke(messages);
     return this.cleanCodeResponse(result.content);
   }
 
@@ -302,9 +305,9 @@ Output ONLY the JavaScript code, no markdown code blocks, no explanation.`)
     const hasFrontend = !!files['frontend.js'];
 
     const messages = [
-      new SystemMessage(`You are a technical documentation writer. Generate a comprehensive README.md for a Gmail Plugin feature.
-Use proper markdown formatting with headers, code blocks, and lists.`),
-      new HumanMessage(`Generate a README.md for this feature:
+      { role: 'system', content: `You are a technical documentation writer. Generate a comprehensive README.md for a Gmail Plugin feature.
+Use proper markdown formatting with headers, code blocks, and lists.` },
+      { role: 'user', content: `Generate a README.md for this feature:
 
 Feature ID: ${analysis.featureId}
 Feature Name: ${analysis.featureName}
@@ -328,10 +331,10 @@ ${hasBackend ? '6. ## API Endpoints - Document all endpoints with request/respon
 ${hasFrontend ? `${hasBackend ? '7' : '6'}. ## UI Components - Describe the UI elements added` : ''}
 7. ## Troubleshooting - Common issues and solutions
 
-Output ONLY the markdown content, no code blocks wrapping it.`)
+Output ONLY the markdown content, no code blocks wrapping it.` }
     ];
 
-    const result = await this.model.invoke(messages);
+    const result = await this.invoke(messages, 0.2, 4096);
     return result.content.trim();
   }
 
