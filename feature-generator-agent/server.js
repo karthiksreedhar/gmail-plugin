@@ -230,6 +230,28 @@ initMongo().then(() => {
   console.error('MongoDB connection failed:', err.message);
 });
 
+let mongoInitPromise = null;
+async function ensureMongoReady() {
+  if (mongoInitialized) return true;
+  if (!mongoInitPromise) {
+    mongoInitPromise = initMongo()
+      .then(() => {
+        mongoInitialized = true;
+        mongoInitError = null;
+        return true;
+      })
+      .catch((err) => {
+        mongoInitError = err;
+        throw err;
+      })
+      .finally(() => {
+        mongoInitPromise = null;
+      });
+  }
+  await mongoInitPromise;
+  return true;
+}
+
 // Middleware
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
@@ -713,8 +735,12 @@ Remember: You're analyzing real email data. Be accurate and helpful! When making
 
 // Helper to load user email data (with optional logging)
 async function loadUserEmailData(userEmail, logger = null) {
+  try {
+    await ensureMongoReady();
+  } catch (_) {}
+
   if (!mongoInitialized) {
-    throw new Error('Database not connected');
+    throw new Error(mongoInitError ? `Database unavailable: ${mongoInitError.message}` : 'Database not connected');
   }
   
   const data = {};
@@ -1242,6 +1268,10 @@ app.post('/api/email-chat', async (req, res) => {
     });
   }
   
+  try {
+    await ensureMongoReady();
+  } catch (_) {}
+
   if (!mongoInitialized) {
     return res.status(503).json({
       success: false,
@@ -1383,6 +1413,10 @@ app.post('/api/email-chat-category-suggestions', async (req, res) => {
     });
   }
   
+  try {
+    await ensureMongoReady();
+  } catch (_) {}
+
   if (!mongoInitialized) {
     return res.status(503).json({
       success: false,
@@ -1563,6 +1597,10 @@ app.post('/api/email-chat-confirm', async (req, res) => {
     });
   }
   
+  try {
+    await ensureMongoReady();
+  } catch (_) {}
+
   if (!mongoInitialized) {
     return res.status(503).json({
       success: false,
@@ -1661,6 +1699,10 @@ app.post('/api/category-suggestions', async (req, res) => {
   // Initialize operations logger
   const logger = new OperationsLogger();
   
+  try {
+    await ensureMongoReady();
+  } catch (_) {}
+
   if (!mongoInitialized) {
     return res.status(503).json({
       success: false,
