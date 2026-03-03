@@ -798,7 +798,17 @@ async function exchangeAuthCodeForTokens(code) {
 
 async function finalizeLoginForUser(userEmail, tokens) {
   const normalizedEmail = normalizeUserEmailForData(userEmail);
-  const tokensSaved = await saveStoredTokensForUser(normalizedEmail, tokens);
+  let finalTokens = tokens || {};
+  // Google often omits refresh_token on subsequent consent flows.
+  // Preserve existing refresh_token if we already have one on file.
+  if (!finalTokens.refresh_token) {
+    const existing = await loadStoredTokensForUser(normalizedEmail);
+    if (existing && existing.refresh_token) {
+      finalTokens = { ...existing, ...finalTokens, refresh_token: existing.refresh_token };
+    }
+  }
+
+  const tokensSaved = await saveStoredTokensForUser(normalizedEmail, finalTokens);
   if (!tokensSaved) {
     throw new Error(`Failed to persist OAuth tokens for ${normalizedEmail}`);
   }
