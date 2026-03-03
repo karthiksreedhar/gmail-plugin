@@ -799,10 +799,37 @@ async function loadUserEmailData(userEmail, logger = null) {
 // Format email data as context for the AI
 function formatEmailDataContext(data) {
   const lines = [];
+
+  // Category counts summary derived from response_emails (authoritative for UI category badges)
+  if (data.responseEmails && data.responseEmails.length > 0) {
+    const categoryCounts = {};
+    for (const email of data.responseEmails) {
+      const categories = Array.isArray(email?.categories) && email.categories.length
+        ? email.categories
+        : [email?.category || 'Uncategorized'];
+      for (const cat of categories) {
+        const name = String(cat || '').trim() || 'Uncategorized';
+        categoryCounts[name] = (categoryCounts[name] || 0) + 1;
+      }
+    }
+    const sortedCategoryCounts = Object.entries(categoryCounts)
+      .sort((a, b) => b[1] - a[1]);
+    const categoriesWithEmails = sortedCategoryCounts.filter(([, count]) => count > 0);
+
+    lines.push(`**Category Counts (from response_emails):**`);
+    if (categoriesWithEmails.length === 0) {
+      lines.push('- No categories currently have emails.');
+    } else {
+      lines.push(`- Total categories with >=1 email: ${categoriesWithEmails.length}`);
+      for (const [name, count] of categoriesWithEmails) {
+        lines.push(`- ${name}: ${count}`);
+      }
+    }
+  }
   
   // Categories overview
   if (data.categories && data.categories.length > 0) {
-    lines.push(`**Categories (${data.categories.length}):** ${data.categories.join(', ')}`);
+    lines.push(`\n**Categories (${data.categories.length}):** ${data.categories.join(', ')}`);
   }
   
   // Category guidelines
