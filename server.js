@@ -2758,6 +2758,13 @@ function getAutoSyncLockAgeMs(userEmail) {
   return Math.max(0, Date.now() - startedAt);
 }
 
+function clearAutoSyncLockForUser(userEmail) {
+  const normalized = normalizeUserEmailForData(userEmail);
+  const existed = perUserAutoSyncLocks.has(normalized);
+  perUserAutoSyncLocks.delete(normalized);
+  return existed;
+}
+
 function getMessageHeader(headers, headerName) {
   const list = Array.isArray(headers) ? headers : [];
   const hit = list.find(h => String(h?.name || '').toLowerCase() === String(headerName || '').toLowerCase());
@@ -3824,6 +3831,11 @@ app.post('/api/auto-sync/run', async (req, res) => {
     autoSyncLastRunAt = new Date().toISOString();
     autoSyncRunCount += 1;
     const normalizedEmail = normalizeUserEmailForData(authUser);
+    const force = !!(req.body && req.body.force);
+    let clearedLock = false;
+    if (force) {
+      clearedLock = clearAutoSyncLockForUser(normalizedEmail);
+    }
     const result = await syncUserInboxFromGmail(normalizedEmail, { forceBackfill: false });
     autoSyncLastSummary = {
       reason: (req.body && req.body.reason) || 'manual',
@@ -3836,6 +3848,8 @@ app.post('/api/auto-sync/run', async (req, res) => {
     return res.json({
       success: !!result?.success,
       result,
+      force,
+      clearedLock,
       intervalMs: AUTO_SYNC_INTERVAL_MS,
       nextSuggestedRunAt: new Date(Date.now() + AUTO_SYNC_INTERVAL_MS).toISOString()
     });
