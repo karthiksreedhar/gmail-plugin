@@ -2822,6 +2822,12 @@ async function buildGmailClientForUser(userEmail) {
   const auth = new google.auth.OAuth2(oauth.clientId, oauth.clientSecret, oauth.redirectUri);
   auth.setCredentials(tokens);
 
+  const expiryMs = Number(tokens?.expiry_date || 0);
+  const hasRefreshToken = !!tokens?.refresh_token;
+  if (expiryMs > 0 && Date.now() >= expiryMs && !hasRefreshToken) {
+    return { gmailClient: null, reason: 'token_expired_no_refresh_token' };
+  }
+
   // Best-effort token refresh. If refresh fails, caller treats this user as skipped.
   try {
     await auth.getAccessToken();
@@ -2974,16 +2980,10 @@ async function classifySyncedEmailsWithV4ForUser(userEmail, candidates) {
   return { categoriesX, byId };
 }
 
-function isOlderThan24Hours(dateLike) {
-  const d = new Date(dateLike);
-  if (!(d instanceof Date) || Number.isNaN(d.getTime())) return true;
-  return (Date.now() - d.getTime()) > (24 * 60 * 60 * 1000);
-}
-
-function getLatestThreadDateFromStore(threads) {
+function getLatestDateFromItems(items) {
   let latest = null;
-  for (const t of (Array.isArray(threads) ? threads : [])) {
-    const d = new Date(t?.date || 0);
+  for (const item of (Array.isArray(items) ? items : [])) {
+    const d = new Date(item?.date || 0);
     if (!Number.isNaN(d.getTime()) && (!latest || d > latest)) latest = d;
   }
   return latest;
@@ -2997,14 +2997,14 @@ function withTimeout(promise, timeoutMs, label) {
   return Promise.race([promise, timeoutPromise]);
 }
 
-async function fetchInboxCandidatesForUser(gmailClient, latestStoredDate, forceBackfill) {
+async function fetchInboxCandidatesForUser(gmailClient, latestStoredDate) {
   const candidates = [];
   const seenMessageIds = new Set();
   const PER_PAGE = 100;
   const CAP = 50;
 
   let query = 'in:inbox';
-  if (!forceBackfill && latestStoredDate) {
+  if (latestStoredDate) {
     const sinceSec = Math.max(0, Math.floor(latestStoredDate.getTime() / 1000) - 120);
     query = `in:inbox after:${sinceSec}`;
   }
@@ -3060,7 +3060,11 @@ async function fetchInboxCandidatesForUser(gmailClient, latestStoredDate, forceB
         const headers = msg?.payload?.headers || [];
         const subject = getMessageHeader(headers, 'Subject') || 'No Subject';
         const from = getMessageHeader(headers, 'From') || 'Unknown Sender';
-        const date = getMessageHeader(headers, 'Date') || new Date(Number(msg?.internalDate || Date.now())).toISOString();
+        const headerDate = getMessageHeader(headers, 'Date');
+        const parsedHeaderDate = new Date(headerDate || 0);
+        const parsedDate = !Number.isNaN(parsedHeaderDate.getTime())
+          ? parsedHeaderDate
+          : new Date(Number(msg?.internalDate || Date.now()));
         const body = extractEmailBody(msg?.payload) || msg?.snippet || '';
         const snippet = msg?.snippet || (body ? String(body).slice(0, 100) + (String(body).length > 100 ? '...' : '') : 'No content available');
         const webUrl = (() => {
@@ -3078,7 +3082,7 @@ async function fetchInboxCandidatesForUser(gmailClient, latestStoredDate, forceB
           threadId: String(ref.threadId || ref.id),
           subject,
           from,
-          date: new Date(date).toISOString(),
+          date: parsedDate.toISOString(),
           body: body || 'No content available',
           snippet,
           webUrl
@@ -3091,8 +3095,15 @@ async function fetchInboxCandidatesForUser(gmailClient, latestStoredDate, forceB
 
   await Promise.all(Array.from({ length: workerCount }, () => worker()));
 
-  candidates.sort((a, b) => new Date(b.date) - new Date(a.date));
-  return candidates.length > CAP ? candidates.slice(0, CAP) : candidates;
+  const filtered = latestStoredDate
+    ? candidates.filter(c => {
+        const d = new Date(c?.date || 0);
+        return !Number.isNaN(d.getTime()) && d > latestStoredDate;
+      })
+    : candidates;
+
+  filtered.sort((a, b) => new Date(b.date) - new Date(a.date));
+  return filtered.length > CAP ? filtered.slice(0, CAP) : filtered;
 }
 
 async function syncUserInboxFromGmail(userEmail, opts = {}) {
@@ -3142,16 +3153,20 @@ async function syncUserInboxFromGmail(userEmail, opts = {}) {
 
     const existingResponseIds = new Set((responses || []).map(r => r && r.id).filter(Boolean));
     const existingThreadIds = new Set((threads || []).map(t => t && t.id).filter(Boolean));
-    const latestStoredDate = getLatestThreadDateFromStore(threads);
-    const forceBackfill = !!opts.forceBackfill || !latestStoredDate || isOlderThan24Hours(latestStoredDate);
+    const latestResponseDate = getLatestDateFromItems(responses);
+    const latestThreadDate = getLatestDateFromItems(threads);
+    const latestStoredDate = (() => {
+      if (latestResponseDate && latestThreadDate) return latestResponseDate > latestThreadDate ? latestResponseDate : latestThreadDate;
+      return latestResponseDate || latestThreadDate || null;
+    })();
 
-    const candidates = await fetchInboxCandidatesForUser(gmailClient, latestStoredDate, forceBackfill);
+    const candidates = await fetchInboxCandidatesForUser(gmailClient, latestStoredDate);
     if (!candidates.length) {
       return {
         success: true,
         userEmail: normalizedEmail,
         skipped: false,
-        forceBackfill,
+        latestStoredDate: latestStoredDate ? latestStoredDate.toISOString() : null,
         fetched: 0,
         added: 0
       };
@@ -3246,7 +3261,7 @@ async function syncUserInboxFromGmail(userEmail, opts = {}) {
       success: true,
       userEmail: normalizedEmail,
       skipped: false,
-      forceBackfill,
+      latestStoredDate: latestStoredDate ? latestStoredDate.toISOString() : null,
       fetched: candidates.length,
       added
     };
@@ -3264,16 +3279,38 @@ async function syncUserInboxFromGmail(userEmail, opts = {}) {
 }
 
 async function getAllAutoSyncUsers() {
+  const users = new Set();
   try {
     await initMongo();
     const db = getDb();
     const rows = await db.collection('oauth_tokens').find({}).project({ userEmail: 1 }).toArray();
-    const users = Array.from(new Set(rows.map(r => normalizeUserEmailForData(r?.userEmail)).filter(Boolean)));
-    return users;
+    rows
+      .map(r => normalizeUserEmailForData(r?.userEmail))
+      .filter(Boolean)
+      .forEach(u => users.add(u));
   } catch (e) {
     console.warn('[AutoSync] Failed to load users from oauth_tokens:', e?.message || e);
-    return [];
   }
+
+  // File fallback: include users with persisted Gmail token files.
+  try {
+    const dataDir = path.join(__dirname, 'data');
+    if (fs.existsSync(dataDir)) {
+      const dirs = fs.readdirSync(dataDir, { withFileTypes: true })
+        .filter(d => d.isDirectory())
+        .map(d => d.name);
+      for (const dirName of dirs) {
+        if (!String(dirName).includes('@')) continue;
+        const normalized = normalizeUserEmailForData(dirName);
+        const tokenPath = path.join(dataDir, dirName, 'gmail-tokens.json');
+        if (fs.existsSync(tokenPath)) users.add(normalized);
+      }
+    }
+  } catch (e) {
+    console.warn('[AutoSync] Failed to load users from token files:', e?.message || e);
+  }
+
+  return Array.from(users);
 }
 
 async function runAutoSyncForAllUsers(reason = 'interval') {
