@@ -2980,9 +2980,10 @@ function getLatestThreadDateFromStore(threads) {
 }
 
 async function fetchInboxCandidatesForUser(gmailClient, latestStoredDate, forceBackfill) {
-  const dedupedByThread = [];
-  const seenThreadIds = new Set();
-  const maxResults = forceBackfill ? 200 : 100;
+  const candidates = [];
+  const seenMessageIds = new Set();
+  const PER_PAGE = 100;
+  const CAP = 50;
 
   let query = 'in:inbox';
   if (!forceBackfill && latestStoredDate) {
@@ -2990,19 +2991,29 @@ async function fetchInboxCandidatesForUser(gmailClient, latestStoredDate, forceB
     query = `in:inbox after:${sinceSec}`;
   }
 
-  const listResp = await gmailClient.users.messages.list({
-    userId: 'me',
-    q: query,
-    maxResults
-  });
-  const refs = Array.isArray(listResp?.data?.messages) ? listResp.data.messages : [];
-  if (!refs.length) return [];
+  // Fetch refs with pagination:
+  // - If there are <= 50, load all.
+  // - If > 50, stop early and keep only the 50 most recent.
+  let pageToken = null;
+  const refs = [];
+  do {
+    const listResp = await gmailClient.users.messages.list({
+      userId: 'me',
+      q: query,
+      maxResults: PER_PAGE,
+      pageToken: pageToken || undefined
+    });
+    const pageRefs = Array.isArray(listResp?.data?.messages) ? listResp.data.messages : [];
+    refs.push(...pageRefs);
+    pageToken = listResp?.data?.nextPageToken || null;
+    if (refs.length > CAP) break;
+  } while (pageToken);
 
   for (const ref of refs) {
     if (!ref?.id) continue;
-    const threadId = String(ref.threadId || ref.id);
-    if (seenThreadIds.has(threadId)) continue;
-    seenThreadIds.add(threadId);
+    const messageId = String(ref.id);
+    if (seenMessageIds.has(messageId)) continue;
+    seenMessageIds.add(messageId);
 
     try {
       const msgResp = await gmailClient.users.messages.get({
@@ -3027,9 +3038,9 @@ async function fetchInboxCandidatesForUser(gmailClient, latestStoredDate, forceB
         }
       })();
 
-      dedupedByThread.push({
+      candidates.push({
         id: String(msg?.id || ref.id),
-        threadId,
+        threadId: String(ref.threadId || ref.id),
         subject,
         from,
         date: new Date(date).toISOString(),
@@ -3037,15 +3048,13 @@ async function fetchInboxCandidatesForUser(gmailClient, latestStoredDate, forceB
         snippet,
         webUrl
       });
-
-      if (forceBackfill && dedupedByThread.length >= AUTO_SYNC_BACKFILL_COUNT) break;
     } catch (e) {
       console.warn(`[AutoSync] Failed to load message ${ref.id}:`, e?.message || e);
     }
   }
 
-  dedupedByThread.sort((a, b) => new Date(b.date) - new Date(a.date));
-  return forceBackfill ? dedupedByThread.slice(0, AUTO_SYNC_BACKFILL_COUNT) : dedupedByThread;
+  candidates.sort((a, b) => new Date(b.date) - new Date(a.date));
+  return candidates.length > CAP ? candidates.slice(0, CAP) : candidates;
 }
 
 async function syncUserInboxFromGmail(userEmail, opts = {}) {
