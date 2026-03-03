@@ -2745,6 +2745,8 @@ function keywordCategorizeUnreplied(subject, body, from) {
 const AUTO_SYNC_INTERVAL_MS = 5 * 60 * 1000;
 const AUTO_SYNC_BACKFILL_COUNT = 50;
 const AUTO_SYNC_LOCK_TTL_MS = 3 * 60 * 1000;
+const AUTO_SYNC_GMAIL_FETCH_CONCURRENCY = 8;
+const AUTO_SYNC_LLM_TIMEOUT_MS = parseInt(process.env.AUTO_SYNC_LLM_TIMEOUT_MS || '20000', 10);
 let autoSyncRunning = false;
 let autoSyncLastRunAt = null;
 let autoSyncLastSummary = null;
@@ -3016,49 +3018,61 @@ async function fetchInboxCandidatesForUser(gmailClient, latestStoredDate, forceB
     if (refs.length > CAP) break;
   } while (pageToken);
 
-  for (const ref of refs) {
-    if (!ref?.id) continue;
+  const refsToFetch = refs.filter(ref => {
+    if (!ref?.id) return false;
     const messageId = String(ref.id);
-    if (seenMessageIds.has(messageId)) continue;
+    if (seenMessageIds.has(messageId)) return false;
     seenMessageIds.add(messageId);
+    return true;
+  });
 
-    try {
-      const msgResp = await gmailClient.users.messages.get({
-        userId: 'me',
-        id: ref.id,
-        format: 'full'
-      });
-      const msg = msgResp?.data || {};
-      const headers = msg?.payload?.headers || [];
-      const subject = getMessageHeader(headers, 'Subject') || 'No Subject';
-      const from = getMessageHeader(headers, 'From') || 'Unknown Sender';
-      const date = getMessageHeader(headers, 'Date') || new Date(Number(msg?.internalDate || Date.now())).toISOString();
-      const body = extractEmailBody(msg?.payload) || msg?.snippet || '';
-      const snippet = msg?.snippet || (body ? String(body).slice(0, 100) + (String(body).length > 100 ? '...' : '') : 'No content available');
-      const webUrl = (() => {
-        try {
-          const rfc = getMessageHeader(headers, 'Message-ID');
-          if (!rfc) return '';
-          return `https://mail.google.com/mail/u/0/#search/rfc822msgid%3A${encodeURIComponent(rfc)}`;
-        } catch {
-          return '';
-        }
-      })();
+  const workerCount = Math.max(1, Math.min(AUTO_SYNC_GMAIL_FETCH_CONCURRENCY, refsToFetch.length));
+  let cursor = 0;
+  async function worker() {
+    while (true) {
+      const idx = cursor++;
+      if (idx >= refsToFetch.length) return;
+      const ref = refsToFetch[idx];
+      try {
+        const msgResp = await gmailClient.users.messages.get({
+          userId: 'me',
+          id: ref.id,
+          format: 'full'
+        });
+        const msg = msgResp?.data || {};
+        const headers = msg?.payload?.headers || [];
+        const subject = getMessageHeader(headers, 'Subject') || 'No Subject';
+        const from = getMessageHeader(headers, 'From') || 'Unknown Sender';
+        const date = getMessageHeader(headers, 'Date') || new Date(Number(msg?.internalDate || Date.now())).toISOString();
+        const body = extractEmailBody(msg?.payload) || msg?.snippet || '';
+        const snippet = msg?.snippet || (body ? String(body).slice(0, 100) + (String(body).length > 100 ? '...' : '') : 'No content available');
+        const webUrl = (() => {
+          try {
+            const rfc = getMessageHeader(headers, 'Message-ID');
+            if (!rfc) return '';
+            return `https://mail.google.com/mail/u/0/#search/rfc822msgid%3A${encodeURIComponent(rfc)}`;
+          } catch {
+            return '';
+          }
+        })();
 
-      candidates.push({
-        id: String(msg?.id || ref.id),
-        threadId: String(ref.threadId || ref.id),
-        subject,
-        from,
-        date: new Date(date).toISOString(),
-        body: body || 'No content available',
-        snippet,
-        webUrl
-      });
-    } catch (e) {
-      console.warn(`[AutoSync] Failed to load message ${ref.id}:`, e?.message || e);
+        candidates.push({
+          id: String(msg?.id || ref.id),
+          threadId: String(ref.threadId || ref.id),
+          subject,
+          from,
+          date: new Date(date).toISOString(),
+          body: body || 'No content available',
+          snippet,
+          webUrl
+        });
+      } catch (e) {
+        console.warn(`[AutoSync] Failed to load message ${ref.id}:`, e?.message || e);
+      }
     }
   }
+
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
 
   candidates.sort((a, b) => new Date(b.date) - new Date(a.date));
   return candidates.length > CAP ? candidates.slice(0, CAP) : candidates;
@@ -12112,7 +12126,7 @@ Return ONLY strictly valid JSON of the form:
   console.log(`[BatchLabel] Calling OpenAI with ~${Math.round(totalEstimatedTokens)} estimated tokens (${categories.length} categories, ${newEmails.length} new emails, max ${maxPerCat} examples/category)`);
 
   try {
-    const resp = await openai.chat.completions.create({
+    const llmPromise = openai.chat.completions.create({
       model: 'o3',
       messages: [
         { role: 'system', content: SYSTEM },
@@ -12121,6 +12135,10 @@ Return ONLY strictly valid JSON of the form:
       max_completion_tokens: 2000,
       response_format: { type: 'json_object' }
     });
+    const timeoutPromise = new Promise((_, reject) => {
+      setTimeout(() => reject(new Error(`auto_sync_llm_timeout_${AUTO_SYNC_LLM_TIMEOUT_MS}ms`)), AUTO_SYNC_LLM_TIMEOUT_MS);
+    });
+    const resp = await Promise.race([llmPromise, timeoutPromise]);
     const raw = resp.choices?.[0]?.message?.content || '';
     const rawPreview = typeof raw === 'string' ? raw.slice(0, 500) : String(raw).slice(0, 500);
     console.log(`[BatchLabel] Raw response preview (first 500 chars): ${rawPreview}`);
