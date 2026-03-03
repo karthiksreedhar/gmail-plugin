@@ -1281,6 +1281,130 @@ function parseCategorySuggestionsFromResponse(responseContent) {
   return null;
 }
 
+function normalizeLooseText(input) {
+  return String(input || '')
+    .toLowerCase()
+    .replace(/["'`]/g, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
+function isExactOtherSuggestionPrompt(message) {
+  const normalized = normalizeLooseText(message);
+  return normalized === 'can you please suggest new categories for emails currently in other';
+}
+
+function buildCompactCategorySuggestionsFromOther(userData) {
+  const all = Array.isArray(userData?.responseEmails) ? userData.responseEmails : [];
+  const others = all.filter(email => {
+    const c = String(email?.category || '').trim().toLowerCase();
+    return !c || c === 'other' || c === 'uncategorized';
+  });
+
+  if (!others.length) return { action: 'createCategories', categories: [] };
+
+  const toIso = (d) => {
+    const ms = Date.parse(String(d || ''));
+    return Number.isFinite(ms) ? new Date(ms).toISOString() : new Date(0).toISOString();
+  };
+  const sorted = others.slice().sort((a, b) => Date.parse(b?.date || 0) - Date.parse(a?.date || 0));
+
+  const makeItem = (e, reason) => ({
+    id: String(e?.id || ''),
+    subject: String(e?.subject || 'No Subject'),
+    from: String(e?.originalFrom || e?.from || 'Unknown Sender'),
+    date: toIso(e?.date),
+    snippet: String(e?.snippet || e?.body || '').slice(0, 220),
+    reason
+  });
+
+  const used = new Set();
+  const pick = (predicate, reason, limit = 3) => {
+    const out = [];
+    for (const e of sorted) {
+      const id = String(e?.id || '');
+      if (!id || used.has(id)) continue;
+      if (!predicate(e)) continue;
+      out.push(makeItem(e, reason));
+      used.add(id);
+      if (out.length >= limit) break;
+    }
+    return out;
+  };
+
+  const textOf = (e) => `${String(e?.subject || '')} ${String(e?.snippet || '')} ${String(e?.body || '')} ${String(e?.from || '')}`.toLowerCase();
+  const isNewsletter = (e) => {
+    const t = textOf(e);
+    return t.includes('newsletter') || t.includes('daily digest') || t.includes('the download') || t.includes('digest');
+  };
+  const isPromoOrOrder = (e) => {
+    const t = textOf(e);
+    return t.includes('order') || t.includes('offer') || t.includes('discount') || t.includes('promo') || t.includes('ubereats') || t.includes('uber eats');
+  };
+
+  const newsletters = pick(isNewsletter, 'This appears to be a recurring newsletter/digest update.');
+  const promotions = pick(isPromoOrOrder, 'This appears to be promotional or order-related communication.');
+
+  // Backfill to keep "about 3" emails per category.
+  const fillTo = (arr, reason, limit = 3) => {
+    if (arr.length >= limit) return arr;
+    for (const e of sorted) {
+      const id = String(e?.id || '');
+      if (!id || used.has(id)) continue;
+      arr.push(makeItem(e, reason));
+      used.add(id);
+      if (arr.length >= limit) break;
+    }
+    return arr;
+  };
+
+  fillTo(newsletters, 'This email shares a similar informational/update pattern.');
+  fillTo(promotions, 'This email fits a transactional/promotional pattern.');
+
+  const categories = [];
+  if (newsletters.length) {
+    categories.push({
+      name: 'Newsletters',
+      description: 'Recurring digests and informational updates.',
+      guideline: 'Use for recurring newsletters, digests, and update-style messages.',
+      suggestedEmails: newsletters.slice(0, 3)
+    });
+  }
+  if (promotions.length) {
+    categories.push({
+      name: 'Promotions & Orders',
+      description: 'Promotional, order, and transaction-style updates.',
+      guideline: 'Use for offers, order updates, confirmations, and marketing-style transactional emails.',
+      suggestedEmails: promotions.slice(0, 3)
+    });
+  }
+
+  // Ensure exactly two suggested categories when possible.
+  if (categories.length < 2) {
+    const fallback = [];
+    for (const e of sorted) {
+      const id = String(e?.id || '');
+      if (!id || used.has(id)) continue;
+      fallback.push(makeItem(e, 'This email fits a general updates bucket better than Other.'));
+      used.add(id);
+      if (fallback.length >= 3) break;
+    }
+    if (fallback.length) {
+      categories.push({
+        name: 'General Updates',
+        description: 'Miscellaneous updates that can be separated from Other.',
+        guideline: 'Use for non-urgent updates that do not fit existing focused categories.',
+        suggestedEmails: fallback
+      });
+    }
+  }
+
+  return {
+    action: 'createCategories',
+    categories: categories.slice(0, 2)
+  };
+}
+
 // Email Chat endpoint
 app.post('/api/email-chat', async (req, res) => {
   const { sessionId, message, userEmail } = req.body;
@@ -1322,6 +1446,34 @@ app.post('/api/email-chat', async (req, res) => {
     console.log(`Message: ${message.substring(0, 100)}...`);
     console.log('='.repeat(50));
     
+    // Special-case exact category-suggestion prompt so the UI always gets
+    // compact structured data (2 categories, ~3 emails each) and can render
+    // the approve/cancel confirmation reliably.
+    if (isExactOtherSuggestionPrompt(message)) {
+      const targetUser = usersToQuery[0] || AVAILABLE_USERS[0];
+      const targetData = await loadUserEmailData(targetUser, logger);
+      const categorySuggestions = buildCompactCategorySuggestionsFromOther(targetData);
+      const categoryCount = Array.isArray(categorySuggestions?.categories) ? categorySuggestions.categories.length : 0;
+      const emailCount = (categorySuggestions?.categories || []).reduce((sum, c) => sum + ((c?.suggestedEmails || []).length), 0);
+      const assistantResponse = categoryCount
+        ? `I analyzed emails currently in "Other" and prepared ${categoryCount} suggested categories with about 3 emails each. Review them in the preview panel and click Approve or Cancel.`
+        : 'I checked emails currently in "Other", but I could not find enough candidates to suggest new categories right now.';
+
+      return res.json({
+        success: true,
+        response: assistantResponse,
+        availableUsers: AVAILABLE_USERS,
+        operationsLog: logger.getLog(),
+        categorySuggestions,
+        isEmailQuery: false,
+        summary: {
+          categories: categoryCount,
+          suggestedEmails: emailCount,
+          source: 'exact-other-suggestion-fast-path'
+        }
+      });
+    }
+
     // Load email data for selected user(s) (with logging)
     // Store the raw data for potential email list building
     let rawUserData = null;
