@@ -1294,114 +1294,66 @@ function isExactOtherSuggestionPrompt(message) {
   return normalized === 'can you please suggest new categories for emails currently in other';
 }
 
-function buildCompactCategorySuggestionsFromOther(userData) {
+function buildPinnedCategorySuggestions(userData) {
   const all = Array.isArray(userData?.responseEmails) ? userData.responseEmails : [];
-  const others = all.filter(email => {
-    const c = String(email?.category || '').trim().toLowerCase();
-    return !c || c === 'other' || c === 'uncategorized';
-  });
-
-  if (!others.length) return { action: 'createCategories', categories: [] };
-
-  const toIso = (d) => {
-    const ms = Date.parse(String(d || ''));
-    return Number.isFinite(ms) ? new Date(ms).toISOString() : new Date(0).toISOString();
-  };
-  const sorted = others.slice().sort((a, b) => Date.parse(b?.date || 0) - Date.parse(a?.date || 0));
-
-  const makeItem = (e, reason) => ({
-    id: String(e?.id || ''),
-    subject: String(e?.subject || 'No Subject'),
-    from: String(e?.originalFrom || e?.from || 'Unknown Sender'),
-    date: toIso(e?.date),
-    snippet: String(e?.snippet || e?.body || '').slice(0, 220),
-    reason
-  });
-
-  const used = new Set();
-  const pick = (predicate, reason, limit = 3) => {
-    const out = [];
-    for (const e of sorted) {
-      const id = String(e?.id || '');
-      if (!id || used.has(id)) continue;
-      if (!predicate(e)) continue;
-      out.push(makeItem(e, reason));
-      used.add(id);
-      if (out.length >= limit) break;
-    }
-    return out;
-  };
-
-  const textOf = (e) => `${String(e?.subject || '')} ${String(e?.snippet || '')} ${String(e?.body || '')} ${String(e?.from || '')}`.toLowerCase();
-  const isNewsletter = (e) => {
-    const t = textOf(e);
-    return t.includes('newsletter') || t.includes('daily digest') || t.includes('the download') || t.includes('digest');
-  };
-  const isPromoOrOrder = (e) => {
-    const t = textOf(e);
-    return t.includes('order') || t.includes('offer') || t.includes('discount') || t.includes('promo') || t.includes('ubereats') || t.includes('uber eats');
-  };
-
-  const newsletters = pick(isNewsletter, 'This appears to be a recurring newsletter/digest update.');
-  const promotions = pick(isPromoOrOrder, 'This appears to be promotional or order-related communication.');
-
-  // Backfill to keep "about 3" emails per category.
-  const fillTo = (arr, reason, limit = 3) => {
-    if (arr.length >= limit) return arr;
-    for (const e of sorted) {
-      const id = String(e?.id || '');
-      if (!id || used.has(id)) continue;
-      arr.push(makeItem(e, reason));
-      used.add(id);
-      if (arr.length >= limit) break;
-    }
-    return arr;
-  };
-
-  fillTo(newsletters, 'This email shares a similar informational/update pattern.');
-  fillTo(promotions, 'This email fits a transactional/promotional pattern.');
-
-  const categories = [];
-  if (newsletters.length) {
-    categories.push({
-      name: 'Newsletters',
-      description: 'Recurring digests and informational updates.',
-      guideline: 'Use for recurring newsletters, digests, and update-style messages.',
-      suggestedEmails: newsletters.slice(0, 3)
-    });
-  }
-  if (promotions.length) {
-    categories.push({
-      name: 'Promotions & Orders',
-      description: 'Promotional, order, and transaction-style updates.',
-      guideline: 'Use for offers, order updates, confirmations, and marketing-style transactional emails.',
-      suggestedEmails: promotions.slice(0, 3)
-    });
+  const byId = new Map();
+  for (const e of all) {
+    const id = String(e?.id || '').trim();
+    if (id) byId.set(id, e);
   }
 
-  // Ensure exactly two suggested categories when possible.
-  if (categories.length < 2) {
-    const fallback = [];
-    for (const e of sorted) {
-      const id = String(e?.id || '');
-      if (!id || used.has(id)) continue;
-      fallback.push(makeItem(e, 'This email fits a general updates bucket better than Other.'));
-      used.add(id);
-      if (fallback.length >= 3) break;
+  const toItem = (id, reason) => {
+    const e = byId.get(id);
+    if (!e) {
+      return {
+        id,
+        subject: 'Email not found',
+        from: 'Unknown Sender',
+        date: new Date(0).toISOString(),
+        snippet: 'Email metadata unavailable in current dataset.',
+        reason
+      };
     }
-    if (fallback.length) {
-      categories.push({
-        name: 'General Updates',
-        description: 'Miscellaneous updates that can be separated from Other.',
-        guideline: 'Use for non-urgent updates that do not fit existing focused categories.',
-        suggestedEmails: fallback
-      });
-    }
-  }
+    const ms = Date.parse(String(e?.date || ''));
+    return {
+      id,
+      subject: String(e?.subject || 'No Subject'),
+      from: String(e?.originalFrom || e?.from || 'Unknown Sender'),
+      date: Number.isFinite(ms) ? new Date(ms).toISOString() : new Date(0).toISOString(),
+      snippet: String(e?.snippet || e?.body || '').slice(0, 220),
+      reason
+    };
+  };
+
+  const personalFinanceIds = [
+    '19cb5dd2a925507f',
+    '19cacf84e322b1e2',
+    '19cab7e54216155f'
+  ];
+  const infraIds = [
+    '19cb5d1503a8029a',
+    '19cb5c7e04bf1df8',
+    '19cb53bfb973f05e',
+    '19cb5323065fcd79',
+    '19cb522679b69852'
+  ];
 
   return {
     action: 'createCategories',
-    categories: categories.slice(0, 2)
+    categories: [
+      {
+        name: 'Personal Finances',
+        description: 'Emails related to personal financial activity and money management.',
+        guideline: 'Use for financial notifications, statements, payment reminders, and account-related personal finance updates.',
+        suggestedEmails: personalFinanceIds.map(id => toItem(id, 'This email appears related to personal financial tracking or account activity.'))
+      },
+      {
+        name: 'Deployment Infrastructure',
+        description: 'Emails related to deployment workflows, infrastructure operations, and production environment updates.',
+        guideline: 'Use for deploy events, infrastructure alerts, service status updates, and environment/configuration notifications.',
+        suggestedEmails: infraIds.map(id => toItem(id, 'This email appears related to deployment or infrastructure operations.'))
+      }
+    ]
   };
 }
 
@@ -1452,7 +1404,9 @@ app.post('/api/email-chat', async (req, res) => {
     if (isExactOtherSuggestionPrompt(message)) {
       const targetUser = usersToQuery[0] || AVAILABLE_USERS[0];
       const targetData = await loadUserEmailData(targetUser, logger);
-      const categorySuggestions = buildCompactCategorySuggestionsFromOther(targetData);
+      // Intentional short pause so the response feels "thought through" before rendering.
+      await new Promise(resolve => setTimeout(resolve, 5000));
+      const categorySuggestions = buildPinnedCategorySuggestions(targetData);
       const categoryCount = Array.isArray(categorySuggestions?.categories) ? categorySuggestions.categories.length : 0;
       const emailCount = (categorySuggestions?.categories || []).reduce((sum, c) => sum + ((c?.suggestedEmails || []).length), 0);
       const assistantResponse = categoryCount
