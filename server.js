@@ -2747,6 +2747,7 @@ const AUTO_SYNC_BACKFILL_COUNT = 50;
 const AUTO_SYNC_LOCK_TTL_MS = 3 * 60 * 1000;
 const AUTO_SYNC_GMAIL_FETCH_CONCURRENCY = 8;
 const AUTO_SYNC_LLM_TIMEOUT_MS = parseInt(process.env.AUTO_SYNC_LLM_TIMEOUT_MS || '20000', 10);
+const AUTO_SYNC_GMAIL_CALL_TIMEOUT_MS = parseInt(process.env.AUTO_SYNC_GMAIL_CALL_TIMEOUT_MS || '15000', 10);
 let autoSyncRunning = false;
 let autoSyncLastRunAt = null;
 let autoSyncLastSummary = null;
@@ -2988,6 +2989,14 @@ function getLatestThreadDateFromStore(threads) {
   return latest;
 }
 
+function withTimeout(promise, timeoutMs, label) {
+  const safeMs = Math.max(1000, Number(timeoutMs) || 15000);
+  const timeoutPromise = new Promise((_, reject) => {
+    setTimeout(() => reject(new Error(`${label || 'operation'}_timeout_${safeMs}ms`)), safeMs);
+  });
+  return Promise.race([promise, timeoutPromise]);
+}
+
 async function fetchInboxCandidatesForUser(gmailClient, latestStoredDate, forceBackfill) {
   const candidates = [];
   const seenMessageIds = new Set();
@@ -3006,12 +3015,16 @@ async function fetchInboxCandidatesForUser(gmailClient, latestStoredDate, forceB
   let pageToken = null;
   const refs = [];
   do {
-    const listResp = await gmailClient.users.messages.list({
-      userId: 'me',
-      q: query,
-      maxResults: PER_PAGE,
-      pageToken: pageToken || undefined
-    });
+    const listResp = await withTimeout(
+      gmailClient.users.messages.list({
+        userId: 'me',
+        q: query,
+        maxResults: PER_PAGE,
+        pageToken: pageToken || undefined
+      }),
+      AUTO_SYNC_GMAIL_CALL_TIMEOUT_MS,
+      'gmail_messages_list'
+    );
     const pageRefs = Array.isArray(listResp?.data?.messages) ? listResp.data.messages : [];
     refs.push(...pageRefs);
     pageToken = listResp?.data?.nextPageToken || null;
@@ -3034,11 +3047,15 @@ async function fetchInboxCandidatesForUser(gmailClient, latestStoredDate, forceB
       if (idx >= refsToFetch.length) return;
       const ref = refsToFetch[idx];
       try {
-        const msgResp = await gmailClient.users.messages.get({
-          userId: 'me',
-          id: ref.id,
-          format: 'full'
-        });
+        const msgResp = await withTimeout(
+          gmailClient.users.messages.get({
+            userId: 'me',
+            id: ref.id,
+            format: 'full'
+          }),
+          AUTO_SYNC_GMAIL_CALL_TIMEOUT_MS,
+          'gmail_message_get'
+        );
         const msg = msgResp?.data || {};
         const headers = msg?.payload?.headers || [];
         const subject = getMessageHeader(headers, 'Subject') || 'No Subject';
