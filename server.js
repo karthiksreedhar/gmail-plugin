@@ -3791,8 +3791,18 @@ app.post('/api/auto-sync/run', async (req, res) => {
     if (!authUser) {
       return res.status(401).json({ success: false, error: 'Not authenticated' });
     }
+    autoSyncLastRunAt = new Date().toISOString();
+    autoSyncRunCount += 1;
     const normalizedEmail = normalizeUserEmailForData(authUser);
     const result = await syncUserInboxFromGmail(normalizedEmail, { forceBackfill: false });
+    autoSyncLastSummary = {
+      reason: (req.body && req.body.reason) || 'manual',
+      usersProcessed: 1,
+      added: Number(result?.added) || 0,
+      failed: result?.success ? 0 : 1,
+      failures: result?.success ? [] : [{ userEmail: normalizedEmail, reason: result?.reason || 'unknown error' }],
+      timestamp: new Date().toISOString()
+    };
     return res.json({
       success: !!result?.success,
       result,

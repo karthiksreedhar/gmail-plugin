@@ -337,15 +337,29 @@ window.__categoryChats = window.__categoryChats || {};
             if (!isAuthenticatedUser || uiAutoSyncInFlight) return;
             uiAutoSyncInFlight = true;
             try {
-                await fetch('/api/auto-sync/run', {
+                const resp = await fetch('/api/auto-sync/run', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ reason: reason || 'ui-interval' })
                 });
+                const data = await resp.json().catch(() => ({}));
+                if (!resp.ok || !data.success) {
+                    const reasonText = data?.result?.reason || data?.error || 'unknown';
+                    throw new Error(`Auto sync failed: ${reasonText}`);
+                }
+                const addedCount = Number(data?.result?.added) || 0;
+                if (addedCount > 0) {
+                    updateAutoSyncBanner(`Added ${addedCount} new email${addedCount === 1 ? '' : 's'} from inbox.`);
+                } else if (data?.result?.reason) {
+                    updateAutoSyncBanner(`No new emails synced (${data.result.reason}).`);
+                } else {
+                    updateAutoSyncBanner('No new emails synced.');
+                }
                 await loadEmails();
                 uiNextSyncAt = Date.now() + UI_AUTO_SYNC_INTERVAL_MS;
                 startUiAutoSyncCountdown();
             } catch (e) {
+                console.error('triggerUiAutoSync failed:', e);
                 updateAutoSyncBanner('Auto update failed. Retrying in 5 minutes.', true);
             } finally {
                 uiAutoSyncInFlight = false;
@@ -13056,11 +13070,15 @@ async function renderEmailNotesPreview(el, emailId) {
             (async () => {
                 try {
                     try {
-                        await fetch('/api/auto-sync/run', {
+                        const syncResp = await fetch('/api/auto-sync/run', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({ reason: 'initial-page-load' })
                         });
+                        const syncData = await syncResp.json().catch(() => ({}));
+                        if (!syncResp.ok || !syncData.success) {
+                            console.warn('Initial auto-sync failed:', syncData?.error || syncData?.result?.reason || 'unknown');
+                        }
                     } catch (_) {}
                     await loadEmails();
                     initializeUiAutoSync();
