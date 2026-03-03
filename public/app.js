@@ -10624,8 +10624,15 @@ categoriesState[index].name = newName;
 
         async function approveAndSaveCategories() {
             try {
-                // Either send explicit assignments or categories array (backend supports both)
-                const body = { categories: categoriesState };
+                // Send explicit assignments to guarantee IDs map to category moves.
+                const assignments = {};
+                categoriesState.forEach(cat => {
+                    const name = (cat && cat.name) ? String(cat.name) : '';
+                    (cat && Array.isArray(cat.emails) ? cat.emails : []).forEach(e => {
+                        if (e && e.id && name) assignments[e.id] = name;
+                    });
+                });
+                const body = { assignments, categories: categoriesState };
 
                 const resp = await fetch('/api/save-categories', {
                     method: 'POST',

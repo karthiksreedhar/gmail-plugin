@@ -1520,6 +1520,13 @@ app.post('/api/email-chat-category-suggestions', async (req, res) => {
     
     if (responseEmailsDoc && responseEmailsDoc.emails) {
       const updatedEmails = [...responseEmailsDoc.emails];
+      const byId = new Map();
+      for (let i = 0; i < updatedEmails.length; i++) {
+        const rawId = updatedEmails[i] && updatedEmails[i].id != null ? String(updatedEmails[i].id).trim() : '';
+        if (!rawId) continue;
+        byId.set(rawId, i);
+        byId.set(`thread-${rawId}`, i);
+      }
       console.log(`   Found ${updatedEmails.length} emails in database`);
       
       // Debug: Log all email IDs in database
@@ -1530,15 +1537,19 @@ app.post('/api/email-chat-category-suggestions', async (req, res) => {
         console.log(`   Selected emails: ${cat.selectedEmails || 'NONE'}`);
         
         if (cat.selectedEmails && cat.selectedEmails.length > 0) {
-          for (const emailId of cat.selectedEmails) {
+          for (const selected of cat.selectedEmails) {
+            const emailId = selected && typeof selected === 'object'
+              ? String(selected.id || '').trim()
+              : String(selected || '').trim();
+            if (!emailId) continue;
+
             console.log(`     Looking for email ID: ${emailId}`);
-            
-            // Handle ID format mismatch: threads use "thread-" prefix, response emails don't
-            const originalEmailId = emailId.startsWith('thread-') ? emailId.replace('thread-', '') : emailId;
-            console.log(`     Normalized email ID: ${originalEmailId}`);
-            
-            const emailIndex = updatedEmails.findIndex(e => e.id === originalEmailId);
-            
+
+            const emailIndex = byId.has(emailId) ? byId.get(emailId) : -1;
+            const originalEmailId = (emailIndex !== -1 && updatedEmails[emailIndex] && updatedEmails[emailIndex].id != null)
+              ? String(updatedEmails[emailIndex].id)
+              : emailId;
+
             if (emailIndex !== -1) {
               const oldCategory = updatedEmails[emailIndex].category;
               const emailSubject = updatedEmails[emailIndex].subject;
@@ -1546,7 +1557,8 @@ app.post('/api/email-chat-category-suggestions', async (req, res) => {
               // Move emails from any category to new categories (allow reorganization)
               updatedEmails[emailIndex] = {
                 ...updatedEmails[emailIndex],
-                category: cat.name
+                category: cat.name,
+                categories: [cat.name]
               };
               results.emailsMoved.push({
                 emailId: originalEmailId,
@@ -1556,8 +1568,8 @@ app.post('/api/email-chat-category-suggestions', async (req, res) => {
               });
               console.log(`     ✅ Moved email "${emailSubject}" from "${oldCategory || 'Uncategorized'}" to "${cat.name}"`);
             } else {
-              console.log(`     ❌ Email ${originalEmailId} not found in database`);
-              results.errors.push(`Email ${originalEmailId} not found in database`);
+              console.log(`     ❌ Email ${emailId} not found in database`);
+              results.errors.push(`Email ${emailId} not found in database`);
             }
           }
         } else {
