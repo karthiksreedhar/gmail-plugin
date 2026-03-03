@@ -760,6 +760,8 @@ function getGmailAuthUrl() {
 
   return gmailAuth.generateAuthUrl({
     access_type: 'offline',
+    prompt: 'consent',
+    include_granted_scopes: true,
     scope: scopes,
   });
 }
