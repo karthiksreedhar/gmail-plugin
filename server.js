@@ -2744,11 +2744,19 @@ function keywordCategorizeUnreplied(subject, body, from) {
 
 const AUTO_SYNC_INTERVAL_MS = 5 * 60 * 1000;
 const AUTO_SYNC_BACKFILL_COUNT = 50;
+const AUTO_SYNC_LOCK_TTL_MS = 3 * 60 * 1000;
 let autoSyncRunning = false;
 let autoSyncLastRunAt = null;
 let autoSyncLastSummary = null;
 let autoSyncRunCount = 0;
-const perUserAutoSyncLocks = new Set();
+const perUserAutoSyncLocks = new Map(); // userEmail -> lockStartMs
+
+function getAutoSyncLockAgeMs(userEmail) {
+  const normalized = normalizeUserEmailForData(userEmail);
+  const startedAt = perUserAutoSyncLocks.get(normalized);
+  if (!startedAt) return null;
+  return Math.max(0, Date.now() - startedAt);
+}
 
 function getMessageHeader(headers, headerName) {
   const list = Array.isArray(headers) ? headers : [];
@@ -3042,11 +3050,24 @@ async function fetchInboxCandidatesForUser(gmailClient, latestStoredDate, forceB
 
 async function syncUserInboxFromGmail(userEmail, opts = {}) {
   const normalizedEmail = normalizeUserEmailForData(userEmail);
-  if (perUserAutoSyncLocks.has(normalizedEmail)) {
-    return { success: true, userEmail: normalizedEmail, skipped: true, reason: 'sync_already_running', added: 0 };
+  const currentLockAgeMs = getAutoSyncLockAgeMs(normalizedEmail);
+  if (currentLockAgeMs !== null) {
+    if (currentLockAgeMs > AUTO_SYNC_LOCK_TTL_MS) {
+      console.warn(`[AutoSync] Clearing stale lock for ${normalizedEmail} (age ${currentLockAgeMs}ms)`);
+      perUserAutoSyncLocks.delete(normalizedEmail);
+    } else {
+      return {
+        success: true,
+        userEmail: normalizedEmail,
+        skipped: true,
+        reason: 'sync_already_running',
+        lockAgeMs: currentLockAgeMs,
+        added: 0
+      };
+    }
   }
 
-  perUserAutoSyncLocks.add(normalizedEmail);
+  perUserAutoSyncLocks.set(normalizedEmail, Date.now());
   try {
     const paths = getUserPaths(normalizedEmail);
     const { gmailClient, reason } = await buildGmailClientForUser(normalizedEmail);
