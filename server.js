@@ -760,7 +760,7 @@ function getGmailAuthUrl() {
 
   return gmailAuth.generateAuthUrl({
     access_type: 'offline',
-    prompt: 'consent',
+    prompt: 'consent select_account',
     include_granted_scopes: true,
     scope: scopes,
   });
@@ -2992,13 +2992,21 @@ async function classifySyncedEmailsWithV4ForUser(userEmail, candidates) {
   return { categoriesX, byId };
 }
 
-function getLatestDateFromItems(items) {
-  let latest = null;
+function getItemTimestampMs(item) {
+  const internalMs = Number(item?.gmailInternalDateMs || item?.internalDateMs || 0);
+  if (Number.isFinite(internalMs) && internalMs > 0) return internalMs;
+  const parsed = Date.parse(item?.date || '');
+  if (Number.isFinite(parsed)) return parsed;
+  return 0;
+}
+
+function getLatestTimestampFromItems(items) {
+  let latestMs = 0;
   for (const item of (Array.isArray(items) ? items : [])) {
-    const d = new Date(item?.date || 0);
-    if (!Number.isNaN(d.getTime()) && (!latest || d > latest)) latest = d;
+    const ts = getItemTimestampMs(item);
+    if (ts > latestMs) latestMs = ts;
   }
-  return latest;
+  return latestMs > 0 ? latestMs : null;
 }
 
 function withTimeout(promise, timeoutMs, label) {
@@ -3009,21 +3017,22 @@ function withTimeout(promise, timeoutMs, label) {
   return Promise.race([promise, timeoutPromise]);
 }
 
-async function fetchInboxCandidatesForUser(gmailClient, latestStoredDate) {
+async function fetchInboxCandidatesForUser(gmailClient, latestStoredTimestampMs) {
   const candidates = [];
   const seenMessageIds = new Set();
   const PER_PAGE = 100;
   const CAP = 50;
+  const normalizedLatestMs = Number(latestStoredTimestampMs || 0);
 
   let query = 'in:inbox';
-  if (latestStoredDate) {
-    const sinceSec = Math.max(0, Math.floor(latestStoredDate.getTime() / 1000) - 120);
+  if (normalizedLatestMs > 0) {
+    const sinceSec = Math.max(0, Math.floor(normalizedLatestMs / 1000) - 120);
     query = `in:inbox after:${sinceSec}`;
   }
 
   // Fetch refs with pagination:
   // - If there are <= 50, load all.
-  // - If > 50, stop early and keep only the 50 most recent.
+  // - If > 50, keep only the 50 most recent.
   let pageToken = null;
   const refs = [];
   do {
@@ -3040,7 +3049,7 @@ async function fetchInboxCandidatesForUser(gmailClient, latestStoredDate) {
     const pageRefs = Array.isArray(listResp?.data?.messages) ? listResp.data.messages : [];
     refs.push(...pageRefs);
     pageToken = listResp?.data?.nextPageToken || null;
-    if (refs.length > CAP) break;
+    if (refs.length >= CAP && pageToken) break;
   } while (pageToken);
 
   const refsToFetch = refs.filter(ref => {
@@ -3049,7 +3058,7 @@ async function fetchInboxCandidatesForUser(gmailClient, latestStoredDate) {
     if (seenMessageIds.has(messageId)) return false;
     seenMessageIds.add(messageId);
     return true;
-  });
+  }).slice(0, CAP);
 
   const workerCount = Math.max(1, Math.min(AUTO_SYNC_GMAIL_FETCH_CONCURRENCY, refsToFetch.length));
   let cursor = 0;
@@ -3077,6 +3086,7 @@ async function fetchInboxCandidatesForUser(gmailClient, latestStoredDate) {
         const parsedDate = !Number.isNaN(parsedHeaderDate.getTime())
           ? parsedHeaderDate
           : new Date(Number(msg?.internalDate || Date.now()));
+        const internalDateMs = Number(msg?.internalDate || 0);
         const body = extractEmailBody(msg?.payload) || msg?.snippet || '';
         const snippet = msg?.snippet || (body ? String(body).slice(0, 100) + (String(body).length > 100 ? '...' : '') : 'No content available');
         const webUrl = (() => {
@@ -3095,6 +3105,7 @@ async function fetchInboxCandidatesForUser(gmailClient, latestStoredDate) {
           subject,
           from,
           date: parsedDate.toISOString(),
+          gmailInternalDateMs: Number.isFinite(internalDateMs) && internalDateMs > 0 ? internalDateMs : parsedDate.getTime(),
           body: body || 'No content available',
           snippet,
           webUrl
@@ -3107,14 +3118,14 @@ async function fetchInboxCandidatesForUser(gmailClient, latestStoredDate) {
 
   await Promise.all(Array.from({ length: workerCount }, () => worker()));
 
-  const filtered = latestStoredDate
+  const filtered = normalizedLatestMs > 0
     ? candidates.filter(c => {
-        const d = new Date(c?.date || 0);
-        return !Number.isNaN(d.getTime()) && d > latestStoredDate;
+        const ts = getItemTimestampMs(c);
+        return ts > normalizedLatestMs;
       })
     : candidates;
 
-  filtered.sort((a, b) => new Date(b.date) - new Date(a.date));
+  filtered.sort((a, b) => getItemTimestampMs(b) - getItemTimestampMs(a));
   return filtered.length > CAP ? filtered.slice(0, CAP) : filtered;
 }
 
@@ -3165,20 +3176,22 @@ async function syncUserInboxFromGmail(userEmail, opts = {}) {
 
     const existingResponseIds = new Set((responses || []).map(r => r && r.id).filter(Boolean));
     const existingThreadIds = new Set((threads || []).map(t => t && t.id).filter(Boolean));
-    const latestResponseDate = getLatestDateFromItems(responses);
-    const latestThreadDate = getLatestDateFromItems(threads);
-    const latestStoredDate = (() => {
-      if (latestResponseDate && latestThreadDate) return latestResponseDate > latestThreadDate ? latestResponseDate : latestThreadDate;
-      return latestResponseDate || latestThreadDate || null;
+    const latestResponseTimestampMs = getLatestTimestampFromItems(responses);
+    const latestThreadTimestampMs = getLatestTimestampFromItems(threads);
+    const latestStoredTimestampMs = (() => {
+      if (latestResponseTimestampMs && latestThreadTimestampMs) {
+        return latestResponseTimestampMs > latestThreadTimestampMs ? latestResponseTimestampMs : latestThreadTimestampMs;
+      }
+      return latestResponseTimestampMs || latestThreadTimestampMs || null;
     })();
 
-    const candidates = await fetchInboxCandidatesForUser(gmailClient, latestStoredDate);
+    const candidates = await fetchInboxCandidatesForUser(gmailClient, latestStoredTimestampMs);
     if (!candidates.length) {
       return {
         success: true,
         userEmail: normalizedEmail,
         skipped: false,
-        latestStoredDate: latestStoredDate ? latestStoredDate.toISOString() : null,
+        latestStoredDate: latestStoredTimestampMs ? new Date(latestStoredTimestampMs).toISOString() : null,
         fetched: 0,
         added: 0
       };
@@ -3226,6 +3239,7 @@ async function syncUserInboxFromGmail(userEmail, opts = {}) {
         snippet: email.snippet || 'No content available',
         originalBody: email.body || '',
         webUrl: email.webUrl || '',
+        gmailInternalDateMs: Number(email?.gmailInternalDateMs || 0) || undefined,
         source: 'auto-sync-v4',
         autoSynced: true,
         autoSyncedAt: syncedAt,
@@ -3240,6 +3254,7 @@ async function syncUserInboxFromGmail(userEmail, opts = {}) {
           originalFrom: email.from || 'Unknown Sender',
           from: meEmail,
           date: email.date || new Date().toISOString(),
+          gmailInternalDateMs: Number(email?.gmailInternalDateMs || 0) || undefined,
           responseId: email.id,
           source: 'auto-sync-v4',
           autoSynced: true,
@@ -3273,7 +3288,7 @@ async function syncUserInboxFromGmail(userEmail, opts = {}) {
       success: true,
       userEmail: normalizedEmail,
       skipped: false,
-      latestStoredDate: latestStoredDate ? latestStoredDate.toISOString() : null,
+      latestStoredDate: latestStoredTimestampMs ? new Date(latestStoredTimestampMs).toISOString() : null,
       fetched: candidates.length,
       added
     };
