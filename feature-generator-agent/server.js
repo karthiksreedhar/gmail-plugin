@@ -1294,29 +1294,22 @@ function isExactOtherSuggestionPrompt(message) {
   return normalized === 'can you please suggest new categories for emails currently in other';
 }
 
-function buildPinnedCategorySuggestions(userData) {
+function buildDynamicCategorySuggestions(userData) {
   const all = Array.isArray(userData?.responseEmails) ? userData.responseEmails : [];
-  const byId = new Map();
-  for (const e of all) {
-    const id = String(e?.id || '').trim();
-    if (id) byId.set(id, e);
-  }
+  const others = all.filter(email => {
+    const c = String(email?.category || '').trim().toLowerCase();
+    return !c || c === 'other' || c === 'uncategorized';
+  });
 
-  const toItem = (id, reason) => {
-    const e = byId.get(id);
-    if (!e) {
-      return {
-        id,
-        subject: 'Email not found',
-        from: 'Unknown Sender',
-        date: new Date(0).toISOString(),
-        snippet: 'Email metadata unavailable in current dataset.',
-        reason
-      };
-    }
+  if (!others.length) return { action: 'createCategories', categories: [] };
+
+  const sorted = others.slice().sort((a, b) => Date.parse(String(b?.date || 0)) - Date.parse(String(a?.date || 0)));
+  const used = new Set();
+
+  const toItem = (e, reason) => {
     const ms = Date.parse(String(e?.date || ''));
     return {
-      id,
+      id: String(e?.id || ''),
       subject: String(e?.subject || 'No Subject'),
       from: String(e?.originalFrom || e?.from || 'Unknown Sender'),
       date: Number.isFinite(ms) ? new Date(ms).toISOString() : new Date(0).toISOString(),
@@ -1325,36 +1318,83 @@ function buildPinnedCategorySuggestions(userData) {
     };
   };
 
-  const personalFinanceIds = [
-    '19cb5dd2a925507f',
-    '19cacf84e322b1e2',
-    '19cab7e54216155f'
-  ];
-  const infraIds = [
-    '19cb5d1503a8029a',
-    '19cb5c7e04bf1df8',
-    '19cb53bfb973f05e',
-    '19cb5323065fcd79',
-    '19cb522679b69852'
+  const textOf = (e) => `${String(e?.subject || '')} ${String(e?.snippet || '')} ${String(e?.body || '')} ${String(e?.from || '')}`.toLowerCase();
+  const keywordCategoryDefs = [
+    {
+      name: 'Personal Finances',
+      description: 'Emails related to personal financial activity and money management.',
+      guideline: 'Use for account notifications, payments, card activity, bills, and other finance updates.',
+      reason: 'This email appears related to personal finance activity.',
+      match: (t) => /(bank|credit|capital one|chase|amex|payment|bill|statement|invoice|balance|transaction|receipt|venmo|zelle|account alert)/.test(t)
+    },
+    {
+      name: 'Deployment Infrastructure',
+      description: 'Emails related to deployment workflows and infrastructure operations.',
+      guideline: 'Use for deploy events, infra alerts, service updates, and environment/configuration notifications.',
+      reason: 'This email appears related to deployment or infrastructure operations.',
+      match: (t) => /(vercel|deploy|deployment|production|staging|preview|build failed|ci|pipeline|infrastructure|uptime|incident|cron|domain|dns)/.test(t)
+    },
+    {
+      name: 'Newsletters',
+      description: 'Recurring digest and newsletter content.',
+      guideline: 'Use for recurring newsletters, daily digests, and informational updates.',
+      reason: 'This appears to be a recurring newsletter/digest.',
+      match: (t) => /(newsletter|digest|the download|daily digest|weekly digest|top stories)/.test(t)
+    },
+    {
+      name: 'Promotions & Orders',
+      description: 'Promotional and transactional order-related updates.',
+      guideline: 'Use for offers, discounts, order updates, and purchase confirmations.',
+      reason: 'This appears to be a promotional or order-related email.',
+      match: (t) => /(offer|discount|promo|sale|coupon|order|ubereats|uber eats|tracking|shipped|delivery)/.test(t)
+    }
   ];
 
-  return {
-    action: 'createCategories',
-    categories: [
-      {
-        name: 'Personal Finances',
-        description: 'Emails related to personal financial activity and money management.',
-        guideline: 'Use for financial notifications, statements, payment reminders, and account-related personal finance updates.',
-        suggestedEmails: personalFinanceIds.map(id => toItem(id, 'This email appears related to personal financial tracking or account activity.'))
-      },
-      {
-        name: 'Deployment Infrastructure',
-        description: 'Emails related to deployment workflows, infrastructure operations, and production environment updates.',
-        guideline: 'Use for deploy events, infrastructure alerts, service status updates, and environment/configuration notifications.',
-        suggestedEmails: infraIds.map(id => toItem(id, 'This email appears related to deployment or infrastructure operations.'))
-      }
-    ]
+  const buildCategory = (def, limit = 3) => {
+    const picked = [];
+    for (const e of sorted) {
+      const id = String(e?.id || '');
+      if (!id || used.has(id)) continue;
+      if (!def.match(textOf(e))) continue;
+      picked.push(toItem(e, def.reason));
+      used.add(id);
+      if (picked.length >= limit) break;
+    }
+    if (!picked.length) return null;
+    return {
+      name: def.name,
+      description: def.description,
+      guideline: def.guideline,
+      suggestedEmails: picked
+    };
   };
+
+  const categories = [];
+  for (const def of keywordCategoryDefs) {
+    const built = buildCategory(def, 3);
+    if (built) categories.push(built);
+    if (categories.length >= 2) break;
+  }
+
+  while (categories.length < 2) {
+    const fallback = [];
+    for (const e of sorted) {
+      const id = String(e?.id || '');
+      if (!id || used.has(id)) continue;
+      fallback.push(toItem(e, 'This email fits a general updates bucket better than Other.'));
+      used.add(id);
+      if (fallback.length >= 3) break;
+    }
+    if (!fallback.length) break;
+    categories.push({
+      name: categories.length === 0 ? 'General Updates' : 'Miscellaneous Follow-ups',
+      description: 'A compact bucket for uncategorized updates.',
+      guideline: 'Use for messages that do not clearly fit existing focused categories.',
+      suggestedEmails: fallback
+    });
+  }
+
+  return { action: 'createCategories', categories: categories.slice(0, 2) };
 }
 
 // Email Chat endpoint
@@ -1404,9 +1444,7 @@ app.post('/api/email-chat', async (req, res) => {
     if (isExactOtherSuggestionPrompt(message)) {
       const targetUser = usersToQuery[0] || AVAILABLE_USERS[0];
       const targetData = await loadUserEmailData(targetUser, logger);
-      // Intentional short pause so the response feels "thought through" before rendering.
-      await new Promise(resolve => setTimeout(resolve, 5000));
-      const categorySuggestions = buildPinnedCategorySuggestions(targetData);
+      const categorySuggestions = buildDynamicCategorySuggestions(targetData);
       const categoryCount = Array.isArray(categorySuggestions?.categories) ? categorySuggestions.categories.length : 0;
       const emailCount = (categorySuggestions?.categories || []).reduce((sum, c) => sum + ((c?.suggestedEmails || []).length), 0);
       const assistantResponse = categoryCount
