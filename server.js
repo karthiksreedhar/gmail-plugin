@@ -3017,9 +3017,53 @@ function withTimeout(promise, timeoutMs, label) {
   return Promise.race([promise, timeoutPromise]);
 }
 
-async function fetchInboxCandidatesForUser(gmailClient, latestStoredTimestampMs) {
+function isUserAuthoredMessage(fromValue, userEmail) {
+  const from = String(fromValue || '').toLowerCase();
+  const me = String(userEmail || '').toLowerCase().trim();
+  return !!(me && from.includes(me));
+}
+
+function buildAutoSyncMessageEntry(rawMessage, userEmail) {
+  const headers = rawMessage?.payload?.headers || [];
+  const subject = getMessageHeader(headers, 'Subject') || 'No Subject';
+  const from = getMessageHeader(headers, 'From') || 'Unknown Sender';
+  const to = getMessageHeader(headers, 'To') || 'Unknown Recipient';
+  const headerDate = getMessageHeader(headers, 'Date');
+  const parsedHeaderDate = new Date(headerDate || 0);
+  const internalDateMs = Number(rawMessage?.internalDate || 0);
+  const parsedDate = !Number.isNaN(parsedHeaderDate.getTime())
+    ? parsedHeaderDate
+    : new Date(internalDateMs || Date.now());
+  const body = extractEmailBody(rawMessage?.payload) || rawMessage?.snippet || '';
+  const snippet = rawMessage?.snippet || (body ? String(body).slice(0, 100) + (String(body).length > 100 ? '...' : '') : 'No content available');
+  const messageIdHeader = getMessageHeader(headers, 'Message-ID') || getMessageHeader(headers, 'MessageId');
+  const webUrl = (() => {
+    try {
+      if (!messageIdHeader) return '';
+      return `https://mail.google.com/mail/u/0/#search/rfc822msgid%3A${encodeURIComponent(messageIdHeader)}`;
+    } catch {
+      return '';
+    }
+  })();
+  const isResponse = isUserAuthoredMessage(from, userEmail);
+
+  return {
+    id: String(rawMessage?.id || ''),
+    from,
+    to: String(to || '').split(',').map(email => email.trim()).filter(Boolean),
+    date: parsedDate.toISOString(),
+    subject,
+    body: body || 'No content available',
+    snippet,
+    isResponse,
+    webUrl,
+    gmailInternalDateMs: Number.isFinite(internalDateMs) && internalDateMs > 0 ? internalDateMs : parsedDate.getTime()
+  };
+}
+
+async function fetchInboxThreadCandidatesForUser(gmailClient, latestStoredTimestampMs, userEmail) {
   const candidates = [];
-  const seenMessageIds = new Set();
+  const seenThreadIds = new Set();
   const PER_PAGE = 100;
   const CAP = 50;
   const normalizedLatestMs = Number(latestStoredTimestampMs || 0);
@@ -3052,66 +3096,70 @@ async function fetchInboxCandidatesForUser(gmailClient, latestStoredTimestampMs)
     if (refs.length >= CAP && pageToken) break;
   } while (pageToken);
 
-  const refsToFetch = refs.filter(ref => {
-    if (!ref?.id) return false;
-    const messageId = String(ref.id);
-    if (seenMessageIds.has(messageId)) return false;
-    seenMessageIds.add(messageId);
+  const threadIdsToFetch = refs.filter(ref => {
+    const threadId = String(ref?.threadId || '');
+    if (!threadId) return false;
+    if (seenThreadIds.has(threadId)) return false;
+    seenThreadIds.add(threadId);
     return true;
-  }).slice(0, CAP);
+  }).map(ref => String(ref.threadId)).slice(0, CAP);
 
-  const workerCount = Math.max(1, Math.min(AUTO_SYNC_GMAIL_FETCH_CONCURRENCY, refsToFetch.length));
+  const workerCount = Math.max(1, Math.min(AUTO_SYNC_GMAIL_FETCH_CONCURRENCY, threadIdsToFetch.length));
   let cursor = 0;
   async function worker() {
     while (true) {
       const idx = cursor++;
-      if (idx >= refsToFetch.length) return;
-      const ref = refsToFetch[idx];
+      if (idx >= threadIdsToFetch.length) return;
+      const threadId = threadIdsToFetch[idx];
       try {
-        const msgResp = await withTimeout(
-          gmailClient.users.messages.get({
+        const threadResp = await withTimeout(
+          gmailClient.users.threads.get({
             userId: 'me',
-            id: ref.id,
+            id: threadId,
             format: 'full'
           }),
           AUTO_SYNC_GMAIL_CALL_TIMEOUT_MS,
-          'gmail_message_get'
+          'gmail_thread_get'
         );
-        const msg = msgResp?.data || {};
-        const headers = msg?.payload?.headers || [];
-        const subject = getMessageHeader(headers, 'Subject') || 'No Subject';
-        const from = getMessageHeader(headers, 'From') || 'Unknown Sender';
-        const headerDate = getMessageHeader(headers, 'Date');
-        const parsedHeaderDate = new Date(headerDate || 0);
-        const parsedDate = !Number.isNaN(parsedHeaderDate.getTime())
-          ? parsedHeaderDate
-          : new Date(Number(msg?.internalDate || Date.now()));
-        const internalDateMs = Number(msg?.internalDate || 0);
-        const body = extractEmailBody(msg?.payload) || msg?.snippet || '';
-        const snippet = msg?.snippet || (body ? String(body).slice(0, 100) + (String(body).length > 100 ? '...' : '') : 'No content available');
-        const webUrl = (() => {
-          try {
-            const rfc = getMessageHeader(headers, 'Message-ID');
-            if (!rfc) return '';
-            return `https://mail.google.com/mail/u/0/#search/rfc822msgid%3A${encodeURIComponent(rfc)}`;
-          } catch {
-            return '';
-          }
-        })();
+        const rawMessages = Array.isArray(threadResp?.data?.messages) ? threadResp.data.messages : [];
+        if (!rawMessages.length) return;
+
+        const allMessages = rawMessages.map(msg => buildAutoSyncMessageEntry(msg, userEmail))
+          .filter(msg => !!msg.id)
+          .sort((a, b) => getItemTimestampMs(a) - getItemTimestampMs(b));
+        if (!allMessages.length) return;
+
+        const latestMessage = allMessages[allMessages.length - 1];
+        const latestIncoming = allMessages.filter(msg => !msg.isResponse).sort((a, b) => getItemTimestampMs(b) - getItemTimestampMs(a))[0] || latestMessage;
+        const firstIncoming = allMessages.find(msg => !msg.isResponse) || latestIncoming;
+        const latestThreadTimestampMs = Math.max(...allMessages.map(msg => getItemTimestampMs(msg)));
 
         candidates.push({
-          id: String(msg?.id || ref.id),
-          threadId: String(ref.threadId || ref.id),
-          subject,
-          from,
-          date: parsedDate.toISOString(),
-          gmailInternalDateMs: Number.isFinite(internalDateMs) && internalDateMs > 0 ? internalDateMs : parsedDate.getTime(),
-          body: body || 'No content available',
-          snippet,
-          webUrl
+          id: latestIncoming.id,
+          threadId,
+          subject: latestMessage?.subject || latestIncoming.subject || 'No Subject',
+          from: latestIncoming.from || 'Unknown Sender',
+          originalFrom: firstIncoming?.from || latestIncoming.from || 'Unknown Sender',
+          date: latestIncoming.date || latestMessage.date,
+          gmailInternalDateMs: latestThreadTimestampMs,
+          body: latestIncoming.body || 'No content available',
+          snippet: latestIncoming.snippet || 'No content available',
+          originalBody: firstIncoming?.body || latestIncoming.body || '',
+          webUrl: latestIncoming.webUrl || latestMessage.webUrl || '',
+          messages: allMessages.map(msg => ({
+            id: msg.id,
+            from: msg.from,
+            to: Array.isArray(msg.to) && msg.to.length ? msg.to : ['Unknown Recipient'],
+            date: msg.date,
+            subject: msg.subject,
+            body: msg.isResponse ? msg.body : msg.body,
+            isResponse: !!msg.isResponse,
+            gmailInternalDateMs: msg.gmailInternalDateMs,
+            webUrl: msg.webUrl || ''
+          }))
         });
       } catch (e) {
-        console.warn(`[AutoSync] Failed to load message ${ref.id}:`, e?.message || e);
+        console.warn(`[AutoSync] Failed to load thread ${threadId}:`, e?.message || e);
       }
     }
   }
@@ -3120,8 +3168,8 @@ async function fetchInboxCandidatesForUser(gmailClient, latestStoredTimestampMs)
 
   const filtered = normalizedLatestMs > 0
     ? candidates.filter(c => {
-        const ts = getItemTimestampMs(c);
-        return ts > normalizedLatestMs;
+      const ts = getItemTimestampMs(c);
+      return ts > normalizedLatestMs;
       })
     : candidates;
 
@@ -3174,8 +3222,6 @@ async function syncUserInboxFromGmail(userEmail, opts = {}) {
       (Array.isArray(categories) && categories.length) ? categories : derivedCategoriesFromResponses
     );
 
-    const existingResponseIds = new Set((responses || []).map(r => r && r.id).filter(Boolean));
-    const existingThreadIds = new Set((threads || []).map(t => t && t.id).filter(Boolean));
     const latestResponseTimestampMs = getLatestTimestampFromItems(responses);
     const latestThreadTimestampMs = getLatestTimestampFromItems(threads);
     const latestStoredTimestampMs = (() => {
@@ -3185,7 +3231,7 @@ async function syncUserInboxFromGmail(userEmail, opts = {}) {
       return latestResponseTimestampMs || latestThreadTimestampMs || null;
     })();
 
-    const candidates = await fetchInboxCandidatesForUser(gmailClient, latestStoredTimestampMs);
+    const candidates = await fetchInboxThreadCandidatesForUser(gmailClient, latestStoredTimestampMs, normalizedEmail);
     if (!candidates.length) {
       return {
         success: true,
@@ -3197,7 +3243,28 @@ async function syncUserInboxFromGmail(userEmail, opts = {}) {
       };
     }
 
-    const classified = await classifySyncedEmailsWithV4ForUser(normalizedEmail, candidates);
+    const nextThreads = Array.isArray(threads) ? threads.slice() : [];
+    const nextResponses = Array.isArray(responses) ? responses.slice() : [];
+    const responseIndexById = new Map(nextResponses.map((r, idx) => [r && r.id, idx]).filter(([id]) => !!id));
+    const threadIndexById = new Map(nextThreads.map((t, idx) => [t && t.id, idx]).filter(([id]) => !!id));
+    const responseIndexByThreadId = new Map();
+
+    nextResponses.forEach((response, idx) => {
+      const rawThreadId = String(response?.threadId || '').trim();
+      if (rawThreadId) responseIndexByThreadId.set(rawThreadId, idx);
+    });
+    nextThreads.forEach(thread => {
+      const rawThreadId = String(thread?.threadId || (String(thread?.id || '').startsWith('thread-') ? String(thread.id).slice(7) : '')).trim();
+      if (!rawThreadId || responseIndexByThreadId.has(rawThreadId)) return;
+      const idx = responseIndexById.get(thread?.responseId);
+      if (typeof idx === 'number') responseIndexByThreadId.set(rawThreadId, idx);
+    });
+
+    const candidatesNeedingCategory = candidates.filter(email => {
+      const persistedThreadId = `thread-${email.threadId || email.id}`;
+      return !threadIndexById.has(persistedThreadId) && !responseIndexByThreadId.has(String(email.threadId || '').trim());
+    });
+    const classified = await classifySyncedEmailsWithV4ForUser(normalizedEmail, candidatesNeedingCategory);
     const classifiedById = (classified && classified.byId) ? classified.byId : {};
     const categoriesForUser = (Array.isArray(currentCategories) && currentCategories.length)
       ? currentCategories
@@ -3208,58 +3275,76 @@ async function syncUserInboxFromGmail(userEmail, opts = {}) {
 
     const meEmail = normalizedEmail;
     let added = 0;
-    const nextThreads = Array.isArray(threads) ? threads.slice() : [];
-    const nextResponses = Array.isArray(responses) ? responses.slice() : [];
 
     for (const email of candidates) {
       if (!email?.id) continue;
+      const rawThreadId = String(email.threadId || '').trim();
       const persistedThreadId = `thread-${email.threadId || email.id}`;
-      if (hiddenThreadIds.has(persistedThreadId) || hiddenResponseIds.has(email.id)) continue;
-      if (existingResponseIds.has(email.id)) continue;
+      const existingThreadIndex = threadIndexById.get(persistedThreadId);
+      const existingResponseIndex = responseIndexByThreadId.get(rawThreadId);
+      const existingResponse = typeof existingResponseIndex === 'number' ? nextResponses[existingResponseIndex] : null;
+      const existingSummaryId = existingResponse?.id || email.id;
 
-      const category = (
+      if (hiddenThreadIds.has(persistedThreadId) || hiddenResponseIds.has(email.id) || (existingSummaryId && hiddenResponseIds.has(existingSummaryId))) continue;
+
+      const classifiedCategory = (
         classifiedById[email.id] && classifiedById[email.id].category
           ? (matchToCurrentCategory(classifiedById[email.id].category, categoriesForUser) || classifiedById[email.id].category)
           : ''
-      ) || otherCategory;
-      const categoriesArr = [category];
+      ) || '';
+      const existingCategories = Array.isArray(existingResponse?.categories) && existingResponse.categories.length
+        ? existingResponse.categories.filter(Boolean)
+        : (existingResponse?.category ? [existingResponse.category] : []);
+      const category = existingCategories[0] || classifiedCategory || otherCategory;
+      const categoriesArr = existingCategories.length ? existingCategories : [category];
       const syncedAt = new Date().toISOString();
-      const explanation = (classifiedById[email.id] && classifiedById[email.id].explanation) || '';
-
-      nextResponses.push({
-        id: email.id,
+      const explanation = existingResponse?.autoSyncExplanation || (classifiedById[email.id] && classifiedById[email.id].explanation) || '';
+      const responseRecord = {
+        id: existingSummaryId,
+        threadId: rawThreadId || undefined,
         subject: email.subject || 'No Subject',
         from: meEmail,
-        originalFrom: email.from || 'Unknown Sender',
+        originalFrom: email.originalFrom || email.from || 'Unknown Sender',
         date: email.date || new Date().toISOString(),
         seededOriginalOnly: true,
         category,
         categories: categoriesArr,
-        body: email.body || '(synced item)',
+        body: email.body || existingResponse?.body || '(synced item)',
         snippet: email.snippet || 'No content available',
-        originalBody: email.body || '',
+        originalBody: email.originalBody || email.body || '',
         webUrl: email.webUrl || '',
         gmailInternalDateMs: Number(email?.gmailInternalDateMs || 0) || undefined,
         source: 'auto-sync-v4',
         autoSynced: true,
         autoSyncedAt: syncedAt,
         autoSyncExplanation: explanation
-      });
-      existingResponseIds.add(email.id);
+      };
 
-      if (!existingThreadIds.has(persistedThreadId)) {
-        nextThreads.push({
-          id: persistedThreadId,
-          subject: email.subject || 'No Subject',
-          originalFrom: email.from || 'Unknown Sender',
-          from: meEmail,
-          date: email.date || new Date().toISOString(),
-          gmailInternalDateMs: Number(email?.gmailInternalDateMs || 0) || undefined,
-          responseId: email.id,
-          source: 'auto-sync-v4',
-          autoSynced: true,
-          autoSyncedAt: syncedAt,
-          messages: [
+      if (typeof existingResponseIndex === 'number') {
+        nextResponses[existingResponseIndex] = {
+          ...existingResponse,
+          ...responseRecord
+        };
+      } else {
+        nextResponses.push(responseRecord);
+        responseIndexByThreadId.set(rawThreadId, nextResponses.length - 1);
+      }
+
+      const threadRecord = {
+        id: persistedThreadId,
+        threadId: rawThreadId || undefined,
+        subject: email.subject || 'No Subject',
+        originalFrom: email.originalFrom || email.from || 'Unknown Sender',
+        from: meEmail,
+        date: email.date || new Date().toISOString(),
+        gmailInternalDateMs: Number(email?.gmailInternalDateMs || 0) || undefined,
+        responseId: existingSummaryId,
+        source: 'auto-sync-v4',
+        autoSynced: true,
+        autoSyncedAt: syncedAt,
+        messages: Array.isArray(email.messages) && email.messages.length
+          ? email.messages
+          : [
             {
               id: `original-${email.id}`,
               from: email.from || 'Unknown Sender',
@@ -3270,11 +3355,21 @@ async function syncUserInboxFromGmail(userEmail, opts = {}) {
               isResponse: false
             }
           ]
-        });
-        existingThreadIds.add(persistedThreadId);
-      }
+      };
 
-      added++;
+      if (typeof existingThreadIndex === 'number') {
+        nextThreads[existingThreadIndex] = {
+          ...nextThreads[existingThreadIndex],
+          ...threadRecord
+        };
+      } else {
+        nextThreads.push({
+          id: persistedThreadId,
+          ...threadRecord
+        });
+        threadIndexById.set(persistedThreadId, nextThreads.length - 1);
+        added++;
+      }
     }
 
     if (added > 0) {
