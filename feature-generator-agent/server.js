@@ -1318,6 +1318,19 @@ function isOtherCategorySuggestionPrompt(message) {
   return mentionsOther && mentionsCategoryIntent && (mentionsEmails || asksForFitOrMove);
 }
 
+function isDatabaseModificationIntent(message) {
+  const normalized = normalizeLooseText(message);
+  if (!normalized) return false;
+
+  if (isOtherCategorySuggestionPrompt(message)) return false;
+  if (isEmailListQuery(message)) return false;
+
+  const actionWords = /\b(add|create|make|update|change|move|remove|delete|rename|set|edit|modify|put|assign|recategorize|categorize)\b/;
+  const targetWords = /\b(category|categories|guideline|summary|note|notes|email|emails|message|messages|database|db|inbox)\b/;
+
+  return actionWords.test(normalized) && targetWords.test(normalized);
+}
+
 function parseJsonCandidates(text) {
   const trimmed = String(text || '').trim();
   if (!trimmed) return [];
@@ -1350,6 +1363,156 @@ function parseSuggestionEnvelope(responseText) {
     }
   }
   return null;
+}
+
+function parseModificationEnvelope(responseText) {
+  for (const candidate of parseJsonCandidates(responseText)) {
+    try {
+      const parsed = JSON.parse(candidate);
+      if (Array.isArray(parsed?.modifications)) return parsed;
+      if (parsed?.plan && Array.isArray(parsed.plan.modifications)) return parsed.plan;
+    } catch (_) {
+      // Keep trying alternate slices.
+    }
+  }
+  return null;
+}
+
+function normalizeModificationPlan(input, defaultUserEmail) {
+  const rawMods = Array.isArray(input?.modifications) ? input.modifications : [];
+  const modifications = [];
+
+  for (const raw of rawMods) {
+    const type = String(raw?.type || '').trim();
+    const collection = String(raw?.collection || '').trim();
+    const description = String(raw?.description || '').trim();
+    const data = raw && typeof raw.data === 'object' && raw.data ? raw.data : {};
+    if (!type || !collection || !description) continue;
+
+    modifications.push({
+      type,
+      collection,
+      description,
+      data,
+      userEmail: raw?.userEmail || defaultUserEmail,
+      id: uuidv4(),
+      timestamp: new Date().toISOString()
+    });
+  }
+
+  return {
+    summary: String(input?.summary || '').trim(),
+    modifications
+  };
+}
+
+async function generateModificationPlanForUsers(message, usersToQuery, logger) {
+  const dataContext = await loadUsersData(usersToQuery, logger);
+  const targetUser = usersToQuery[0] || AVAILABLE_USERS[0];
+  const modelName = getGeminiModel();
+  const modificationSchema = {
+    type: 'OBJECT',
+    properties: {
+      summary: { type: 'STRING' },
+      modifications: {
+        type: 'ARRAY',
+        items: {
+          type: 'OBJECT',
+          properties: {
+            type: { type: 'STRING' },
+            collection: { type: 'STRING' },
+            userEmail: { type: 'STRING' },
+            description: { type: 'STRING' },
+            data: { type: 'OBJECT' }
+          },
+          required: ['type', 'collection', 'description', 'data']
+        }
+      }
+    },
+    required: ['modifications']
+  };
+
+  const plannerPrompt = `You are planning database changes for an email assistant.
+
+User request:
+${message}
+
+Target user:
+${targetUser}
+
+Available users:
+${usersToQuery.join(', ')}
+
+Allowed modification types:
+- addCategory -> collection "categories" -> data: { "category": "Name" }
+- removeCategory -> collection "categories" -> data: { "category": "Name" }
+- updateGuideline -> collection "category_guidelines" -> data: { "category": "Name", "guideline": "Text" }
+- updateSummary -> collection "category_summaries" -> data: { "category": "Name", "summary": "Text" }
+- addNote -> collection "notes" -> data: { "note": "Text" }
+- updateEmailCategory -> collection "response_emails" -> data: { "emailId": "Exact email id", "newCategory": "Category Name" }
+
+Return ONLY JSON:
+{
+  "summary": "One sentence summary of the intended changes",
+  "modifications": [
+    {
+      "type": "updateEmailCategory",
+      "collection": "response_emails",
+      "userEmail": "${targetUser}",
+      "description": "Move email abc123 to Research",
+      "data": {
+        "emailId": "abc123",
+        "newCategory": "Research"
+      }
+    }
+  ]
+}
+
+Rules:
+- If the request does not require any database change, return {"summary":"", "modifications":[]}
+- Use exact email IDs from the data context when changing email categories
+- Do not invent categories that already exist if the request only asks to move emails
+- Keep descriptions concise and user-facing
+- Return JSON only
+
+DATA CONTEXT:
+${dataContext}`;
+
+  const started = Date.now();
+  let response;
+  try {
+    response = await invokeGemini({
+      model: modelName,
+      temperature: 0.1,
+      maxOutputTokens: 1800,
+      responseMimeType: 'application/json',
+      responseSchema: modificationSchema,
+      messages: [
+        { role: 'user', content: plannerPrompt }
+      ]
+    });
+    const duration = Date.now() - started;
+    logger?.logApiCall(
+      modelName,
+      Math.ceil(plannerPrompt.length / 4),
+      Math.ceil((response.content?.length || 0) / 4),
+      duration,
+      true,
+      null,
+      null,
+      plannerPrompt,
+      response.content
+    );
+  } catch (error) {
+    const duration = Date.now() - started;
+    logger?.logApiCall(modelName, 0, 0, duration, false, error, null, plannerPrompt, null);
+    logger?.logError('Modification planner API call', error);
+    throw error;
+  }
+
+  const parsed = parseModificationEnvelope(response.content);
+  const normalized = normalizeModificationPlan(parsed, targetUser);
+  return normalized;
 }
 
 function normalizeCategorySuggestions(input, validEmailIds = new Set()) {
@@ -1755,6 +1918,35 @@ app.post('/api/email-chat', async (req, res) => {
           source: 'dedicated-ai-category-suggestions'
         }
       });
+    }
+
+    if (isDatabaseModificationIntent(message)) {
+      const plan = await generateModificationPlanForUsers(message, usersToQuery, logger);
+      const modifications = [];
+      for (const mod of plan.modifications) {
+        const errors = await validateModification(mod);
+        if (errors.length === 0) modifications.push(mod);
+      }
+
+      const operationsLog = logger.getLog();
+      if (modifications.length > 0) {
+        const assistantResponse = plan.summary
+          ? plan.summary
+          : `I identified ${modifications.length} database change${modifications.length !== 1 ? 's' : ''} that require your approval.`;
+        return res.json({
+          success: true,
+          response: assistantResponse,
+          availableUsers: AVAILABLE_USERS,
+          operationsLog,
+          modifications,
+          requiresConfirmation: true,
+          isEmailQuery: false,
+          summary: {
+            modifications: modifications.length,
+            source: 'dedicated-ai-modification-planner'
+          }
+        });
+      }
     }
 
     // Load email data for selected user(s) (with logging)
