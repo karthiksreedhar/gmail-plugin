@@ -43,11 +43,11 @@
         .header {
             background: #d2b48c;
             border-bottom: 1px solid #e0e0e0;
-            padding: 10px 18px;
+            padding: 8px 14px;
             display: flex;
             justify-content: space-between;
             align-items: center;
-            gap: 12px;
+            gap: 8px;
             box-shadow: 0 1px 3px rgba(0,0,0,0.1);
             position: fixed;
             top: 0;
@@ -71,20 +71,21 @@
 
         .header-left-buttons {
             display: flex;
-            gap: 12px;
+            gap: 8px;
             align-items: center;
             flex: 0 1 auto;
             min-width: 0;
+            flex-wrap: nowrap;
         }
 
         .header-buttons {
             display: flex;
-            gap: 12px;
+            gap: 8px;
             align-items: center;
             justify-content: flex-end;
             flex: 0 1 auto;
             min-width: 0;
-            flex-wrap: wrap;
+            flex-wrap: nowrap;
         }
 
         .header-center-actions {
@@ -94,15 +95,31 @@
             justify-content: center;
             align-items: center;
             gap: 8px;
-            flex-wrap: wrap;
+            flex-wrap: nowrap;
         }
 
         .header-compact-btn {
-            padding: 10px 16px;
-            font-size: 0.92em;
-            line-height: 1.15;
+            padding: 7px 12px;
+            font-size: 0.78em;
+            line-height: 1.05;
             white-space: nowrap;
             flex: 0 1 auto;
+            border-radius: 6px;
+            font-weight: 500;
+        }
+
+        #feature-header-actions {
+            display: flex;
+            gap: 8px;
+            flex-wrap: nowrap;
+            justify-content: center;
+            align-items: center;
+            min-width: 0;
+        }
+
+        #currentUser {
+            font-size: 0.92em;
+            white-space: nowrap;
         }
 
         .save-scenario-btn {
@@ -141,7 +158,7 @@
             display: flex;
             flex: 1;
             overflow: hidden;
-            margin-top: 96px;
+            margin-top: 76px;
         }
 
         .sidebar {
@@ -619,24 +636,24 @@
 
         @media (max-width: 1600px) {
             .header {
-                padding: 8px 14px;
-                gap: 8px;
+                padding: 7px 10px;
+                gap: 6px;
             }
 
             .header-left-buttons,
             .header-buttons,
             .header-center-actions,
             #feature-header-actions {
-                gap: 8px !important;
+                gap: 6px !important;
             }
 
             .header-compact-btn {
-                padding: 9px 12px;
-                font-size: 0.86em;
+                padding: 6px 10px;
+                font-size: 0.72em;
             }
 
             .main-content {
-                margin-top: 102px;
+                margin-top: 72px;
             }
         }
 
@@ -2820,7 +2837,7 @@
                 <button class="refresh-btn header-compact-btn" onclick="window.location.href='/seed.html'" title="Seed initial categories from important inbox">Seed Categories</button>
                 <button class="generate-btn header-compact-btn" onclick="openTestClassifier()" title="Run classifier evaluation on labeled emails">Test Classifier</button>
                 <!-- Feature extension point: header actions -->
-                <div id="feature-header-actions" style="display:flex; gap:8px; flex-wrap:wrap; justify-content:center;">
+                <div id="feature-header-actions">
                     <button id="openFeatureManagerBtn" class="generate-btn header-compact-btn" type="button" title="Manage deployed features">Features</button>
                     <button id="openFeatureGeneratorBtn" class="generate-btn header-compact-btn" type="button" title="Open feature generator">Open Feature Generator</button>
                 </div>

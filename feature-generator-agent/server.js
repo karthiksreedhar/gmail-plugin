@@ -215,7 +215,19 @@ async function getUserDocWithLogging(collection, userEmail, logger) {
 
 const app = express();
 const PORT = process.env.PORT || 5000;
-const MAIN_SYSTEM_BASE_URL = String(process.env.MAIN_SYSTEM_BASE_URL || 'http://localhost:3000').replace(/\/+$/, '');
+function normalizeBaseUrl(rawUrl, fallback) {
+  const raw = String(rawUrl || '').trim();
+  if (!raw) return fallback;
+  if (/^https?:\/\//i.test(raw)) {
+    return raw.replace(/\/+$/, '');
+  }
+  return `https://${raw.replace(/\/+$/, '')}`;
+}
+
+const MAIN_SYSTEM_BASE_URL = normalizeBaseUrl(
+  process.env.MAIN_SYSTEM_BASE_URL,
+  'http://localhost:3000'
+);
 const FEATURE_PUBLISH_TOKEN = String(process.env.FEATURE_PUBLISH_TOKEN || '').trim();
 const FEATURE_GENERATOR_CREATED_BY = String(
   process.env.FEATURE_GENERATOR_CREATED_BY || process.env.CURRENT_USER_EMAIL || ''
