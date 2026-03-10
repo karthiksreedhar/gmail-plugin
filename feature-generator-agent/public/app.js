@@ -1842,14 +1842,17 @@ function closeEmailList() {
 // Store pending category suggestions
 let pendingCategorySuggestions = null;
 let categoryEmailSelections = {}; // { categoryName: { emailId: boolean } }
+let categorySelections = {}; // { categoryName: boolean }
 
 // Show category suggestions in RHS with tabbed interface
 function showCategorySuggestionsInPreview(suggestions, operationsLog) {
   pendingCategorySuggestions = suggestions;
   categoryEmailSelections = {};
+  categorySelections = {};
   
   // Initialize all emails as selected by default
   for (const cat of suggestions.categories) {
+    categorySelections[cat.name] = true;
     categoryEmailSelections[cat.name] = {};
     if (cat.suggestedEmails) {
       for (const email of cat.suggestedEmails) {
@@ -1916,6 +1919,7 @@ function renderCategorySuggestionsHTML(suggestions) {
     const cat = categories[i];
     const emailCount = cat.suggestedEmails?.length || 0;
     html += `<button class="category-tab ${i === 0 ? 'active' : ''}" data-category="${escapeHtml(cat.name)}" data-index="${i}">
+      <input type="checkbox" class="category-enable-checkbox" data-category="${escapeHtml(cat.name)}" ${categorySelections[cat.name] ? 'checked' : ''}>
       ${escapeHtml(cat.name)} <span class="tab-count">${emailCount}</span>
     </button>`;
   }
@@ -1927,6 +1931,12 @@ function renderCategorySuggestionsHTML(suggestions) {
     const cat = categories[i];
     html += `<div class="category-panel ${i === 0 ? 'active' : ''}" data-category="${escapeHtml(cat.name)}" data-index="${i}">
       <div class="category-info">
+        <div class="category-enable-row">
+          <label class="checkbox-label">
+            <input type="checkbox" class="category-enable-checkbox" data-category="${escapeHtml(cat.name)}" ${categorySelections[cat.name] ? 'checked' : ''}>
+            <span>Include this category</span>
+          </label>
+        </div>
         <div class="category-description">${escapeHtml(cat.description || '')}</div>
         ${cat.guideline ? `<div class="category-guideline"><strong>Guideline:</strong> ${escapeHtml(cat.guideline)}</div>` : ''}
       </div>
@@ -1985,12 +1995,30 @@ function addCategorySuggestionsHandlers(container) {
   const panels = container.querySelectorAll('.category-panel');
   
   tabs.forEach(tab => {
-    tab.addEventListener('click', () => {
+    tab.addEventListener('click', (e) => {
+      if (e.target && e.target.classList.contains('category-enable-checkbox')) return;
       const index = tab.dataset.index;
       tabs.forEach(t => t.classList.remove('active'));
       panels.forEach(p => p.classList.remove('active'));
       tab.classList.add('active');
       container.querySelector(`.category-panel[data-index="${index}"]`).classList.add('active');
+    });
+  });
+
+  const categoryCheckboxes = container.querySelectorAll('.category-enable-checkbox');
+  categoryCheckboxes.forEach(checkbox => {
+    checkbox.addEventListener('click', (e) => e.stopPropagation());
+    checkbox.addEventListener('change', () => {
+      const categoryName = checkbox.dataset.category;
+      const enabled = checkbox.checked;
+      categorySelections[categoryName] = enabled;
+
+      container.querySelectorAll(`.category-enable-checkbox[data-category="${categoryName}"]`).forEach(cb => {
+        cb.checked = enabled;
+      });
+
+      const panel = container.querySelector(`.category-panel[data-category="${categoryName}"]`);
+      if (panel) panel.classList.toggle('category-disabled', !enabled);
     });
   });
   
@@ -2088,6 +2116,7 @@ function closeCategorySuggestions() {
   previewSection.style.display = 'none';
   pendingCategorySuggestions = null;
   categoryEmailSelections = {};
+  categorySelections = {};
   
   // Hide close button
   const closeBtn = previewSection.querySelector('.close-category-suggestions-btn');
@@ -2171,13 +2200,21 @@ async function handleApproveCategorySuggestions() {
   // Build the final suggestions with selected emails only
   const finalSuggestions = {
     ...pendingCategorySuggestions,
-    categories: pendingCategorySuggestions.categories.map(cat => ({
-      ...cat,
-      selectedEmails: Object.entries(categoryEmailSelections[cat.name] || {})
-        .filter(([id, selected]) => selected)
-        .map(([id]) => id)
-    }))
+    categories: pendingCategorySuggestions.categories
+      .filter(cat => categorySelections[cat.name] !== false)
+      .map(cat => ({
+        ...cat,
+        selectedEmails: Object.entries(categoryEmailSelections[cat.name] || {})
+          .filter(([id, selected]) => selected)
+          .map(([id]) => id)
+      }))
+      .filter(cat => cat.selectedEmails.length > 0)
   };
+
+  if (finalSuggestions.categories.length === 0) {
+    showToast('Please keep at least one category with selected emails', 'warning');
+    return;
+  }
   
   // Show loading state
   if (approveBtn) {
@@ -2235,6 +2272,7 @@ async function handleApproveCategorySuggestions() {
   
   pendingCategorySuggestions = null;
   categoryEmailSelections = {};
+  categorySelections = {};
 }
 
 // Handle cancel category suggestions
@@ -2255,6 +2293,7 @@ function handleCancelCategorySuggestions() {
   closeCategorySuggestions();
   pendingCategorySuggestions = null;
   categoryEmailSelections = {};
+  categorySelections = {};
   
   showToast('Category creation cancelled', 'warning');
 }
@@ -2266,6 +2305,7 @@ function handleCancelCategorySuggestions() {
 // State for RHS panel
 let rhsCategorySuggestions = null;
 let rhsEmailSelections = {}; // { categoryName: { emailId: boolean } }
+let rhsCategorySelections = {}; // { categoryName: boolean }
 
 // DOM Elements for RHS panel (will be initialized after DOM loads)
 let rhsPanel, rhsCloseBtn, rhsCategoryTabs, rhsCategoryPanels;
@@ -2368,9 +2408,11 @@ async function triggerCategorySuggestions() {
 function showRHSCategorySuggestionPanel(suggestions) {
   rhsCategorySuggestions = suggestions;
   rhsEmailSelections = {};
+  rhsCategorySelections = {};
   
   // Initialize all emails as selected by default
   for (const cat of suggestions.categories) {
+    rhsCategorySelections[cat.name] = true;
     rhsEmailSelections[cat.name] = {};
     if (cat.suggestedEmails) {
       for (const email of cat.suggestedEmails) {
@@ -2412,11 +2454,15 @@ function generateRHSTabs(categories) {
     tab.dataset.index = index;
     tab.dataset.category = cat.name;
     tab.innerHTML = `
+      <input type="checkbox" class="rhs-category-enable-checkbox" data-category="${escapeHtml(cat.name)}" ${rhsCategorySelections[cat.name] ? 'checked' : ''}>
       <span class="tab-name">${escapeHtml(cat.name)}</span>
       <span class="tab-count">${cat.suggestedEmails?.length || 0}</span>
     `;
     
-    tab.addEventListener('click', () => activateRHSTab(index));
+    tab.addEventListener('click', (e) => {
+      if (e.target && e.target.classList.contains('rhs-category-enable-checkbox')) return;
+      activateRHSTab(index);
+    });
     rhsCategoryTabs.appendChild(tab);
   });
 }
@@ -2433,6 +2479,12 @@ function generateRHSPanels(categories) {
     
     panel.innerHTML = `
       <div class="rhs-category-info">
+        <div class="rhs-category-enable-row">
+          <label class="rhs-checkbox-label">
+            <input type="checkbox" class="rhs-category-enable-checkbox" data-category="${escapeHtml(cat.name)}" ${rhsCategorySelections[cat.name] ? 'checked' : ''}>
+            <span>Include this category</span>
+          </label>
+        </div>
         <div class="rhs-category-description">${escapeHtml(cat.description || '')}</div>
         ${cat.guideline ? `<div class="rhs-category-guideline"><strong>Classification:</strong> ${escapeHtml(cat.guideline)}</div>` : ''}
       </div>
@@ -2522,6 +2574,21 @@ function setupRHSPanelEventListeners() {
       updateRHSSelectedCount();
     });
   });
+
+  const categoryCheckboxes = rhsCategoryPanels.querySelectorAll('.rhs-category-enable-checkbox');
+  categoryCheckboxes.forEach(checkbox => {
+    checkbox.addEventListener('change', () => {
+      const categoryName = checkbox.dataset.category;
+      const enabled = checkbox.checked;
+      rhsCategorySelections[categoryName] = enabled;
+      document.querySelectorAll(`.rhs-category-enable-checkbox[data-category="${categoryName}"]`).forEach(cb => {
+        cb.checked = enabled;
+      });
+      const panel = rhsCategoryPanels.querySelector(`.rhs-category-panel[data-category="${categoryName}"]`);
+      if (panel) panel.classList.toggle('rhs-category-disabled', !enabled);
+      updateRHSSelectedCount();
+    });
+  });
   
   // Email click to view thread
   const emailMains = rhsCategoryPanels.querySelectorAll('.rhs-email-main');
@@ -2584,8 +2651,9 @@ function updateRHSCategorySelectedCount(categoryName) {
 // Update total selected count across all categories
 function updateRHSSelectedCount() {
   let totalSelected = 0;
-  for (const categorySelections of Object.values(rhsEmailSelections)) {
-    totalSelected += Object.values(categorySelections).filter(v => v).length;
+  for (const [categoryName, emailSelections] of Object.entries(rhsEmailSelections)) {
+    if (rhsCategorySelections[categoryName] === false) continue;
+    totalSelected += Object.values(emailSelections).filter(v => v).length;
   }
   selectedEmailCount.textContent = totalSelected;
   
@@ -2644,12 +2712,15 @@ async function handleRHSApprove() {
   // Build final suggestions with selected emails only
   const finalSuggestions = {
     action: 'createCategories',
-    categories: rhsCategorySuggestions.categories.map(cat => ({
-      ...cat,
-      selectedEmails: Object.entries(rhsEmailSelections[cat.name] || {})
-        .filter(([id, selected]) => selected)
-        .map(([id]) => id)
-    })).filter(cat => cat.selectedEmails.length > 0) // Only include categories with selected emails
+    categories: rhsCategorySuggestions.categories
+      .filter(cat => rhsCategorySelections[cat.name] !== false)
+      .map(cat => ({
+        ...cat,
+        selectedEmails: Object.entries(rhsEmailSelections[cat.name] || {})
+          .filter(([id, selected]) => selected)
+          .map(([id]) => id)
+      }))
+      .filter(cat => cat.selectedEmails.length > 0)
   };
   
   if (finalSuggestions.categories.length === 0) {
@@ -2701,6 +2772,7 @@ function closeRHSPanel() {
     rhsPanel.style.display = 'none';
     rhsCategorySuggestions = null;
     rhsEmailSelections = {};
+    rhsCategorySelections = {};
   }, 300);
 }
 
