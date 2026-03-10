@@ -1848,6 +1848,22 @@ body.chat-mode .mode-btn.active[data-mode="chat"] {
   color: var(--primary-color);
 }
 
+.category-enable-row,
+.rhs-category-enable-row {
+  margin-bottom: 10px;
+}
+
+.category-confirm-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.category-disabled,
+.rhs-category-disabled {
+  opacity: 0.55;
+}
+
 /* Category Panels */
 .category-panels {
   flex: 1;

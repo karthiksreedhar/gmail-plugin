@@ -2012,13 +2012,7 @@ function addCategorySuggestionsHandlers(container) {
       const categoryName = checkbox.dataset.category;
       const enabled = checkbox.checked;
       categorySelections[categoryName] = enabled;
-
-      container.querySelectorAll(`.category-enable-checkbox[data-category="${categoryName}"]`).forEach(cb => {
-        cb.checked = enabled;
-      });
-
-      const panel = container.querySelector(`.category-panel[data-category="${categoryName}"]`);
-      if (panel) panel.classList.toggle('category-disabled', !enabled);
+      syncCategorySelectionUI(categoryName, enabled);
     });
   });
   
@@ -2169,9 +2163,16 @@ function addCategorySuggestionConfirmationMessage(suggestions) {
       <strong>Create New Categories</strong><br>
       I want to create <strong>${suggestions.categories.length} new categories</strong> and move <strong>${totalEmails} emails</strong>:
       <ul class="inline-changes-list">
-        ${suggestions.categories.map(cat => `<li>📂 ${escapeHtml(cat.name)} (${cat.suggestedEmails?.length || 0} emails)</li>`).join('')}
+        ${suggestions.categories.map(cat => `
+          <li>
+            <label class="category-confirm-option">
+              <input type="checkbox" class="category-confirm-checkbox" data-category="${escapeHtml(cat.name)}" ${categorySelections[cat.name] !== false ? 'checked' : ''}>
+              <span>📂 ${escapeHtml(cat.name)} (${cat.suggestedEmails?.length || 0} emails)</span>
+            </label>
+          </li>
+        `).join('')}
       </ul>
-      <p class="confirmation-hint">Select/deselect emails in the preview panel, then approve →</p>
+      <p class="confirmation-hint">Select categories here, and emails in the preview panel, then approve →</p>
     </div>
     <div class="confirmation-buttons">
       <button class="btn-secondary cancel-btn">✕ Cancel</button>
@@ -2180,6 +2181,14 @@ function addCategorySuggestionConfirmationMessage(suggestions) {
   `;
   
   // Add button handlers
+  contentDiv.querySelectorAll('.category-confirm-checkbox').forEach(checkbox => {
+    checkbox.addEventListener('change', () => {
+      const categoryName = checkbox.dataset.category;
+      const enabled = checkbox.checked;
+      categorySelections[categoryName] = enabled;
+      syncCategorySelectionUI(categoryName, enabled);
+    });
+  });
   contentDiv.querySelector('.cancel-btn').addEventListener('click', handleCancelCategorySuggestions);
   contentDiv.querySelector('.approve-btn').addEventListener('click', handleApproveCategorySuggestions);
   
@@ -2187,6 +2196,28 @@ function addCategorySuggestionConfirmationMessage(suggestions) {
   messageDiv.appendChild(contentDiv);
   chatMessages.appendChild(messageDiv);
   scrollToBottom();
+}
+
+function syncCategorySelectionUI(categoryName, enabled) {
+  if (categorySelections && Object.prototype.hasOwnProperty.call(categorySelections, categoryName)) {
+    categorySelections[categoryName] = enabled;
+  }
+  if (rhsCategorySelections && Object.prototype.hasOwnProperty.call(rhsCategorySelections, categoryName)) {
+    rhsCategorySelections[categoryName] = enabled;
+  }
+
+  document.querySelectorAll(`.category-enable-checkbox[data-category="${categoryName}"]`).forEach(cb => {
+    cb.checked = enabled;
+  });
+  document.querySelectorAll(`.category-confirm-checkbox[data-category="${categoryName}"]`).forEach(cb => {
+    cb.checked = enabled;
+  });
+
+  const previewPanel = document.querySelector(`.category-panel[data-category="${categoryName}"]`);
+  if (previewPanel) previewPanel.classList.toggle('category-disabled', !enabled);
+
+  const rhsPanelEl = document.querySelector(`.rhs-category-panel[data-category="${categoryName}"]`);
+  if (rhsPanelEl) rhsPanelEl.classList.toggle('rhs-category-disabled', !enabled);
 }
 
 // Handle approve category suggestions
@@ -2581,11 +2612,7 @@ function setupRHSPanelEventListeners() {
       const categoryName = checkbox.dataset.category;
       const enabled = checkbox.checked;
       rhsCategorySelections[categoryName] = enabled;
-      document.querySelectorAll(`.rhs-category-enable-checkbox[data-category="${categoryName}"]`).forEach(cb => {
-        cb.checked = enabled;
-      });
-      const panel = rhsCategoryPanels.querySelector(`.rhs-category-panel[data-category="${categoryName}"]`);
-      if (panel) panel.classList.toggle('rhs-category-disabled', !enabled);
+      syncCategorySelectionUI(categoryName, enabled);
       updateRHSSelectedCount();
     });
   });

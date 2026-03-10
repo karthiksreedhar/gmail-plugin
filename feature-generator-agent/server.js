@@ -1573,6 +1573,14 @@ function normalizeCategorySuggestions(input, validEmailIds = new Set()) {
   };
 }
 
+function hasSufficientCategorySuggestions(suggestions) {
+  const categories = Array.isArray(suggestions?.categories) ? suggestions.categories : [];
+  if (categories.length < 2) return false;
+  const totalEmails = categories.reduce((sum, cat) => sum + ((cat?.suggestedEmails || []).length), 0);
+  if (totalEmails < 4) return false;
+  return categories.every(cat => (cat?.suggestedEmails || []).length >= 2);
+}
+
 async function generateCategorySuggestionsForUser(userData, logger, options = {}) {
   const requestedCategories = Array.isArray(options.requestedCategories)
     ? options.requestedCategories.filter(Boolean)
@@ -1775,7 +1783,7 @@ ${String(aiResponse.content || '').slice(0, 12000)}`;
   }
 
   const normalized = normalizeCategorySuggestions(suggestions, validEmailIds);
-  if (normalized.categories.length) {
+  if (hasSufficientCategorySuggestions(normalized)) {
     return {
       suggestions: normalized,
       otherEmailsCount: otherEmails.length,
@@ -1794,6 +1802,7 @@ ${String(aiResponse.content || '').slice(0, 12000)}`;
 
 Group these emails currently in Other into 2-4 potential new categories.
 Use ONLY the exact ids provided below. Do not invent or modify ids.
+Try to produce at least 2 categories with at least 2 emails per category when the data supports it.
 
 Output shape:
 {
@@ -1836,7 +1845,7 @@ ${JSON.stringify(compactEmails, null, 2)}`;
     );
     const simplerParsed = parseSuggestionEnvelope(simpler.content);
     const simplerNormalized = normalizeCategorySuggestions(simplerParsed, validEmailIds);
-    if (simplerNormalized.categories.length) {
+    if (hasSufficientCategorySuggestions(simplerNormalized)) {
       return {
         suggestions: simplerNormalized,
         otherEmailsCount: otherEmails.length,
@@ -1847,6 +1856,69 @@ ${JSON.stringify(compactEmails, null, 2)}`;
     const simpleDuration = Date.now() - simpleStart;
     logger?.logApiCall(modelName, 0, 0, simpleDuration, false, simpleError, null, simplerPrompt, null);
     logger?.logError('Category suggestions simplified API call', simpleError);
+  }
+
+  const retryPrompt = `Return valid JSON only.
+
+The previous result was too sparse. Re-cluster these emails from Other into 2-4 meaningful new categories.
+Requirements:
+- Produce at least 2 categories
+- Put at least 2 exact email IDs in each category
+- Use ONLY exact IDs from the list below
+- Prefer covering 4-8 total emails
+
+Output shape:
+{
+  "categories": [
+    {
+      "name": "Category Name",
+      "description": "Short description",
+      "guideline": "Short guideline",
+      "emails": ["exact_id_1", "exact_id_2"],
+      "confidence": 0.8
+    }
+  ]
+}
+
+Emails:
+${JSON.stringify(compactEmails, null, 2)}`;
+
+  const retryStart = Date.now();
+  try {
+    const retried = await invokeGemini({
+      model: modelName,
+      temperature: 0.1,
+      maxOutputTokens: 1800,
+      responseMimeType: 'application/json',
+      messages: [
+        { role: 'user', content: retryPrompt }
+      ]
+    });
+    const retryDuration = Date.now() - retryStart;
+    logger?.logApiCall(
+      modelName,
+      Math.ceil(retryPrompt.length / 4),
+      Math.ceil((retried.content?.length || 0) / 4),
+      retryDuration,
+      true,
+      null,
+      null,
+      retryPrompt,
+      retried.content
+    );
+    const retriedParsed = parseSuggestionEnvelope(retried.content);
+    const retriedNormalized = normalizeCategorySuggestions(retriedParsed, validEmailIds);
+    if (hasSufficientCategorySuggestions(retriedNormalized)) {
+      return {
+        suggestions: retriedNormalized,
+        otherEmailsCount: otherEmails.length,
+        rawResponse: retried.content
+      };
+    }
+  } catch (retryError) {
+    const retryDuration = Date.now() - retryStart;
+    logger?.logApiCall(modelName, 0, 0, retryDuration, false, retryError, null, retryPrompt, null);
+    logger?.logError('Category suggestions retry API call', retryError);
   }
 
   throw new Error('AI response was not valid category-suggestion JSON');
