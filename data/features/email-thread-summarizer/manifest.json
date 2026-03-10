@@ -1,0 +1,13 @@
+{
+  "id": "email-thread-summarizer",
+  "name": "Email Thread Summarizer",
+  "version": "1.0.0",
+  "description": "Adds a 'Summarize' button to each email thread that generates a short summary (max 3 sentences) and lists any identified TODOs.",
+  "author": "Feature Generator Agent",
+  "backend": "backend.js",
+  "frontend": "frontend.js",
+  "permissions": [
+    "emails:read",
+    "api:custom"
+  ]
+}
