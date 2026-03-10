@@ -11,6 +11,7 @@ require('dotenv').config();
 
 // MongoDB (Atlas) connection helper
 const { initMongo, getDb, getUserDoc, setUserDoc, warmCacheForUser, getCachedDoc } = require('./db');
+const { invokeGemini, getGeminiApiKey, getGeminiModel } = require('./feature-generator-agent/gemini');
 
 /**
  * Initialize OpenAI client using environment variable
@@ -19,6 +20,55 @@ const { initMongo, getDb, getUserDoc, setUserDoc, warmCacheForUser, getCachedDoc
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
 });
+
+const GEMINI_CLASSIFIER_CONTEXT_BUDGET_CHARS = parseInt(process.env.GEMINI_CLASSIFIER_CONTEXT_BUDGET_CHARS || '90000', 10);
+const GEMINI_RESPONSE_CONTEXT_BUDGET_CHARS = parseInt(process.env.GEMINI_RESPONSE_CONTEXT_BUDGET_CHARS || '55000', 10);
+const GEMINI_RESPONSE_EXAMPLE_BUDGET_CHARS = parseInt(process.env.GEMINI_RESPONSE_EXAMPLE_BUDGET_CHARS || '26000', 10);
+const GEMINI_RESPONSE_REFINEMENT_BUDGET_CHARS = parseInt(process.env.GEMINI_RESPONSE_REFINEMENT_BUDGET_CHARS || '14000', 10);
+const GEMINI_RESPONSE_SAVED_GENERATION_BUDGET_CHARS = parseInt(process.env.GEMINI_RESPONSE_SAVED_GENERATION_BUDGET_CHARS || '9000', 10);
+
+function truncateForModel(text, maxChars) {
+  const str = String(text || '');
+  if (!maxChars || str.length <= maxChars) return str;
+  return `${str.slice(0, Math.max(0, maxChars - 1))}...`;
+}
+
+function similarityTokens(text) {
+  return String(text || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .filter(token => token.length >= 3);
+}
+
+function similarityOverlapScore(a, b) {
+  const left = new Set(similarityTokens(a));
+  if (left.size === 0) return 0;
+  let score = 0;
+  for (const token of similarityTokens(b)) {
+    if (left.has(token)) score++;
+  }
+  return score;
+}
+
+function selectItemsWithinCharBudget(items, { scoreItem, buildBlock, charBudget, maxItems }) {
+  const ranked = (items || [])
+    .map(item => ({ item, score: scoreItem(item) }))
+    .sort((a, b) => b.score - a.score);
+
+  const selected = [];
+  let usedChars = 0;
+  for (const entry of ranked) {
+    if (selected.length >= maxItems) break;
+    const block = buildBlock(entry.item);
+    if (!block) continue;
+    if (usedChars + block.length > charBudget) continue;
+    selected.push({ item: entry.item, block, score: entry.score });
+    usedChars += block.length;
+  }
+
+  return { selected, usedChars };
+}
 
 const app = express();
 const PORT = parseInt(process.env.PORT, 10) || 3000;
@@ -2126,7 +2176,31 @@ app.get('/api/email-thread/:emailId', async (req, res) => {
   }
 });
 
-// API endpoint to generate response using OpenAI
+function scoreResponseExampleForPrompt(email, target) {
+  const targetText = `${target.sender || ''} ${target.subject || ''} ${target.emailBody || ''} ${target.context || ''}`;
+  const candidateText = `${email.originalFrom || email.from || ''} ${email.subject || ''} ${email.body || ''}`;
+  let score = similarityOverlapScore(targetText, candidateText);
+  if (target.category && String(email.category || '').toLowerCase() === String(target.category || '').toLowerCase()) {
+    score += 25;
+  }
+  if (String(email.originalFrom || email.from || '').toLowerCase() === String(target.sender || '').toLowerCase()) {
+    score += 30;
+  }
+  return score;
+}
+
+function scoreRefinementForPrompt(refinement, target) {
+  const refinementText = `${refinement.prompt || ''} ${refinement.originalResponse || ''} ${refinement.refinedResponse || ''}`;
+  return similarityOverlapScore(`${target.subject || ''} ${target.emailBody || ''} ${target.context || ''}`, refinementText);
+}
+
+function scoreSavedGenerationForPrompt(generation, target) {
+  const originalEmail = generation.originalEmail || {};
+  const generationText = `${originalEmail.sender || ''} ${originalEmail.subject || ''} ${originalEmail.emailBody || ''} ${generation.generatedResponse || ''} ${generation.justification || ''}`;
+  return similarityOverlapScore(`${target.sender || ''} ${target.subject || ''} ${target.emailBody || ''} ${target.context || ''}`, generationText);
+}
+
+// API endpoint to generate response using Gemini
 app.post('/api/generate-response', async (req, res) => {
   try {
     const { sender, subject, emailBody, context } = req.body;
@@ -2155,8 +2229,7 @@ Body: ${emailBody}
 PREVIOUS EMAIL RESPONSES:
 `;
 
-    // Add prior examples with REAL user responses only, preferring same-category; fallback to random subset if none
-    // IMPORTANT: Do not truncate any email bodies. Control context via the number of examples only.
+    // Add prior examples with real user responses only, preferring same-category and lexical similarity.
     const targetCategory = (function () {
       try {
         return keywordCategorizeUnreplied(subject || '', emailBody || '', sender || '');
@@ -2172,68 +2245,76 @@ PREVIOUS EMAIL RESPONSES:
       String(e.category || '').toLowerCase() === String(targetCategory || '').toLowerCase()
     );
     const allPool = (responseEmails || []).filter(e => isRealUserResponse(e));
-
-    // If we have same-category examples with real user responses, use them; otherwise use a randomized subset from all real responses.
-    const baseList = (sameCatPool && sameCatPool.length)
-      ? sameCatPool
-      : (function shuffle(arr) {
-          const a = (arr || []).slice();
-          for (let i = a.length - 1; i > 0; i--) {
-            const j = Math.floor(Math.random() * (i + 1));
-            [a[i], a[j]] = [a[j], a[i]];
-          }
-          return a;
-        })(allPool);
-
-    // Soft context budget by character count for examples only (no truncation of individual bodies)
-    // Increase/decrease if needed; this controls the number of included examples, not their content.
-    let exampleCharBudget = 35000;
-    let used = 0;
-    let idx = 0;
-
-    for (const email of baseList) {
-      const block =
-        `\n--- EMAIL ${idx + 1} ---\n` +
+    const targetEmail = { sender, subject, emailBody, context, category: targetCategory };
+    const basePool = (sameCatPool && sameCatPool.length) ? sameCatPool : allPool;
+    const exampleSelection = selectItemsWithinCharBudget(basePool, {
+      scoreItem: email => scoreResponseExampleForPrompt(email, targetEmail),
+      buildBlock: email => (
+        `\n--- EMAIL ---\n` +
         `Category: ${email.category}\n` +
-        `Subject: ${email.subject}\n` +
-        `From: ${email.originalFrom || 'Unknown'}\n` +
-        `Your Response: ${email.body}\n\n`;
+        `Subject: ${truncateForModel(email.subject || '', 200)}\n` +
+        `From: ${truncateForModel(email.originalFrom || 'Unknown', 140)}\n` +
+        `Your Response: ${truncateForModel(email.body || '', 1800)}\n`
+      ),
+      charBudget: GEMINI_RESPONSE_EXAMPLE_BUDGET_CHARS,
+      maxItems: 18
+    });
 
-      if (used + block.length > exampleCharBudget) break;
-      prompt += block;
-      used += block.length;
-      idx++;
+    for (const [index, selected] of exampleSelection.selected.entries()) {
+      prompt += selected.block.replace('--- EMAIL ---', `--- EMAIL ${index + 1} ---`) + '\n';
     }
 
-    // Include ALL refinements (do not truncate); apply these patterns when relevant
     if (emailMemory.refinements && emailMemory.refinements.length > 0) {
-      prompt += `\nPREVIOUS REFINEMENTS (apply these patterns to new responses when relevant):\n`;
-      emailMemory.refinements.forEach((refinement, index) => {
-        prompt += `\n--- REFINEMENT ${index + 1} ---\n`;
-        prompt += `Refinement Request: ${refinement.prompt}\n`;
-        prompt += `Original Response: ${refinement.originalResponse}\n`;
-        prompt += `Refined Response: ${refinement.refinedResponse}\n`;
-        if (refinement.analysis && refinement.analysis.changes && refinement.analysis.changes.length) {
-          prompt += `Extracted Rules:\n`;
-          refinement.analysis.changes.forEach(change => {
-            if (change.extractedRule) {
-              prompt += `- ${change.extractedRule}\n`;
-            }
-          });
-        }
-        prompt += `\n`;
+      const refinementSelection = selectItemsWithinCharBudget(emailMemory.refinements, {
+        scoreItem: refinement => scoreRefinementForPrompt(refinement, targetEmail),
+        buildBlock: refinement => {
+          const extractedRules = Array.isArray(refinement.analysis?.changes)
+            ? refinement.analysis.changes
+                .map(change => change?.extractedRule)
+                .filter(Boolean)
+                .slice(0, 6)
+            : [];
+          let block =
+            `\n--- REFINEMENT ---\n` +
+            `Refinement Request: ${truncateForModel(refinement.prompt || '', 500)}\n` +
+            `Original Response: ${truncateForModel(refinement.originalResponse || '', 900)}\n` +
+            `Refined Response: ${truncateForModel(refinement.refinedResponse || '', 900)}\n`;
+          if (extractedRules.length) {
+            block += `Extracted Rules:\n${extractedRules.map(rule => `- ${truncateForModel(rule, 180)}`).join('\n')}\n`;
+          }
+          return block;
+        },
+        charBudget: GEMINI_RESPONSE_REFINEMENT_BUDGET_CHARS,
+        maxItems: 8
       });
+
+      if (refinementSelection.selected.length > 0) {
+        prompt += `\nPREVIOUS REFINEMENTS (apply these patterns to new responses when relevant):\n`;
+        for (const [index, selected] of refinementSelection.selected.entries()) {
+          prompt += selected.block.replace('--- REFINEMENT ---', `--- REFINEMENT ${index + 1} ---`) + '\n';
+        }
+      }
     }
 
-    // Add ALL saved generations if they exist
     if (emailMemory.savedGenerations && emailMemory.savedGenerations.length > 0) {
-      prompt += `\nPREVIOUS SAVED GENERATIONS:\n`;
-      emailMemory.savedGenerations.forEach((generation, index) => {
-        prompt += `\n--- SAVED GENERATION ${index + 1} ---\n`;
-        prompt += `Original Email: ${JSON.stringify(generation.originalEmail)}\n`;
-        prompt += `Generated Response: ${generation.generatedResponse}\n`;
-        prompt += `Justification: ${generation.justification}\n\n`;
+      const savedGenerationSelection = selectItemsWithinCharBudget(emailMemory.savedGenerations, {
+        scoreItem: generation => scoreSavedGenerationForPrompt(generation, targetEmail),
+        buildBlock: generation => (
+          `\n--- SAVED GENERATION ---\n` +
+          `Original Email: ${truncateForModel(JSON.stringify(generation.originalEmail || {}), 900)}\n` +
+          `Generated Response: ${truncateForModel(generation.generatedResponse || '', 900)}\n` +
+          `Justification: ${truncateForModel(generation.justification || '', 500)}\n`
+        ),
+        charBudget: GEMINI_RESPONSE_SAVED_GENERATION_BUDGET_CHARS,
+        maxItems: 6
       });
+
+      if (savedGenerationSelection.selected.length > 0) {
+        prompt += `\nPREVIOUS SAVED GENERATIONS:\n`;
+        for (const [index, selected] of savedGenerationSelection.selected.entries()) {
+          prompt += selected.block.replace('--- SAVED GENERATION ---', `--- SAVED GENERATION ${index + 1} ---`) + '\n';
+        }
+      }
     }
 
 
@@ -2244,7 +2325,7 @@ PREVIOUS EMAIL RESPONSES:
       prompt += `\nADDITIONAL CONTEXT: ${missingInfoContext}\n`;
     }
 
-    prompt += `\nGenerate the response following the instructions above. Format your response as:
+    const responseFormatInstructions = `\nGenerate the response following the instructions above. Format your response as:
 
 RESPONSE:
 [The actual email response content only - from greeting to sign-off, no subject line or metadata]
@@ -2252,13 +2333,17 @@ RESPONSE:
 JUSTIFICATION:
 [Bullet point list explaining which previous emails are most similar and why]`;
 
-    const completion = await openai.chat.completions.create({
-      model: "o3",
-      messages: [{ role: "user", content: prompt }],
-      max_completion_tokens: 2000
+    const maxPromptChars = Math.max(4000, GEMINI_RESPONSE_CONTEXT_BUDGET_CHARS - responseFormatInstructions.length);
+    prompt = truncateForModel(prompt, maxPromptChars) + responseFormatInstructions;
+
+    const completion = await invokeGemini({
+      model: getGeminiModel(),
+      messages: [{ role: 'user', content: prompt }],
+      temperature: 0.2,
+      maxOutputTokens: 2000
     });
 
-    const fullResponse = completion.choices[0].message.content.trim();
+    const fullResponse = String(completion?.content || '').trim();
     
     // Parse the response to separate the email content from justification
     const responseParts = fullResponse.split('JUSTIFICATION:');
@@ -12234,23 +12319,36 @@ function __v3BuildCategoryRows() {
   return byCat;
 }
 
-// OpenAI batched labeling: returns { [id]: { contenders, pick, rationales } }
+// LLM batched labeling: returns { [id]: { contenders, pick, rationales } }
 async function __v3OpenAIBatchLabel(newEmails, categories, perCatRows, summariesMap, guidelinesMap, maxPerCat = 20) {
+  const perCategoryBudget = Math.max(1200, Math.floor(GEMINI_CLASSIFIER_CONTEXT_BUDGET_CHARS / Math.max(categories.length || 1, 1)));
   const bundles = [];
+  let totalBundleChars = 0;
   for (const c of categories) {
-    const rows = (perCatRows.get(c) || []).slice(0, maxPerCat).map((r, i) => ({
-      i: i + 1,
-      subject: String(r.subject || '').slice(0, 180),
-      body: String(r.body || '').slice(0, 550)
-    }));
+    const summary = truncateForModel(summariesMap?.[c] || '', 300);
+    const guideline = truncateForModel(guidelinesMap?.[c] || '', 300);
+    const rows = [];
+    let bundleChars = summary.length + guideline.length + String(c || '').length;
+    for (const row of (perCatRows.get(c) || []).slice(0, maxPerCat)) {
+      const candidate = {
+        i: rows.length + 1,
+        subject: truncateForModel(row.subject || '', 160),
+        body: truncateForModel(row.body || '', 360)
+      };
+      const candidateChars = JSON.stringify(candidate).length;
+      if (rows.length > 0 && bundleChars + candidateChars > perCategoryBudget) break;
+      rows.push(candidate);
+      bundleChars += candidateChars;
+    }
     bundles.push({
       category: c,
       meta: {
-        summary: summariesMap?.[c] || '',
-        guideline: guidelinesMap?.[c] || ''
+        summary,
+        guideline
       },
       examples: rows
     });
+    totalBundleChars += bundleChars;
   }
   const allowedJson = JSON.stringify(categories, null, 2);
   const bundlesJson = JSON.stringify(bundles, null, 2);
@@ -12258,7 +12356,7 @@ async function __v3OpenAIBatchLabel(newEmails, categories, perCatRows, summaries
     id: String(e.id || ''),
     from: String(e.from || ''),
     subject: String(e.subject || '').slice(0, 200),
-    body: String(e.body || '').slice(0, 1400)
+    body: String(e.body || '').slice(0, 1100)
   }));
   const itemsJson = JSON.stringify(items, null, 2);
 
@@ -12299,23 +12397,24 @@ Return ONLY strictly valid JSON of the form:
   const systemTokens = SYSTEM.length / 4; // rough estimate: 4 chars per token
   const userTokens = USER.length / 4;
   const totalEstimatedTokens = systemTokens + userTokens;
-  console.log(`[BatchLabel] Calling OpenAI with ~${Math.round(totalEstimatedTokens)} estimated tokens (${categories.length} categories, ${newEmails.length} new emails, max ${maxPerCat} examples/category)`);
+  console.log(`[BatchLabel] Calling Gemini (${getGeminiModel()}) with ~${Math.round(totalEstimatedTokens)} estimated tokens (${categories.length} categories, ${newEmails.length} new emails, max ${maxPerCat} examples/category, bundled chars ${totalBundleChars})`);
 
   try {
-    const llmPromise = openai.chat.completions.create({
-      model: 'o3',
+    const llmPromise = invokeGemini({
+      model: getGeminiModel(),
       messages: [
         { role: 'system', content: SYSTEM },
         { role: 'user', content: USER }
       ],
-      max_completion_tokens: 2000,
-      response_format: { type: 'json_object' }
+      temperature: 0.1,
+      maxOutputTokens: 2000,
+      responseMimeType: 'application/json'
     });
     const timeoutPromise = new Promise((_, reject) => {
       setTimeout(() => reject(new Error(`auto_sync_llm_timeout_${AUTO_SYNC_LLM_TIMEOUT_MS}ms`)), AUTO_SYNC_LLM_TIMEOUT_MS);
     });
     const resp = await Promise.race([llmPromise, timeoutPromise]);
-    const raw = resp.choices?.[0]?.message?.content || '';
+    const raw = resp?.content || '';
     const rawPreview = typeof raw === 'string' ? raw.slice(0, 500) : String(raw).slice(0, 500);
     console.log(`[BatchLabel] Raw response preview (first 500 chars): ${rawPreview}`);
     
@@ -12370,8 +12469,8 @@ Return ONLY strictly valid JSON of the form:
     }
     return results;
   } catch (err) {
-    console.error(`[BatchLabel] OpenAI batch labeling FAILED:`, err?.message || err);
-    if (err?.status === 400) {
+    console.error(`[BatchLabel] Gemini batch labeling FAILED:`, err?.message || err);
+    if (err?.status === 400 || /token|context|size/i.test(String(err?.message || ''))) {
       console.error(`[BatchLabel] HTTP 400 - likely context window exceeded (estimated ${Math.round(totalEstimatedTokens)} tokens)`);
     } else if (err?.status === 429) {
       console.error(`[BatchLabel] HTTP 429 - rate limit hit`);
@@ -12794,8 +12893,8 @@ app.post('/api/classifier-v4/suggest-batch', async (req, res) => {
 // Runs the V4 batched classifier and returns metrics/rows (shape mirrors v3 endpoint)
 app.post('/api/test-classifier/run-v4', async (req, res) => {
   try {
-    if (!process.env.OPENAI_API_KEY) {
-      return res.status(400).json({ success: false, error: 'OPENAI_API_KEY is required for classifier v4.' });
+    if (!getGeminiApiKey()) {
+      return res.status(400).json({ success: false, error: 'GEMINI_API_KEY or GOOGLE_API_KEY is required for classifier v4.' });
     }
 
     // Load labeled ground truth (apply same validation/hidden filters as v3)
@@ -13032,8 +13131,8 @@ app.post('/api/test-classifier/run-v4', async (req, res) => {
 // Runs the V3 batched classifier on a deterministic 80/20 split and returns metrics + rows (like the existing UI expects)
 app.post('/api/test-classifier/run-v3', async (req, res) => {
   try {
-    if (!process.env.OPENAI_API_KEY) {
-      return res.status(400).json({ success: false, error: 'OPENAI_API_KEY is required for classifier v3.' });
+    if (!getGeminiApiKey()) {
+      return res.status(400).json({ success: false, error: 'GEMINI_API_KEY or GOOGLE_API_KEY is required for classifier v3.' });
     }
 
     // Load labeled ground truth emails (like the evaluator scripts do)
@@ -13348,9 +13447,9 @@ app.post('/api/explain-category-assignment', async (req, res) => {
       heuristic += '.';
     }
 
-    // Try OpenAI for a concise, polished explanation; fall back to heuristic if anything fails
+    // Try Gemini for a concise, polished explanation; fall back to heuristic if anything fails
     let explanation = heuristic;
-    if (process.env.OPENAI_API_KEY) {
+    if (getGeminiApiKey()) {
       try {
         const SYSTEM = 'You produce a concise, one or two sentence explanation of why an email fits a given category. Be specific, reference concrete cues (subject terms, sender patterns, similarities to prior examples), and avoid generic wording. Output plain text only.';
         const USER = `CATEGORY: ${category}
@@ -13364,29 +13463,30 @@ ${examples.map((r, i) => `${i + 1}) ${r.subject || 'No Subject'} | ${r.originalF
 
 Provide a one or two sentence justification only.`;
 
-        const completion = await openai.chat.completions.create({
-          model: 'o3',
+        const completion = await invokeGemini({
+          model: getGeminiModel(),
           messages: [
             { role: 'system', content: SYSTEM },
             { role: 'user', content: USER }
           ],
-          max_completion_tokens: 180
+          temperature: 0.2,
+          maxOutputTokens: 180
         });
-        const txt = (completion.choices?.[0]?.message?.content || '').trim();
+        const txt = String(completion?.content || '').trim();
         if (txt) {
           explanation = txt;
           console.log(`[ExplainCategory] AI explanation generated for "${category}" (length: ${txt.length})`);
         } else {
-          console.warn(`[ExplainCategory] OpenAI returned empty response for "${category}", using heuristic fallback`);
+          console.warn(`[ExplainCategory] Gemini returned empty response for "${category}", using heuristic fallback`);
           explanation = heuristic;
         }
       } catch (err) {
-        console.warn(`[ExplainCategory] OpenAI explanation failed for "${category}":`, err?.message || err);
+        console.warn(`[ExplainCategory] Gemini explanation failed for "${category}":`, err?.message || err);
         console.log(`[ExplainCategory] Falling back to heuristic explanation`);
         explanation = heuristic;
       }
     } else {
-      console.log(`[ExplainCategory] No OPENAI_API_KEY, using heuristic explanation for "${category}"`);
+      console.log(`[ExplainCategory] No GEMINI_API_KEY/GOOGLE_API_KEY, using heuristic explanation for "${category}"`);
     }
 
     return res.json({
