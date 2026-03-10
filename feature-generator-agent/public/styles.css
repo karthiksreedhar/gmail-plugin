@@ -406,6 +406,7 @@ body.chat-mode .mode-btn.active[data-mode="chat"] {
   display: flex;
   flex-direction: column;
   min-height: 0;
+  max-height: calc(100vh - 140px);
 }
 
 .preview-header {
@@ -519,6 +520,7 @@ body.chat-mode .mode-btn.active[data-mode="chat"] {
   overflow: auto;
   background: var(--bg-primary);
   min-height: 0;
+  max-height: 100%;
 }
 
 #fileContent code {
