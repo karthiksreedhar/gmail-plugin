@@ -10,7 +10,20 @@ const crypto = require('crypto');
 require('dotenv').config();
 
 // MongoDB (Atlas) connection helper
-const { initMongo, getDb, getUserDoc, setUserDoc, warmCacheForUser, getCachedDoc } = require('./db');
+const {
+  initMongo,
+  getDb,
+  getUserDoc,
+  setUserDoc,
+  warmCacheForUser,
+  getCachedDoc,
+  createOrUpdateGeneratedFeature,
+  getGeneratedFeature,
+  listGeneratedFeatures,
+  upsertUserFeaturePreference,
+  getUserFeaturePreference,
+  listUserFeaturePreferences
+} = require('./db');
 const { invokeGemini, getGeminiApiKey, getGeminiModel } = require('./feature-generator-agent/gemini');
 
 /**
@@ -84,6 +97,8 @@ const FEATURE_GENERATOR_URL = String(process.env.FEATURE_GENERATOR_URL || '').tr
  */
 const loadedFeatures = [];
 const FEATURE_PUBLISH_TOKEN = String(process.env.FEATURE_PUBLISH_TOKEN || '').trim();
+const ALLOW_LOCAL_FEATURE_PUBLISH =
+  String(process.env.ALLOW_LOCAL_FEATURE_PUBLISH || (!process.env.VERCEL ? 'true' : 'false')).toLowerCase() === 'true';
 const FEATURE_PUBLISH_ALLOW_LOCAL_NO_TOKEN =
   String(process.env.FEATURE_PUBLISH_ALLOW_LOCAL_NO_TOKEN || 'true').toLowerCase() === 'true';
 
@@ -251,6 +266,9 @@ function initializeFeatures(options = {}) {
 }
 
 function shouldAllowFeaturePublish(req) {
+  if (!ALLOW_LOCAL_FEATURE_PUBLISH) {
+    return false;
+  }
   const tokenFromHeader = String(req.get('x-feature-publish-token') || '');
   if (FEATURE_PUBLISH_TOKEN) {
     return tokenFromHeader && tokenFromHeader === FEATURE_PUBLISH_TOKEN;
@@ -280,18 +298,100 @@ function resolveFeatureFilePath(featureDir, relativeFilePath) {
   return fullPath;
 }
 
-// API endpoint to list loaded features
-app.get('/api/features', (req, res) => {
-  res.json({
-    success: true,
-    features: loadedFeatures.map(f => ({
-      id: f.id,
-      name: f.name,
-      version: f.version,
-      description: f.manifest.description || ''
-    }))
+function getLoadedFeatureMap() {
+  return new Map(loadedFeatures.map(feature => [feature.id, feature]));
+}
+
+function getDefaultFeaturePreference() {
+  return {
+    visible: true,
+    enabled: true,
+    pinned: false
+  };
+}
+
+async function ensureLoadedFeaturesRegistered() {
+  await Promise.all(loadedFeatures.map(feature =>
+    createOrUpdateGeneratedFeature(feature.id, {
+      name: feature.name,
+      description: feature.manifest.description || '',
+      manifest: feature.manifest,
+      source: 'filesystem',
+      status: 'deployed',
+      deploymentStatus: 'deployed'
+    }).catch(error => {
+      console.error(`Failed to register loaded feature ${feature.id}:`, error.message);
+      return null;
+    })
+  ));
+}
+
+async function listFeatureRegistryForUser(userEmail) {
+  await ensureLoadedFeaturesRegistered();
+
+  const normalizedUserEmail = String(userEmail || '').trim().toLowerCase();
+  const [registryFeatures, preferences] = await Promise.all([
+    listGeneratedFeatures(),
+    listUserFeaturePreferences(normalizedUserEmail)
+  ]);
+
+  const loadedMap = getLoadedFeatureMap();
+  const preferenceMap = new Map(preferences.map(pref => [pref.featureId, pref]));
+  const featureIds = new Set([
+    ...registryFeatures.map(feature => feature.featureId),
+    ...loadedFeatures.map(feature => feature.id)
+  ]);
+
+  return Array.from(featureIds).map(featureId => {
+    const loaded = loadedMap.get(featureId) || null;
+    const registry = registryFeatures.find(feature => feature.featureId === featureId) || null;
+    const preference = preferenceMap.get(featureId) || null;
+    const defaults = getDefaultFeaturePreference();
+    const resolvedStatus = registry?.status || (loaded ? 'deployed' : 'draft');
+    const resolvedDeploymentStatus = registry?.deploymentStatus || (loaded ? 'deployed' : 'pending');
+
+    return {
+      featureId,
+      id: featureId,
+      name: registry?.name || loaded?.name || featureId,
+      version: registry?.manifest?.version || loaded?.version || '1.0.0',
+      description: registry?.description || loaded?.manifest?.description || '',
+      status: resolvedStatus,
+      deploymentStatus: resolvedDeploymentStatus,
+      source: registry?.source || (loaded ? 'filesystem' : 'registry'),
+      createdBy: registry?.createdBy || null,
+      prUrl: registry?.prUrl || null,
+      prNumber: registry?.prNumber || null,
+      vercelDeploymentUrl: registry?.vercelDeploymentUrl || null,
+      onDisk: !!loaded,
+      loaded: !!loaded,
+      manifest: registry?.manifest || loaded?.manifest || null,
+      preferences: {
+        visible: preference?.visible ?? defaults.visible,
+        enabled: preference?.enabled ?? defaults.enabled,
+        pinned: preference?.pinned ?? defaults.pinned
+      }
+    };
+  }).sort((a, b) => {
+    if (Number(b.preferences.pinned) !== Number(a.preferences.pinned)) {
+      return Number(b.preferences.pinned) - Number(a.preferences.pinned);
+    }
+    return a.name.localeCompare(b.name);
   });
-});
+}
+
+async function getFeatureRegistryEntryForUser(featureId, userEmail) {
+  const entries = await listFeatureRegistryForUser(userEmail);
+  return entries.find(entry => entry.featureId === featureId) || null;
+}
+
+function shouldExposeFeature(entry) {
+  return !!entry &&
+    entry.onDisk &&
+    entry.status === 'deployed' &&
+    entry.preferences.visible !== false &&
+    entry.preferences.enabled !== false;
+}
 
 // Client config endpoint for hosted feature-generator URL
 app.get('/api/config/feature-generator-url', (req, res) => {
@@ -315,6 +415,102 @@ app.use(session({
   saveUninitialized: false,
   cookie: { secure: process.env.NODE_ENV === 'production', httpOnly: true, maxAge: 24 * 60 * 60 * 1000 } // 1 day
 }));
+
+app.get('/api/features', async (req, res) => {
+  try {
+    const registryEntries = await listFeatureRegistryForUser(CURRENT_USER_EMAIL);
+    const features = registryEntries
+      .filter(shouldExposeFeature)
+      .map(entry => ({
+        id: entry.id,
+        name: entry.name,
+        version: entry.version,
+        description: entry.description || '',
+        status: entry.status,
+        deploymentStatus: entry.deploymentStatus,
+        preferences: entry.preferences
+      }));
+
+    res.json({ success: true, features });
+  } catch (error) {
+    console.error('Failed to list visible features:', error);
+    res.status(500).json({ success: false, error: 'Failed to load features' });
+  }
+});
+
+app.get('/api/feature-registry', async (req, res) => {
+  try {
+    const features = await listFeatureRegistryForUser(CURRENT_USER_EMAIL);
+    res.json({
+      success: true,
+      currentUser: CURRENT_USER_EMAIL,
+      features
+    });
+  } catch (error) {
+    console.error('Failed to load feature registry:', error);
+    res.status(500).json({ success: false, error: 'Failed to load feature registry' });
+  }
+});
+
+app.get('/api/feature-registry-visible', async (req, res) => {
+  try {
+    const features = (await listFeatureRegistryForUser(CURRENT_USER_EMAIL)).filter(shouldExposeFeature);
+    res.json({ success: true, features });
+  } catch (error) {
+    console.error('Failed to load visible feature registry:', error);
+    res.status(500).json({ success: false, error: 'Failed to load visible features' });
+  }
+});
+
+app.get('/api/feature-registry/:featureId', async (req, res) => {
+  try {
+    const featureId = sanitizeFeatureId(req.params.featureId);
+    if (!featureId) {
+      return res.status(400).json({ success: false, error: 'Invalid featureId' });
+    }
+
+    const feature = await getFeatureRegistryEntryForUser(featureId, CURRENT_USER_EMAIL);
+    if (!feature) {
+      return res.status(404).json({ success: false, error: 'Feature not found' });
+    }
+
+    res.json({ success: true, feature });
+  } catch (error) {
+    console.error('Failed to load feature registry entry:', error);
+    res.status(500).json({ success: false, error: 'Failed to load feature' });
+  }
+});
+
+app.post('/api/feature-registry/:featureId/preferences', async (req, res) => {
+  try {
+    const featureId = sanitizeFeatureId(req.params.featureId);
+    if (!featureId) {
+      return res.status(400).json({ success: false, error: 'Invalid featureId' });
+    }
+
+    const existingFeature = await getGeneratedFeature(featureId);
+    const loadedFeature = getLoadedFeatureMap().get(featureId);
+    if (!existingFeature && !loadedFeature) {
+      return res.status(404).json({ success: false, error: 'Feature not found' });
+    }
+
+    const payload = {};
+    if (typeof req.body?.visible === 'boolean') payload.visible = req.body.visible;
+    if (typeof req.body?.enabled === 'boolean') payload.enabled = req.body.enabled;
+    if (typeof req.body?.pinned === 'boolean') payload.pinned = req.body.pinned;
+
+    if (Object.keys(payload).length === 0) {
+      return res.status(400).json({ success: false, error: 'No valid preference fields provided' });
+    }
+
+    const preference = await upsertUserFeaturePreference(CURRENT_USER_EMAIL, featureId, payload);
+    const feature = await getFeatureRegistryEntryForUser(featureId, CURRENT_USER_EMAIL);
+    res.json({ success: true, preference, feature });
+  } catch (error) {
+    console.error('Failed to update feature preferences:', error);
+    res.status(500).json({ success: false, error: 'Failed to update feature preferences' });
+  }
+});
 
 // Publish or update generated features and reload feature plugins at runtime.
 app.post('/api/feature-management/publish', (req, res) => {
@@ -366,6 +562,22 @@ app.post('/api/feature-management/publish', (req, res) => {
     }
 
     const { loadedCount } = initializeFeatures({ reload: true });
+    Promise.all([
+      createOrUpdateGeneratedFeature(featureId, {
+        name: req.body?.name || featureId,
+        description: req.body?.description || '',
+        status: 'deployed',
+        deploymentStatus: 'deployed',
+        source: 'runtime_publish'
+      }),
+      upsertUserFeaturePreference(CURRENT_USER_EMAIL, featureId, {
+        visible: true,
+        enabled: true
+      })
+    ]).catch(error => {
+      console.error(`Failed to sync published feature ${featureId} into registry:`, error.message);
+    });
+
     return res.json({
       success: true,
       message: `Published ${writtenFiles.length} files for feature ${featureId}`,

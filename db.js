@@ -30,6 +30,8 @@ const COLLECTIONS = [
   'priority_emails',
   'precategorized_emails'
 ];
+const GENERATED_FEATURES_COLLECTION = 'generated_features';
+const USER_FEATURE_PREFERENCES_COLLECTION = 'user_feature_preferences';
 
 async function initMongo() {
   if (_db) return _db;
@@ -45,6 +47,21 @@ async function initMongo() {
     _cache[name] = _cache[name] || Object.create(null);
     try { await _db.collection(name).createIndex({ userEmail: 1 }, { unique: true }); } catch (_) {}
   }));
+  try {
+    await _db.collection(GENERATED_FEATURES_COLLECTION).createIndex({ featureId: 1 }, { unique: true });
+  } catch (_) {}
+  try {
+    await _db.collection(GENERATED_FEATURES_COLLECTION).createIndex({ status: 1 });
+  } catch (_) {}
+  try {
+    await _db.collection(GENERATED_FEATURES_COLLECTION).createIndex({ createdBy: 1 });
+  } catch (_) {}
+  try {
+    await _db.collection(USER_FEATURE_PREFERENCES_COLLECTION).createIndex(
+      { userEmail: 1, featureId: 1 },
+      { unique: true }
+    );
+  } catch (_) {}
 
   return _db;
 }
@@ -100,6 +117,108 @@ async function setUserDoc(collectionName, userEmail, payload) {
   return true;
 }
 
+async function createOrUpdateGeneratedFeature(featureId, payload = {}) {
+  const db = getDb();
+  const coll = db.collection(GENERATED_FEATURES_COLLECTION);
+  const now = new Date();
+  const normalizedFeatureId = String(featureId || '').trim();
+  if (!normalizedFeatureId) {
+    throw new Error('featureId is required');
+  }
+
+  const toStore = {
+    featureId: normalizedFeatureId,
+    ...payload,
+    updatedAt: now
+  };
+
+  await coll.updateOne(
+    { featureId: normalizedFeatureId },
+    {
+      $set: toStore,
+      $setOnInsert: { createdAt: now }
+    },
+    { upsert: true }
+  );
+
+  return coll.findOne({ featureId: normalizedFeatureId });
+}
+
+async function getGeneratedFeature(featureId) {
+  const db = getDb();
+  return db.collection(GENERATED_FEATURES_COLLECTION).findOne({ featureId: String(featureId || '').trim() });
+}
+
+async function listGeneratedFeatures(filter = {}, options = {}) {
+  const db = getDb();
+  const sort = options.sort || { updatedAt: -1, createdAt: -1, featureId: 1 };
+  return db.collection(GENERATED_FEATURES_COLLECTION).find(filter).sort(sort).toArray();
+}
+
+async function updateGeneratedFeatureStatus(featureId, status, extra = {}) {
+  return createOrUpdateGeneratedFeature(featureId, {
+    ...extra,
+    status
+  });
+}
+
+async function upsertUserFeaturePreference(userEmail, featureId, payload = {}) {
+  const db = getDb();
+  const coll = db.collection(USER_FEATURE_PREFERENCES_COLLECTION);
+  const now = new Date();
+  const normalizedUserEmail = String(userEmail || '').trim().toLowerCase();
+  const normalizedFeatureId = String(featureId || '').trim();
+
+  if (!normalizedUserEmail || !normalizedFeatureId) {
+    throw new Error('userEmail and featureId are required');
+  }
+
+  await coll.updateOne(
+    { userEmail: normalizedUserEmail, featureId: normalizedFeatureId },
+    {
+      $set: {
+        userEmail: normalizedUserEmail,
+        featureId: normalizedFeatureId,
+        ...payload,
+        updatedAt: now
+      },
+      $setOnInsert: { createdAt: now }
+    },
+    { upsert: true }
+  );
+
+  return coll.findOne({ userEmail: normalizedUserEmail, featureId: normalizedFeatureId });
+}
+
+async function getUserFeaturePreference(userEmail, featureId) {
+  const db = getDb();
+  return db.collection(USER_FEATURE_PREFERENCES_COLLECTION).findOne({
+    userEmail: String(userEmail || '').trim().toLowerCase(),
+    featureId: String(featureId || '').trim()
+  });
+}
+
+async function listUserFeaturePreferences(userEmail) {
+  const db = getDb();
+  return db.collection(USER_FEATURE_PREFERENCES_COLLECTION).find({
+    userEmail: String(userEmail || '').trim().toLowerCase()
+  }).toArray();
+}
+
+async function getVisibleDeployedFeaturesForUser(userEmail) {
+  const [features, preferences] = await Promise.all([
+    listGeneratedFeatures({ status: 'deployed' }),
+    listUserFeaturePreferences(userEmail)
+  ]);
+
+  const prefMap = new Map(preferences.map(pref => [pref.featureId, pref]));
+  return features.filter(feature => {
+    const pref = prefMap.get(feature.featureId);
+    if (!pref) return true;
+    return pref.visible !== false && pref.enabled !== false;
+  });
+}
+
 module.exports = {
   initMongo,
   getDb,
@@ -107,4 +226,12 @@ module.exports = {
   setUserDoc,
   warmCacheForUser,
   getCachedDoc,
+  createOrUpdateGeneratedFeature,
+  getGeneratedFeature,
+  listGeneratedFeatures,
+  updateGeneratedFeatureStatus,
+  upsertUserFeaturePreference,
+  getUserFeaturePreference,
+  listUserFeaturePreferences,
+  getVisibleDeployedFeaturesForUser,
 };

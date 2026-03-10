@@ -100,6 +100,8 @@
          * FEATURE LOADER
          * Dynamically loads frontend scripts for installed features
          */
+        const loadedFeatureScriptIds = new Set();
+
         async function loadFeatures() {
             try {
                 const response = await fetch('/api/features');
@@ -114,6 +116,9 @@
                 
                 for (const feature of data.features) {
                     try {
+                        if (loadedFeatureScriptIds.has(feature.id)) {
+                            continue;
+                        }
                         // Check if feature has frontend component
                         const scriptPath = `/data/features/${feature.id}/frontend.js`;
                         const script = document.createElement('script');
@@ -122,6 +127,7 @@
                             console.log(`No frontend script for feature: ${feature.name}`);
                         };
                         script.onload = () => {
+                            loadedFeatureScriptIds.add(feature.id);
                             console.log(`✓ Loaded frontend for feature: ${feature.name}`);
                             // Trigger feature loaded event
                             window.EmailAssistant.trigger('featureLoaded', feature);
@@ -165,6 +171,174 @@
                 window.open(targetUrl, '_blank', 'noopener');
             } catch (error) {
                 console.error('Failed to open feature generator:', error);
+            }
+        }
+
+        function featureStatusLabel(feature) {
+            if (feature.deploymentStatus && feature.deploymentStatus !== 'deployed') {
+                return feature.deploymentStatus;
+            }
+            return feature.status || 'unknown';
+        }
+
+        function featureStatusColor(feature) {
+            const status = featureStatusLabel(feature);
+            if (status === 'deployed') return '#137333';
+            if (status === 'pr_open' || status === 'pr_requested') return '#1a73e8';
+            if (status === 'deploying' || status === 'pr_merged') return '#b06000';
+            if (status === 'deploy_failed' || status === 'error') return '#b3261e';
+            return '#5f6368';
+        }
+
+        function formatFeatureSectionTitle(key) {
+            if (key === 'available') return 'Available';
+            if (key === 'awaiting') return 'Awaiting Review';
+            if (key === 'deploying') return 'Deploying';
+            if (key === 'hidden') return 'Hidden';
+            return 'Other';
+        }
+
+        function classifyFeatureSection(feature) {
+            if (feature.status !== 'deployed' || feature.deploymentStatus !== 'deployed') {
+                if (feature.status === 'pr_open' || feature.status === 'pr_requested' || feature.status === 'draft') {
+                    return 'awaiting';
+                }
+                if (feature.status === 'pr_merged' || feature.deploymentStatus === 'deploying' || feature.status === 'deploying') {
+                    return 'deploying';
+                }
+                return 'other';
+            }
+            return feature.preferences && feature.preferences.visible === false ? 'hidden' : 'available';
+        }
+
+        async function fetchFeatureRegistry() {
+            const response = await fetch('/api/feature-registry');
+            const data = await response.json();
+            if (!response.ok || !data.success) {
+                throw new Error(data.error || 'Failed to load feature registry');
+            }
+            return data.features || [];
+        }
+
+        function renderFeatureRegistry(root, features) {
+            const sections = { available: [], awaiting: [], deploying: [], hidden: [], other: [] };
+            (features || []).forEach(feature => {
+                sections[classifyFeatureSection(feature)].push(feature);
+            });
+
+            const html = Object.entries(sections)
+                .filter(([, items]) => items.length > 0)
+                .map(([section, items]) => `
+                    <div style="margin-bottom:20px;">
+                        <h3 style="margin:0 0 12px; font-size:16px; color:#202124;">${formatFeatureSectionTitle(section)}</h3>
+                        <div style="display:flex; flex-direction:column; gap:12px;">
+                            ${items.map(feature => {
+                                const showToggleDisabled = feature.status !== 'deployed' || feature.deploymentStatus !== 'deployed';
+                                const statusColor = featureStatusColor(feature);
+                                return `
+                                    <div style="border:1px solid #e0e0e0; border-radius:10px; padding:14px; background:#fff;">
+                                        <div style="display:flex; justify-content:space-between; gap:12px; align-items:flex-start;">
+                                            <div style="flex:1; min-width:0;">
+                                                <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+                                                    <strong style="font-size:15px; color:#202124;">${escapeHtml(feature.name || feature.featureId)}</strong>
+                                                    <span style="font-size:12px; font-weight:600; color:${statusColor}; background:${statusColor}18; padding:4px 8px; border-radius:999px; text-transform:capitalize;">${escapeHtml(featureStatusLabel(feature))}</span>
+                                                </div>
+                                                <div style="margin-top:6px; font-size:13px; color:#5f6368;">${escapeHtml(feature.description || 'No description yet.')}</div>
+                                                <div style="margin-top:8px; font-size:12px; color:#5f6368;">
+                                                    <span>Feature ID: ${escapeHtml(feature.featureId)}</span>
+                                                    ${feature.createdBy ? `<span style="margin-left:12px;">Created by ${escapeHtml(feature.createdBy)}</span>` : ''}
+                                                </div>
+                                                <div style="margin-top:8px; display:flex; gap:12px; flex-wrap:wrap; font-size:12px;">
+                                                    ${feature.prUrl ? `<a href="${feature.prUrl}" target="_blank" rel="noopener" style="color:#1a73e8; text-decoration:none;">View PR</a>` : ''}
+                                                    ${feature.vercelDeploymentUrl ? `<a href="${feature.vercelDeploymentUrl}" target="_blank" rel="noopener" style="color:#1a73e8; text-decoration:none;">View Deploy</a>` : ''}
+                                                </div>
+                                            </div>
+                                            <div style="display:flex; flex-direction:column; gap:10px; min-width:170px;">
+                                                <label style="display:flex; align-items:center; justify-content:space-between; gap:12px; font-size:13px; color:#202124;">
+                                                    <span>Show in my app</span>
+                                                    <input type="checkbox" data-feature-id="${escapeHtml(feature.featureId)}" data-pref-field="visible" ${feature.preferences && feature.preferences.visible !== false ? 'checked' : ''} ${showToggleDisabled ? 'disabled' : ''}>
+                                                </label>
+                                                <label style="display:flex; align-items:center; justify-content:space-between; gap:12px; font-size:13px; color:#202124;">
+                                                    <span>Enabled</span>
+                                                    <input type="checkbox" data-feature-id="${escapeHtml(feature.featureId)}" data-pref-field="enabled" ${feature.preferences && feature.preferences.enabled !== false ? 'checked' : ''} ${showToggleDisabled ? 'disabled' : ''}>
+                                                </label>
+                                                <label style="display:flex; align-items:center; justify-content:space-between; gap:12px; font-size:13px; color:#202124;">
+                                                    <span>Pinned</span>
+                                                    <input type="checkbox" data-feature-id="${escapeHtml(feature.featureId)}" data-pref-field="pinned" ${feature.preferences && feature.preferences.pinned ? 'checked' : ''}>
+                                                </label>
+                                            </div>
+                                        </div>
+                                    </div>
+                                `;
+                            }).join('')}
+                        </div>
+                    </div>
+                `).join('');
+
+            root.innerHTML = html || '<div style="color:#5f6368;">No features found yet.</div>';
+        }
+
+        async function refreshFeatureRegistryModal(root) {
+            root.innerHTML = '<div style="color:#5f6368;">Loading features...</div>';
+            const features = await fetchFeatureRegistry();
+            renderFeatureRegistry(root, features);
+        }
+
+        async function updateFeaturePreference(featureId, field, value) {
+            const response = await fetch(`/api/feature-registry/${encodeURIComponent(featureId)}/preferences`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ [field]: value })
+            });
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok || !data.success) {
+                throw new Error(data.error || 'Failed to update feature preference');
+            }
+            return data;
+        }
+
+        async function openFeatureManager() {
+            const modal = window.EmailAssistant.showModal(
+                '<div class="feature-manager-root" style="min-width:min(920px, 86vw); max-width:86vw;"></div>',
+                'Feature Manager'
+            );
+            if (!modal) return;
+
+            const root = modal.querySelector('.feature-manager-root');
+            if (!root) return;
+
+            modal.addEventListener('change', async (event) => {
+                const target = event.target;
+                if (!(target instanceof HTMLInputElement)) return;
+                const featureId = target.dataset.featureId;
+                const field = target.dataset.prefField;
+                if (!featureId || !field) return;
+
+                const nextValue = !!target.checked;
+                target.disabled = true;
+                try {
+                    await updateFeaturePreference(featureId, field, nextValue);
+                    if (field === 'visible' && nextValue) {
+                        await loadFeatures();
+                        showSuccessPopup('Feature is now visible in your app.', 'Feature Updated');
+                    } else if (field === 'visible' && !nextValue) {
+                        showSuccessPopup('Feature hidden. Refresh the page to fully remove any already-loaded UI.', 'Feature Updated');
+                    } else {
+                        showSuccessPopup('Feature preference updated.', 'Feature Updated');
+                    }
+                    await refreshFeatureRegistryModal(root);
+                } catch (error) {
+                    target.checked = !nextValue;
+                    showErrorPopup(error.message || 'Failed to update feature preference.', 'Update Failed');
+                } finally {
+                    target.disabled = false;
+                }
+            });
+
+            try {
+                await refreshFeatureRegistryModal(root);
+            } catch (error) {
+                root.innerHTML = `<div style="color:#b3261e;">${escapeHtml(error.message || 'Failed to load feature registry.')}</div>`;
             }
         }
 
@@ -13056,6 +13230,10 @@ async function renderEmailNotesPreview(el, emailId) {
 
         document.addEventListener('DOMContentLoaded', function() {
             startHardBannerHeartbeat();
+            const openFeatureManagerBtn = document.getElementById('openFeatureManagerBtn');
+            if (openFeatureManagerBtn) {
+                openFeatureManagerBtn.addEventListener('click', openFeatureManager);
+            }
             const openFeatureGeneratorBtn = document.getElementById('openFeatureGeneratorBtn');
             if (openFeatureGeneratorBtn) {
                 openFeatureGeneratorBtn.addEventListener('click', openFeatureGenerator);
