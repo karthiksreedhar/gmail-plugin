@@ -94,6 +94,9 @@
           <h2>📁 Generated Files</h2>
           <div class="preview-actions">
             <span id="featureIdBadge" class="feature-id-badge"></span>
+            <button id="createPrBtn" class="btn btn-primary" style="display: none;">
+              <span>🔀</span> Create PR
+            </button>
             <button id="downloadBtn" class="btn btn-success">
               <span>📦</span> Download ZIP
             </button>
@@ -169,7 +172,7 @@
 
     <!-- Footer -->
     <footer class="footer">
-      <p>Files are saved to <code>data/features/{feature-id}/</code> in your Gmail Plugin directory</p>
+      <p>Generated files are saved as a draft first, then promoted into <code>data/features/{feature-id}/</code> through a GitHub pull request.</p>
     </footer>
   </div>
 

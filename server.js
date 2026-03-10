@@ -97,6 +97,8 @@ const FEATURE_GENERATOR_URL = String(process.env.FEATURE_GENERATOR_URL || '').tr
  */
 const loadedFeatures = [];
 const FEATURE_PUBLISH_TOKEN = String(process.env.FEATURE_PUBLISH_TOKEN || '').trim();
+const FEATURE_EXPORT_TOKEN = String(process.env.FEATURE_EXPORT_TOKEN || '').trim();
+const FEATURE_PR_CALLBACK_TOKEN = String(process.env.FEATURE_PR_CALLBACK_TOKEN || '').trim();
 const ALLOW_LOCAL_FEATURE_PUBLISH =
   String(process.env.ALLOW_LOCAL_FEATURE_PUBLISH || (!process.env.VERCEL ? 'true' : 'false')).toLowerCase() === 'true';
 const FEATURE_PUBLISH_ALLOW_LOCAL_NO_TOKEN =
@@ -284,6 +286,26 @@ function shouldAllowFeatureRegistryWrite(req) {
   return ip === '127.0.0.1' || ip === '::1' || ip.endsWith('127.0.0.1');
 }
 
+function shouldAllowFeatureExport(req) {
+  const tokenFromHeader = String(req.get('x-feature-export-token') || req.get('authorization') || '').trim();
+  if (!FEATURE_EXPORT_TOKEN) return false;
+  if (tokenFromHeader === FEATURE_EXPORT_TOKEN) return true;
+  if (tokenFromHeader.toLowerCase().startsWith('bearer ')) {
+    return tokenFromHeader.slice(7).trim() === FEATURE_EXPORT_TOKEN;
+  }
+  return false;
+}
+
+function shouldAllowFeaturePrCallback(req) {
+  const tokenFromHeader = String(req.get('x-feature-pr-callback-token') || req.get('authorization') || '').trim();
+  if (!FEATURE_PR_CALLBACK_TOKEN) return false;
+  if (tokenFromHeader === FEATURE_PR_CALLBACK_TOKEN) return true;
+  if (tokenFromHeader.toLowerCase().startsWith('bearer ')) {
+    return tokenFromHeader.slice(7).trim() === FEATURE_PR_CALLBACK_TOKEN;
+  }
+  return false;
+}
+
 function sanitizeFeatureId(rawFeatureId) {
   const featureId = String(rawFeatureId || '').trim();
   if (!featureId) return null;
@@ -366,7 +388,9 @@ async function listFeatureRegistryForUser(userEmail) {
       createdBy: registry?.createdBy || null,
       prUrl: registry?.prUrl || null,
       prNumber: registry?.prNumber || null,
+      prWorkflowUrl: registry?.prWorkflowUrl || null,
       vercelDeploymentUrl: registry?.vercelDeploymentUrl || null,
+      lastError: registry?.lastError || null,
       onDisk: !!loaded,
       loaded: !!loaded,
       manifest: registry?.manifest || loaded?.manifest || null,
@@ -533,6 +557,102 @@ app.post('/api/internal/generated-features/save-draft', async (req, res) => {
   } catch (error) {
     console.error('Failed to save generated feature draft:', error);
     res.status(500).json({ success: false, error: error.message || 'Failed to save feature draft' });
+  }
+});
+
+app.get('/api/internal/generated-features/:featureId/export', async (req, res) => {
+  try {
+    if (!shouldAllowFeatureExport(req)) {
+      return res.status(401).json({ success: false, error: 'Unauthorized feature export request' });
+    }
+
+    const featureId = sanitizeFeatureId(req.params.featureId);
+    if (!featureId) {
+      return res.status(400).json({ success: false, error: 'Invalid featureId' });
+    }
+
+    const feature = await getGeneratedFeature(featureId);
+    if (!feature) {
+      return res.status(404).json({ success: false, error: 'Feature not found' });
+    }
+
+    if (!feature.files || typeof feature.files !== 'object' || Array.isArray(feature.files)) {
+      return res.status(400).json({ success: false, error: 'Feature has no exportable files' });
+    }
+
+    res.json({
+      success: true,
+      feature: {
+        featureId: feature.featureId,
+        name: feature.name || feature.featureId,
+        description: feature.description || '',
+        createdBy: feature.createdBy || null,
+        requestPrompt: feature.requestPrompt || '',
+        manifest: feature.manifest || null,
+        files: feature.files,
+        status: feature.status || 'draft'
+      }
+    });
+  } catch (error) {
+    console.error('Failed to export generated feature draft:', error);
+    res.status(500).json({ success: false, error: error.message || 'Failed to export feature draft' });
+  }
+});
+
+app.post('/api/internal/generated-features/:featureId/pr-requested', async (req, res) => {
+  try {
+    if (!shouldAllowFeatureRegistryWrite(req)) {
+      return res.status(401).json({ success: false, error: 'Unauthorized PR request update' });
+    }
+
+    const featureId = sanitizeFeatureId(req.params.featureId);
+    if (!featureId) {
+      return res.status(400).json({ success: false, error: 'Invalid featureId' });
+    }
+
+    const feature = await createOrUpdateGeneratedFeature(featureId, {
+      status: 'pr_requested',
+      prRequestedAt: new Date(),
+      prWorkflowUrl: String(req.body?.prWorkflowUrl || '').trim() || null
+    });
+
+    res.json({ success: true, feature });
+  } catch (error) {
+    console.error('Failed to mark PR requested:', error);
+    res.status(500).json({ success: false, error: error.message || 'Failed to mark PR requested' });
+  }
+});
+
+app.post('/api/internal/generated-features/:featureId/pr-status', async (req, res) => {
+  try {
+    if (!shouldAllowFeaturePrCallback(req)) {
+      return res.status(401).json({ success: false, error: 'Unauthorized PR status callback' });
+    }
+
+    const featureId = sanitizeFeatureId(req.params.featureId);
+    if (!featureId) {
+      return res.status(400).json({ success: false, error: 'Invalid featureId' });
+    }
+
+    const status = String(req.body?.status || '').trim();
+    if (!status) {
+      return res.status(400).json({ success: false, error: 'Missing status' });
+    }
+
+    const feature = await createOrUpdateGeneratedFeature(featureId, {
+      status,
+      prUrl: String(req.body?.prUrl || '').trim() || null,
+      prNumber: req.body?.prNumber ?? null,
+      prBranch: String(req.body?.prBranch || '').trim() || null,
+      commitSha: String(req.body?.commitSha || '').trim() || null,
+      lastError: String(req.body?.error || '').trim() || null,
+      deploymentStatus: status === 'pr_open' ? 'pending' : undefined
+    });
+
+    res.json({ success: true, feature });
+  } catch (error) {
+    console.error('Failed to update PR status:', error);
+    res.status(500).json({ success: false, error: error.message || 'Failed to update PR status' });
   }
 });
 

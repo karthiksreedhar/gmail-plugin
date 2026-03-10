@@ -11,6 +11,7 @@ let currentFileName = 'manifest.json';
 let updatedFiles = [];
 let isGenerating = false;
 let currentMode = localStorage.getItem('featureGeneratorMode') || 'generate'; // 'chat' or 'generate'
+let currentDraftSaved = false;
 
 // DOM Elements
 const chatMessages = document.getElementById('chatMessages');
@@ -20,6 +21,7 @@ const newSessionBtn = document.getElementById('newSessionBtn');
 const previewSection = document.getElementById('previewSection');
 const featureIdBadge = document.getElementById('featureIdBadge');
 const downloadBtn = document.getElementById('downloadBtn');
+const createPrBtn = document.getElementById('createPrBtn');
 const fileTabs = document.querySelectorAll('.file-tab');
 const currentFileNameEl = document.getElementById('currentFileName');
 const fileContent = document.getElementById('fileContent');
@@ -114,6 +116,7 @@ async function loadSessionFiles() {
     if (data.success) {
       currentFiles = data.files;
       currentFeatureId = data.featureId;
+      updateCreatePrButton();
       showPreview();
     }
   } catch (error) {
@@ -146,6 +149,9 @@ After testing, come back and tell me about any issues - I'll help fix them!`);
       for (const entry of data.chatHistory) {
         addMessage(entry.role, entry.content, false);
       }
+
+      currentDraftSaved = data.chatHistory.some(entry => entry && entry.draftSave && entry.draftSave.success);
+      updateCreatePrButton();
       
       scrollToBottom();
     }
@@ -187,6 +193,10 @@ function setupEventListeners() {
   
   // Download button
   downloadBtn.addEventListener('click', handleDownload);
+
+  if (createPrBtn) {
+    createPrBtn.addEventListener('click', handleCreatePr);
+  }
   
   // Auto-resize textarea
   messageInput.addEventListener('input', () => {
@@ -232,6 +242,8 @@ function setMode(mode) {
       previewSection.style.display = 'flex';
     }
   }
+
+  updateCreatePrButton();
   
   // Update welcome message if chat is empty (only welcome message)
   if (chatMessages.children.length <= 1) {
@@ -323,13 +335,19 @@ async function handleSend() {
           
           if (data.draftSave && data.draftSave.success) {
             const draftMsg = data.draftSave.message || 'Saved as a draft feature';
+            currentDraftSaved = true;
+            updateCreatePrButton();
             addMessage('assistant', `Saved feature \`${data.featureId}\` as a draft in the main system.\n\n${draftMsg}\n\nNext step: create a GitHub pull request from this saved draft so it can be reviewed and deployed.`);
             showToast('Feature draft saved', 'success');
           } else if (data.draftSave && !data.draftSave.success) {
             const err = data.draftSave.error || 'Draft save failed';
+            currentDraftSaved = false;
+            updateCreatePrButton();
             addMessage('assistant', `Feature files were generated, but saving the draft to the main system failed.\n\nError: ${err}\n\nYou can still download the ZIP while we wire up the PR workflow.`);
             showToast(`Generated, but draft save failed: ${err}`, 'warning');
           } else {
+            currentDraftSaved = false;
+            updateCreatePrButton();
             showToast('Files generated successfully!', 'success');
           }
         }
@@ -372,6 +390,8 @@ async function handleNewSession() {
   currentFiles = {};
   currentFeatureId = null;
   updatedFiles = [];
+  currentDraftSaved = false;
+  updateCreatePrButton();
   
   // Create new session
   await createNewSession();
@@ -413,6 +433,43 @@ function handleDownload() {
   // Trigger download
   window.location.href = `/api/download/${sessionId}`;
   showToast('Download started!', 'success');
+}
+
+function updateCreatePrButton() {
+  if (!createPrBtn) return;
+  const shouldShow = currentMode === 'generate' && !!currentFeatureId && currentDraftSaved;
+  createPrBtn.style.display = shouldShow ? 'inline-flex' : 'none';
+}
+
+async function handleCreatePr() {
+  if (!currentFeatureId || !createPrBtn) return;
+
+  const originalHtml = createPrBtn.innerHTML;
+  createPrBtn.disabled = true;
+  createPrBtn.innerHTML = '<span class="spinner"></span> Creating PR...';
+
+  try {
+    const response = await fetch(`/api/features/${encodeURIComponent(currentFeatureId)}/create-pr`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' }
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !data.success) {
+      throw new Error(data.error || 'Failed to create PR');
+    }
+
+    addMessage(
+      'assistant',
+      `PR creation requested for \`${currentFeatureId}\`.\n\nGitHub Actions will create a branch from \`${data.baseBranch || 'vercel-deploy-test-2'}\`, commit the generated files, and open a pull request.\n\nTrack progress here: ${data.workflowUrl || 'https://github.com/karthiksreedhar/gmail-plugin/actions'}`
+    );
+    showToast('PR creation requested', 'success');
+  } catch (error) {
+    addMessage('assistant', `Failed to request a PR for \`${currentFeatureId}\`.\n\nError: ${error.message}`);
+    showToast(error.message || 'Failed to create PR', 'error');
+  } finally {
+    createPrBtn.disabled = false;
+    createPrBtn.innerHTML = originalHtml;
+  }
 }
 
 // Store the current operations log for display in preview panel

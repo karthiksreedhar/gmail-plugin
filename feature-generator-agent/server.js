@@ -229,6 +229,13 @@ const MAIN_SYSTEM_BASE_URL = normalizeBaseUrl(
   'http://localhost:3000'
 );
 const FEATURE_PUBLISH_TOKEN = String(process.env.FEATURE_PUBLISH_TOKEN || '').trim();
+const GH_FINE_GRAINED_TOKEN = String(process.env.GH_FINE_GRAINED_TOKEN || '').trim();
+const GITHUB_REPO_OWNER = String(process.env.GITHUB_REPO_OWNER || 'karthiksreedhar').trim();
+const GITHUB_REPO_NAME = String(process.env.GITHUB_REPO_NAME || 'gmail-plugin').trim();
+const GITHUB_BASE_BRANCH = String(process.env.GITHUB_BASE_BRANCH || 'vercel-deploy-test-2').trim();
+const GITHUB_PR_WORKFLOW_FILE = String(
+  process.env.GITHUB_PR_WORKFLOW_FILE || 'create-generated-feature-pr.yml'
+).trim();
 const FEATURE_GENERATOR_CREATED_BY = String(
   process.env.FEATURE_GENERATOR_CREATED_BY || process.env.CURRENT_USER_EMAIL || ''
 ).trim().toLowerCase();
@@ -358,6 +365,98 @@ async function saveDraftFeatureToMainSystem(featureId, files, requestPrompt = ''
     return {
       success: false,
       error: error.message || 'Draft save request failed'
+    };
+  }
+}
+
+async function markPrRequestedInMainSystem(featureId) {
+  if (!featureId) {
+    return { success: false, error: 'Missing featureId for PR request update' };
+  }
+
+  const endpoint = `${MAIN_SYSTEM_BASE_URL}/api/internal/generated-features/${encodeURIComponent(featureId)}/pr-requested`;
+  const headers = { 'Content-Type': 'application/json' };
+  if (FEATURE_PUBLISH_TOKEN) {
+    headers['x-feature-publish-token'] = FEATURE_PUBLISH_TOKEN;
+  }
+
+  const prWorkflowUrl = `https://github.com/${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME}/actions/workflows/${GITHUB_PR_WORKFLOW_FILE}`;
+
+  try {
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ prWorkflowUrl })
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !data.success) {
+      return {
+        success: false,
+        status: response.status,
+        error: data.error || `PR request update failed with status ${response.status}`
+      };
+    }
+    return { success: true, feature: data.feature || null, prWorkflowUrl };
+  } catch (error) {
+    return {
+      success: false,
+      error: error.message || 'Failed to update PR requested status'
+    };
+  }
+}
+
+async function dispatchCreatePrWorkflow(featureId) {
+  if (!featureId) {
+    return { success: false, error: 'Missing featureId' };
+  }
+  if (!GH_FINE_GRAINED_TOKEN) {
+    return { success: false, error: 'GH_FINE_GRAINED_TOKEN is not configured' };
+  }
+
+  const endpoint = `https://api.github.com/repos/${encodeURIComponent(GITHUB_REPO_OWNER)}/${encodeURIComponent(GITHUB_REPO_NAME)}/actions/workflows/${encodeURIComponent(GITHUB_PR_WORKFLOW_FILE)}/dispatches`;
+  const workflowUrl = `https://github.com/${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME}/actions/workflows/${GITHUB_PR_WORKFLOW_FILE}`;
+
+  try {
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        'Accept': 'application/vnd.github+json',
+        'Authorization': `Bearer ${GH_FINE_GRAINED_TOKEN}`,
+        'Content-Type': 'application/json',
+        'X-GitHub-Api-Version': '2022-11-28'
+      },
+      body: JSON.stringify({
+        ref: GITHUB_BASE_BRANCH,
+        inputs: { feature_id: featureId }
+      })
+    });
+
+    if (!response.ok) {
+      const errorBody = await response.text().catch(() => '');
+      return {
+        success: false,
+        status: response.status,
+        error: errorBody || `GitHub workflow dispatch failed with status ${response.status}`
+      };
+    }
+
+    const statusResult = await markPrRequestedInMainSystem(featureId);
+    if (!statusResult.success) {
+      return {
+        success: false,
+        error: statusResult.error || 'Workflow dispatched, but failed to mark PR requested'
+      };
+    }
+
+    return {
+      success: true,
+      workflowUrl,
+      baseBranch: GITHUB_BASE_BRANCH
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error.message || 'Failed to dispatch GitHub workflow'
     };
   }
 }
@@ -506,6 +605,33 @@ app.get('/api/files/:sessionId', (req, res) => {
     featureId: session.featureId,
     files: session.generatedFiles
   });
+});
+
+app.post('/api/features/:featureId/create-pr', async (req, res) => {
+  try {
+    const featureId = String(req.params.featureId || '').trim();
+    if (!featureId) {
+      return res.status(400).json({ success: false, error: 'featureId is required' });
+    }
+
+    const result = await dispatchCreatePrWorkflow(featureId);
+    if (!result.success) {
+      return res.status(500).json({ success: false, error: result.error || 'Failed to dispatch PR workflow' });
+    }
+
+    return res.json({
+      success: true,
+      featureId,
+      workflowUrl: result.workflowUrl,
+      baseBranch: result.baseBranch
+    });
+  } catch (error) {
+    console.error('Create PR request failed:', error);
+    return res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to create PR request'
+    });
+  }
 });
 
 // Download files as ZIP

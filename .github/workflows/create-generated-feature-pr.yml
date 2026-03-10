@@ -1,0 +1,143 @@
+name: Create Generated Feature PR
+
+on:
+  workflow_dispatch:
+    inputs:
+      feature_id:
+        description: Feature ID to export and publish as a PR
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+
+env:
+  MAIN_SYSTEM_BASE_URL: https://gmail-plugin.vercel.app
+  BASE_BRANCH: vercel-deploy-test-2
+
+jobs:
+  create-pr:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout base branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.BASE_BRANCH }}
+          fetch-depth: 0
+
+      - name: Fetch saved feature draft
+        run: |
+          curl -fsSL \
+            -H "x-feature-export-token: ${{ secrets.FEATURE_EXPORT_TOKEN }}" \
+            "${MAIN_SYSTEM_BASE_URL}/api/internal/generated-features/${{ inputs.feature_id }}/export" \
+            -o /tmp/feature-export.json
+
+      - name: Prepare branch
+        run: |
+          BRANCH_NAME="generated/${{ inputs.feature_id }}-${{ github.run_id }}-${{ github.run_attempt }}"
+          echo "PR_BRANCH=${BRANCH_NAME}" >> "$GITHUB_ENV"
+          git checkout -b "$BRANCH_NAME"
+
+      - name: Write feature files
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const path = require('path');
+
+          const payload = JSON.parse(fs.readFileSync('/tmp/feature-export.json', 'utf8'));
+          if (!payload.success || !payload.feature) {
+            throw new Error('Feature export payload missing feature data');
+          }
+
+          const feature = payload.feature;
+          const featureId = String(feature.featureId || '').trim();
+          if (!featureId) {
+            throw new Error('Missing featureId in export payload');
+          }
+
+          const targetDir = path.join(process.cwd(), 'data', 'features', featureId);
+          fs.mkdirSync(targetDir, { recursive: true });
+
+          for (const [relativePath, content] of Object.entries(feature.files || {})) {
+            const rel = String(relativePath || '').trim();
+            if (!rel || rel.startsWith('/') || rel.includes('\0')) {
+              throw new Error(`Invalid feature file path: ${relativePath}`);
+            }
+            const normalized = path.normalize(rel);
+            if (normalized.startsWith('..') || path.isAbsolute(normalized)) {
+              throw new Error(`Unsafe feature file path: ${relativePath}`);
+            }
+
+            const fullPath = path.join(targetDir, normalized);
+            fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+            fs.writeFileSync(fullPath, String(content), 'utf8');
+          }
+
+          const prBody = [
+            `Generated feature: ${feature.name || featureId}`,
+            '',
+            `Feature ID: ${featureId}`,
+            `Base branch: ${process.env.BASE_BRANCH}`,
+            '',
+            'Files:',
+            ...Object.keys(feature.files || {}).map(file => `- data/features/${featureId}/${file}`),
+            '',
+            'Original request:',
+            feature.requestPrompt ? feature.requestPrompt : '_Not available_'
+          ].join('\n');
+
+          fs.writeFileSync('/tmp/pr-body.md', prBody, 'utf8');
+          NODE
+
+      - name: Commit and push branch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "data/features/${{ inputs.feature_id }}"
+          git commit -m "Add generated feature: ${{ inputs.feature_id }}"
+          git push origin "$PR_BRANCH"
+          echo "COMMIT_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+
+      - name: Open pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh pr create \
+            --base "${BASE_BRANCH}" \
+            --head "$PR_BRANCH" \
+            --title "Generated feature: ${{ inputs.feature_id }}" \
+            --body-file /tmp/pr-body.md
+
+          PR_JSON="$(gh pr view "$PR_BRANCH" --json number,url --jq '{number: .number, url: .url}')"
+          echo "PR_JSON=${PR_JSON}" >> "$GITHUB_ENV"
+
+      - name: Notify main system of PR creation
+        run: |
+          curl -fsSL \
+            -X POST \
+            -H "Content-Type: application/json" \
+            -H "x-feature-pr-callback-token: ${{ secrets.FEATURE_PR_CALLBACK_TOKEN }}" \
+            "${MAIN_SYSTEM_BASE_URL}/api/internal/generated-features/${{ inputs.feature_id }}/pr-status" \
+            -d "$(node <<'NODE'
+          const payload = JSON.parse(process.env.PR_JSON);
+          process.stdout.write(JSON.stringify({
+            status: 'pr_open',
+            prUrl: payload.url,
+            prNumber: payload.number,
+            prBranch: process.env.PR_BRANCH,
+            commitSha: process.env.COMMIT_SHA
+          }));
+          NODE
+          )"
+
+      - name: Notify main system of PR failure
+        if: failure()
+        run: |
+          curl -fsSL \
+            -X POST \
+            -H "Content-Type: application/json" \
+            -H "x-feature-pr-callback-token: ${{ secrets.FEATURE_PR_CALLBACK_TOKEN }}" \
+            "${MAIN_SYSTEM_BASE_URL}/api/internal/generated-features/${{ inputs.feature_id }}/pr-status" \
+            -d '{"status":"error","error":"GitHub Actions failed while creating the PR."}' || true
