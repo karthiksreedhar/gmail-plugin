@@ -196,6 +196,7 @@ body.chat-mode .mode-btn.active[data-mode="chat"] {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 24px;
+  min-height: 0;
 }
 
 @media (max-width: 1200px) {
@@ -404,6 +405,7 @@ body.chat-mode .mode-btn.active[data-mode="chat"] {
   overflow: hidden;
   display: flex;
   flex-direction: column;
+  min-height: 0;
 }
 
 .preview-header {
@@ -492,6 +494,7 @@ body.chat-mode .mode-btn.active[data-mode="chat"] {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  min-height: 0;
 }
 
 .file-content-header {
@@ -515,7 +518,7 @@ body.chat-mode .mode-btn.active[data-mode="chat"] {
   padding: 20px;
   overflow: auto;
   background: var(--bg-primary);
-  max-height: 50vh;
+  min-height: 0;
 }
 
 #fileContent code {
@@ -1789,12 +1792,14 @@ body.chat-mode .mode-btn.active[data-mode="chat"] {
   height: 100%;
   display: flex;
   flex-direction: column;
+  min-height: 0;
 }
 
 .category-suggestions-container {
   display: flex;
   flex-direction: column;
   height: 100%;
+  min-height: 0;
 }
 
 /* Category Tabs */
@@ -1870,6 +1875,7 @@ body.chat-mode .mode-btn.active[data-mode="chat"] {
   overflow: hidden;
   display: flex;
   flex-direction: column;
+  min-height: 0;
 }
 
 .category-panel {
@@ -1877,6 +1883,7 @@ body.chat-mode .mode-btn.active[data-mode="chat"] {
   flex-direction: column;
   height: 100%;
   overflow: hidden;
+  min-height: 0;
 }
 
 .category-panel.active {
@@ -1945,8 +1952,8 @@ body.chat-mode .mode-btn.active[data-mode="chat"] {
 .suggested-emails {
   flex: 1;
   overflow-y: auto;
-  max-height: 350px;
   background: var(--bg-primary);
+  min-height: 0;
 }
 
 .suggested-email-item {
