@@ -75,7 +75,14 @@ async function resolveGeminiModel(apiKey, preferredModel, forceRefresh = false) 
   }
 }
 
-async function invokeGemini({ messages, model, temperature = 0.2, maxOutputTokens = 2048 }) {
+async function invokeGemini({
+  messages,
+  model,
+  temperature = 0.2,
+  maxOutputTokens = 2048,
+  responseMimeType,
+  responseSchema
+}) {
   const apiKey = getGeminiApiKey();
   if (!apiKey) {
     throw new Error('Missing Gemini API key. Set GEMINI_API_KEY (or GOOGLE_API_KEY).');
@@ -110,6 +117,12 @@ async function invokeGemini({ messages, model, temperature = 0.2, maxOutputToken
   };
   if (systemParts.length > 0) {
     body.systemInstruction = { parts: systemParts };
+  }
+  if (responseMimeType) {
+    body.generationConfig.responseMimeType = responseMimeType;
+  }
+  if (responseSchema) {
+    body.generationConfig.responseSchema = responseSchema;
   }
 
   async function runGenerateContent(targetModel) {

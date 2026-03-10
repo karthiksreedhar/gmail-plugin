@@ -1344,11 +1344,63 @@ function parseSuggestionEnvelope(responseText) {
       const parsed = JSON.parse(candidate);
       if (parsed?.suggestions && Array.isArray(parsed.suggestions.categories)) return parsed.suggestions;
       if (parsed?.categorySuggestions && Array.isArray(parsed.categorySuggestions.categories)) return parsed.categorySuggestions;
+      if (Array.isArray(parsed?.categories)) return parsed;
     } catch (_) {
       // Keep trying alternate slices.
     }
   }
   return null;
+}
+
+function normalizeCategorySuggestions(input, validEmailIds = new Set()) {
+  const sourceCategories = Array.isArray(input?.categories) ? input.categories : [];
+  const categories = [];
+
+  for (const rawCategory of sourceCategories) {
+    const name = String(rawCategory?.name || '').trim();
+    if (!name) continue;
+
+    const description = String(rawCategory?.description || '').trim();
+    const guideline = String(rawCategory?.guideline || '').trim();
+    const rawEmails = Array.isArray(rawCategory?.suggestedEmails)
+      ? rawCategory.suggestedEmails
+      : Array.isArray(rawCategory?.emails)
+        ? rawCategory.emails
+        : [];
+
+    const suggestedEmails = [];
+    const seenIds = new Set();
+    for (const item of rawEmails) {
+      const emailObj = item && typeof item === 'object' ? item : { id: item };
+      const id = String(emailObj?.id || '').trim();
+      if (!id || seenIds.has(id)) continue;
+      if (validEmailIds.size && !validEmailIds.has(id)) continue;
+
+      seenIds.add(id);
+      suggestedEmails.push({
+        id,
+        subject: String(emailObj?.subject || 'No Subject'),
+        from: String(emailObj?.from || 'Unknown Sender'),
+        date: String(emailObj?.date || ''),
+        snippet: String(emailObj?.snippet || '').trim(),
+        reason: String(emailObj?.reason || 'This email appears to fit this category.').trim()
+      });
+    }
+
+    if (!suggestedEmails.length) continue;
+    categories.push({
+      name,
+      description,
+      guideline,
+      confidence: Number(rawCategory?.confidence || 0) || undefined,
+      suggestedEmails
+    });
+  }
+
+  return {
+    action: String(input?.action || 'createCategories'),
+    categories
+  };
 }
 
 async function generateCategorySuggestionsForUser(userData, logger, options = {}) {
@@ -1359,6 +1411,7 @@ async function generateCategorySuggestionsForUser(userData, logger, options = {}
   const otherEmails = (userData?.responseEmails || []).filter(email =>
     email.category === 'Other' || email.category === 'Uncategorized' || !email.category
   );
+  const validEmailIds = new Set(otherEmails.map(email => String(email?.id || '').trim()).filter(Boolean));
 
   if (otherEmails.length === 0) {
     return {
@@ -1429,6 +1482,7 @@ IMPORTANT:
       model: modelName,
       temperature: 0.3,
       maxOutputTokens: 2200,
+      responseMimeType: 'application/json',
       messages: [
         { role: 'user', content: analysisPrompt }
       ]
@@ -1445,16 +1499,76 @@ IMPORTANT:
     throw apiError;
   }
 
-  const suggestions = parseSuggestionEnvelope(aiResponse.content);
+  let suggestions = parseSuggestionEnvelope(aiResponse.content);
   if (!suggestions) {
+    const repairPrompt = `Fix this into valid JSON for category suggestions.
+
+Return JSON only with this shape:
+{
+  "suggestions": {
+    "action": "createCategories",
+    "categories": [
+      {
+        "name": "Category Name",
+        "description": "Description",
+        "guideline": "Guideline",
+        "confidence": 0.8,
+        "suggestedEmails": [
+          {
+            "id": "email_id",
+            "subject": "Subject",
+            "from": "sender@example.com",
+            "date": "2024-01-01",
+            "snippet": "Preview",
+            "reason": "Why it fits"
+          }
+        ]
+      }
+    ]
+  }
+}
+
+Original response:
+${String(aiResponse.content || '').slice(0, 12000)}`;
+
+    const repairStart = Date.now();
+    try {
+      const repaired = await invokeGemini({
+        model: modelName,
+        temperature: 0,
+        maxOutputTokens: 2200,
+        responseMimeType: 'application/json',
+        messages: [
+          { role: 'user', content: repairPrompt }
+        ]
+      });
+      const repairDuration = Date.now() - repairStart;
+      logger?.logApiCall(
+        modelName,
+        Math.ceil(repairPrompt.length / 4),
+        Math.ceil((repaired.content?.length || 0) / 4),
+        repairDuration,
+        true,
+        null,
+        null,
+        repairPrompt,
+        repaired.content
+      );
+      suggestions = parseSuggestionEnvelope(repaired.content);
+    } catch (repairError) {
+      const repairDuration = Date.now() - repairStart;
+      logger?.logApiCall(modelName, 0, 0, repairDuration, false, repairError, null, repairPrompt, null);
+      logger?.logError('Category suggestions repair API call', repairError);
+    }
+  }
+
+  const normalized = normalizeCategorySuggestions(suggestions, validEmailIds);
+  if (!normalized.categories.length) {
     throw new Error('AI response was not valid category-suggestion JSON');
   }
 
   return {
-    suggestions: {
-      action: suggestions.action || 'createCategories',
-      categories: Array.isArray(suggestions.categories) ? suggestions.categories : []
-    },
+    suggestions: normalized,
     otherEmailsCount: otherEmails.length,
     rawResponse: aiResponse.content
   };
