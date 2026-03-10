@@ -43,10 +43,11 @@
         .header {
             background: #d2b48c;
             border-bottom: 1px solid #e0e0e0;
-            padding: 16px 24px;
+            padding: 10px 18px;
             display: flex;
             justify-content: space-between;
             align-items: center;
+            gap: 12px;
             box-shadow: 0 1px 3px rgba(0,0,0,0.1);
             position: fixed;
             top: 0;
@@ -71,11 +72,37 @@
         .header-left-buttons {
             display: flex;
             gap: 12px;
+            align-items: center;
+            flex: 0 1 auto;
+            min-width: 0;
         }
 
         .header-buttons {
             display: flex;
             gap: 12px;
+            align-items: center;
+            justify-content: flex-end;
+            flex: 0 1 auto;
+            min-width: 0;
+            flex-wrap: wrap;
+        }
+
+        .header-center-actions {
+            flex: 1 1 auto;
+            min-width: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .header-compact-btn {
+            padding: 10px 16px;
+            font-size: 0.92em;
+            line-height: 1.15;
+            white-space: nowrap;
+            flex: 0 1 auto;
         }
 
         .save-scenario-btn {
@@ -114,7 +141,7 @@
             display: flex;
             flex: 1;
             overflow: hidden;
-            margin-top: 110px;
+            margin-top: 96px;
         }
 
         .sidebar {
@@ -588,6 +615,29 @@
 
         .view-saved-generations-btn:hover {
             background: #5a67d8;
+        }
+
+        @media (max-width: 1600px) {
+            .header {
+                padding: 8px 14px;
+                gap: 8px;
+            }
+
+            .header-left-buttons,
+            .header-buttons,
+            .header-center-actions,
+            #feature-header-actions {
+                gap: 8px !important;
+            }
+
+            .header-compact-btn {
+                padding: 9px 12px;
+                font-size: 0.86em;
+            }
+
+            .main-content {
+                margin-top: 102px;
+            }
         }
 
         .email-item {
@@ -2763,22 +2813,22 @@
                 <div class="user-selector-container" id="userSelectorContainer" style="display:flex; align-items:center; gap:12px;">
                     <span id="currentUser">ks4190@columbia.edu</span>
                 </div>
-                <button class="save-scenario-btn" onclick="saveScenario()">Save Scenario</button>
-                <button class="load-scenario-btn" onclick="showLoadScenarioModal()">Load Scenario</button>
+                <button class="save-scenario-btn header-compact-btn" onclick="saveScenario()">Save Scenario</button>
+                <button class="load-scenario-btn header-compact-btn" onclick="showLoadScenarioModal()">Load Scenario</button>
             </div>
-            <div style="flex:1; display:flex; justify-content:center; gap:12px;">
-                <button class="refresh-btn" onclick="window.location.href='/seed.html'" title="Seed initial categories from important inbox">Seed Categories</button>
-                <button class="generate-btn" onclick="openTestClassifier()" title="Run classifier evaluation on labeled emails">Test Classifier</button>
+            <div class="header-center-actions">
+                <button class="refresh-btn header-compact-btn" onclick="window.location.href='/seed.html'" title="Seed initial categories from important inbox">Seed Categories</button>
+                <button class="generate-btn header-compact-btn" onclick="openTestClassifier()" title="Run classifier evaluation on labeled emails">Test Classifier</button>
                 <!-- Feature extension point: header actions -->
-                <div id="feature-header-actions" style="display:flex; gap:12px;">
-                    <button id="openFeatureManagerBtn" class="generate-btn" type="button" title="Manage deployed features">Features</button>
-                    <button id="openFeatureGeneratorBtn" class="generate-btn" type="button" title="Open feature generator">Open Feature Generator</button>
+                <div id="feature-header-actions" style="display:flex; gap:8px; flex-wrap:wrap; justify-content:center;">
+                    <button id="openFeatureManagerBtn" class="generate-btn header-compact-btn" type="button" title="Manage deployed features">Features</button>
+                    <button id="openFeatureGeneratorBtn" class="generate-btn header-compact-btn" type="button" title="Open feature generator">Open Feature Generator</button>
                 </div>
             </div>
             <div class="header-buttons">
-                <button class="view-saved-generations-btn" onclick="showViewSavedGenerationsModal()">View Saved Generations</button>
-                <button class="view-refinements-btn" onclick="showViewRefinementsModal()">View Refinements</button>
-                <button class="view-refinements-btn" style="background-color: #d93025;" onclick="window.location.href='/api/auth/logout'">Logout</button>
+                <button class="view-saved-generations-btn header-compact-btn" onclick="showViewSavedGenerationsModal()">View Saved Generations</button>
+                <button class="view-refinements-btn header-compact-btn" onclick="showViewRefinementsModal()">View Refinements</button>
+                <button class="view-refinements-btn header-compact-btn" style="background-color: #d93025;" onclick="window.location.href='/api/auth/logout'">Logout</button>
             </div>
         </div>
         <div id="autoSyncBanner" class="auto-sync-banner" style="display:flex; background:#e8f0fe; color:#1a3f8b; border-bottom:1px solid #c7d7ff;">

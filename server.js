@@ -269,6 +269,10 @@ function shouldAllowFeaturePublish(req) {
   if (!ALLOW_LOCAL_FEATURE_PUBLISH) {
     return false;
   }
+  return shouldAllowFeatureRegistryWrite(req);
+}
+
+function shouldAllowFeatureRegistryWrite(req) {
   const tokenFromHeader = String(req.get('x-feature-publish-token') || '');
   if (FEATURE_PUBLISH_TOKEN) {
     return tokenFromHeader && tokenFromHeader === FEATURE_PUBLISH_TOKEN;
@@ -478,6 +482,57 @@ app.get('/api/feature-registry/:featureId', async (req, res) => {
   } catch (error) {
     console.error('Failed to load feature registry entry:', error);
     res.status(500).json({ success: false, error: 'Failed to load feature' });
+  }
+});
+
+app.post('/api/internal/generated-features/save-draft', async (req, res) => {
+  try {
+    if (!shouldAllowFeatureRegistryWrite(req)) {
+      return res.status(401).json({ success: false, error: 'Unauthorized draft save request' });
+    }
+
+    const featureId = sanitizeFeatureId(req.body?.featureId);
+    if (!featureId) {
+      return res.status(400).json({ success: false, error: 'Invalid or missing featureId' });
+    }
+
+    const files = req.body?.files;
+    if (!files || typeof files !== 'object' || Array.isArray(files) || Object.keys(files).length === 0) {
+      return res.status(400).json({ success: false, error: 'files must be a non-empty object of filepath -> content' });
+    }
+
+    const createdBy = String(req.body?.createdBy || '').trim().toLowerCase() || CURRENT_USER_EMAIL;
+    const name = String(req.body?.name || featureId).trim();
+    const description = String(req.body?.description || '').trim();
+    const requestPrompt = String(req.body?.requestPrompt || '').trim();
+    const manifest = req.body?.manifest && typeof req.body.manifest === 'object' ? req.body.manifest : null;
+
+    const feature = await createOrUpdateGeneratedFeature(featureId, {
+      name,
+      description,
+      requestPrompt,
+      createdBy,
+      manifest,
+      files,
+      source: 'generator',
+      status: 'draft',
+      deploymentStatus: 'pending'
+    });
+
+    await upsertUserFeaturePreference(createdBy, featureId, {
+      visible: false,
+      enabled: true,
+      pinned: false
+    });
+
+    res.json({
+      success: true,
+      message: `Saved draft for feature ${featureId}`,
+      feature
+    });
+  } catch (error) {
+    console.error('Failed to save generated feature draft:', error);
+    res.status(500).json({ success: false, error: error.message || 'Failed to save feature draft' });
   }
 });
 

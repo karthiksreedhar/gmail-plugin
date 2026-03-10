@@ -321,14 +321,14 @@ async function handleSend() {
             selectFile('manifest.json');
           }
           
-          if (data.publish && data.publish.success) {
-            const publishMsg = data.publish.message || 'Published to main app';
-            addMessage('assistant', `Published feature \`${data.featureId}\` to the main app.\n\n${publishMsg}\n\nRefresh your main email app tab to load the updated feature files.`);
-            showToast('Generated and published to main app', 'success');
-          } else if (data.publish && !data.publish.success) {
-            const err = data.publish.error || 'Publish failed';
-            addMessage('assistant', `Feature files were generated, but publishing to the main app failed.\n\nError: ${err}\n\nYou can still download the ZIP and install manually.`);
-            showToast(`Generated, but publish failed: ${err}`, 'warning');
+          if (data.draftSave && data.draftSave.success) {
+            const draftMsg = data.draftSave.message || 'Saved as a draft feature';
+            addMessage('assistant', `Saved feature \`${data.featureId}\` as a draft in the main system.\n\n${draftMsg}\n\nNext step: create a GitHub pull request from this saved draft so it can be reviewed and deployed.`);
+            showToast('Feature draft saved', 'success');
+          } else if (data.draftSave && !data.draftSave.success) {
+            const err = data.draftSave.error || 'Draft save failed';
+            addMessage('assistant', `Feature files were generated, but saving the draft to the main system failed.\n\nError: ${err}\n\nYou can still download the ZIP while we wire up the PR workflow.`);
+            showToast(`Generated, but draft save failed: ${err}`, 'warning');
           } else {
             showToast('Files generated successfully!', 'success');
           }

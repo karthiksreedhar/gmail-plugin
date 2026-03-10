@@ -217,6 +217,9 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 const MAIN_SYSTEM_BASE_URL = String(process.env.MAIN_SYSTEM_BASE_URL || 'http://localhost:3000').replace(/\/+$/, '');
 const FEATURE_PUBLISH_TOKEN = String(process.env.FEATURE_PUBLISH_TOKEN || '').trim();
+const FEATURE_GENERATOR_CREATED_BY = String(
+  process.env.FEATURE_GENERATOR_CREATED_BY || process.env.CURRENT_USER_EMAIL || ''
+).trim().toLowerCase();
 
 // Initialize MongoDB connection
 let mongoInitialized = false;
@@ -290,12 +293,23 @@ function getSession(sessionId) {
   return { session, isNew: false };
 }
 
-async function publishFeatureToMainSystem(featureId, files) {
+function parseManifestFromFiles(files) {
+  try {
+    const manifestRaw = files && typeof files === 'object' ? files['manifest.json'] : null;
+    if (!manifestRaw || typeof manifestRaw !== 'string') return null;
+    return JSON.parse(manifestRaw);
+  } catch (_) {
+    return null;
+  }
+}
+
+async function saveDraftFeatureToMainSystem(featureId, files, requestPrompt = '') {
   if (!featureId || !files || typeof files !== 'object') {
-    return { success: false, error: 'Missing featureId or files for publish' };
+    return { success: false, error: 'Missing featureId or files for draft save' };
   }
 
-  const endpoint = `${MAIN_SYSTEM_BASE_URL}/api/feature-management/publish`;
+  const manifest = parseManifestFromFiles(files);
+  const endpoint = `${MAIN_SYSTEM_BASE_URL}/api/internal/generated-features/save-draft`;
   const headers = { 'Content-Type': 'application/json' };
   if (FEATURE_PUBLISH_TOKEN) {
     headers['x-feature-publish-token'] = FEATURE_PUBLISH_TOKEN;
@@ -305,25 +319,33 @@ async function publishFeatureToMainSystem(featureId, files) {
     const response = await fetch(endpoint, {
       method: 'POST',
       headers,
-      body: JSON.stringify({ featureId, files })
+      body: JSON.stringify({
+        featureId,
+        files,
+        manifest,
+        requestPrompt,
+        createdBy: FEATURE_GENERATOR_CREATED_BY || undefined,
+        name: manifest?.name || featureId,
+        description: manifest?.description || ''
+      })
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok || !data.success) {
       return {
         success: false,
         status: response.status,
-        error: data.error || `Publish failed with status ${response.status}`
+        error: data.error || `Draft save failed with status ${response.status}`
       };
     }
     return {
       success: true,
-      message: data.message || 'Published successfully',
-      writtenFiles: data.writtenFiles || []
+      message: data.message || 'Draft saved successfully',
+      feature: data.feature || null
     };
   } catch (error) {
     return {
       success: false,
-      error: error.message || 'Publish request failed'
+      error: error.message || 'Draft save request failed'
     };
   }
 }
@@ -405,7 +427,7 @@ app.post('/api/chat', async (req, res) => {
     // Update session with generated files
     session.generatedFiles = result.files;
     
-    const publishResult = await publishFeatureToMainSystem(session.featureId, session.generatedFiles);
+    const draftSaveResult = await saveDraftFeatureToMainSystem(session.featureId, session.generatedFiles, message);
 
     // Add assistant response to history
     session.chatHistory.push({
@@ -414,7 +436,7 @@ app.post('/api/chat', async (req, res) => {
       timestamp: Date.now(),
       filesGenerated: Object.keys(result.files),
       filesUpdated: result.updatedFiles || [],
-      publish: publishResult
+      draftSave: draftSaveResult
     });
 
     res.json({
@@ -425,7 +447,7 @@ app.post('/api/chat', async (req, res) => {
       files: result.files,
       updatedFiles: result.updatedFiles || [],
       isRefinement,
-      publish: publishResult
+      draftSave: draftSaveResult
     });
 
   } catch (error) {
