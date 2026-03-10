@@ -1262,17 +1262,32 @@ function parseEmailListFromResponse(responseContent) {
 // Parse category suggestions from AI response
 function parseCategorySuggestionsFromResponse(responseContent) {
   try {
+    const text = String(responseContent || '').trim();
+    if (!text) return null;
+
+    const candidates = [];
+    candidates.push(text);
+
     const jsonRegex = /```json\s*(\{[\s\S]*?\})\s*```/g;
     let match;
-    
-    while ((match = jsonRegex.exec(responseContent)) !== null) {
+    while ((match = jsonRegex.exec(text)) !== null) {
+      if (match[1]) candidates.push(match[1].trim());
+    }
+
+    const first = text.indexOf('{');
+    const last = text.lastIndexOf('}');
+    if (first !== -1 && last !== -1 && last > first) {
+      candidates.push(text.slice(first, last + 1));
+    }
+
+    for (const candidate of candidates) {
       try {
-        const parsed = JSON.parse(match[1]);
-        if (parsed.categorySuggestions && parsed.categorySuggestions.categories) {
+        const parsed = JSON.parse(candidate);
+        if (parsed.categorySuggestions && Array.isArray(parsed.categorySuggestions.categories)) {
           return parsed.categorySuggestions;
         }
-      } catch (parseError) {
-        // Continue to next match
+      } catch (_) {
+        // Keep trying other candidate slices.
       }
     }
   } catch (error) {
@@ -1289,112 +1304,160 @@ function normalizeLooseText(input) {
     .trim();
 }
 
-function isExactOtherSuggestionPrompt(message) {
+function isOtherCategorySuggestionPrompt(message) {
   const normalized = normalizeLooseText(message);
-  return normalized === 'can you please suggest new categories for emails currently in other';
+  if (!normalized) return false;
+
+  const mentionsOther = /\b(other|uncategorized)\b/.test(normalized);
+  const mentionsCategoryIntent =
+    /\b(categor(?:y|ies)|bucket|group|label|folder)\b/.test(normalized) &&
+    /\b(suggest|create|new|potential|propose|recommend|identify|find)\b/.test(normalized);
+  const mentionsEmails = /\b(email|emails|message|messages|inbox)\b/.test(normalized);
+  const asksForFitOrMove = /\b(based on|fit|fits|move|belong|currently in)\b/.test(normalized);
+
+  return mentionsOther && mentionsCategoryIntent && (mentionsEmails || asksForFitOrMove);
 }
 
-function buildDynamicCategorySuggestions(userData) {
-  const all = Array.isArray(userData?.responseEmails) ? userData.responseEmails : [];
-  const others = all.filter(email => {
-    const c = String(email?.category || '').trim().toLowerCase();
-    return !c || c === 'other' || c === 'uncategorized';
-  });
+function parseJsonCandidates(text) {
+  const trimmed = String(text || '').trim();
+  if (!trimmed) return [];
 
-  if (!others.length) return { action: 'createCategories', categories: [] };
-
-  const sorted = others.slice().sort((a, b) => Date.parse(String(b?.date || 0)) - Date.parse(String(a?.date || 0)));
-  const used = new Set();
-
-  const toItem = (e, reason) => {
-    const ms = Date.parse(String(e?.date || ''));
-    return {
-      id: String(e?.id || ''),
-      subject: String(e?.subject || 'No Subject'),
-      from: String(e?.originalFrom || e?.from || 'Unknown Sender'),
-      date: Number.isFinite(ms) ? new Date(ms).toISOString() : new Date(0).toISOString(),
-      snippet: String(e?.snippet || e?.body || '').slice(0, 220),
-      reason
-    };
-  };
-
-  const textOf = (e) => `${String(e?.subject || '')} ${String(e?.snippet || '')} ${String(e?.body || '')} ${String(e?.from || '')}`.toLowerCase();
-  const keywordCategoryDefs = [
-    {
-      name: 'Personal Finances',
-      description: 'Emails related to personal financial activity and money management.',
-      guideline: 'Use for account notifications, payments, card activity, bills, and other finance updates.',
-      reason: 'This email appears related to personal finance activity.',
-      match: (t) => /(bank|credit|capital one|chase|amex|payment|bill|statement|invoice|balance|transaction|receipt|venmo|zelle|account alert)/.test(t)
-    },
-    {
-      name: 'Deployment Infrastructure',
-      description: 'Emails related to deployment workflows and infrastructure operations.',
-      guideline: 'Use for deploy events, infra alerts, service updates, and environment/configuration notifications.',
-      reason: 'This email appears related to deployment or infrastructure operations.',
-      match: (t) => /(vercel|deploy|deployment|production|staging|preview|build failed|ci|pipeline|infrastructure|uptime|incident|cron|domain|dns)/.test(t)
-    },
-    {
-      name: 'Newsletters',
-      description: 'Recurring digest and newsletter content.',
-      guideline: 'Use for recurring newsletters, daily digests, and informational updates.',
-      reason: 'This appears to be a recurring newsletter/digest.',
-      match: (t) => /(newsletter|digest|the download|daily digest|weekly digest|top stories)/.test(t)
-    },
-    {
-      name: 'Promotions & Orders',
-      description: 'Promotional and transactional order-related updates.',
-      guideline: 'Use for offers, discounts, order updates, and purchase confirmations.',
-      reason: 'This appears to be a promotional or order-related email.',
-      match: (t) => /(offer|discount|promo|sale|coupon|order|ubereats|uber eats|tracking|shipped|delivery)/.test(t)
-    }
-  ];
-
-  const buildCategory = (def, limit = 3) => {
-    const picked = [];
-    for (const e of sorted) {
-      const id = String(e?.id || '');
-      if (!id || used.has(id)) continue;
-      if (!def.match(textOf(e))) continue;
-      picked.push(toItem(e, def.reason));
-      used.add(id);
-      if (picked.length >= limit) break;
-    }
-    if (!picked.length) return null;
-    return {
-      name: def.name,
-      description: def.description,
-      guideline: def.guideline,
-      suggestedEmails: picked
-    };
-  };
-
-  const categories = [];
-  for (const def of keywordCategoryDefs) {
-    const built = buildCategory(def, 3);
-    if (built) categories.push(built);
-    if (categories.length >= 2) break;
+  const candidates = [trimmed];
+  const jsonRegex = /```json\s*(\{[\s\S]*?\})\s*```/g;
+  let match;
+  while ((match = jsonRegex.exec(trimmed)) !== null) {
+    if (match[1]) candidates.push(match[1].trim());
   }
 
-  while (categories.length < 2) {
-    const fallback = [];
-    for (const e of sorted) {
-      const id = String(e?.id || '');
-      if (!id || used.has(id)) continue;
-      fallback.push(toItem(e, 'This email fits a general updates bucket better than Other.'));
-      used.add(id);
-      if (fallback.length >= 3) break;
+  const first = trimmed.indexOf('{');
+  const last = trimmed.lastIndexOf('}');
+  if (first !== -1 && last !== -1 && last > first) {
+    candidates.push(trimmed.slice(first, last + 1));
+  }
+
+  return candidates;
+}
+
+function parseSuggestionEnvelope(responseText) {
+  for (const candidate of parseJsonCandidates(responseText)) {
+    try {
+      const parsed = JSON.parse(candidate);
+      if (parsed?.suggestions && Array.isArray(parsed.suggestions.categories)) return parsed.suggestions;
+      if (parsed?.categorySuggestions && Array.isArray(parsed.categorySuggestions.categories)) return parsed.categorySuggestions;
+    } catch (_) {
+      // Keep trying alternate slices.
     }
-    if (!fallback.length) break;
-    categories.push({
-      name: categories.length === 0 ? 'General Updates' : 'Miscellaneous Follow-ups',
-      description: 'A compact bucket for uncategorized updates.',
-      guideline: 'Use for messages that do not clearly fit existing focused categories.',
-      suggestedEmails: fallback
+  }
+  return null;
+}
+
+async function generateCategorySuggestionsForUser(userData, logger, options = {}) {
+  const requestedCategories = Array.isArray(options.requestedCategories)
+    ? options.requestedCategories.filter(Boolean)
+    : [];
+  const modelName = getGeminiModel();
+  const otherEmails = (userData?.responseEmails || []).filter(email =>
+    email.category === 'Other' || email.category === 'Uncategorized' || !email.category
+  );
+
+  if (otherEmails.length === 0) {
+    return {
+      suggestions: { action: 'createCategories', categories: [] },
+      otherEmailsCount: 0
+    };
+  }
+
+  const analysisPrompt = `You are analyzing emails currently categorized as "Other" to suggest better category assignments.
+
+EXISTING CATEGORIES: ${userData.categories.join(', ')}
+
+EMAILS IN "OTHER" CATEGORY (${otherEmails.length} emails):
+${otherEmails.slice(0, 20).map((email, i) => `
+${i + 1}. ID: ${email.id}
+   Subject: ${email.subject}
+   From: ${email.from}
+   Date: ${email.date || ''}
+   Snippet: ${(email.snippet || '').substring(0, 200)}
+`).join('')}
+
+TASK: Analyze these "Other" emails and suggest 2-4 new category names that would better organize them. For each suggested category:
+
+1. Choose a clear, descriptive name
+2. Identify which emails from the "Other" list would fit
+3. Explain why those emails belong together
+
+${requestedCategories.length ? `USER REQUESTED THESE CATEGORIES: ${requestedCategories.join(', ')} - prioritize these if they make sense for the emails.` : ''}
+
+Respond with ONLY this JSON format (no other text):
+
+{
+  "suggestions": {
+    "action": "createCategories",
+    "categories": [
+      {
+        "name": "Category Name",
+        "description": "What this category is for",
+        "guideline": "How to classify emails into this category",
+        "confidence": 0.8,
+        "suggestedEmails": [
+          {
+            "id": "email_id_from_above",
+            "subject": "Email Subject",
+            "from": "sender@example.com",
+            "date": "date_from_email",
+            "snippet": "Brief preview...",
+            "reason": "Why this email fits this category"
+          }
+        ]
+      }
+    ]
+  }
+}
+
+IMPORTANT:
+- Only suggest emails that are actually in the "Other" list above
+- Use the exact email IDs from the list
+- Suggest 3-8 emails per category
+- Keep category names professional and descriptive
+- High confidence (0.7+) suggestions only
+- Return valid JSON only`;
+
+  const apiStartTime = Date.now();
+  let aiResponse;
+  try {
+    aiResponse = await invokeGemini({
+      model: modelName,
+      temperature: 0.3,
+      maxOutputTokens: 2200,
+      messages: [
+        { role: 'user', content: analysisPrompt }
+      ]
     });
+
+    const apiDuration = Date.now() - apiStartTime;
+    const inputTokens = Math.ceil(analysisPrompt.length / 4);
+    const outputTokens = Math.ceil((aiResponse.content?.length || 0) / 4);
+    logger?.logApiCall(modelName, inputTokens, outputTokens, apiDuration, true, null, null, analysisPrompt, aiResponse.content);
+  } catch (apiError) {
+    const apiDuration = Date.now() - apiStartTime;
+    logger?.logApiCall(modelName, 0, 0, apiDuration, false, apiError, null, analysisPrompt, null);
+    logger?.logError('Category suggestions API call', apiError);
+    throw apiError;
   }
 
-  return { action: 'createCategories', categories: categories.slice(0, 2) };
+  const suggestions = parseSuggestionEnvelope(aiResponse.content);
+  if (!suggestions) {
+    throw new Error('AI response was not valid category-suggestion JSON');
+  }
+
+  return {
+    suggestions: {
+      action: suggestions.action || 'createCategories',
+      categories: Array.isArray(suggestions.categories) ? suggestions.categories : []
+    },
+    otherEmailsCount: otherEmails.length,
+    rawResponse: aiResponse.content
+  };
 }
 
 // Email Chat endpoint
@@ -1438,17 +1501,16 @@ app.post('/api/email-chat', async (req, res) => {
     console.log(`Message: ${message.substring(0, 100)}...`);
     console.log('='.repeat(50));
     
-    // Special-case exact category-suggestion prompt so the UI always gets
-    // compact structured data (2 categories, ~3 emails each) and can render
-    // the approve/cancel confirmation reliably.
-    if (isExactOtherSuggestionPrompt(message)) {
+    // Route category-suggestion chat requests through the dedicated structured
+    // AI path so the UI can reliably render approval controls.
+    if (isOtherCategorySuggestionPrompt(message)) {
       const targetUser = usersToQuery[0] || AVAILABLE_USERS[0];
       const targetData = await loadUserEmailData(targetUser, logger);
-      const categorySuggestions = buildDynamicCategorySuggestions(targetData);
+      const { suggestions: categorySuggestions } = await generateCategorySuggestionsForUser(targetData, logger);
       const categoryCount = Array.isArray(categorySuggestions?.categories) ? categorySuggestions.categories.length : 0;
       const emailCount = (categorySuggestions?.categories || []).reduce((sum, c) => sum + ((c?.suggestedEmails || []).length), 0);
       const assistantResponse = categoryCount
-        ? `I analyzed emails currently in "Other" and prepared ${categoryCount} suggested categories with about 3 emails each. Review them in the preview panel and click Approve or Cancel.`
+        ? `I analyzed emails currently in "Other" and prepared ${categoryCount} suggested categories. Review them in the preview panel and click Approve or Cancel.`
         : 'I checked emails currently in "Other", but I could not find enough candidates to suggest new categories right now.';
 
       return res.json({
@@ -1461,7 +1523,7 @@ app.post('/api/email-chat', async (req, res) => {
         summary: {
           categories: categoryCount,
           suggestedEmails: emailCount,
-          source: 'exact-other-suggestion-fast-path'
+          source: 'dedicated-ai-category-suggestions'
         }
       });
     }
@@ -1903,21 +1965,13 @@ app.post('/api/category-suggestions', async (req, res) => {
     
     // Load user's current categories and "Other" emails
     const userData = await loadUserEmailData(targetUser, logger);
-    
-    // Find emails currently in "Other" category
-    const otherEmails = userData.responseEmails.filter(email => 
+
+    const otherEmails = (userData.responseEmails || []).filter(email =>
       email.category === 'Other' || email.category === 'Uncategorized' || !email.category
     );
-    
     console.log(`   Found ${otherEmails.length} emails in "Other" category`);
     console.log(`   Sample "Other" emails:`, otherEmails.slice(0, 3).map(e => `${e.id} (${e.category || 'NO_CATEGORY'}) - ${e.subject}`));
-    
-    // Debug: Also show some emails from other categories to verify filtering
-    const nonOtherEmails = userData.responseEmails.filter(email => 
-      email.category !== 'Other' && email.category !== 'Uncategorized' && email.category
-    ).slice(0, 3);
-    console.log(`   Sample non-Other emails:`, nonOtherEmails.map(e => `${e.id} (${e.category}) - ${e.subject}`));
-    
+
     if (otherEmails.length === 0) {
       return res.json({
         success: true,
@@ -1926,102 +1980,16 @@ app.post('/api/category-suggestions', async (req, res) => {
         operationsLog: logger.getLog()
       });
     }
-    
-    // Use AI to analyze these emails and suggest category assignments
-    const modelName = getGeminiModel();
-    
-    // Create prompt for AI category suggestion
-    const analysisPrompt = `You are analyzing emails currently categorized as "Other" to suggest better category assignments.
 
-EXISTING CATEGORIES: ${userData.categories.join(', ')}
-
-EMAILS IN "OTHER" CATEGORY (${otherEmails.length} emails):
-${otherEmails.slice(0, 20).map((email, i) => `
-${i + 1}. ID: ${email.id}
-   Subject: ${email.subject}
-   From: ${email.from}
-   Snippet: ${(email.snippet || '').substring(0, 200)}
-`).join('')}
-
-TASK: Analyze these "Other" emails and suggest 2-4 new category names that would better organize them. For each suggested category:
-
-1. Choose a clear, descriptive name
-2. Identify which emails from the "Other" list would fit
-3. Explain why those emails belong together
-
-${requestedCategories ? `USER REQUESTED THESE CATEGORIES: ${requestedCategories.join(', ')} - prioritize these if they make sense for the emails.` : ''}
-
-Respond with ONLY this JSON format (no other text):
-
-{
-  "suggestions": {
-    "categories": [
-      {
-        "name": "Category Name",
-        "description": "What this category is for",
-        "guideline": "How to classify emails into this category",
-        "confidence": 0.8,
-        "suggestedEmails": [
-          {
-            "id": "email_id_from_above",
-            "subject": "Email Subject",
-            "from": "sender@example.com", 
-            "date": "date_from_email",
-            "snippet": "Brief preview...",
-            "reason": "Why this email fits this category"
-          }
-        ]
-      }
-    ]
-  }
-}
-
-IMPORTANT:
-- Only suggest emails that are actually in the "Other" list above
-- Use the exact email IDs from the list
-- Suggest 3-8 emails per category (the best examples)
-- Make sure category names are professional and descriptive
-- High confidence (0.7+) suggestions only`;
-
-    // Call AI for category suggestions
-    const apiStartTime = Date.now();
-    let aiResponse;
-    try {
-      aiResponse = await invokeGemini({
-        model: modelName,
-        temperature: 0.3,
-        maxOutputTokens: 3000,
-        messages: [
-          { role: 'user', content: analysisPrompt }
-        ]
-      });
-      
-      const apiDuration = Date.now() - apiStartTime;
-      const inputTokens = Math.ceil(analysisPrompt.length / 4);
-      const outputTokens = Math.ceil((aiResponse.content?.length || 0) / 4);
-      
-      logger.logApiCall(modelName, inputTokens, outputTokens, apiDuration, true, null, null, analysisPrompt, aiResponse.content);
-    } catch (apiError) {
-      const apiDuration = Date.now() - apiStartTime;
-      logger.logApiCall(modelName, 0, 0, apiDuration, false, apiError, null, analysisPrompt, null);
-      logger.logError('Category suggestions API call', apiError);
-      throw apiError;
-    }
-    
-    // Parse AI response
-    let suggestions;
-    try {
-      suggestions = JSON.parse(aiResponse.content);
-      console.log(`   AI suggested ${suggestions.suggestions.categories.length} categories`);
-    } catch (parseError) {
-      console.error('Failed to parse AI suggestions:', parseError);
-      throw new Error('AI response was not valid JSON');
-    }
+    const { suggestions, otherEmailsCount } = await generateCategorySuggestionsForUser(userData, logger, {
+      requestedCategories
+    });
+    console.log(`   AI suggested ${suggestions.categories.length} categories`);
     
     res.json({
       success: true,
-      suggestions: suggestions.suggestions,
-      otherEmailsCount: otherEmails.length,
+      suggestions,
+      otherEmailsCount,
       operationsLog: logger.getLog()
     });
     
