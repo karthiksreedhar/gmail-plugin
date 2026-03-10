@@ -1353,6 +1353,12 @@ function parseSuggestionEnvelope(responseText) {
 }
 
 function normalizeCategorySuggestions(input, validEmailIds = new Set()) {
+  const canonicalIdMap = new Map();
+  const canonicalizeId = (value) => String(value || '').trim().replace(/^thread-/i, '');
+  for (const id of validEmailIds) {
+    const key = canonicalizeId(id);
+    if (key && !canonicalIdMap.has(key)) canonicalIdMap.set(key, id);
+  }
   const sourceCategories = Array.isArray(input?.categories) ? input.categories : [];
   const categories = [];
 
@@ -1372,7 +1378,8 @@ function normalizeCategorySuggestions(input, validEmailIds = new Set()) {
     const seenIds = new Set();
     for (const item of rawEmails) {
       const emailObj = item && typeof item === 'object' ? item : { id: item };
-      const id = String(emailObj?.id || '').trim();
+      const rawId = String(emailObj?.id || '').trim();
+      const id = canonicalIdMap.get(canonicalizeId(rawId)) || rawId;
       if (!id || seenIds.has(id)) continue;
       if (validEmailIds.size && !validEmailIds.has(id)) continue;
 
@@ -1412,6 +1419,47 @@ async function generateCategorySuggestionsForUser(userData, logger, options = {}
     email.category === 'Other' || email.category === 'Uncategorized' || !email.category
   );
   const validEmailIds = new Set(otherEmails.map(email => String(email?.id || '').trim()).filter(Boolean));
+  const categorySuggestionSchema = {
+    type: 'OBJECT',
+    properties: {
+      suggestions: {
+        type: 'OBJECT',
+        properties: {
+          action: { type: 'STRING' },
+          categories: {
+            type: 'ARRAY',
+            items: {
+              type: 'OBJECT',
+              properties: {
+                name: { type: 'STRING' },
+                description: { type: 'STRING' },
+                guideline: { type: 'STRING' },
+                confidence: { type: 'NUMBER' },
+                suggestedEmails: {
+                  type: 'ARRAY',
+                  items: {
+                    type: 'OBJECT',
+                    properties: {
+                      id: { type: 'STRING' },
+                      subject: { type: 'STRING' },
+                      from: { type: 'STRING' },
+                      date: { type: 'STRING' },
+                      snippet: { type: 'STRING' },
+                      reason: { type: 'STRING' }
+                    },
+                    required: ['id']
+                  }
+                }
+              },
+              required: ['name', 'suggestedEmails']
+            }
+          }
+        },
+        required: ['categories']
+      }
+    },
+    required: ['suggestions']
+  };
 
   if (otherEmails.length === 0) {
     return {
@@ -1483,6 +1531,7 @@ IMPORTANT:
       temperature: 0.3,
       maxOutputTokens: 2200,
       responseMimeType: 'application/json',
+      responseSchema: categorySuggestionSchema,
       messages: [
         { role: 'user', content: analysisPrompt }
       ]
@@ -1563,15 +1612,81 @@ ${String(aiResponse.content || '').slice(0, 12000)}`;
   }
 
   const normalized = normalizeCategorySuggestions(suggestions, validEmailIds);
-  if (!normalized.categories.length) {
-    throw new Error('AI response was not valid category-suggestion JSON');
+  if (normalized.categories.length) {
+    return {
+      suggestions: normalized,
+      otherEmailsCount: otherEmails.length,
+      rawResponse: aiResponse.content
+    };
   }
 
-  return {
-    suggestions: normalized,
-    otherEmailsCount: otherEmails.length,
-    rawResponse: aiResponse.content
-  };
+  const compactEmails = otherEmails.slice(0, 20).map(email => ({
+    id: String(email?.id || ''),
+    subject: String(email?.subject || ''),
+    from: String(email?.from || ''),
+    date: String(email?.date || ''),
+    snippet: String(email?.snippet || '').slice(0, 160)
+  }));
+  const simplerPrompt = `Return valid JSON only.
+
+Group these emails currently in Other into 2-4 potential new categories.
+Use ONLY the exact ids provided below. Do not invent or modify ids.
+
+Output shape:
+{
+  "categories": [
+    {
+      "name": "Category Name",
+      "description": "Short description",
+      "guideline": "Short guideline",
+      "emails": ["exact_id_1", "exact_id_2"],
+      "confidence": 0.8
+    }
+  ]
+}
+
+Emails:
+${JSON.stringify(compactEmails, null, 2)}`;
+
+  const simpleStart = Date.now();
+  try {
+    const simpler = await invokeGemini({
+      model: modelName,
+      temperature: 0.2,
+      maxOutputTokens: 1800,
+      responseMimeType: 'application/json',
+      messages: [
+        { role: 'user', content: simplerPrompt }
+      ]
+    });
+    const simpleDuration = Date.now() - simpleStart;
+    logger?.logApiCall(
+      modelName,
+      Math.ceil(simplerPrompt.length / 4),
+      Math.ceil((simpler.content?.length || 0) / 4),
+      simpleDuration,
+      true,
+      null,
+      null,
+      simplerPrompt,
+      simpler.content
+    );
+    const simplerParsed = parseSuggestionEnvelope(simpler.content);
+    const simplerNormalized = normalizeCategorySuggestions(simplerParsed, validEmailIds);
+    if (simplerNormalized.categories.length) {
+      return {
+        suggestions: simplerNormalized,
+        otherEmailsCount: otherEmails.length,
+        rawResponse: simpler.content
+      };
+    }
+  } catch (simpleError) {
+    const simpleDuration = Date.now() - simpleStart;
+    logger?.logApiCall(modelName, 0, 0, simpleDuration, false, simpleError, null, simplerPrompt, null);
+    logger?.logError('Category suggestions simplified API call', simpleError);
+  }
+
+  throw new Error('AI response was not valid category-suggestion JSON');
 }
 
 // Email Chat endpoint
