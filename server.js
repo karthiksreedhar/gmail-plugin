@@ -192,6 +192,8 @@ function initializeFeatures(options = {}) {
           gmail: () => gmail,
           gmailAuth: () => gmailAuth,
           openai,
+          invokeGemini,
+          getGeminiModel,
           fs,
           path,
           getUserDoc,

@@ -32,7 +32,9 @@ When your \`backend.js\` module's \`initialize()\` function is called, it receiv
   setUserDoc: async (collection, userEmail, data) => {},  // Save user-specific document to MongoDB
   
   // AI/API clients
-  openai: OpenAI,                  // OpenAI client instance
+  openai: OpenAI,                  // Available for backward compatibility only
+  invokeGemini: async (options) => ({ content: string, model: string }), // PRIMARY LLM helper
+  getGeminiModel: () => string,    // Current Gemini model
   gmail: () => Gmail,              // Gmail API client (lazy getter)
   gmailAuth: () => GoogleAuth,     // Gmail OAuth (lazy getter)
   
@@ -490,20 +492,23 @@ RULES:
 - Log loading status to console
 - Clean up event listeners if feature is reloaded
 
-OPENAI API TOKEN LIMITS & BATCHING (CRITICAL)
+GEMINI STANDARD FOR LLM FEATURES (CRITICAL)
 
-**NEVER send all emails to OpenAI in a single API call!** This will exceed token limits and cause errors.
+All NEW generated features that need an LLM call MUST use Gemini via \`invokeGemini\` by default.
+Do NOT generate new OpenAI-based feature code unless the user explicitly asks for OpenAI.
+
+**NEVER send all emails to Gemini in a single API call!** This will exceed token/context limits and cause errors.
 
 Token Limit Constants - USE THESE IN ALL FEATURES:
 \`\`\`javascript
-const EMAILS_PER_BATCH = 30;  // Max emails per OpenAI call (conservative, works with all models)
+const EMAILS_PER_BATCH = 30;  // Max emails per Gemini call (conservative, works with all models)
 const MAX_BATCHES = 5;        // Maximum number of batches to process
 const MAX_TOTAL_EMAILS = EMAILS_PER_BATCH * MAX_BATCHES; // = 150 emails maximum
 \`\`\`
 
-MANDATORY BATCHING PATTERN - Use this when processing emails with OpenAI:
+MANDATORY BATCHING PATTERN - Use this when processing emails with Gemini:
 \`\`\`javascript
-async function processEmailsWithAI(emails, openai, task) {
+async function processEmailsWithAI(emails, invokeGemini, getGeminiModel, task) {
   const EMAILS_PER_BATCH = 30;
   const MAX_BATCHES = 5;
   const MAX_TOTAL_EMAILS = EMAILS_PER_BATCH * MAX_BATCHES;
@@ -538,17 +543,17 @@ async function processEmailsWithAI(emails, openai, task) {
         snippet: (e.snippet || '').substring(0, 150) // Truncate snippets
       }));
       
-      const response = await openai.chat.completions.create({
-        model: 'gpt-4o-mini', // Use efficient model
+      const response = await invokeGemini({
+        model: typeof getGeminiModel === 'function' ? getGeminiModel() : undefined,
         messages: [
           { role: 'system', content: \`You are analyzing emails. \${task}\` },
           { role: 'user', content: JSON.stringify(emailSummaries) }
         ],
         temperature: 0.3,
-        max_tokens: 2000
+        maxOutputTokens: 2000
       });
       
-      const result = response.choices[0].message.content;
+      const result = response.content;
       allResults.push({ batch: i + 1, result, emailCount: batch.length });
       
     } catch (error) {
@@ -569,19 +574,19 @@ async function processEmailsWithAI(emails, openai, task) {
             // Omit snippet to save more tokens
           }));
           
-          const retryResponse = await openai.chat.completions.create({
-            model: 'gpt-4o-mini',
+          const retryResponse = await invokeGemini({
+            model: typeof getGeminiModel === 'function' ? getGeminiModel() : undefined,
             messages: [
               { role: 'system', content: \`You are analyzing emails. \${task}\` },
               { role: 'user', content: JSON.stringify(emailSummaries) }
             ],
             temperature: 0.3,
-            max_tokens: 1500
+            maxOutputTokens: 1500
           });
           
           allResults.push({ 
             batch: i + 1, 
-            result: retryResponse.choices[0].message.content, 
+            result: retryResponse.content, 
             emailCount: smallerBatch.length,
             wasRetried: true 
           });
@@ -611,12 +616,12 @@ async function processEmailsWithAI(emails, openai, task) {
 \`\`\`
 
 TOKEN LIMIT RULES (MANDATORY):
-1. **NEVER** send more than 30 emails per OpenAI API call
+1. **NEVER** send more than 30 emails per Gemini API call
 2. **ALWAYS** use batching for any feature that processes multiple emails
 3. **ALWAYS** handle token limit errors with retry logic
 4. **LIMIT** total emails to 150 maximum (30 × 5 batches)
 5. **USE** minimal email fields (id, subject, from, category, truncated snippet)
-6. **PREFER** gpt-4o-mini for cost efficiency
+6. **PREFER** \`getGeminiModel()\` for model selection consistency
 7. **ADD** delays between batches to avoid rate limits
 
 IMPLEMENTATION RULES
@@ -629,7 +634,7 @@ Backend Rules:
 5. Database Collections: Name collections as \`{feature_id}_data\` for clarity
 6. Logging: Log all significant operations to console with feature name prefix
 7. No Core Modifications: Do NOT modify server.js, db.js, or any core files
-8. **OpenAI Batching: ALWAYS use the batching pattern above for email processing**
+8. **Gemini Batching: ALWAYS use the batching pattern above for email processing**
 
 Frontend Rules:
 1. IIFE Wrapper: Always wrap code in \`(function() { ... })()\`
@@ -860,7 +865,9 @@ BACKEND CONTEXT (featureContext object available in initialize):
 - getUserDoc(collection, email): Get user data from MongoDB
 - setUserDoc(collection, email, data): Save user data to MongoDB
 - getCurrentUser(): Get current user email
-- openai: OpenAI client
+- invokeGemini(options): PRIMARY LLM helper (use this by default)
+- getGeminiModel(): Returns configured Gemini model
+- openai: OpenAI client (backward compatibility only)
 - loadCategoriesList(): Get category names
 
 FRONTEND API (window.EmailAssistant):
@@ -880,6 +887,7 @@ Common fixes:
 - Add window.EmailAssistant check
 - Fix async/await usage
 - Fix response format { success: boolean, data/error }
+- For any LLM call in new/refined code, default to Gemini via invokeGemini unless user explicitly asks for OpenAI
 
 Output corrected files that fix the reported issues while maintaining all existing functionality.`;
 

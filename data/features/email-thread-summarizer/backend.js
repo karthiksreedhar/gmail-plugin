@@ -9,7 +9,7 @@ module.exports = {
    * @param {Object} context - Feature context with server resources
    */
   initialize(context) {
-    const { app, getUserDoc, openai, getCurrentUser } = context;
+    const { app, getUserDoc, invokeGemini, getGeminiModel, getCurrentUser } = context;
 
     console.log('Email Thread Summarizer: Initializing backend...');
 
@@ -44,24 +44,28 @@ module.exports = {
 
         const messages = threadData.messages;
 
-        // Construct a prompt for OpenAI
+        if (typeof invokeGemini !== 'function') {
+          return res.status(500).json({ success: false, error: 'Gemini client is not available in feature context' });
+        }
+
+        // Construct a prompt for Gemini
         const prompt = `Summarize the following email thread in at most three sentences and list any identified TODOs.
         Email Thread:
         ${messages.map(message => `From: ${message.from}\nSubject: ${message.subject}\nBody: ${message.body}`).join('\n\n')}
         `;
 
-        // Call OpenAI API
-        const response = await openai.chat.completions.create({
-          model: 'gpt-4o-mini',
+        // Call Gemini API
+        const completion = await invokeGemini({
+          model: (typeof getGeminiModel === 'function' ? getGeminiModel() : undefined),
           messages: [
             { role: 'system', content: 'You are an email summarization assistant.' },
             { role: 'user', content: prompt }
           ],
           temperature: 0.3,
-          max_tokens: 500
+          maxOutputTokens: 500
         });
 
-        const summary = String(response?.choices?.[0]?.message?.content || '').trim();
+        const summary = String(completion?.content || '').trim();
 
         console.log(`Email Thread Summarizer: Summary generated for thread ${threadId}: ${summary}`);
 
