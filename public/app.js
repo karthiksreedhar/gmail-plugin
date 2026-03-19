@@ -184,8 +184,8 @@
         function featureStatusColor(feature) {
             const status = featureStatusLabel(feature);
             if (status === 'deployed') return '#137333';
-            if (status === 'pr_open' || status === 'pr_requested') return '#1a73e8';
-            if (status === 'deploying' || status === 'pr_merged') return '#b06000';
+            if (status === 'pr_open' || status === 'pr_requested' || status === 'approval_requested') return '#1a73e8';
+            if (status === 'deploying' || status === 'pr_merged' || status === 'merge_in_progress') return '#b06000';
             if (status === 'missing_code') return '#b3261e';
             if (status === 'deploy_failed' || status === 'error') return '#b3261e';
             return '#5f6368';
@@ -201,10 +201,10 @@
 
         function classifyFeatureSection(feature) {
             if (feature.status !== 'deployed' || feature.deploymentStatus !== 'deployed') {
-                if (feature.status === 'pr_open' || feature.status === 'pr_requested' || feature.status === 'draft') {
+                if (feature.status === 'pr_open' || feature.status === 'pr_requested' || feature.status === 'approval_requested' || feature.status === 'draft') {
                     return 'awaiting';
                 }
-                if (feature.status === 'pr_merged' || feature.deploymentStatus === 'deploying' || feature.status === 'deploying') {
+                if (feature.status === 'merge_in_progress' || feature.status === 'pr_merged' || feature.deploymentStatus === 'deploying' || feature.status === 'deploying') {
                     return 'deploying';
                 }
                 return 'other';

@@ -654,7 +654,8 @@ app.post('/api/internal/generated-features/:featureId/pr-status', async (req, re
       prBranch: String(req.body?.prBranch || '').trim() || null,
       commitSha: String(req.body?.commitSha || '').trim() || null,
       lastError: String(req.body?.error || '').trim() || null,
-      deploymentStatus: status === 'pr_open' ? 'pending' : undefined
+      deploymentStatus: String(req.body?.deploymentStatus || '').trim() || (status === 'pr_open' ? 'pending' : undefined),
+      vercelDeploymentUrl: String(req.body?.vercelDeploymentUrl || '').trim() || null
     });
 
     res.json({ success: true, feature });
