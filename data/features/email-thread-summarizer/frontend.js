@@ -13,35 +13,70 @@
 
   const API = window.EmailAssistant;
 
+  function escapeHtml(text) {
+    return String(text || '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  function getThreadIdFromEmailItem(emailItem) {
+    if (!emailItem) return '';
+
+    // Primary source: the delete button carries the thread/email id in inline onclick.
+    const deleteBtn = emailItem.querySelector('.delete-thread-btn');
+    const onclickAttr = deleteBtn ? String(deleteBtn.getAttribute('onclick') || '') : '';
+    if (onclickAttr) {
+      const match = onclickAttr.match(/deleteEmailThread\('([^']+)'/);
+      if (match && match[1]) return match[1];
+    }
+
+    // Fallback: the id text appears in the date area.
+    const idNode = emailItem.querySelector('.email-date span');
+    if (idNode && idNode.textContent) return String(idNode.textContent).trim();
+
+    return '';
+  }
+
   // Function to summarize the email thread
-  async function summarizeEmailThread(emailId) {
+  async function summarizeEmailThread(threadId) {
     try {
+      if (!threadId) {
+        API.showError('Missing thread ID for this email thread.');
+        return;
+      }
+
       // Show loading modal
-      API.showModal('<div style="text-align: center;">Summarizing email thread...<br><div class="spinner-border" role="status"><span class="visually-hidden">Loading...</span></div></div>', 'Summarizing...');
+      API.showModal(
+        '<div style="text-align:center; padding:12px 0;">Summarizing email thread...</div>',
+        'Summarizing...'
+      );
 
       // Make API call to backend
       const response = await API.apiCall('/api/email-thread-summarizer/summarize', {
         method: 'POST',
-        body: { emailId: emailId }
+        body: { threadId }
       });
 
       // Handle response
       if (response.success) {
-        const summary = response.summary;
-        const todos = response.todos;
+        const summary = response.summary || response?.data?.summary || '';
+        const todos = response.todos || response?.data?.todos || [];
 
         let modalContent = `
           <div style="padding: 20px;">
             <h4>Summary:</h4>
-            <p>${summary}</p>
+            <p>${escapeHtml(summary || 'No summary generated.')}</p>
             ${todos && todos.length > 0 ? `
               <h4>TODOs:</h4>
               <ul>
-                ${todos.map(todo => `<li>${todo}</li>`).join('')}
+                ${todos.map(todo => `<li>${escapeHtml(todo)}</li>`).join('')}
               </ul>
             ` : ''}
             <div style="text-align: center; margin-top: 20px;">
-              <button class="btn btn-primary" onclick="this.closest('.modal').remove()">Close</button>
+              <button style="background:#1a73e8;color:#fff;border:none;border-radius:6px;padding:8px 14px;cursor:pointer;" onclick="this.closest('.modal').remove()">Close</button>
             </div>
           </div>
         `;
@@ -68,8 +103,8 @@
       const emailItems = document.querySelectorAll('.email-item');
 
       emailItems.forEach((emailItem) => {
-        // Extract email data
-        const emailId = emailItem.getAttribute('onclick').match(/openEmailThread\('([^']+)'\)/)[1];
+        const threadId = getThreadIdFromEmailItem(emailItem);
+        if (!threadId) return;
 
         // Find the actions container
         const actionsContainer = emailItem.querySelector('.email-actions');
@@ -93,7 +128,7 @@
         // Add click handler (prevent opening the email)
         summarizeButton.addEventListener('click', (e) => {
           e.stopPropagation(); // Prevent email from opening
-          summarizeEmailThread(emailId);
+          summarizeEmailThread(threadId);
         });
 
         // Insert before delete button
@@ -111,16 +146,13 @@
 
   // Initialize the feature
   function initialize() {
-    // 1. Listen for emailsLoaded event
-    API.on('emailsLoaded', addSummarizeButton);
-
-    // 2. Add buttons immediately (emails may already be loaded)
+    // Add buttons immediately (emails may already be loaded)
     setTimeout(() => addSummarizeButton(), 100);
 
-    // 3. Periodic refresh (most reliable for dynamic content)
+    // Periodic refresh (most reliable for dynamic content)
     setInterval(() => addSummarizeButton(), 2000);
 
-    // 4. Hook into displayEmails if it exists
+    // Hook into displayEmails if it exists
     if (typeof window.displayEmails === 'function') {
       const originalDisplayEmails = window.displayEmails;
       window.displayEmails = async function(...args) {

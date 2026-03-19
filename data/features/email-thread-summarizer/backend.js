@@ -9,7 +9,7 @@ module.exports = {
    * @param {Object} context - Feature context with server resources
    */
   initialize(context) {
-    const { app, getUserDoc, setUserDoc, openai, getCurrentUser, getGmailEmail } = context;
+    const { app, getUserDoc, openai, getCurrentUser } = context;
 
     console.log('Email Thread Summarizer: Initializing backend...');
 
@@ -27,7 +27,16 @@ module.exports = {
 
         // Fetch all emails in the thread
         const thread = await getUserDoc('email_threads', user);
-        const threadData = thread?.threads?.find(t => t.threadId === threadId);
+        const normalizedThreadId = String(threadId || '').trim();
+        const rawThreadId = normalizedThreadId.startsWith('thread-')
+          ? normalizedThreadId.slice('thread-'.length)
+          : normalizedThreadId;
+
+        const threadData = (thread?.threads || []).find(t => {
+          const candidatePersisted = String(t?.id || '').trim();
+          const candidateRaw = String(t?.threadId || '').trim();
+          return candidatePersisted === normalizedThreadId || candidateRaw === rawThreadId;
+        });
 
         if (!threadData || !threadData.messages) {
           return res.status(404).json({ success: false, error: 'Thread not found' });
@@ -52,11 +61,11 @@ module.exports = {
           max_tokens: 500
         });
 
-        const summary = response.choices[0].message.content;
+        const summary = String(response?.choices?.[0]?.message?.content || '').trim();
 
         console.log(`Email Thread Summarizer: Summary generated for thread ${threadId}: ${summary}`);
 
-        res.json({ success: true, data: { summary } });
+        res.json({ success: true, summary, todos: [] });
 
       } catch (error) {
         console.error('Email Thread Summarizer: Error summarizing thread:', error);
