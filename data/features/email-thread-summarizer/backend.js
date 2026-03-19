@@ -10,6 +10,41 @@ module.exports = {
    */
   initialize(context) {
     const { app, getUserDoc, invokeGemini, getGeminiModel, getCurrentUser } = context;
+    function extractFirstSentence(text) {
+      const normalized = String(text || '').replace(/\s+/g, ' ').trim();
+      if (!normalized) return '';
+      const match = normalized.match(/^[^.!?]+[.!?]/);
+      return (match ? match[0] : normalized).trim();
+    }
+
+    function parseSummarizerPayload(raw) {
+      const fallback = {
+        summary: extractFirstSentence(raw) || 'No summary generated.',
+        todos: ['No apparent TODOs']
+      };
+      const source = String(raw || '').trim();
+      if (!source) return fallback;
+
+      const fenceMatch = source.match(/```(?:json)?\s*([\s\S]*?)```/i);
+      const candidate = fenceMatch ? fenceMatch[1].trim() : source;
+      const jsonBlockMatch = candidate.match(/\{[\s\S]*\}/);
+      const jsonText = (jsonBlockMatch ? jsonBlockMatch[0] : candidate).trim();
+
+      try {
+        const parsed = JSON.parse(jsonText);
+        const summary = extractFirstSentence(parsed?.summary) || fallback.summary;
+        const todosRaw = Array.isArray(parsed?.todos) ? parsed.todos : [];
+        const todos = todosRaw
+          .map(item => String(item || '').trim())
+          .filter(Boolean);
+        return {
+          summary,
+          todos: todos.length > 0 ? todos : ['No apparent TODOs']
+        };
+      } catch (_) {
+        return fallback;
+      }
+    }
 
     console.log('Email Thread Summarizer: Initializing backend...');
 
@@ -49,10 +84,23 @@ module.exports = {
         }
 
         // Construct a prompt for Gemini
-        const prompt = `Summarize the following email thread in at most three sentences and list any identified TODOs.
-        Email Thread:
-        ${messages.map(message => `From: ${message.from}\nSubject: ${message.subject}\nBody: ${message.body}`).join('\n\n')}
-        `;
+        const prompt = `Analyze the following email thread and return STRICT JSON only.
+
+Required JSON shape:
+{
+  "summary": "One sentence maximum summary.",
+  "todos": ["TODO item 1", "TODO item 2"]
+}
+
+Rules:
+- "summary" must be at most one sentence.
+- "todos" must be a bullet-list equivalent as an array of strings.
+- If there are no apparent TODOs, set todos to ["No apparent TODOs"] exactly.
+- Do not include markdown or any text outside JSON.
+
+Email Thread:
+${messages.map(message => `From: ${message.from}\nSubject: ${message.subject}\nBody: ${message.body}`).join('\n\n')}
+`;
 
         // Call Gemini API
         const completion = await invokeGemini({
@@ -65,11 +113,12 @@ module.exports = {
           maxOutputTokens: 500
         });
 
-        const summary = String(completion?.content || '').trim();
+        const modelRaw = String(completion?.content || '').trim();
+        const parsed = parseSummarizerPayload(modelRaw);
 
-        console.log(`Email Thread Summarizer: Summary generated for thread ${threadId}: ${summary}`);
+        console.log(`Email Thread Summarizer: Summary generated for thread ${threadId}: ${parsed.summary}`);
 
-        res.json({ success: true, summary, todos: [] });
+        res.json({ success: true, summary: parsed.summary, todos: parsed.todos });
 
       } catch (error) {
         console.error('Email Thread Summarizer: Error summarizing thread:', error);
