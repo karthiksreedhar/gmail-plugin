@@ -14,7 +14,7 @@ permissions:
 
 env:
   MAIN_SYSTEM_BASE_URL: https://gmail-plugin.vercel.app
-  BASE_BRANCH: vercel-deploy-test-2
+  BASE_BRANCH: main
 
 jobs:
   create-pr:
@@ -102,12 +102,13 @@ jobs:
 
       - name: Open pull request
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.GH_FINE_GRAINED_TOKEN }}
         run: |
           gh pr create \
             --base "${BASE_BRANCH}" \
             --head "$PR_BRANCH" \
             --title "Generated feature: ${{ inputs.feature_id }}" \
+            --label "generated-feature" \
             --body-file /tmp/pr-body.md
 
           PR_JSON="$(gh pr view "$PR_BRANCH" --json number,url --jq '{number: .number, url: .url}')"
