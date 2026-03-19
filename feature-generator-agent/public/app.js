@@ -12,6 +12,8 @@ let updatedFiles = [];
 let isGenerating = false;
 let currentMode = localStorage.getItem('featureGeneratorMode') || 'generate'; // 'chat' or 'generate'
 let currentDraftSaved = false;
+let availableExistingFeatures = [];
+let existingFeaturesLoaded = false;
 
 // DOM Elements
 const chatMessages = document.getElementById('chatMessages');
@@ -33,6 +35,9 @@ const headerTitle = document.getElementById('headerTitle');
 const headerSubtitle = document.getElementById('headerSubtitle');
 const userSelector = document.getElementById('userSelector');
 const selectedUserDropdown = document.getElementById('selectedUser');
+const existingFeatureSelector = document.getElementById('existingFeatureSelector');
+const existingFeatureDropdown = document.getElementById('existingFeatureDropdown');
+const loadExistingFeatureBtn = document.getElementById('loadExistingFeatureBtn');
 
 // Welcome messages for each mode
 const WELCOME_MESSAGES = {
@@ -197,6 +202,18 @@ function setupEventListeners() {
   if (createPrBtn) {
     createPrBtn.addEventListener('click', handleCreatePr);
   }
+
+  if (loadExistingFeatureBtn) {
+    loadExistingFeatureBtn.disabled = true;
+    loadExistingFeatureBtn.addEventListener('click', handleLoadExistingFeature);
+  }
+
+  if (existingFeatureDropdown) {
+    existingFeatureDropdown.addEventListener('change', () => {
+      if (!loadExistingFeatureBtn) return;
+      loadExistingFeatureBtn.disabled = !existingFeatureDropdown.value;
+    });
+  }
   
   // Auto-resize textarea
   messageInput.addEventListener('input', () => {
@@ -221,6 +238,9 @@ function setMode(mode) {
   if (userSelector) {
     userSelector.style.display = mode === 'chat' ? 'flex' : 'none';
   }
+  if (existingFeatureSelector) {
+    existingFeatureSelector.style.display = mode === 'generate' ? 'flex' : 'none';
+  }
   
   // Update header
   if (mode === 'chat') {
@@ -241,6 +261,9 @@ function setMode(mode) {
     if (currentFiles && Object.keys(currentFiles).length > 0) {
       previewSection.style.display = 'flex';
     }
+    refreshExistingFeaturesList().catch(error => {
+      console.error('Failed to refresh feature list:', error);
+    });
   }
 
   updateCreatePrButton();
@@ -249,6 +272,111 @@ function setMode(mode) {
   if (chatMessages.children.length <= 1) {
     chatMessages.innerHTML = '';
     addMessage('assistant', WELCOME_MESSAGES[mode]);
+  }
+}
+
+function renderExistingFeaturesDropdown() {
+  if (!existingFeatureDropdown) return;
+
+  const selectedFeatureId = existingFeatureDropdown.value;
+  existingFeatureDropdown.innerHTML = '<option value="">Select a feature...</option>';
+
+  for (const feature of availableExistingFeatures) {
+    const option = document.createElement('option');
+    option.value = feature.featureId;
+    const statusLabel = feature.status === 'deployed' ? 'deployed' : (feature.status || 'draft');
+    option.textContent = `${feature.name || feature.featureId} (${feature.featureId}) [${statusLabel}]`;
+    existingFeatureDropdown.appendChild(option);
+  }
+
+  if (selectedFeatureId && availableExistingFeatures.some(f => f.featureId === selectedFeatureId)) {
+    existingFeatureDropdown.value = selectedFeatureId;
+  } else {
+    existingFeatureDropdown.value = '';
+  }
+
+  if (loadExistingFeatureBtn) {
+    loadExistingFeatureBtn.disabled = !existingFeatureDropdown.value;
+  }
+}
+
+async function refreshExistingFeaturesList(force = false) {
+  if (currentMode !== 'generate' || !existingFeatureDropdown) return;
+  if (existingFeaturesLoaded && !force) return;
+
+  try {
+    const response = await fetch('/api/features/list');
+    const data = await response.json().catch(() => ({}));
+
+    if (!response.ok || !data.success) {
+      throw new Error(data.error || 'Failed to load features list');
+    }
+
+    availableExistingFeatures = Array.isArray(data.features) ? data.features : [];
+    existingFeaturesLoaded = true;
+    renderExistingFeaturesDropdown();
+  } catch (error) {
+    console.error('Error loading existing features:', error);
+    showToast(`Failed to load existing features: ${error.message}`, 'warning');
+  }
+}
+
+async function handleLoadExistingFeature() {
+  const featureId = String(existingFeatureDropdown?.value || '').trim();
+  if (!featureId) {
+    showToast('Select a feature first', 'warning');
+    return;
+  }
+
+  if (!sessionId) {
+    await createNewSession();
+    if (!sessionId) {
+      showToast('Failed to initialize session', 'error');
+      return;
+    }
+  }
+
+  const originalButtonHtml = loadExistingFeatureBtn ? loadExistingFeatureBtn.innerHTML : '';
+  if (loadExistingFeatureBtn) {
+    loadExistingFeatureBtn.disabled = true;
+    loadExistingFeatureBtn.innerHTML = '<span class="spinner"></span> Loading...';
+  }
+
+  try {
+    const response = await fetch(`/api/session/${encodeURIComponent(sessionId)}/load-feature`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ featureId })
+    });
+
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !data.success) {
+      throw new Error(data.error || 'Failed to load feature');
+    }
+
+    currentFeatureId = data.featureId;
+    currentFiles = data.files || {};
+    updatedFiles = [];
+    currentDraftSaved = false;
+    updateCreatePrButton();
+    showPreview();
+    updateFileTabs();
+    selectFile('manifest.json');
+
+    addMessage(
+      'assistant',
+      `Loaded feature \`${data.featureId}\` into this session.\n\nDescribe the edits you want, and I’ll refine the existing files.`
+    );
+    showToast(`Loaded ${data.featureId}`, 'success');
+  } catch (error) {
+    console.error('Error loading existing feature:', error);
+    showToast(error.message || 'Failed to load feature', 'error');
+    addMessage('assistant', `Failed to load \`${featureId}\`.\n\nError: ${error.message}`);
+  } finally {
+    if (loadExistingFeatureBtn) {
+      loadExistingFeatureBtn.disabled = !String(existingFeatureDropdown?.value || '').trim();
+      loadExistingFeatureBtn.innerHTML = originalButtonHtml;
+    }
   }
 }
 

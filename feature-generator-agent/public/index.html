@@ -48,6 +48,17 @@
             <option value="lc3251@columbia.edu">lc3251@columbia.edu</option>
           </select>
         </div>
+
+        <!-- Existing Feature Selection (for Generate mode) -->
+        <div id="existingFeatureSelector" class="feature-selector" style="display: none;">
+          <label for="existingFeatureDropdown">Edit existing feature:</label>
+          <select id="existingFeatureDropdown" class="user-dropdown">
+            <option value="">Select a feature...</option>
+          </select>
+          <button id="loadExistingFeatureBtn" class="btn btn-secondary" type="button">
+            Load Feature
+          </button>
+        </div>
         
         <div id="chatMessages" class="chat-messages">
           <!-- Welcome message -->

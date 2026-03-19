@@ -378,10 +378,10 @@ async function listFeatureRegistryForUser(userEmail) {
     const codeMissingFromDeployment = !loaded && !!registry && registry.status === 'deployed';
     const resolvedStatus = codeMissingFromDeployment
       ? 'error'
-      : (registry?.status || (loaded ? 'deployed' : 'draft'));
+      : (loaded ? 'deployed' : (registry?.status || 'draft'));
     const resolvedDeploymentStatus = codeMissingFromDeployment
       ? 'missing_code'
-      : (registry?.deploymentStatus || (loaded ? 'deployed' : 'pending'));
+      : (loaded ? 'deployed' : (registry?.deploymentStatus || 'pending'));
 
     return {
       featureId,

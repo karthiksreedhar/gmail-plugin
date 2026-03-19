@@ -229,6 +229,7 @@ const MAIN_SYSTEM_BASE_URL = normalizeBaseUrl(
   'http://localhost:3000'
 );
 const FEATURE_PUBLISH_TOKEN = String(process.env.FEATURE_PUBLISH_TOKEN || '').trim();
+const FEATURE_EXPORT_TOKEN = String(process.env.FEATURE_EXPORT_TOKEN || '').trim();
 const GH_FINE_GRAINED_TOKEN = String(process.env.GH_FINE_GRAINED_TOKEN || '').trim();
 const GITHUB_REPO_OWNER = String(process.env.GITHUB_REPO_OWNER || 'karthiksreedhar').trim();
 const GITHUB_REPO_NAME = String(process.env.GITHUB_REPO_NAME || 'gmail-plugin').trim();
@@ -461,6 +462,52 @@ async function dispatchCreatePrWorkflow(featureId) {
   }
 }
 
+async function listFeaturesFromMainSystem() {
+  const endpoint = `${MAIN_SYSTEM_BASE_URL}/api/feature-registry`;
+  const headers = { 'Content-Type': 'application/json' };
+  if (FEATURE_PUBLISH_TOKEN) {
+    headers['x-feature-publish-token'] = FEATURE_PUBLISH_TOKEN;
+  }
+
+  const response = await fetch(endpoint, { method: 'GET', headers });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || !data.success) {
+    throw new Error(data.error || `Failed to list features (status ${response.status})`);
+  }
+
+  const features = Array.isArray(data.features) ? data.features : [];
+  return features.map((feature) => ({
+    featureId: feature.featureId || feature.id,
+    id: feature.id || feature.featureId,
+    name: feature.name || feature.featureId || feature.id,
+    status: feature.status || 'draft',
+    deploymentStatus: feature.deploymentStatus || 'pending',
+    source: feature.source || null,
+    createdBy: feature.createdBy || null
+  })).filter(feature => !!feature.featureId);
+}
+
+async function exportFeatureFromMainSystem(featureId) {
+  if (!FEATURE_EXPORT_TOKEN) {
+    throw new Error('FEATURE_EXPORT_TOKEN is not configured on the feature-generator app');
+  }
+
+  const endpoint = `${MAIN_SYSTEM_BASE_URL}/api/internal/generated-features/${encodeURIComponent(featureId)}/export`;
+  const response = await fetch(endpoint, {
+    method: 'GET',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-feature-export-token': FEATURE_EXPORT_TOKEN
+    }
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || !data.success || !data.feature) {
+    throw new Error(data.error || `Failed to export feature ${featureId} (status ${response.status})`);
+  }
+
+  return data.feature;
+}
+
 // API Routes
 
 // Create new session
@@ -487,6 +534,72 @@ app.get('/api/session/:sessionId', (req, res) => {
     featureId: session.featureId,
     chatHistoryLength: session.chatHistory.length
   });
+});
+
+app.get('/api/features/list', async (req, res) => {
+  try {
+    const features = await listFeaturesFromMainSystem();
+    res.json({
+      success: true,
+      count: features.length,
+      features
+    });
+  } catch (error) {
+    console.error('Failed to load features list from main system:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to load features list'
+    });
+  }
+});
+
+app.post('/api/session/:sessionId/load-feature', async (req, res) => {
+  try {
+    const sessionId = String(req.params.sessionId || '').trim();
+    const featureId = String(req.body?.featureId || '').trim();
+
+    if (!sessionId) {
+      return res.status(400).json({ success: false, error: 'sessionId is required' });
+    }
+    if (!featureId) {
+      return res.status(400).json({ success: false, error: 'featureId is required' });
+    }
+    if (!sessions.has(sessionId)) {
+      return res.status(404).json({ success: false, error: 'Session not found' });
+    }
+
+    const exportedFeature = await exportFeatureFromMainSystem(featureId);
+    const files = exportedFeature.files;
+    if (!files || typeof files !== 'object' || Array.isArray(files) || Object.keys(files).length === 0) {
+      return res.status(400).json({ success: false, error: 'Feature has no files to load' });
+    }
+
+    const session = sessions.get(sessionId);
+    session.lastAccess = Date.now();
+    session.featureId = featureId;
+    session.generatedFiles = files;
+    session.chatHistory.push({
+      role: 'assistant',
+      content: `Loaded existing feature ${featureId} for refinement.`,
+      timestamp: Date.now(),
+      loadedFeature: true
+    });
+
+    return res.json({
+      success: true,
+      sessionId: session.id,
+      featureId,
+      featureName: exportedFeature.name || featureId,
+      status: exportedFeature.status || 'draft',
+      files
+    });
+  } catch (error) {
+    console.error('Failed to load existing feature into session:', error);
+    return res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to load feature'
+    });
+  }
 });
 
 // Main chat endpoint - handles both initial generation and refinements

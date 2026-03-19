@@ -225,7 +225,22 @@ body.chat-mode .mode-btn.active[data-mode="chat"] {
   border-bottom: 1px solid var(--border-color);
 }
 
+.feature-selector {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 20px;
+  background: var(--bg-card);
+  border-bottom: 1px solid var(--border-color);
+}
+
 .user-selector label {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.feature-selector label {
   font-size: 0.85rem;
   color: var(--text-secondary);
   font-weight: 500;
