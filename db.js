@@ -5,10 +5,10 @@ require('dotenv').config();
 const MONGODB_URI = process.env.MONGODB_URI || 'mongodb+srv://ks4190_db_user:pulY33BbK3UQRjKW@please-god.erkorn3.mongodb.net/?appName=please-god';
 // Database name: prefer env, else sensible default
 const DB_NAME = process.env.MONGODB_DB || 'gmail_plugin';
-const MONGODB_MAX_POOL_SIZE = parseInt(process.env.MONGODB_MAX_POOL_SIZE || '1', 10);
+const MONGODB_MAX_POOL_SIZE = parseInt(process.env.MONGODB_MAX_POOL_SIZE || '3', 10);
 const MONGODB_MIN_POOL_SIZE = parseInt(process.env.MONGODB_MIN_POOL_SIZE || '0', 10);
-const MONGODB_MAX_CONNECTING = parseInt(process.env.MONGODB_MAX_CONNECTING || '1', 10);
-const MONGODB_WAIT_QUEUE_TIMEOUT_MS = parseInt(process.env.MONGODB_WAIT_QUEUE_TIMEOUT_MS || '5000', 10);
+const MONGODB_MAX_CONNECTING = parseInt(process.env.MONGODB_MAX_CONNECTING || '2', 10);
+const MONGODB_WAIT_QUEUE_TIMEOUT_MS = parseInt(process.env.MONGODB_WAIT_QUEUE_TIMEOUT_MS || '15000', 10);
 
 const mongoGlobal = globalThis.__gmailPluginMongo || (globalThis.__gmailPluginMongo = {
   client: null,
@@ -49,11 +49,11 @@ async function initMongo() {
   if (_connectPromise) return _connectPromise;
   _connectPromise = (async () => {
     _client = new MongoClient(MONGODB_URI, {
-      maxPoolSize: Number.isFinite(MONGODB_MAX_POOL_SIZE) && MONGODB_MAX_POOL_SIZE > 0 ? MONGODB_MAX_POOL_SIZE : 1,
+      maxPoolSize: Number.isFinite(MONGODB_MAX_POOL_SIZE) && MONGODB_MAX_POOL_SIZE > 0 ? MONGODB_MAX_POOL_SIZE : 3,
       minPoolSize: Number.isFinite(MONGODB_MIN_POOL_SIZE) && MONGODB_MIN_POOL_SIZE >= 0 ? MONGODB_MIN_POOL_SIZE : 0,
-      maxConnecting: Number.isFinite(MONGODB_MAX_CONNECTING) && MONGODB_MAX_CONNECTING > 0 ? MONGODB_MAX_CONNECTING : 1,
-      waitQueueTimeoutMS: Number.isFinite(MONGODB_WAIT_QUEUE_TIMEOUT_MS) && MONGODB_WAIT_QUEUE_TIMEOUT_MS > 0 ? MONGODB_WAIT_QUEUE_TIMEOUT_MS : 5000,
-      maxIdleTimeMS: 10000,
+      maxConnecting: Number.isFinite(MONGODB_MAX_CONNECTING) && MONGODB_MAX_CONNECTING > 0 ? MONGODB_MAX_CONNECTING : 2,
+      waitQueueTimeoutMS: Number.isFinite(MONGODB_WAIT_QUEUE_TIMEOUT_MS) && MONGODB_WAIT_QUEUE_TIMEOUT_MS > 0 ? MONGODB_WAIT_QUEUE_TIMEOUT_MS : 15000,
+      maxIdleTimeMS: 30000,
       connectTimeoutMS: 15000,
       socketTimeoutMS: 20000,
       serverSelectionTimeoutMS: 15000,
