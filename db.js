@@ -5,6 +5,7 @@ require('dotenv').config();
 const MONGODB_URI = process.env.MONGODB_URI || 'mongodb+srv://ks4190_db_user:pulY33BbK3UQRjKW@please-god.erkorn3.mongodb.net/?appName=please-god';
 // Database name: prefer env, else sensible default
 const DB_NAME = process.env.MONGODB_DB || 'gmail_plugin';
+const MONGODB_MAX_POOL_SIZE = parseInt(process.env.MONGODB_MAX_POOL_SIZE || '5', 10);
 
 let _client = null;
 let _db = null;
@@ -36,7 +37,8 @@ const USER_FEATURE_PREFERENCES_COLLECTION = 'user_feature_preferences';
 async function initMongo() {
   if (_db) return _db;
   _client = new MongoClient(MONGODB_URI, {
-    maxPoolSize: 20,
+    maxPoolSize: Number.isFinite(MONGODB_MAX_POOL_SIZE) && MONGODB_MAX_POOL_SIZE > 0 ? MONGODB_MAX_POOL_SIZE : 5,
+    maxIdleTimeMS: 30000,
     serverSelectionTimeoutMS: 15000,
   });
   await _client.connect();

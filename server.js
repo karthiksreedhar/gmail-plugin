@@ -373,8 +373,13 @@ async function listFeatureRegistryForUser(userEmail) {
     const registry = registryFeatures.find(feature => feature.featureId === featureId) || null;
     const preference = preferenceMap.get(featureId) || null;
     const defaults = getDefaultFeaturePreference();
-    const resolvedStatus = registry?.status || (loaded ? 'deployed' : 'draft');
-    const resolvedDeploymentStatus = registry?.deploymentStatus || (loaded ? 'deployed' : 'pending');
+    const codeMissingFromDeployment = !loaded && !!registry && registry.status === 'deployed';
+    const resolvedStatus = codeMissingFromDeployment
+      ? 'error'
+      : (registry?.status || (loaded ? 'deployed' : 'draft'));
+    const resolvedDeploymentStatus = codeMissingFromDeployment
+      ? 'missing_code'
+      : (registry?.deploymentStatus || (loaded ? 'deployed' : 'pending'));
 
     return {
       featureId,
@@ -393,6 +398,7 @@ async function listFeatureRegistryForUser(userEmail) {
       lastError: registry?.lastError || null,
       onDisk: !!loaded,
       loaded: !!loaded,
+      codeMissingFromDeployment,
       manifest: registry?.manifest || loaded?.manifest || null,
       preferences: {
         visible: preference?.visible ?? defaults.visible,

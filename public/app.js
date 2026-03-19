@@ -186,6 +186,7 @@
             if (status === 'deployed') return '#137333';
             if (status === 'pr_open' || status === 'pr_requested') return '#1a73e8';
             if (status === 'deploying' || status === 'pr_merged') return '#b06000';
+            if (status === 'missing_code') return '#b3261e';
             if (status === 'deploy_failed' || status === 'error') return '#b3261e';
             return '#5f6368';
         }
@@ -248,6 +249,11 @@
                                                     <span>Feature ID: ${escapeHtml(feature.featureId)}</span>
                                                     ${feature.createdBy ? `<span style="margin-left:12px;">Created by ${escapeHtml(feature.createdBy)}</span>` : ''}
                                                 </div>
+                                                ${feature.codeMissingFromDeployment ? `
+                                                    <div style="margin-top:8px; font-size:12px; color:#b3261e; font-weight:600;">
+                                                        This feature is marked deployed in the registry, but its code is missing from the current deployment branch.
+                                                    </div>
+                                                ` : ''}
                                                 <div style="margin-top:8px; display:flex; gap:12px; flex-wrap:wrap; font-size:12px;">
                                                     ${feature.prUrl ? `<a href="${feature.prUrl}" target="_blank" rel="noopener" style="color:#1a73e8; text-decoration:none;">View PR</a>` : ''}
                                                     ${feature.vercelDeploymentUrl ? `<a href="${feature.vercelDeploymentUrl}" target="_blank" rel="noopener" style="color:#1a73e8; text-decoration:none;">View Deploy</a>` : ''}
