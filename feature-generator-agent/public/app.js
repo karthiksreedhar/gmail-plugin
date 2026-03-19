@@ -12,6 +12,7 @@ let updatedFiles = [];
 let isGenerating = false;
 let currentMode = localStorage.getItem('featureGeneratorMode') || 'generate'; // 'chat' or 'generate'
 let currentDraftSaved = false;
+let currentPrRequested = false;
 let availableExistingFeatures = [];
 let existingFeaturesLoaded = false;
 
@@ -24,6 +25,7 @@ const previewSection = document.getElementById('previewSection');
 const featureIdBadge = document.getElementById('featureIdBadge');
 const downloadBtn = document.getElementById('downloadBtn');
 const createPrBtn = document.getElementById('createPrBtn');
+const approveDeployBtn = document.getElementById('approveDeployBtn');
 const fileTabs = document.querySelectorAll('.file-tab');
 const currentFileNameEl = document.getElementById('currentFileName');
 const fileContent = document.getElementById('fileContent');
@@ -121,6 +123,8 @@ async function loadSessionFiles() {
     if (data.success) {
       currentFiles = data.files;
       currentFeatureId = data.featureId;
+      currentPrRequested = false;
+      await refreshExistingFeaturesList(true);
       updateCreatePrButton();
       showPreview();
     }
@@ -201,6 +205,9 @@ function setupEventListeners() {
 
   if (createPrBtn) {
     createPrBtn.addEventListener('click', handleCreatePr);
+  }
+  if (approveDeployBtn) {
+    approveDeployBtn.addEventListener('click', handleApproveDeploy);
   }
 
   if (loadExistingFeatureBtn) {
@@ -300,6 +307,18 @@ function renderExistingFeaturesDropdown() {
   }
 }
 
+function isFeatureInPrOrDeployStage(feature) {
+  if (!feature) return false;
+  const status = String(feature.status || '').trim();
+  const deploymentStatus = String(feature.deploymentStatus || '').trim();
+  return status === 'pr_open' ||
+    status === 'pr_requested' ||
+    status === 'approval_requested' ||
+    status === 'merge_in_progress' ||
+    status === 'pr_merged' ||
+    deploymentStatus === 'deploying';
+}
+
 async function refreshExistingFeaturesList(force = false) {
   if (currentMode !== 'generate' || !existingFeatureDropdown) return;
   if (existingFeaturesLoaded && !force) return;
@@ -313,6 +332,11 @@ async function refreshExistingFeaturesList(force = false) {
     }
 
     availableExistingFeatures = Array.isArray(data.features) ? data.features : [];
+    if (currentFeatureId) {
+      const current = availableExistingFeatures.find(f => f.featureId === currentFeatureId);
+      currentPrRequested = isFeatureInPrOrDeployStage(current);
+      updateCreatePrButton();
+    }
     existingFeaturesLoaded = true;
     renderExistingFeaturesDropdown();
   } catch (error) {
@@ -358,6 +382,7 @@ async function handleLoadExistingFeature() {
     currentFiles = data.files || {};
     updatedFiles = [];
     currentDraftSaved = false;
+    currentPrRequested = false;
     updateCreatePrButton();
     showPreview();
     updateFileTabs();
@@ -449,6 +474,7 @@ async function handleSend() {
           currentFiles = data.files;
           currentFeatureId = data.featureId;
           updatedFiles = data.updatedFiles || [];
+          currentPrRequested = false;
           
           // Show/update preview
           showPreview();
@@ -519,6 +545,7 @@ async function handleNewSession() {
   currentFeatureId = null;
   updatedFiles = [];
   currentDraftSaved = false;
+  currentPrRequested = false;
   updateCreatePrButton();
   
   // Create new session
@@ -567,6 +594,10 @@ function updateCreatePrButton() {
   if (!createPrBtn) return;
   const shouldShow = currentMode === 'generate' && !!currentFeatureId && currentDraftSaved;
   createPrBtn.style.display = shouldShow ? 'inline-flex' : 'none';
+  if (approveDeployBtn) {
+    const shouldShowApprove = shouldShow && currentPrRequested;
+    approveDeployBtn.style.display = shouldShowApprove ? 'inline-flex' : 'none';
+  }
 }
 
 async function handleCreatePr() {
@@ -588,7 +619,13 @@ async function handleCreatePr() {
 
     addMessage(
       'assistant',
-      `PR creation requested for \`${currentFeatureId}\`.\n\nGitHub Actions will create a branch from \`${data.baseBranch || 'vercel-deploy-test-2'}\`, commit the generated files, and open a pull request.\n\nTrack progress here: ${data.workflowUrl || 'https://github.com/karthiksreedhar/gmail-plugin/actions'}`
+      `PR creation requested for \`${currentFeatureId}\`.\n\nGitHub Actions will create a branch from \`${data.baseBranch || 'main'}\`, commit the generated files, and open a pull request.\n\nTrack progress here: ${data.workflowUrl || 'https://github.com/karthiksreedhar/gmail-plugin/actions'}`
+    );
+    currentPrRequested = true;
+    updateCreatePrButton();
+    addMessage(
+      'assistant',
+      `Approval stage ready for \`${currentFeatureId}\`.\n\nClick **Approve Merge + Deploy** to merge the generated PR into \`${data.baseBranch || 'main'}\` and trigger production deployment.`
     );
     showToast('PR creation requested', 'success');
   } catch (error) {
@@ -597,6 +634,37 @@ async function handleCreatePr() {
   } finally {
     createPrBtn.disabled = false;
     createPrBtn.innerHTML = originalHtml;
+  }
+}
+
+async function handleApproveDeploy() {
+  if (!currentFeatureId || !approveDeployBtn) return;
+
+  const originalHtml = approveDeployBtn.innerHTML;
+  approveDeployBtn.disabled = true;
+  approveDeployBtn.innerHTML = '<span class="spinner"></span> Approving...';
+
+  try {
+    const response = await fetch(`/api/features/${encodeURIComponent(currentFeatureId)}/approve-and-deploy`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' }
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !data.success) {
+      throw new Error(data.error || 'Failed to approve and deploy');
+    }
+
+    addMessage(
+      'assistant',
+      `Approval accepted for \`${currentFeatureId}\`.\n\nGitHub Actions will validate and merge the generated PR into \`${data.productionBranch || 'main'}\`.\n\nTrack progress here: ${data.workflowUrl || 'https://github.com/karthiksreedhar/gmail-plugin/actions'}`
+    );
+    showToast('Approve + deploy requested', 'success');
+  } catch (error) {
+    addMessage('assistant', `Failed to approve/deploy \`${currentFeatureId}\`.\n\nError: ${error.message}`);
+    showToast(error.message || 'Failed to approve/deploy', 'error');
+  } finally {
+    approveDeployBtn.disabled = false;
+    approveDeployBtn.innerHTML = originalHtml;
   }
 }
 

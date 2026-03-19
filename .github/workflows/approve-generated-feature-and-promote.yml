@@ -1,0 +1,148 @@
+name: Approve Generated Feature And Promote
+
+on:
+  workflow_dispatch:
+    inputs:
+      feature_id:
+        description: Feature ID to approve, merge, and deploy
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+
+env:
+  MAIN_SYSTEM_BASE_URL: https://gmail-plugin.vercel.app
+  BASE_BRANCH: main
+
+jobs:
+  approve-merge-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout base branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.BASE_BRANCH }}
+          fetch-depth: 0
+
+      - name: Authenticate gh
+        env:
+          GH_TOKEN: ${{ secrets.GH_FINE_GRAINED_TOKEN }}
+        run: |
+          if [ -z "${GH_TOKEN}" ]; then
+            echo "GH_FINE_GRAINED_TOKEN secret is required."
+            exit 1
+          fi
+          gh auth status
+
+      - name: Find PR for feature
+        env:
+          GH_TOKEN: ${{ secrets.GH_FINE_GRAINED_TOKEN }}
+          FEATURE_ID: ${{ inputs.feature_id }}
+        run: |
+          PR_JSON="$(gh pr list \
+            --state open \
+            --base "${BASE_BRANCH}" \
+            --limit 100 \
+            --json number,url,headRefName,baseRefName,labels \
+            | node -e '
+              const fs = require("fs");
+              const featureId = process.env.FEATURE_ID;
+              const prefix = `generated/${featureId}-`;
+              const prs = JSON.parse(fs.readFileSync(0, "utf8"));
+              const match = prs.find(pr => String(pr.headRefName || "").startsWith(prefix));
+              process.stdout.write(match ? JSON.stringify(match) : "");
+            ')"
+
+          if [ -z "${PR_JSON}" ]; then
+            echo "No open PR found for generated feature ${FEATURE_ID} targeting ${BASE_BRANCH}."
+            exit 1
+          fi
+
+          echo "PR_JSON=${PR_JSON}" >> "$GITHUB_ENV"
+          echo "PR_NUMBER=$(echo "${PR_JSON}" | node -e 'const fs=require("fs");const p=JSON.parse(fs.readFileSync(0,"utf8"));process.stdout.write(String(p.number));')" >> "$GITHUB_ENV"
+          echo "PR_URL=$(echo "${PR_JSON}" | node -e 'const fs=require("fs");const p=JSON.parse(fs.readFileSync(0,"utf8"));process.stdout.write(String(p.url));')" >> "$GITHUB_ENV"
+          echo "PR_HEAD=$(echo "${PR_JSON}" | node -e 'const fs=require("fs");const p=JSON.parse(fs.readFileSync(0,"utf8"));process.stdout.write(String(p.headRefName));')" >> "$GITHUB_ENV"
+      - name: Notify merge started
+        run: |
+          curl -fsSL \
+            -X POST \
+            -H "Content-Type: application/json" \
+            -H "x-feature-pr-callback-token: ${{ secrets.FEATURE_PR_CALLBACK_TOKEN }}" \
+            "${MAIN_SYSTEM_BASE_URL}/api/internal/generated-features/${{ inputs.feature_id }}/pr-status" \
+            -d "$(node <<'NODE'
+          process.stdout.write(JSON.stringify({
+            status: 'merge_in_progress',
+            deploymentStatus: 'deploying',
+            prUrl: process.env.PR_URL,
+            prNumber: Number(process.env.PR_NUMBER || 0) || null,
+            prBranch: process.env.PR_HEAD || ''
+          }));
+          NODE
+          )"
+
+      - name: Validate label gate
+        env:
+          GH_TOKEN: ${{ secrets.GH_FINE_GRAINED_TOKEN }}
+        run: |
+          HAS_LABEL="$(gh pr view "${PR_NUMBER}" --json labels --jq '.labels[].name' | grep -x 'generated-feature' || true)"
+          if [ -z "${HAS_LABEL}" ]; then
+            echo "PR ${PR_NUMBER} is missing required label: generated-feature"
+            exit 1
+          fi
+
+      - name: Validate changed paths
+        env:
+          GH_TOKEN: ${{ secrets.GH_FINE_GRAINED_TOKEN }}
+        run: |
+          gh pr view "${PR_NUMBER}" --json files --jq '.files[].path' > /tmp/pr-files.txt
+          if [ ! -s /tmp/pr-files.txt ]; then
+            echo "PR ${PR_NUMBER} has no files."
+            exit 1
+          fi
+          ALLOWED_PREFIX="data/features/${{ inputs.feature_id }}/"
+          while IFS= read -r file; do
+            if [[ "${file}" != ${ALLOWED_PREFIX}* ]]; then
+              echo "Disallowed path in PR: ${file}"
+              exit 1
+            fi
+          done < /tmp/pr-files.txt
+
+      - name: Merge PR
+        env:
+          GH_TOKEN: ${{ secrets.GH_FINE_GRAINED_TOKEN }}
+        run: |
+          gh pr merge "${PR_NUMBER}" --squash --delete-branch
+          MERGE_SHA="$(gh pr view "${PR_NUMBER}" --json mergeCommit --jq '.mergeCommit.oid')"
+          echo "MERGE_SHA=${MERGE_SHA}" >> "$GITHUB_ENV"
+
+      - name: Notify merge success
+        run: |
+          curl -fsSL \
+            -X POST \
+            -H "Content-Type: application/json" \
+            -H "x-feature-pr-callback-token: ${{ secrets.FEATURE_PR_CALLBACK_TOKEN }}" \
+            "${MAIN_SYSTEM_BASE_URL}/api/internal/generated-features/${{ inputs.feature_id }}/pr-status" \
+            -d "$(node <<'NODE'
+          process.stdout.write(JSON.stringify({
+            status: 'pr_merged',
+            deploymentStatus: 'deploying',
+            prUrl: process.env.PR_URL,
+            prNumber: Number(process.env.PR_NUMBER || 0) || null,
+            prBranch: process.env.PR_HEAD || '',
+            commitSha: process.env.MERGE_SHA || ''
+          }));
+          NODE
+          )"
+
+      - name: Notify merge/deploy failure
+        if: failure()
+        run: |
+          curl -fsSL \
+            -X POST \
+            -H "Content-Type: application/json" \
+            -H "x-feature-pr-callback-token: ${{ secrets.FEATURE_PR_CALLBACK_TOKEN }}" \
+            "${MAIN_SYSTEM_BASE_URL}/api/internal/generated-features/${{ inputs.feature_id }}/pr-status" \
+            -d '{"status":"deploy_failed","deploymentStatus":"failed","error":"Approval workflow failed while validating or merging the PR."}' || true

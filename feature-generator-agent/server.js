@@ -233,10 +233,14 @@ const FEATURE_EXPORT_TOKEN = String(process.env.FEATURE_EXPORT_TOKEN || '').trim
 const GH_FINE_GRAINED_TOKEN = String(process.env.GH_FINE_GRAINED_TOKEN || '').trim();
 const GITHUB_REPO_OWNER = String(process.env.GITHUB_REPO_OWNER || 'karthiksreedhar').trim();
 const GITHUB_REPO_NAME = String(process.env.GITHUB_REPO_NAME || 'gmail-plugin').trim();
-const GITHUB_BASE_BRANCH = String(process.env.GITHUB_BASE_BRANCH || 'vercel-deploy-test-2').trim();
+const GITHUB_BASE_BRANCH = String(process.env.GITHUB_BASE_BRANCH || 'main').trim();
 const GITHUB_PR_WORKFLOW_FILE = String(
   process.env.GITHUB_PR_WORKFLOW_FILE || 'create-generated-feature-pr.yml'
 ).trim();
+const GITHUB_APPROVAL_WORKFLOW_FILE = String(
+  process.env.GITHUB_APPROVAL_WORKFLOW_FILE || 'approve-generated-feature-and-promote.yml'
+).trim();
+const GITHUB_PRODUCTION_BRANCH = String(process.env.GITHUB_PRODUCTION_BRANCH || 'main').trim();
 const FEATURE_GENERATOR_CREATED_BY = String(
   process.env.FEATURE_GENERATOR_CREATED_BY || process.env.CURRENT_USER_EMAIL || ''
 ).trim().toLowerCase();
@@ -458,6 +462,54 @@ async function dispatchCreatePrWorkflow(featureId) {
     return {
       success: false,
       error: error.message || 'Failed to dispatch GitHub workflow'
+    };
+  }
+}
+
+async function dispatchApproveAndDeployWorkflow(featureId) {
+  if (!featureId) {
+    return { success: false, error: 'Missing featureId' };
+  }
+  if (!GH_FINE_GRAINED_TOKEN) {
+    return { success: false, error: 'GH_FINE_GRAINED_TOKEN is not configured' };
+  }
+
+  const endpoint = `https://api.github.com/repos/${encodeURIComponent(GITHUB_REPO_OWNER)}/${encodeURIComponent(GITHUB_REPO_NAME)}/actions/workflows/${encodeURIComponent(GITHUB_APPROVAL_WORKFLOW_FILE)}/dispatches`;
+  const workflowUrl = `https://github.com/${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME}/actions/workflows/${GITHUB_APPROVAL_WORKFLOW_FILE}`;
+
+  try {
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        'Accept': 'application/vnd.github+json',
+        'Authorization': `Bearer ${GH_FINE_GRAINED_TOKEN}`,
+        'Content-Type': 'application/json',
+        'X-GitHub-Api-Version': '2022-11-28'
+      },
+      body: JSON.stringify({
+        ref: GITHUB_PRODUCTION_BRANCH,
+        inputs: { feature_id: featureId }
+      })
+    });
+
+    if (!response.ok) {
+      const errorBody = await response.text().catch(() => '');
+      return {
+        success: false,
+        status: response.status,
+        error: errorBody || `GitHub workflow dispatch failed with status ${response.status}`
+      };
+    }
+
+    return {
+      success: true,
+      workflowUrl,
+      productionBranch: GITHUB_PRODUCTION_BRANCH
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error.message || 'Failed to dispatch approval workflow'
     };
   }
 }
@@ -743,6 +795,33 @@ app.post('/api/features/:featureId/create-pr', async (req, res) => {
     return res.status(500).json({
       success: false,
       error: error.message || 'Failed to create PR request'
+    });
+  }
+});
+
+app.post('/api/features/:featureId/approve-and-deploy', async (req, res) => {
+  try {
+    const featureId = String(req.params.featureId || '').trim();
+    if (!featureId) {
+      return res.status(400).json({ success: false, error: 'featureId is required' });
+    }
+
+    const result = await dispatchApproveAndDeployWorkflow(featureId);
+    if (!result.success) {
+      return res.status(500).json({ success: false, error: result.error || 'Failed to dispatch approval workflow' });
+    }
+
+    return res.json({
+      success: true,
+      featureId,
+      workflowUrl: result.workflowUrl,
+      productionBranch: result.productionBranch
+    });
+  } catch (error) {
+    console.error('Approve and deploy request failed:', error);
+    return res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to approve and deploy feature'
     });
   }
 });
