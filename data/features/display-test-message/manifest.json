@@ -1,0 +1,9 @@
+{
+  "id": "display-test-message",
+  "name": "Display Test Message",
+  "version": "1.0.0",
+  "description": "Adds a button that displays a test message when clicked.",
+  "author": "Feature Generator Agent",
+  "frontend": "frontend.js",
+  "permissions": []
+}
