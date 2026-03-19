@@ -5,10 +5,20 @@ require('dotenv').config();
 const MONGODB_URI = process.env.MONGODB_URI || 'mongodb+srv://ks4190_db_user:pulY33BbK3UQRjKW@please-god.erkorn3.mongodb.net/?appName=please-god';
 // Database name: prefer env, else sensible default
 const DB_NAME = process.env.MONGODB_DB || 'gmail_plugin';
-const MONGODB_MAX_POOL_SIZE = parseInt(process.env.MONGODB_MAX_POOL_SIZE || '5', 10);
+const MONGODB_MAX_POOL_SIZE = parseInt(process.env.MONGODB_MAX_POOL_SIZE || '1', 10);
+const MONGODB_MIN_POOL_SIZE = parseInt(process.env.MONGODB_MIN_POOL_SIZE || '0', 10);
+const MONGODB_MAX_CONNECTING = parseInt(process.env.MONGODB_MAX_CONNECTING || '1', 10);
+const MONGODB_WAIT_QUEUE_TIMEOUT_MS = parseInt(process.env.MONGODB_WAIT_QUEUE_TIMEOUT_MS || '5000', 10);
 
-let _client = null;
-let _db = null;
+const mongoGlobal = globalThis.__gmailPluginMongo || (globalThis.__gmailPluginMongo = {
+  client: null,
+  db: null,
+  connectPromise: null
+});
+
+let _client = mongoGlobal.client;
+let _db = mongoGlobal.db;
+let _connectPromise = mongoGlobal.connectPromise;
 
 // Lightweight in-memory cache so synchronous readers can work without async/await refactors
 // Shape: { [collection]: { [userEmail]: doc } }
@@ -36,36 +46,59 @@ const USER_FEATURE_PREFERENCES_COLLECTION = 'user_feature_preferences';
 
 async function initMongo() {
   if (_db) return _db;
-  _client = new MongoClient(MONGODB_URI, {
-    maxPoolSize: Number.isFinite(MONGODB_MAX_POOL_SIZE) && MONGODB_MAX_POOL_SIZE > 0 ? MONGODB_MAX_POOL_SIZE : 5,
-    maxIdleTimeMS: 30000,
-    serverSelectionTimeoutMS: 15000,
-  });
-  await _client.connect();
-  _db = _client.db(DB_NAME);
+  if (_connectPromise) return _connectPromise;
+  _connectPromise = (async () => {
+    _client = new MongoClient(MONGODB_URI, {
+      maxPoolSize: Number.isFinite(MONGODB_MAX_POOL_SIZE) && MONGODB_MAX_POOL_SIZE > 0 ? MONGODB_MAX_POOL_SIZE : 1,
+      minPoolSize: Number.isFinite(MONGODB_MIN_POOL_SIZE) && MONGODB_MIN_POOL_SIZE >= 0 ? MONGODB_MIN_POOL_SIZE : 0,
+      maxConnecting: Number.isFinite(MONGODB_MAX_CONNECTING) && MONGODB_MAX_CONNECTING > 0 ? MONGODB_MAX_CONNECTING : 1,
+      waitQueueTimeoutMS: Number.isFinite(MONGODB_WAIT_QUEUE_TIMEOUT_MS) && MONGODB_WAIT_QUEUE_TIMEOUT_MS > 0 ? MONGODB_WAIT_QUEUE_TIMEOUT_MS : 5000,
+      maxIdleTimeMS: 10000,
+      connectTimeoutMS: 15000,
+      socketTimeoutMS: 20000,
+      serverSelectionTimeoutMS: 15000,
+    });
+    await _client.connect();
+    _db = _client.db(DB_NAME);
+    mongoGlobal.client = _client;
+    mongoGlobal.db = _db;
+    mongoGlobal.connectPromise = _connectPromise;
 
-  // Ensure basic indexes for per-user docs and init cache buckets
-  await Promise.all(COLLECTIONS.map(async (name) => {
-    _cache[name] = _cache[name] || Object.create(null);
-    try { await _db.collection(name).createIndex({ userEmail: 1 }, { unique: true }); } catch (_) {}
-  }));
-  try {
-    await _db.collection(GENERATED_FEATURES_COLLECTION).createIndex({ featureId: 1 }, { unique: true });
-  } catch (_) {}
-  try {
-    await _db.collection(GENERATED_FEATURES_COLLECTION).createIndex({ status: 1 });
-  } catch (_) {}
-  try {
-    await _db.collection(GENERATED_FEATURES_COLLECTION).createIndex({ createdBy: 1 });
-  } catch (_) {}
-  try {
-    await _db.collection(USER_FEATURE_PREFERENCES_COLLECTION).createIndex(
-      { userEmail: 1, featureId: 1 },
-      { unique: true }
-    );
-  } catch (_) {}
+    // Ensure basic indexes for per-user docs and init cache buckets
+    await Promise.all(COLLECTIONS.map(async (name) => {
+      _cache[name] = _cache[name] || Object.create(null);
+      try { await _db.collection(name).createIndex({ userEmail: 1 }, { unique: true }); } catch (_) {}
+    }));
+    try {
+      await _db.collection(GENERATED_FEATURES_COLLECTION).createIndex({ featureId: 1 }, { unique: true });
+    } catch (_) {}
+    try {
+      await _db.collection(GENERATED_FEATURES_COLLECTION).createIndex({ status: 1 });
+    } catch (_) {}
+    try {
+      await _db.collection(GENERATED_FEATURES_COLLECTION).createIndex({ createdBy: 1 });
+    } catch (_) {}
+    try {
+      await _db.collection(USER_FEATURE_PREFERENCES_COLLECTION).createIndex(
+        { userEmail: 1, featureId: 1 },
+        { unique: true }
+      );
+    } catch (_) {}
 
-  return _db;
+    return _db;
+  })();
+
+  try {
+    return await _connectPromise;
+  } catch (err) {
+    _connectPromise = null;
+    _db = null;
+    _client = null;
+    mongoGlobal.connectPromise = null;
+    mongoGlobal.db = null;
+    mongoGlobal.client = null;
+    throw err;
+  }
 }
 
 function getDb() {

@@ -3,23 +3,58 @@ require('dotenv').config();
 
 const MONGODB_URI = process.env.MONGODB_URI || '';
 const DB_NAME = process.env.MONGODB_DB || 'gmail_plugin';
+const MONGODB_MAX_POOL_SIZE = parseInt(process.env.MONGODB_MAX_POOL_SIZE || '1', 10);
+const MONGODB_MIN_POOL_SIZE = parseInt(process.env.MONGODB_MIN_POOL_SIZE || '0', 10);
+const MONGODB_MAX_CONNECTING = parseInt(process.env.MONGODB_MAX_CONNECTING || '1', 10);
+const MONGODB_WAIT_QUEUE_TIMEOUT_MS = parseInt(process.env.MONGODB_WAIT_QUEUE_TIMEOUT_MS || '5000', 10);
 
-let _client = null;
-let _db = null;
+const mongoGlobal = globalThis.__featureGeneratorMongo || (globalThis.__featureGeneratorMongo = {
+  client: null,
+  db: null,
+  connectPromise: null
+});
+
+let _client = mongoGlobal.client;
+let _db = mongoGlobal.db;
+let _connectPromise = mongoGlobal.connectPromise;
 
 async function initMongo() {
   if (_db) return _db;
+  if (_connectPromise) return _connectPromise;
   if (!MONGODB_URI) {
     throw new Error('MONGODB_URI is not configured');
   }
 
-  _client = new MongoClient(MONGODB_URI, {
-    maxPoolSize: 20,
-    serverSelectionTimeoutMS: 15000
-  });
-  await _client.connect();
-  _db = _client.db(DB_NAME);
-  return _db;
+  _connectPromise = (async () => {
+    _client = new MongoClient(MONGODB_URI, {
+      maxPoolSize: Number.isFinite(MONGODB_MAX_POOL_SIZE) && MONGODB_MAX_POOL_SIZE > 0 ? MONGODB_MAX_POOL_SIZE : 1,
+      minPoolSize: Number.isFinite(MONGODB_MIN_POOL_SIZE) && MONGODB_MIN_POOL_SIZE >= 0 ? MONGODB_MIN_POOL_SIZE : 0,
+      maxConnecting: Number.isFinite(MONGODB_MAX_CONNECTING) && MONGODB_MAX_CONNECTING > 0 ? MONGODB_MAX_CONNECTING : 1,
+      waitQueueTimeoutMS: Number.isFinite(MONGODB_WAIT_QUEUE_TIMEOUT_MS) && MONGODB_WAIT_QUEUE_TIMEOUT_MS > 0 ? MONGODB_WAIT_QUEUE_TIMEOUT_MS : 5000,
+      maxIdleTimeMS: 10000,
+      connectTimeoutMS: 15000,
+      socketTimeoutMS: 20000,
+      serverSelectionTimeoutMS: 15000
+    });
+    await _client.connect();
+    _db = _client.db(DB_NAME);
+    mongoGlobal.client = _client;
+    mongoGlobal.db = _db;
+    mongoGlobal.connectPromise = _connectPromise;
+    return _db;
+  })();
+
+  try {
+    return await _connectPromise;
+  } catch (err) {
+    _connectPromise = null;
+    _client = null;
+    _db = null;
+    mongoGlobal.connectPromise = null;
+    mongoGlobal.client = null;
+    mongoGlobal.db = null;
+    throw err;
+  }
 }
 
 function getDb() {
