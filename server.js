@@ -1262,6 +1262,9 @@ async function finalizeLoginForUser(userEmail, tokens) {
   CURRENT_USER_EMAIL = normalizedEmail;
   SENDING_EMAIL = normalizedEmail;
 
+  // Ensure first-time users get their per-user storage shape immediately.
+  await ensureUserBootstrap(CURRENT_USER_EMAIL);
+
   // Warm Mongo cache for new/current user
   await warmCacheForUser(CURRENT_USER_EMAIL);
 
@@ -1269,6 +1272,10 @@ async function finalizeLoginForUser(userEmail, tokens) {
   gmailAuth = null;
   gmail = null;
   await initializeGmailAPI();
+
+  // Kick off an immediate sync for this user so first-login data is loaded
+  // without waiting for the next interval/cron run.
+  triggerAutoSyncForUser(normalizedEmail, 'post-login');
 }
 
 // Search Gmail for emails with pagination support
@@ -3966,6 +3973,64 @@ async function runAutoSyncForAllUsers(reason = 'interval') {
   }
 }
 
+async function ensureUserBootstrap(userEmail) {
+  const normalizedEmail = normalizeUserEmailForData(userEmail);
+  const paths = getUserPaths(normalizedEmail);
+
+  // Always ensure filesystem layout exists for endpoints that enumerate local users.
+  try {
+    if (!fs.existsSync(paths.USER_DATA_DIR)) {
+      fs.mkdirSync(paths.USER_DATA_DIR, { recursive: true });
+    }
+  } catch (e) {
+    console.warn(`[Bootstrap] Failed to create local directory for ${normalizedEmail}:`, e?.message || e);
+  }
+
+  // Best-effort Mongo bootstrap: create empty per-user docs if they don't exist.
+  try {
+    await initMongo();
+    const defaultDocs = [
+      { collection: 'response_emails', payload: { emails: [] } },
+      { collection: 'email_threads', payload: { threads: [] } },
+      { collection: 'unreplied_emails', payload: { emails: [] } },
+      { collection: 'notes', payload: { notes: [] } },
+      { collection: 'categories', payload: { categories: CANONICAL_CATEGORIES.slice() } },
+      { collection: 'category_guidelines', payload: { categories: [], updatedAt: new Date().toISOString() } },
+      { collection: 'category_summaries', payload: { summaries: {}, updatedAt: new Date().toISOString() } },
+      { collection: 'email_notes', payload: { notesByEmail: {}, updatedAt: new Date().toISOString() } },
+      { collection: 'hidden_threads', payload: { hidden: [] } },
+      { collection: 'hidden_inbox', payload: { hiddenMessages: [] } },
+      { collection: 'user_state', payload: { scenarios: [], refinements: [], savedGenerations: [] } },
+      { collection: 'classifier_log', payload: { entries: [] } }
+    ];
+
+    for (const entry of defaultDocs) {
+      const existing = await getUserDoc(entry.collection, normalizedEmail);
+      if (!existing) {
+        await setUserDoc(entry.collection, normalizedEmail, entry.payload);
+      }
+    }
+  } catch (e) {
+    console.warn(`[Bootstrap] Mongo bootstrap skipped for ${normalizedEmail}:`, e?.message || e);
+  }
+}
+
+function triggerAutoSyncForUser(userEmail, reason = 'manual-trigger') {
+  const normalizedEmail = normalizeUserEmailForData(userEmail);
+  setTimeout(() => {
+    syncUserInboxFromGmail(normalizedEmail, { forceBackfill: false })
+      .then((result) => {
+        const added = Number(result?.added) || 0;
+        const status = result?.success ? 'ok' : 'failed';
+        const details = result?.reason ? ` reason=${result.reason}` : '';
+        console.log(`[AutoSync] trigger=${reason} user=${normalizedEmail} status=${status} added=${added}${details}`);
+      })
+      .catch((err) => {
+        console.error(`[AutoSync] trigger=${reason} user=${normalizedEmail} failed:`, err?.message || err);
+      });
+  }, 0);
+}
+
 app.post('/api/unreplied-emails/reclassify', async (req, res) => {
   try {
     // Load current unreplied emails (Inbox data) and category list X
@@ -4177,19 +4242,33 @@ app.post('/api/set-sending-email', (req, res) => {
   }
 });
 
-app.get('/api/users', (req, res) => {
+app.get('/api/users', async (req, res) => {
   try {
+    const users = new Set();
     const dataDir = path.join(__dirname, 'data');
-    if (!fs.existsSync(dataDir)) {
-      return res.json({ users: [] });
+    if (fs.existsSync(dataDir)) {
+      const fileUsers = fs.readdirSync(dataDir, { withFileTypes: true })
+        .filter(dirent => dirent.isDirectory())
+        .map(dirent => dirent.name)
+        .filter(name => name.includes('@'))
+        .map(name => normalizeUserEmailForData(name));
+      fileUsers.forEach(u => users.add(u));
     }
-    
-    const users = fs.readdirSync(dataDir, { withFileTypes: true })
-      .filter(dirent => dirent.isDirectory())
-      .map(dirent => dirent.name)
-      .filter(name => name.includes('@')); // Only email-like directory names
-    
-    res.json({ users });
+
+    // Include users present in Mongo even if no local folder exists yet.
+    try {
+      await initMongo();
+      const db = getDb();
+      const rows = await db.collection('oauth_tokens').find({}).project({ userEmail: 1 }).toArray();
+      rows
+        .map(r => normalizeUserEmailForData(r?.userEmail))
+        .filter(Boolean)
+        .forEach(u => users.add(u));
+    } catch (e) {
+      console.warn('[Users] Failed to read Mongo users:', e?.message || e);
+    }
+
+    res.json({ users: Array.from(users).sort() });
   } catch (error) {
     console.error('Error listing users:', error);
     res.status(500).json({ error: 'Failed to list users' });
@@ -4204,17 +4283,27 @@ app.post('/api/switch-user', async (req, res) => {
       return res.status(400).json({ error: 'Invalid user email' });
     }
     
-    // Check if user directory exists (support aliases/typos via normalization)
-    const userDataDir = path.join(__dirname, 'data', normalizeUserEmailForData(userEmail));
-    if (!fs.existsSync(userDataDir)) {
+    // Check user existence by local folder OR Mongo token document.
+    const effective = normalizeUserEmailForData(userEmail);
+    const userDataDir = path.join(__dirname, 'data', effective);
+    let userExists = fs.existsSync(userDataDir);
+    if (!userExists) {
+      try {
+        await initMongo();
+        const tokenDoc = await getUserDoc('oauth_tokens', effective);
+        userExists = !!tokenDoc;
+      } catch (_) {}
+    }
+    if (!userExists) {
       return res.status(404).json({ error: 'User not found' });
     }
     
     // Switch current user (normalize aliases/typos to backing data dir)
-    const effective = normalizeUserEmailForData(userEmail);
     CURRENT_USER_EMAIL = effective;
     // Reset sending email to match current (effective) user (can be changed later if needed)
     SENDING_EMAIL = effective;
+
+    await ensureUserBootstrap(CURRENT_USER_EMAIL);
 
     // Warm Mongo cache for new user to support synchronous loaders
     await warmCacheForUser(CURRENT_USER_EMAIL);
