@@ -303,17 +303,45 @@
             return data;
         }
 
-        async function openFeatureManager() {
-            const modal = window.EmailAssistant.showModal(
-                '<div class="feature-manager-root" style="min-width:min(920px, 86vw); max-width:86vw;"></div>',
-                'Feature Manager'
-            );
-            if (!modal) return;
+        function closeFeatureManagerOverlay() {
+            const existing = document.getElementById('featureManagerOverlay');
+            if (existing) existing.remove();
+            document.body.style.overflow = '';
+        }
 
-            const root = modal.querySelector('.feature-manager-root');
+        async function openFeatureManager() {
+            closeFeatureManagerOverlay();
+
+            const overlay = document.createElement('div');
+            overlay.id = 'featureManagerOverlay';
+            overlay.style.position = 'fixed';
+            overlay.style.inset = '0';
+            overlay.style.width = '100vw';
+            overlay.style.height = '100vh';
+            overlay.style.background = '#fff';
+            overlay.style.zIndex = '5000';
+            overlay.style.display = 'flex';
+            overlay.style.flexDirection = 'column';
+            overlay.innerHTML = `
+                <div style="display:flex; align-items:center; justify-content:space-between; padding:18px 22px; border-bottom:1px solid #e0e0e0; background:#f8f9fa;">
+                    <h2 style="margin:0; font-size:22px; color:#202124;">Feature Manager</h2>
+                    <button id="featureManagerCloseBtn" type="button" style="background:#d93025; color:#fff; border:none; border-radius:8px; padding:8px 12px; cursor:pointer; font-size:14px; font-weight:600;">X</button>
+                </div>
+                <div class="feature-manager-root" style="flex:1; overflow:auto; padding:20px 24px 24px;"></div>
+            `;
+
+            document.body.appendChild(overlay);
+            document.body.style.overflow = 'hidden';
+
+            const closeBtn = overlay.querySelector('#featureManagerCloseBtn');
+            if (closeBtn) {
+                closeBtn.addEventListener('click', closeFeatureManagerOverlay);
+            }
+
+            const root = overlay.querySelector('.feature-manager-root');
             if (!root) return;
 
-            modal.addEventListener('change', async (event) => {
+            overlay.addEventListener('change', async (event) => {
                 const target = event.target;
                 if (!(target instanceof HTMLInputElement)) return;
                 const featureId = target.dataset.featureId;
