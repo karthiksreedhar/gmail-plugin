@@ -1,0 +1,13 @@
+{
+  "id": "deployment-update",
+  "name": "Deployment Update",
+  "version": "1.0.0",
+  "description": "Adds a top-level Deployment Update page that shows the latest emails in the Deployment Infrastructure category.",
+  "author": "Feature Generator Agent",
+  "backend": "backend.js",
+  "frontend": "frontend.js",
+  "permissions": [
+    "emails:read",
+    "api:custom"
+  ]
+}
