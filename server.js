@@ -90,9 +90,8 @@ const PORT = parseInt(process.env.PORT, 10) || 3000;
 // Base URL for internal API calls (supports deployment environments)
 const BASE_URL = process.env.BASE_URL || `http://localhost:${PORT}`;
 const FEATURE_GENERATOR_URL = String(process.env.FEATURE_GENERATOR_URL || '').trim();
-const USER_DATA_ROOT =
-  String(process.env.USER_DATA_ROOT || '').trim() ||
-  (process.env.VERCEL ? path.join(os.tmpdir(), 'gmail-plugin-data') : path.join(__dirname, 'data'));
+const USER_DATA_ROOT = String(process.env.USER_DATA_ROOT || '').trim() || path.join(__dirname, 'data');
+const USER_DATA_FALLBACK_ROOT = process.env.VERCEL ? path.join(os.tmpdir(), 'gmail-plugin-data') : USER_DATA_ROOT;
 
 /**
  * FEATURE PLUGIN SYSTEM
@@ -851,8 +850,12 @@ function normalizeUserEmailForData(email) {
 
 // Function to get user-specific paths
 function getUserPaths(userEmail = CURRENT_USER_EMAIL) {
+  return getUserPathsWithRoot(userEmail, USER_DATA_ROOT);
+}
+
+function getUserPathsWithRoot(userEmail = CURRENT_USER_EMAIL, rootDir = USER_DATA_ROOT) {
   const effectiveEmail = normalizeUserEmailForData(userEmail);
-  const USER_DATA_DIR = path.join(USER_DATA_ROOT, effectiveEmail);
+  const USER_DATA_DIR = path.join(rootDir, effectiveEmail);
   return {
     USER_DATA_DIR,
     DATA_FILE_PATH: path.join(USER_DATA_DIR, 'scenarios.json'),
@@ -911,6 +914,17 @@ async function loadStoredTokensForUser(userEmail) {
   } catch (err) {
     console.warn(`File token read failed for ${normalizedEmail}:`, err?.message || err);
   }
+
+  if (USER_DATA_FALLBACK_ROOT !== USER_DATA_ROOT) {
+    try {
+      const fallbackPaths = getUserPathsWithRoot(normalizedEmail, USER_DATA_FALLBACK_ROOT);
+      if (fs.existsSync(fallbackPaths.TOKENS_PATH)) {
+        return JSON.parse(fs.readFileSync(fallbackPaths.TOKENS_PATH, 'utf8'));
+      }
+    } catch (err) {
+      console.warn(`Fallback file token read failed for ${normalizedEmail}:`, err?.message || err);
+    }
+  }
   return null;
 }
 
@@ -938,6 +952,20 @@ async function saveStoredTokensForUser(userEmail, tokens) {
   } catch (err) {
     persistErrors.push(`file:${getUserPaths(normalizedEmail).TOKENS_PATH}: ${err?.message || err}`);
     console.warn(`File token write failed for ${normalizedEmail}:`, err?.message || err);
+  }
+
+  if (!saved && USER_DATA_FALLBACK_ROOT !== USER_DATA_ROOT) {
+    try {
+      const fallbackPaths = getUserPathsWithRoot(normalizedEmail, USER_DATA_FALLBACK_ROOT);
+      if (!fs.existsSync(fallbackPaths.USER_DATA_DIR)) {
+        fs.mkdirSync(fallbackPaths.USER_DATA_DIR, { recursive: true });
+      }
+      fs.writeFileSync(fallbackPaths.TOKENS_PATH, JSON.stringify(tokens, null, 2));
+      saved = true;
+    } catch (err) {
+      persistErrors.push(`fallback-file:${getUserPathsWithRoot(normalizedEmail, USER_DATA_FALLBACK_ROOT).TOKENS_PATH}: ${err?.message || err}`);
+      console.warn(`Fallback file token write failed for ${normalizedEmail}:`, err?.message || err);
+    }
   }
 
   return { saved, persistErrors };
