@@ -902,8 +902,25 @@ async function loadStoredTokensForUser(userEmail) {
   try {
     await initMongo();
     const doc = await getUserDoc('oauth_tokens', normalizedEmail);
-    if (doc && doc.tokens) {
-      return doc.tokens;
+    if (doc) {
+      // Support both legacy nested token docs and flat token docs.
+      if (doc.tokens && typeof doc.tokens === 'object') {
+        return doc.tokens;
+      }
+      if (doc.access_token || doc.refresh_token || doc.expiry_date) {
+        return {
+          access_token: doc.access_token || '',
+          refresh_token: doc.refresh_token || '',
+          expiry_date: doc.expiry_date || null
+        };
+      }
+      if (doc.accessToken || doc.refreshToken || doc.expiryDate) {
+        return {
+          access_token: doc.accessToken || '',
+          refresh_token: doc.refreshToken || '',
+          expiry_date: doc.expiryDate || null
+        };
+      }
     }
   } catch (err) {
     console.warn(`Mongo token read failed for ${normalizedEmail}, falling back to file:`, err?.message || err);
