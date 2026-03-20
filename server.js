@@ -794,6 +794,12 @@ function getAuthenticatedUserEmail(req) {
   return userEmail;
 }
 
+function getEffectiveUserEmailForRequest(req) {
+  const authUser = getAuthenticatedUserEmail(req);
+  if (authUser) return normalizeUserEmailForData(authUser);
+  return normalizeUserEmailForData(CURRENT_USER_EMAIL);
+}
+
 // Helper to check if user is logged in
 function isLoggedIn(req) {
   return !!getAuthenticatedUserEmail(req);
@@ -1742,10 +1748,14 @@ function loadResponseEmails() {
   try {
     const doc = getCachedDoc('response_emails', CURRENT_USER_EMAIL);
     if (doc && Array.isArray(doc.emails)) return doc.emails;
+    if (doc && Array.isArray(doc.responses)) return doc.responses;
   } catch (_) {}
   const paths = getCurrentUserPaths();
   const data = loadEmailData(paths.RESPONSE_EMAILS_PATH);
-  return data ? data.emails || [] : [];
+  if (!data) return [];
+  if (Array.isArray(data.emails)) return data.emails;
+  if (Array.isArray(data.responses)) return data.responses;
+  return [];
 }
 
 // Function to load email threads (cache/Mongo first, fallback to JSON) - synchronous for legacy callers
@@ -2451,21 +2461,35 @@ app.get('/api/current-categories', (req, res) => {
 // API endpoint to get response emails - prioritize JSON data, Gmail API only for specific features
 app.get('/api/response-emails', async (req, res) => {
   try {
+    const userEmail = getEffectiveUserEmailForRequest(req);
+    const paths = getUserPaths(userEmail);
     // Prefer MongoDB (via direct fetch), fallback to cache/file for resilience
     console.log('Loading response emails (MongoDB preferred, fallback to local JSON)...');
     let source = 'mongo';
     let responseEmails = [];
     try {
-      const doc = await getUserDoc('response_emails', CURRENT_USER_EMAIL);
+      const doc = await getUserDoc('response_emails', userEmail);
       if (doc && Array.isArray(doc.emails)) {
         responseEmails = doc.emails;
+      } else if (doc && Array.isArray(doc.responses)) {
+        // Backward compatibility with older payload shape
+        responseEmails = doc.responses;
       } else {
         source = 'file';
-        responseEmails = loadResponseEmails();
+        responseEmails = await readUserArrayDoc('response_emails', userEmail, 'emails', paths.RESPONSE_EMAILS_PATH);
       }
     } catch (_) {
       source = 'file';
-      responseEmails = loadResponseEmails();
+      responseEmails = await readUserArrayDoc('response_emails', userEmail, 'emails', paths.RESPONSE_EMAILS_PATH);
+    }
+
+    // Recovery fallback: if Mongo has an empty array, try file data for this user.
+    if (source === 'mongo' && (!Array.isArray(responseEmails) || responseEmails.length === 0)) {
+      const fileEmails = await readUserArrayDoc('response_emails', userEmail, 'emails', paths.RESPONSE_EMAILS_PATH);
+      if (Array.isArray(fileEmails) && fileEmails.length > 0) {
+        source = 'file';
+        responseEmails = fileEmails;
+      }
     }
     
     if (responseEmails.length === 0) {
@@ -2477,13 +2501,13 @@ app.get('/api/response-emails', async (req, res) => {
     const validatedEmails = [];
     
     responseEmails.forEach((email, index) => {
-      // Validate required fields
-      if (!email.id || !email.subject || !email.from || !email.body) {
+      // Validate minimally required fields; tolerate legacy records.
+      if (!email.id || !(email.subject || email.body || email.snippet)) {
         console.error(`Email at index ${index} missing required fields:`, {
           id: !!email.id,
           subject: !!email.subject,
-          from: !!email.from,
-          body: !!email.body
+          body: !!email.body,
+          snippet: !!email.snippet
         });
         return; // Skip invalid emails
       }
@@ -2512,12 +2536,12 @@ app.get('/api/response-emails', async (req, res) => {
       const validatedEmail = {
         id: email.id,
         subject: email.subject || 'No Subject',
-        from: email.from || 'Unknown Sender',
+        from: email.from || userEmail || 'Unknown Sender',
         originalFrom: email.originalFrom || 'Unknown Sender',
         date: email.date || new Date().toISOString(),
         category: primaryCategory,
         categories: catsUniq,
-        body: email.body || 'No content available',
+        body: email.body || email.originalBody || email.snippet || 'No content available',
         snippet: email.snippet || (email.body ? email.body.substring(0, 100) + (email.body.length > 100 ? '...' : '') : 'No content available')
       };
 
@@ -2528,7 +2552,13 @@ app.get('/api/response-emails', async (req, res) => {
       console.warn(`Filtered out ${responseEmails.length - validatedEmails.length} invalid emails`);
     }
 
-    const hiddenList = loadHiddenThreads();
+    let hiddenList = [];
+    try {
+      const hiddenDoc = await getUserDoc('hidden_threads', userEmail);
+      hiddenList = Array.isArray(hiddenDoc?.hidden) ? hiddenDoc.hidden : [];
+    } catch (_) {
+      hiddenList = loadHiddenThreads();
+    }
     const hiddenResponseIds = new Set((hiddenList || []).flatMap(h => (h.responseIds || [])));
     const filteredEmails = validatedEmails.filter(e => !hiddenResponseIds.has(e.id));
     if (filteredEmails.length !== validatedEmails.length) {
@@ -3414,14 +3444,24 @@ async function buildGmailClientForUser(userEmail) {
 
 async function readUserArrayDoc(collection, userEmail, field, filePath) {
   const normalizedEmail = normalizeUserEmailForData(userEmail);
+  const fallbackFields = [];
+  if (collection === 'response_emails' && field === 'emails') {
+    fallbackFields.push('responses', 'responseEmails');
+  }
   try {
     const doc = await getUserDoc(collection, normalizedEmail);
     if (doc && Array.isArray(doc[field])) return doc[field];
+    for (const altField of fallbackFields) {
+      if (doc && Array.isArray(doc[altField])) return doc[altField];
+    }
   } catch (_) {}
   try {
     if (filePath && fs.existsSync(filePath)) {
       const parsed = JSON.parse(fs.readFileSync(filePath, 'utf8'));
       if (parsed && Array.isArray(parsed[field])) return parsed[field];
+      for (const altField of fallbackFields) {
+        if (parsed && Array.isArray(parsed[altField])) return parsed[altField];
+      }
     }
   } catch (_) {}
   return [];

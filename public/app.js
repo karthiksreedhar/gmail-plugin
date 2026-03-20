@@ -13288,19 +13288,23 @@ async function renderEmailNotesPreview(el, emailId) {
             showFlashFromQuery();
             (async () => {
                 try {
+                    await loadEmails();
+                    initializeUiAutoSync();
+                    // Kick off auto-sync in background so initial UI is not blocked by Gmail fetch latency.
                     try {
-                        const syncResp = await fetch('/api/auto-sync/run', {
+                        fetch('/api/auto-sync/run', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({ reason: 'initial-page-load' })
-                        });
-                        const syncData = await syncResp.json().catch(() => ({}));
-                        if (!syncResp.ok || !syncData.success) {
-                            console.warn('Initial auto-sync failed:', syncData?.error || syncData?.result?.reason || 'unknown');
-                        }
+                        })
+                        .then(async (syncResp) => {
+                            const syncData = await syncResp.json().catch(() => ({}));
+                            if (!syncResp.ok || !syncData.success) {
+                                console.warn('Initial auto-sync failed:', syncData?.error || syncData?.result?.reason || 'unknown');
+                            }
+                        })
+                        .catch(() => {});
                     } catch (_) {}
-                    await loadEmails();
-                    initializeUiAutoSync();
                 } catch (_){}
             })();
         });
