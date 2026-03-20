@@ -951,12 +951,16 @@ async function loadStoredTokensForUser(userEmail) {
 async function saveStoredTokensForUser(userEmail, tokens) {
   const normalizedEmail = normalizeUserEmailForData(userEmail);
   let saved = false;
+  let mongoSaved = false;
+  let fileSaved = false;
+  let fallbackFileSaved = false;
   const persistErrors = [];
 
   try {
     await initMongo();
     await setUserDoc('oauth_tokens', normalizedEmail, { tokens });
     saved = true;
+    mongoSaved = true;
   } catch (err) {
     persistErrors.push(`mongo: ${err?.message || err}`);
     console.warn(`Mongo token write failed for ${normalizedEmail}, trying file fallback:`, err?.message || err);
@@ -969,6 +973,7 @@ async function saveStoredTokensForUser(userEmail, tokens) {
     }
     fs.writeFileSync(paths.TOKENS_PATH, JSON.stringify(tokens, null, 2));
     saved = true;
+    fileSaved = true;
   } catch (err) {
     persistErrors.push(`file:${getUserPaths(normalizedEmail).TOKENS_PATH}: ${err?.message || err}`);
     console.warn(`File token write failed for ${normalizedEmail}:`, err?.message || err);
@@ -982,10 +987,20 @@ async function saveStoredTokensForUser(userEmail, tokens) {
       }
       fs.writeFileSync(fallbackPaths.TOKENS_PATH, JSON.stringify(tokens, null, 2));
       saved = true;
+      fallbackFileSaved = true;
     } catch (err) {
       persistErrors.push(`fallback-file:${getUserPathsWithRoot(normalizedEmail, USER_DATA_FALLBACK_ROOT).TOKENS_PATH}: ${err?.message || err}`);
       console.warn(`Fallback file token write failed for ${normalizedEmail}:`, err?.message || err);
     }
+  }
+
+  // In serverless runtimes, file writes are not durable across invocations.
+  // Treat token persistence as successful only when Mongo save succeeded.
+  if (process.env.VERCEL && !mongoSaved) {
+    if (fileSaved || fallbackFileSaved) {
+      persistErrors.push('non_durable_file_only_on_vercel');
+    }
+    saved = false;
   }
 
   return { saved, persistErrors };
