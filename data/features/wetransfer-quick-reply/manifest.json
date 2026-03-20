@@ -1,0 +1,11 @@
+{
+  "id": "wetransfer-quick-reply",
+  "name": "WeTransfer Quick Reply",
+  "version": "1.0.0",
+  "description": "Adds a Quick Reply button to emails in the WeTransfer category and copies a predefined reply template.",
+  "author": "Feature Generator Agent",
+  "frontend": "frontend.js",
+  "permissions": [
+    "emails:read"
+  ]
+}
