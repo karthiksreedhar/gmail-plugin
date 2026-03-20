@@ -2,6 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
 const OpenAI = require('openai');
 const { google } = require('googleapis');
 const cookieParser = require('cookie-parser');
@@ -89,6 +90,9 @@ const PORT = parseInt(process.env.PORT, 10) || 3000;
 // Base URL for internal API calls (supports deployment environments)
 const BASE_URL = process.env.BASE_URL || `http://localhost:${PORT}`;
 const FEATURE_GENERATOR_URL = String(process.env.FEATURE_GENERATOR_URL || '').trim();
+const USER_DATA_ROOT =
+  String(process.env.USER_DATA_ROOT || '').trim() ||
+  (process.env.VERCEL ? path.join(os.tmpdir(), 'gmail-plugin-data') : path.join(__dirname, 'data'));
 
 /**
  * FEATURE PLUGIN SYSTEM
@@ -839,7 +843,7 @@ function normalizeUserEmailForData(email) {
   try {
     const e = String(email || '').toLowerCase().trim();
     if (e === 'lc3521@columbia.edu') return 'lc3251@columbia.edu';
-    return email;
+    return e;
   } catch {
     return email;
   }
@@ -848,7 +852,7 @@ function normalizeUserEmailForData(email) {
 // Function to get user-specific paths
 function getUserPaths(userEmail = CURRENT_USER_EMAIL) {
   const effectiveEmail = normalizeUserEmailForData(userEmail);
-  const USER_DATA_DIR = path.join(__dirname, 'data', effectiveEmail);
+  const USER_DATA_DIR = path.join(USER_DATA_ROOT, effectiveEmail);
   return {
     USER_DATA_DIR,
     DATA_FILE_PATH: path.join(USER_DATA_DIR, 'scenarios.json'),
@@ -913,12 +917,14 @@ async function loadStoredTokensForUser(userEmail) {
 async function saveStoredTokensForUser(userEmail, tokens) {
   const normalizedEmail = normalizeUserEmailForData(userEmail);
   let saved = false;
+  const persistErrors = [];
 
   try {
     await initMongo();
     await setUserDoc('oauth_tokens', normalizedEmail, { tokens });
     saved = true;
   } catch (err) {
+    persistErrors.push(`mongo: ${err?.message || err}`);
     console.warn(`Mongo token write failed for ${normalizedEmail}, trying file fallback:`, err?.message || err);
   }
 
@@ -930,10 +936,11 @@ async function saveStoredTokensForUser(userEmail, tokens) {
     fs.writeFileSync(paths.TOKENS_PATH, JSON.stringify(tokens, null, 2));
     saved = true;
   } catch (err) {
+    persistErrors.push(`file:${getUserPaths(normalizedEmail).TOKENS_PATH}: ${err?.message || err}`);
     console.warn(`File token write failed for ${normalizedEmail}:`, err?.message || err);
   }
 
-  return saved;
+  return { saved, persistErrors };
 }
 
 async function hasStoredTokensForUser(userEmail) {
@@ -1254,9 +1261,10 @@ async function finalizeLoginForUser(userEmail, tokens) {
     }
   }
 
-  const tokensSaved = await saveStoredTokensForUser(normalizedEmail, finalTokens);
+  const { saved: tokensSaved, persistErrors } = await saveStoredTokensForUser(normalizedEmail, finalTokens);
   if (!tokensSaved) {
-    throw new Error(`Failed to persist OAuth tokens for ${normalizedEmail}`);
+    const detail = persistErrors?.length ? ` (${persistErrors.join(' | ')})` : '';
+    throw new Error(`Failed to persist OAuth tokens for ${normalizedEmail}${detail}`);
   }
 
   CURRENT_USER_EMAIL = normalizedEmail;
