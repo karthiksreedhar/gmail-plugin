@@ -21,12 +21,6 @@
       .replace(/'/g, '&#39;');
   }
 
-  function formatDate(value) {
-    const d = new Date(value || 0);
-    if (Number.isNaN(d.getTime())) return 'Unknown date';
-    return d.toLocaleString();
-  }
-
   function ensureOverlay() {
     let overlay = document.getElementById(OVERLAY_ID);
     if (overlay) return overlay;
@@ -90,9 +84,7 @@
   function renderUpdates(container, updates) {
     const cards = (updates || []).map((item) => {
       const subject = escapeHtml(item.subject || 'No Subject');
-      const from = escapeHtml(item.from || 'Unknown Sender');
-      const date = formatDate(item.date);
-      const snippet = escapeHtml(item.snippet || '');
+      const updateText = escapeHtml(item.updateText || item.subject || 'No Subject');
 
       return `
         <button
@@ -107,18 +99,14 @@
             background:#fff;
             border:1px solid #e2e8f0;
             border-radius:10px;
-            padding:14px 16px;
-            margin-bottom:10px;
+            padding:12px 14px;
+            margin-bottom:8px;
             cursor:pointer;
+            color:#0f172a;
+            font-size:15px;
+            line-height:1.45;
           "
-        >
-          <div style="display:flex; justify-content:space-between; gap:12px; align-items:flex-start;">
-            <div style="font-size:16px; font-weight:650; color:#0f172a;">${subject}</div>
-            <div style="font-size:12px; color:#475569; white-space:nowrap;">${escapeHtml(date)}</div>
-          </div>
-          <div style="font-size:13px; color:#334155; margin-top:4px;">${from}</div>
-          <div style="font-size:13px; color:#475569; margin-top:8px; line-height:1.5;">${snippet}</div>
-        </button>
+        >${updateText}</button>
       `;
     }).join('');
 

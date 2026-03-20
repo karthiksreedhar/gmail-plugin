@@ -12,6 +12,39 @@ module.exports = {
       loadResponseEmails
     } = context;
 
+    function extractDeploymentUpdateText(subjectRaw) {
+      let s = String(subjectRaw || '').trim();
+      if (!s) return 'No Subject';
+
+      // Remove common email prefixes and bracketed tags.
+      s = s
+        .replace(/^\s*(re|fwd?|fw)\s*:\s*/i, '')
+        .replace(/\[[^\]]+\]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+
+      // If subject includes "Deployment Infrastructure", keep the most specific
+      // tail segment after common separators.
+      const hasDeploymentInfra = /deployment\s+infrastructure/i.test(s);
+      if (hasDeploymentInfra) {
+        const split = s.split(/\s[-:|]\s/);
+        if (split.length > 1) {
+          const best = split[split.length - 1].trim();
+          if (best && !/deployment\s+infrastructure/i.test(best)) {
+            return best;
+          }
+        }
+      }
+
+      // Generic cleanup for "Update:"-style subjects.
+      s = s
+        .replace(/^\s*deployment\s+infrastructure\s*[-:|]\s*/i, '')
+        .replace(/^\s*update\s*[-:]\s*/i, '')
+        .trim();
+
+      return s || String(subjectRaw || '').trim() || 'No Subject';
+    }
+
     app.get('/api/deployment-update/latest', async (req, res) => {
       try {
         const user = getCurrentUser();
@@ -52,9 +85,8 @@ module.exports = {
           .map((email) => ({
             id: email.id,
             subject: email.subject || 'No Subject',
-            from: email.originalFrom || email.from || 'Unknown Sender',
             date: email.date || null,
-            snippet: email.snippet || (email.body ? String(email.body).slice(0, 220) : ''),
+            updateText: extractDeploymentUpdateText(email.subject || ''),
             category: 'Deployment Infrastructure'
           }));
 
