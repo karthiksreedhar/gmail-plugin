@@ -2,7 +2,7 @@
 
 Adds a `Quick Reply` button to each email card that has the category `WeTransfer`.
 
-When clicked, it copies this exact template to clipboard:
+When clicked, it opens the same inline Generate Response view and pre-fills the generated response with this exact template:
 
 Hi,
 

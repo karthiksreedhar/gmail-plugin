@@ -1,7 +1,8 @@
 /**
  * WeTransfer Quick Reply Frontend
  * Adds a "Quick Reply" button to emails categorized as WeTransfer.
- * Clicking the button copies the configured response template.
+ * Clicking the button opens the inline Generate Response flow and pre-fills
+ * the generated response with the configured template.
  */
 
 (function () {
@@ -28,31 +29,63 @@
     return pills.some((pill) => String(pill.textContent || '').trim().toLowerCase() === TARGET_CATEGORY);
   }
 
-  function copyText(text) {
-    if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
-      return navigator.clipboard.writeText(text);
-    }
+  function getEmailId(emailItem) {
+    const deleteBtn = emailItem.querySelector('.delete-thread-btn');
+    const onclickAttr = deleteBtn ? String(deleteBtn.getAttribute('onclick') || '') : '';
+    if (!onclickAttr) return '';
+    const match = onclickAttr.match(/deleteEmailThread\('([^']+)'/);
+    return match && match[1] ? match[1] : '';
+  }
 
+  function getEmailSubject(emailItem) {
+    const subjectEl = emailItem.querySelector('.email-subject');
+    return String(subjectEl?.textContent || '').trim() || 'Email Thread';
+  }
+
+  function waitFor(conditionFn, timeoutMs = 8000, intervalMs = 60) {
     return new Promise((resolve, reject) => {
-      try {
-        const ta = document.createElement('textarea');
-        ta.value = text;
-        ta.setAttribute('readonly', '');
-        ta.style.position = 'fixed';
-        ta.style.left = '-9999px';
-        document.body.appendChild(ta);
-        ta.select();
-        const ok = document.execCommand('copy');
-        document.body.removeChild(ta);
-        if (!ok) {
-          reject(new Error('copy_command_failed'));
+      const started = Date.now();
+      const timer = setInterval(() => {
+        let ok = false;
+        try {
+          ok = !!conditionFn();
+        } catch (_) {}
+        if (ok) {
+          clearInterval(timer);
+          resolve(true);
           return;
         }
-        resolve();
-      } catch (err) {
-        reject(err);
-      }
+        if (Date.now() - started >= timeoutMs) {
+          clearInterval(timer);
+          reject(new Error('timeout'));
+        }
+      }, intervalMs);
     });
+  }
+
+  function setTemplateAsGeneratedResponse(template) {
+    const responseArea = document.getElementById('generatedResponseArea');
+    const responseDisplay = document.getElementById('responseDisplay');
+    const responseEditor = document.getElementById('responseEditor');
+    const refineSection = document.getElementById('refineSection');
+
+    if (!responseArea || !responseDisplay || !responseEditor || !refineSection) {
+      throw new Error('generate_response_ui_missing');
+    }
+
+    responseArea.style.display = 'block';
+    refineSection.style.display = 'block';
+    responseDisplay.innerHTML = String(template).replace(/\n/g, '<br>');
+    responseDisplay.style.display = 'block';
+    responseEditor.style.display = 'none';
+
+    // Keep core app's internal `currentGeneratedResponse` in sync by routing
+    // through existing edit/save handlers.
+    if (typeof window.enableResponseEditing === 'function' && typeof window.saveResponseEdit === 'function') {
+      window.enableResponseEditing();
+      responseEditor.value = template;
+      window.saveResponseEdit();
+    }
   }
 
   async function handleQuickReplyClick(ev) {
@@ -60,11 +93,27 @@
     ev.stopPropagation();
 
     try {
-      await copyText(REPLY_TEMPLATE);
-      API.showSuccess('Quick reply copied to clipboard.');
+      const emailItem = ev.currentTarget?.closest('.email-item');
+      if (!emailItem) throw new Error('email_item_not_found');
+
+      const emailId = getEmailId(emailItem);
+      const subject = getEmailSubject(emailItem);
+      if (!emailId) throw new Error('email_id_not_found');
+
+      if (typeof window.openEmailThread !== 'function' || typeof window.replyToCurrentThread !== 'function') {
+        throw new Error('thread_actions_unavailable');
+      }
+
+      await window.openEmailThread(emailId, subject);
+      await waitFor(() => window.currentThreadContext && window.currentThreadContext.emailId === emailId, 10000, 80);
+      window.replyToCurrentThread();
+      await waitFor(() => document.getElementById('generatedResponseArea') && document.getElementById('responseDisplay'), 5000, 50);
+
+      setTemplateAsGeneratedResponse(REPLY_TEMPLATE);
+      API.showSuccess('Quick reply template loaded in Generate Response.');
     } catch (error) {
-      console.error('WeTransfer Quick Reply: copy failed', error);
-      API.showError('Failed to copy quick reply.');
+      console.error('WeTransfer Quick Reply: open/prefill failed', error);
+      API.showError('Failed to open Quick Reply template.');
     }
   }
 
