@@ -90,8 +90,11 @@ const PORT = parseInt(process.env.PORT, 10) || 3000;
 // Base URL for internal API calls (supports deployment environments)
 const BASE_URL = process.env.BASE_URL || `http://localhost:${PORT}`;
 const FEATURE_GENERATOR_URL = String(process.env.FEATURE_GENERATOR_URL || '').trim();
-const USER_DATA_ROOT = String(process.env.USER_DATA_ROOT || '').trim() || path.join(__dirname, 'data');
-const USER_DATA_FALLBACK_ROOT = process.env.VERCEL ? path.join(os.tmpdir(), 'gmail-plugin-data') : USER_DATA_ROOT;
+const USER_DATA_ROOT =
+  String(process.env.USER_DATA_ROOT || '').trim() ||
+  (process.env.VERCEL ? path.join(os.tmpdir(), 'gmail-plugin-data') : path.join(__dirname, 'data'));
+// Keep a secondary location for compatibility reads/writes across deploy mode changes.
+const USER_DATA_FALLBACK_ROOT = process.env.VERCEL ? path.join(__dirname, 'data') : USER_DATA_ROOT;
 
 /**
  * FEATURE PLUGIN SYSTEM
