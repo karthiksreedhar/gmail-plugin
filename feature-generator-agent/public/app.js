@@ -70,6 +70,7 @@ document.addEventListener('DOMContentLoaded', () => {
   setupEventListeners();
   initRHSElements();
   setupRHSEventListeners();
+  refreshAvailableUsers();
   setMode(currentMode);
 });
 
@@ -251,6 +252,9 @@ function setMode(mode) {
   
   // Update header
   if (mode === 'chat') {
+    refreshAvailableUsers().catch(error => {
+      console.error('Failed to refresh users in chat mode:', error);
+    });
     headerTitle.textContent = '💬 Email Assistant';
     headerSubtitle.textContent = 'Ask questions about your emails';
     messageInput.placeholder = 'Ask about your emails... (e.g., "How many emails do I have in each category?")';
@@ -2646,14 +2650,47 @@ function addCategorySuggestionTrigger() {
   triggerBtn.style.display = currentMode === 'chat' ? 'block' : 'none';
 }
 
-// Define available users (should match server)
-const AVAILABLE_USERS = ['ks4190@columbia.edu', 'lc3251@columbia.edu'];
+let availableUsers = [];
+
+async function refreshAvailableUsers() {
+  if (!selectedUserDropdown) return;
+  const previous = String(selectedUserDropdown.value || '').trim().toLowerCase();
+
+  try {
+    const resp = await fetch('/api/users');
+    const data = await resp.json().catch(() => ({}));
+    const users = Array.isArray(data?.users) ? data.users : [];
+    availableUsers = users
+      .map(u => String(u || '').trim().toLowerCase())
+      .filter(Boolean);
+  } catch (error) {
+    console.error('Failed to load available users:', error);
+  }
+
+  if (!availableUsers.length) {
+    availableUsers = Array.from(selectedUserDropdown.options).map(opt => String(opt.value || '').trim().toLowerCase()).filter(Boolean);
+  }
+
+  selectedUserDropdown.innerHTML = '';
+  for (const email of availableUsers) {
+    const option = document.createElement('option');
+    option.value = email;
+    option.textContent = email;
+    selectedUserDropdown.appendChild(option);
+  }
+
+  if (previous && availableUsers.includes(previous)) {
+    selectedUserDropdown.value = previous;
+  } else if (availableUsers.length > 0) {
+    selectedUserDropdown.value = availableUsers[0];
+  }
+}
 
 // Trigger category suggestions
 async function triggerCategorySuggestions() {
   if (isGenerating) return;
   
-  const selectedUser = selectedUserDropdown ? selectedUserDropdown.value : AVAILABLE_USERS[0];
+  const selectedUser = selectedUserDropdown ? selectedUserDropdown.value : (availableUsers[0] || '');
   
   setGenerating(true);
   showToast('Analyzing "Other" emails...', 'info');

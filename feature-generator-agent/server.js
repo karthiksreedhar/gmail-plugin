@@ -917,12 +917,61 @@ app.delete('/api/session/:sessionId', (req, res) => {
   });
 });
 
+// List chat users dynamically so newly-authenticated users appear in UI.
+app.get('/api/users', async (req, res) => {
+  try {
+    const users = await getAvailableUsers(true);
+    res.json({ success: true, users });
+  } catch (error) {
+    console.error('Failed to list available users:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to load users',
+      users: DEFAULT_AVAILABLE_USERS.slice()
+    });
+  }
+});
+
 // =====================================================
 // EMAIL CHAT MODE - Query email data using AI
 // =====================================================
 
-// Available user emails in the system
-const AVAILABLE_USERS = ['ks4190@columbia.edu', 'lc3251@columbia.edu'];
+// Available user emails in the system (dynamic from Mongo, with fallback)
+const DEFAULT_AVAILABLE_USERS = ['ks4190@columbia.edu', 'lc3251@columbia.edu'];
+let availableUsersCache = {
+  users: DEFAULT_AVAILABLE_USERS.slice(),
+  fetchedAt: 0
+};
+const AVAILABLE_USERS_CACHE_TTL_MS = 30 * 1000;
+
+async function getAvailableUsers(force = false) {
+  const now = Date.now();
+  if (!force && availableUsersCache.users.length && (now - availableUsersCache.fetchedAt) < AVAILABLE_USERS_CACHE_TTL_MS) {
+    return availableUsersCache.users.slice();
+  }
+
+  const users = new Set(DEFAULT_AVAILABLE_USERS.map(u => String(u || '').trim().toLowerCase()).filter(Boolean));
+  try {
+    await ensureMongoReady();
+    if (mongoInitialized) {
+      const db = getDb();
+      const rows = await db.collection('oauth_tokens').find({}).project({ userEmail: 1 }).toArray();
+      for (const row of rows) {
+        const email = String(row?.userEmail || '').trim().toLowerCase();
+        if (email) users.add(email);
+      }
+    }
+  } catch (error) {
+    console.warn('Failed to refresh available users from Mongo:', error?.message || error);
+  }
+
+  const resolved = Array.from(users).sort();
+  availableUsersCache = {
+    users: resolved.length ? resolved : DEFAULT_AVAILABLE_USERS.slice(),
+    fetchedAt: now
+  };
+  return availableUsersCache.users.slice();
+}
 
 // Email chat system prompt
 const EMAIL_CHAT_SYSTEM_PROMPT = `You are an intelligent Email Assistant with access to email data from the Gmail Plugin system. You can help users:
@@ -1311,7 +1360,8 @@ async function loadUsersData(users, logger = null) {
 
 // Load and format data for ALL users (with optional logging) - legacy wrapper
 async function loadAllUsersData(logger = null) {
-  return loadUsersData(AVAILABLE_USERS, logger);
+  const users = await getAvailableUsers();
+  return loadUsersData(users, logger);
 }
 
 // =====================================================
@@ -1363,7 +1413,8 @@ async function validateModification(modification) {
   if (!modification.data) errors.push('Missing modification data');
   
   // Validate user email exists in system
-  if (modification.userEmail && !AVAILABLE_USERS.includes(modification.userEmail)) {
+  const availableUsers = await getAvailableUsers();
+  if (modification.userEmail && !availableUsers.includes(String(modification.userEmail).trim().toLowerCase())) {
     errors.push(`User ${modification.userEmail} not found in system`);
   }
   
@@ -1760,7 +1811,8 @@ function normalizeModificationPlan(input, defaultUserEmail) {
 
 async function generateModificationPlanForUsers(message, usersToQuery, logger) {
   const dataContext = await loadUsersData(usersToQuery, logger);
-  const targetUser = usersToQuery[0] || AVAILABLE_USERS[0];
+  const availableUsers = await getAvailableUsers();
+  const targetUser = usersToQuery[0] || availableUsers[0] || DEFAULT_AVAILABLE_USERS[0];
   const modelName = getGeminiModel();
   const modificationSchema = {
     type: 'OBJECT',
@@ -2303,9 +2355,11 @@ app.post('/api/email-chat', async (req, res) => {
     });
   }
   
+  const availableUsers = await getAvailableUsers();
   // Validate userEmail if provided
-  const selectedUser = userEmail && AVAILABLE_USERS.includes(userEmail) ? userEmail : null;
-  const usersToQuery = selectedUser ? [selectedUser] : AVAILABLE_USERS;
+  const normalizedRequested = String(userEmail || '').trim().toLowerCase();
+  const selectedUser = normalizedRequested && availableUsers.includes(normalizedRequested) ? normalizedRequested : null;
+  const usersToQuery = selectedUser ? [selectedUser] : availableUsers;
   
   // Detect if this is an email list query
   const isEmailQuery = isEmailListQuery(message);
@@ -2320,7 +2374,7 @@ app.post('/api/email-chat', async (req, res) => {
     // Route category-suggestion chat requests through the dedicated structured
     // AI path so the UI can reliably render approval controls.
     if (isOtherCategorySuggestionPrompt(message)) {
-      const targetUser = usersToQuery[0] || AVAILABLE_USERS[0];
+      const targetUser = usersToQuery[0] || availableUsers[0] || DEFAULT_AVAILABLE_USERS[0];
       const targetData = await loadUserEmailData(targetUser, logger);
       const { suggestions: categorySuggestions } = await generateCategorySuggestionsForUser(targetData, logger);
       const categoryCount = Array.isArray(categorySuggestions?.categories) ? categorySuggestions.categories.length : 0;
@@ -2332,7 +2386,7 @@ app.post('/api/email-chat', async (req, res) => {
       return res.json({
         success: true,
         response: assistantResponse,
-        availableUsers: AVAILABLE_USERS,
+        availableUsers,
         operationsLog: logger.getLog(),
         categorySuggestions,
         isEmailQuery: false,
@@ -2360,7 +2414,7 @@ app.post('/api/email-chat', async (req, res) => {
         return res.json({
           success: true,
           response: assistantResponse,
-          availableUsers: AVAILABLE_USERS,
+          availableUsers,
           operationsLog,
           modifications,
           requiresConfirmation: true,
@@ -2459,7 +2513,7 @@ app.post('/api/email-chat', async (req, res) => {
     res.json({
       success: true,
       response: assistantResponse,
-      availableUsers: AVAILABLE_USERS,
+      availableUsers,
       operationsLog,
       modifications: hasModifications ? modifications : undefined,
       requiresConfirmation: hasModifications,
@@ -2504,7 +2558,11 @@ app.post('/api/email-chat-category-suggestions', async (req, res) => {
     });
   }
   
-  const targetUser = userEmail || AVAILABLE_USERS[0];
+  const availableUsers = await getAvailableUsers();
+  const normalizedRequested = String(userEmail || '').trim().toLowerCase();
+  const targetUser = (normalizedRequested && availableUsers.includes(normalizedRequested))
+    ? normalizedRequested
+    : (availableUsers[0] || DEFAULT_AVAILABLE_USERS[0]);
   const results = {
     categoriesCreated: [],
     emailsMoved: [],
@@ -2802,8 +2860,12 @@ app.post('/api/category-suggestions', async (req, res) => {
     });
   }
   
+  const availableUsers = await getAvailableUsers();
   // Validate user email
-  const targetUser = userEmail && AVAILABLE_USERS.includes(userEmail) ? userEmail : AVAILABLE_USERS[0];
+  const normalizedRequested = String(userEmail || '').trim().toLowerCase();
+  const targetUser = normalizedRequested && availableUsers.includes(normalizedRequested)
+    ? normalizedRequested
+    : (availableUsers[0] || DEFAULT_AVAILABLE_USERS[0]);
   
   try {
     console.log(`\n📂 GENERATING CATEGORY SUGGESTIONS for ${targetUser}`);
