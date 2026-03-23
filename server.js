@@ -908,7 +908,16 @@ app.use((req, res, next) => {
 // per-user Mongo cache at request time to avoid empty/file fallbacks.
 let cacheWarmUserEmail = null;
 let cacheWarmAtMs = 0;
+let cacheWarmInFlight = null;
 const CACHE_WARM_TTL_MS = 60 * 1000;
+
+function withTimeout(promise, ms, label) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms))
+  ]);
+}
+
 app.use(async (req, res, next) => {
   try {
     const userEmail = getEffectiveUserEmailForRequest(req);
@@ -919,10 +928,23 @@ app.use(async (req, res, next) => {
       (now - cacheWarmAtMs) > CACHE_WARM_TTL_MS;
 
     if (needsWarm) {
-      await initMongo();
-      await warmCacheForUser(userEmail);
-      cacheWarmUserEmail = userEmail;
-      cacheWarmAtMs = now;
+      if (!cacheWarmInFlight) {
+        cacheWarmInFlight = (async () => {
+          await withTimeout(initMongo(), 2500, 'initMongo');
+          await withTimeout(warmCacheForUser(userEmail), 2500, 'warmCacheForUser');
+          cacheWarmUserEmail = userEmail;
+          cacheWarmAtMs = Date.now();
+        })()
+          .catch(err => {
+            console.warn('[CacheWarm] Background warm failed:', err?.message || err);
+          })
+          .finally(() => {
+            cacheWarmInFlight = null;
+          });
+      }
+
+      // Give cache warm a brief chance without blocking requests indefinitely.
+      await withTimeout(cacheWarmInFlight, 800, 'cache warm wait').catch(() => {});
     }
   } catch (err) {
     console.warn('[CacheWarm] Request-time warm failed:', err?.message || err);
@@ -4687,8 +4709,8 @@ app.get('/api/auth/status', (req, res) => {
 app.get('/api/debug/mongo-user-snapshot', async (req, res) => {
   try {
     const userEmail = getEffectiveUserEmailForRequest(req);
-    await initMongo();
-    await warmCacheForUser(userEmail);
+    await withTimeout(initMongo(), 3000, 'initMongo');
+    await withTimeout(warmCacheForUser(userEmail), 3000, 'warmCacheForUser');
 
     const collections = [
       { name: 'oauth_tokens', field: 'tokens' },
@@ -4701,13 +4723,22 @@ app.get('/api/debug/mongo-user-snapshot', async (req, res) => {
 
     const snapshot = {};
     for (const entry of collections) {
-      const doc = await getUserDoc(entry.name, userEmail);
-      const payload = doc?.[entry.field];
-      snapshot[entry.name] = {
-        exists: !!doc,
-        itemCount: Array.isArray(payload) ? payload.length : null,
-        updatedAt: doc?._updatedAt || null
-      };
+      try {
+        const doc = await withTimeout(getUserDoc(entry.name, userEmail), 2000, `getUserDoc:${entry.name}`);
+        const payload = doc?.[entry.field];
+        snapshot[entry.name] = {
+          exists: !!doc,
+          itemCount: Array.isArray(payload) ? payload.length : null,
+          updatedAt: doc?._updatedAt || null
+        };
+      } catch (err) {
+        snapshot[entry.name] = {
+          exists: null,
+          itemCount: null,
+          updatedAt: null,
+          error: err?.message || String(err)
+        };
+      }
     }
 
     return res.json({
