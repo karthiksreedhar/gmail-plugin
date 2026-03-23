@@ -1,0 +1,11 @@
+{
+  "id": "summarize-button-reappearance",
+  "name": "Restore Summarize Button",
+  "version": "1.0.0",
+  "description": "The user reports that the summarize button is missing and needs to be restored to its previous functionality.",
+  "author": "Feature Generator Agent",
+  "frontend": "frontend.js",
+  "permissions": [
+    "emails:read"
+  ]
+}
