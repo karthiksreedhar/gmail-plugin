@@ -106,11 +106,29 @@ function getDb() {
   return _db;
 }
 
-async function warmCacheForUser(userEmail) {
+const CORE_WARM_COLLECTIONS = [
+  'oauth_tokens',
+  'categories',
+  'response_emails',
+  'email_threads',
+  'unreplied_emails',
+  'priority_emails',
+  'precategorized_emails',
+  'hidden_threads',
+  'hidden_inbox'
+];
+
+async function warmCacheForUser(userEmail, options = {}) {
   const db = getDb();
-  const tasks = COLLECTIONS.map(async (name) => {
+  const include = Array.isArray(options.include) && options.include.length > 0
+    ? options.include
+    : CORE_WARM_COLLECTIONS;
+  const maxTimeMS = Number.isFinite(options.maxTimeMS) && options.maxTimeMS > 0 ? options.maxTimeMS : 1500;
+
+  const tasks = include.map(async (name) => {
     try {
-      const doc = await db.collection(name).findOne({ userEmail });
+      _cache[name] = _cache[name] || Object.create(null);
+      const doc = await db.collection(name).findOne({ userEmail }, { maxTimeMS });
       if (doc) {
         _cache[name][userEmail] = doc;
       }

@@ -918,6 +918,18 @@ function withTimeout(promise, ms, label) {
   ]);
 }
 
+async function warmUserCacheSafely(userEmail, waitMs = 1200) {
+  const p = warmCacheForUser(userEmail, { maxTimeMS: 1200 });
+  try {
+    await withTimeout(p, waitMs, 'warmUserCacheSafely');
+    return true;
+  } catch (err) {
+    console.warn('[CacheWarm] Non-blocking warm fallback:', err?.message || err);
+    p.catch(() => {});
+    return false;
+  }
+}
+
 app.use(async (req, res, next) => {
   try {
     const userEmail = getEffectiveUserEmailForRequest(req);
@@ -931,7 +943,7 @@ app.use(async (req, res, next) => {
       if (!cacheWarmInFlight) {
         cacheWarmInFlight = (async () => {
           await withTimeout(initMongo(), 2500, 'initMongo');
-          await withTimeout(warmCacheForUser(userEmail), 2500, 'warmCacheForUser');
+          await withTimeout(warmCacheForUser(userEmail, { maxTimeMS: 1200 }), 2500, 'warmCacheForUser');
           cacheWarmUserEmail = userEmail;
           cacheWarmAtMs = Date.now();
         })()
@@ -1391,8 +1403,8 @@ async function finalizeLoginForUser(userEmail, tokens) {
   // Ensure first-time users get their per-user storage shape immediately.
   await ensureUserBootstrap(CURRENT_USER_EMAIL);
 
-  // Warm Mongo cache for new/current user
-  await warmCacheForUser(CURRENT_USER_EMAIL);
+  // Warm Mongo cache for new/current user without blocking login indefinitely.
+  await warmUserCacheSafely(CURRENT_USER_EMAIL, 1200);
 
   // Reinitialize Gmail API for this user
   gmailAuth = null;
@@ -2112,7 +2124,7 @@ async function saveCategoriesList(categories) {
 
 // Initialize MongoDB on server start and warm cache for current user
 initMongo()
-  .then(() => warmCacheForUser(CURRENT_USER_EMAIL))
+  .then(() => warmUserCacheSafely(CURRENT_USER_EMAIL, 1200))
   .catch(err => console.error('Mongo init error:', err));
 
 // Load initial data (async-aware)
@@ -4465,8 +4477,8 @@ app.post('/api/switch-user', async (req, res) => {
 
     await ensureUserBootstrap(CURRENT_USER_EMAIL);
 
-    // Warm Mongo cache for new user to support synchronous loaders
-    await warmCacheForUser(CURRENT_USER_EMAIL);
+    // Warm Mongo cache for new user without blocking request indefinitely.
+    await warmUserCacheSafely(CURRENT_USER_EMAIL, 1200);
     
     // Reinitialize Gmail API for new user
     gmailAuth = null;
@@ -4710,7 +4722,7 @@ app.get('/api/debug/mongo-user-snapshot', async (req, res) => {
   try {
     const userEmail = getEffectiveUserEmailForRequest(req);
     await withTimeout(initMongo(), 3000, 'initMongo');
-    await withTimeout(warmCacheForUser(userEmail), 3000, 'warmCacheForUser');
+    await withTimeout(warmCacheForUser(userEmail, { maxTimeMS: 1200 }), 3000, 'warmCacheForUser');
 
     const collections = [
       { name: 'oauth_tokens', field: 'tokens' },
