@@ -903,6 +903,33 @@ app.use((req, res, next) => {
   return next();
 });
 
+// In serverless environments, module-level caches are cold on many requests.
+// Most legacy readers are synchronous and rely on getCachedDoc(), so we warm
+// per-user Mongo cache at request time to avoid empty/file fallbacks.
+let cacheWarmUserEmail = null;
+let cacheWarmAtMs = 0;
+const CACHE_WARM_TTL_MS = 60 * 1000;
+app.use(async (req, res, next) => {
+  try {
+    const userEmail = getEffectiveUserEmailForRequest(req);
+    const now = Date.now();
+    const needsWarm =
+      !cacheWarmUserEmail ||
+      cacheWarmUserEmail !== userEmail ||
+      (now - cacheWarmAtMs) > CACHE_WARM_TTL_MS;
+
+    if (needsWarm) {
+      await initMongo();
+      await warmCacheForUser(userEmail);
+      cacheWarmUserEmail = userEmail;
+      cacheWarmAtMs = now;
+    }
+  } catch (err) {
+    console.warn('[CacheWarm] Request-time warm failed:', err?.message || err);
+  }
+  return next();
+});
+
 async function loadStoredTokensForUser(userEmail) {
   const normalizedEmail = normalizeUserEmailForData(userEmail);
   try {
@@ -4652,6 +4679,50 @@ app.get('/api/auth/status', (req, res) => {
     res.json({ loggedIn: true, userEmail });
   } else {
     res.json({ loggedIn: false, userEmail: null });
+  }
+});
+
+// Isolated production diagnostics endpoint for login/render issues.
+// Confirms whether Mongo has the user-specific docs needed to render inbox state.
+app.get('/api/debug/mongo-user-snapshot', async (req, res) => {
+  try {
+    const userEmail = getEffectiveUserEmailForRequest(req);
+    await initMongo();
+    await warmCacheForUser(userEmail);
+
+    const collections = [
+      { name: 'oauth_tokens', field: 'tokens' },
+      { name: 'categories', field: 'categories' },
+      { name: 'response_emails', field: 'emails' },
+      { name: 'email_threads', field: 'threads' },
+      { name: 'unreplied_emails', field: 'emails' },
+      { name: 'priority_emails', field: 'emails' }
+    ];
+
+    const snapshot = {};
+    for (const entry of collections) {
+      const doc = await getUserDoc(entry.name, userEmail);
+      const payload = doc?.[entry.field];
+      snapshot[entry.name] = {
+        exists: !!doc,
+        itemCount: Array.isArray(payload) ? payload.length : null,
+        updatedAt: doc?._updatedAt || null
+      };
+    }
+
+    return res.json({
+      success: true,
+      userEmail,
+      currentUserGlobal: CURRENT_USER_EMAIL,
+      cacheWarmUserEmail,
+      cacheWarmAt: cacheWarmAtMs ? new Date(cacheWarmAtMs).toISOString() : null,
+      snapshot
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      error: error?.message || 'Failed to build mongo user snapshot'
+    });
   }
 });
 
