@@ -8,7 +8,7 @@ const { google } = require('googleapis');
 const cookieParser = require('cookie-parser');
 const session = require('express-session');
 const crypto = require('crypto');
-require('dotenv').config();
+require('dotenv').config({ path: ['.env.local', '.env'] });
 
 // MongoDB (Atlas) connection helper
 const {
