@@ -1,0 +1,13 @@
+{
+  "id": "email-summarizer-and-todo-extractor",
+  "name": "Email Summarizer and ToDo Extractor",
+  "version": "1.0.0",
+  "description": "Adds a 'Summarize' button to each email thread that, when clicked, opens a popup with a one-sentence summary and a list of extracted ToDos.",
+  "author": "Feature Generator Agent",
+  "backend": "backend.js",
+  "frontend": "frontend.js",
+  "permissions": [
+    "emails:read",
+    "api:custom"
+  ]
+}
