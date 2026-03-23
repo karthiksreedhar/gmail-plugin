@@ -2,7 +2,7 @@
   "id": "email-body-required-error-handling",
   "name": "Email Body Required Error Handling",
   "version": "1.0.0",
-  "description": "Improves error handling when the email body is missing during summarization.",
+  "description": "Improves error handling when the email body is missing during summarization, providing a more informative error message to the user.",
   "author": "Feature Generator Agent",
   "frontend": "frontend.js",
   "permissions": []
