@@ -1,0 +1,13 @@
+{
+  "id": "email-summarization-with-todos",
+  "name": "Email Summarization with To-Do Extraction",
+  "version": "1.0.0",
+  "description": "Adds a 'Summarize' button to each email thread that generates a one-sentence summary and extracts to-do items using Gemini.",
+  "author": "Feature Generator Agent",
+  "backend": "backend.js",
+  "frontend": "frontend.js",
+  "permissions": [
+    "emails:read",
+    "api:custom"
+  ]
+}
