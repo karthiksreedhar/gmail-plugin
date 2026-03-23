@@ -930,6 +930,18 @@ async function warmUserCacheSafely(userEmail, waitMs = 1200) {
   }
 }
 
+async function ensureUserBootstrapSafely(userEmail, waitMs = 1500) {
+  const p = ensureUserBootstrap(userEmail);
+  try {
+    await withTimeout(p, waitMs, 'ensureUserBootstrapSafely');
+    return true;
+  } catch (err) {
+    console.warn('[Bootstrap] Non-blocking fallback:', err?.message || err);
+    p.catch(() => {});
+    return false;
+  }
+}
+
 app.use(async (req, res, next) => {
   try {
     const userEmail = getEffectiveUserEmailForRequest(req);
@@ -1400,8 +1412,8 @@ async function finalizeLoginForUser(userEmail, tokens) {
   CURRENT_USER_EMAIL = normalizedEmail;
   SENDING_EMAIL = normalizedEmail;
 
-  // Ensure first-time users get their per-user storage shape immediately.
-  await ensureUserBootstrap(CURRENT_USER_EMAIL);
+  // Ensure first-time users get their per-user storage shape; do not block login indefinitely.
+  await ensureUserBootstrapSafely(CURRENT_USER_EMAIL, 1500);
 
   // Warm Mongo cache for new/current user without blocking login indefinitely.
   await warmUserCacheSafely(CURRENT_USER_EMAIL, 1200);
@@ -4475,7 +4487,7 @@ app.post('/api/switch-user', async (req, res) => {
     // Reset sending email to match current (effective) user (can be changed later if needed)
     SENDING_EMAIL = effective;
 
-    await ensureUserBootstrap(CURRENT_USER_EMAIL);
+    await ensureUserBootstrapSafely(CURRENT_USER_EMAIL, 1500);
 
     // Warm Mongo cache for new user without blocking request indefinitely.
     await warmUserCacheSafely(CURRENT_USER_EMAIL, 1200);
@@ -4722,7 +4734,6 @@ app.get('/api/debug/mongo-user-snapshot', async (req, res) => {
   try {
     const userEmail = getEffectiveUserEmailForRequest(req);
     await withTimeout(initMongo(), 3000, 'initMongo');
-    await withTimeout(warmCacheForUser(userEmail, { maxTimeMS: 1200 }), 3000, 'warmCacheForUser');
 
     const collections = [
       { name: 'oauth_tokens', field: 'tokens' },
