@@ -1,6 +1,6 @@
 /**
  * Email Body Required Error Handling Frontend
- * Improves error handling when the email body is missing during summarization.
+ * Improves error handling when the email body is missing during summarization, providing a more informative error message to the user.
  */
 
 (function() {
@@ -13,56 +13,45 @@
 
   const API = window.EmailAssistant;
 
-  /**
-   * Handles the summarization process, including error handling for missing email bodies.
-   * @param {object} email - The email object.
-   */
-  async function handleSummarizeEmail(email) {
-    if (!email) {
-      API.showError('Email object is missing.');
-      return;
-    }
+  function handleSummarizeError(emailId) {
+    API.showError('Failed to summarize email: Email body is required');
+    console.error(`Email Body Required Error Handling: Failed to summarize email ${emailId}: Email body is required`);
+  }
 
-    API.showModal('<div style="text-align: center;">Summarizing email...<br><img src="https://i.imgur.com/Tkzx1J4.gif" width="50"></div>', 'Summarizing...');
+  // Override the existing summarize function to handle the error
+  const originalSummarizeEmail = window.summarizeEmail;
 
-    try {
-      const response = await API.apiCall('/api/email-body-required-error-handling/summarize', {
-        method: 'POST',
-        body: { emailId: email.id }
-      });
+  if (originalSummarizeEmail) {
+    window.summarizeEmail = async function(emailId) {
+      try {
+        API.showModal('<div style="text-align: center;">Loading summary...</div>', 'Summarizing Email');
+        const emails = await API.getEmails();
 
-      document.querySelector('.modal').remove(); // Close loading modal
+        if (!emails || emails.length === 0) {
+          handleSummarizeError(emailId);
+          return;
+        }
 
-      if (response.success) {
-        API.showSuccess('Email summarized successfully!');
-        API.showModal(`<div style="padding: 20px;">${response.data.summary}</div>`, 'Summary');
-      } else {
-        API.showError(`Failed to summarize email: ${response.error}`);
+        const email = emails.find(e => e.id === emailId);
+
+        if (!email || !email.body) {
+          handleSummarizeError(emailId);
+          return;
+        }
+
+        // Call the original function if the email body exists
+        originalSummarizeEmail.call(this, emailId);
+
+      } catch (error) {
+        API.showError(`Failed to summarize email: ${error.message || error}`);
+        console.error('Email Body Required Error Handling: Error during summarization:', error);
+      } finally {
+        API.showModal('', ''); // Close the modal
       }
-    } catch (error) {
-      console.error('Email Body Required Error Handling: Error during summarization:', error);
-      document.querySelector('.modal').remove(); // Close loading modal
-      API.showError(`Failed to summarize email: ${error.message || 'Unknown error'}`);
-    }
+    };
+  } else {
+    console.warn('Email Body Required Error Handling: Original summarizeEmail function not found.');
   }
-
-  /**
-   * Adds a "Summarize" action to the email context menu.
-   */
-  function addSummarizeAction() {
-    API.addEmailAction('Summarize', handleSummarizeEmail);
-  }
-
-  /**
-   * Initializes the frontend by adding the "Summarize" action.
-   */
-  function initialize() {
-    addSummarizeAction();
-    console.log('Email Body Required Error Handling: Frontend initialized successfully');
-  }
-
-  // Initialize when loaded
-  initialize();
 
   console.log('Email Body Required Error Handling: Frontend loaded successfully');
 })();
