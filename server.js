@@ -944,6 +944,13 @@ async function ensureUserBootstrapSafely(userEmail, waitMs = 1500) {
 
 app.use(async (req, res, next) => {
   try {
+    const pathName = String(req.path || '');
+    const isApi = pathName.startsWith('/api/');
+    const isAuthRoute = pathName.startsWith('/api/auth/');
+    if (!isApi || isAuthRoute || req.method === 'OPTIONS') {
+      return next();
+    }
+
     const userEmail = getEffectiveUserEmailForRequest(req);
     const now = Date.now();
     const needsWarm =
@@ -1423,9 +1430,26 @@ async function finalizeLoginForUser(userEmail, tokens) {
   gmail = null;
   await initializeGmailAPI();
 
-  // Kick off an immediate sync for this user so first-login data is loaded
-  // without waiting for the next interval/cron run.
-  triggerAutoSyncForUser(normalizedEmail, 'post-login');
+  // For first-time users, run a synchronous initial seed so inbox content
+  // appears immediately after redirect: latest 50 items, all in "Other".
+  const paths = getUserPaths(normalizedEmail);
+  let existingResponses = [];
+  try {
+    existingResponses = await readUserArrayDoc('response_emails', normalizedEmail, 'emails', paths.RESPONSE_EMAILS_PATH);
+  } catch (_) {
+    existingResponses = [];
+  }
+
+  if (!Array.isArray(existingResponses) || existingResponses.length === 0) {
+    await syncUserInboxFromGmail(normalizedEmail, {
+      forceBackfill: true,
+      seedAsOther: true,
+      maxCandidates: 50
+    });
+  } else {
+    // Existing users: keep non-blocking refresh behavior.
+    triggerAutoSyncForUser(normalizedEmail, 'post-login');
+  }
 }
 
 // Search Gmail for emails with pagination support
@@ -3733,11 +3757,14 @@ function buildAutoSyncMessageEntry(rawMessage, userEmail) {
   };
 }
 
-async function fetchInboxThreadCandidatesForUser(gmailClient, latestStoredTimestampMs, userEmail) {
+async function fetchInboxThreadCandidatesForUser(gmailClient, latestStoredTimestampMs, userEmail, options = {}) {
   const candidates = [];
   const seenThreadIds = new Set();
   const PER_PAGE = 100;
-  const CAP = 50;
+  const requestedCap = Number(options.maxCandidates || AUTO_SYNC_BACKFILL_COUNT);
+  const CAP = Number.isFinite(requestedCap) && requestedCap > 0
+    ? Math.min(200, Math.floor(requestedCap))
+    : AUTO_SYNC_BACKFILL_COUNT;
   const normalizedLatestMs = Number(latestStoredTimestampMs || 0);
 
   let query = 'in:inbox';
@@ -3851,6 +3878,12 @@ async function fetchInboxThreadCandidatesForUser(gmailClient, latestStoredTimest
 
 async function syncUserInboxFromGmail(userEmail, opts = {}) {
   const normalizedEmail = normalizeUserEmailForData(userEmail);
+  const forceBackfill = !!opts.forceBackfill;
+  const seedAsOther = !!opts.seedAsOther;
+  const requestedMaxCandidates = Number(opts.maxCandidates || AUTO_SYNC_BACKFILL_COUNT);
+  const maxCandidates = Number.isFinite(requestedMaxCandidates) && requestedMaxCandidates > 0
+    ? Math.min(200, Math.floor(requestedMaxCandidates))
+    : AUTO_SYNC_BACKFILL_COUNT;
   const currentLockAgeMs = getAutoSyncLockAgeMs(normalizedEmail);
   if (currentLockAgeMs !== null) {
     if (currentLockAgeMs > AUTO_SYNC_LOCK_TTL_MS) {
@@ -3896,14 +3929,20 @@ async function syncUserInboxFromGmail(userEmail, opts = {}) {
 
     const latestResponseTimestampMs = getLatestTimestampFromItems(responses);
     const latestThreadTimestampMs = getLatestTimestampFromItems(threads);
-    const latestStoredTimestampMs = (() => {
+    const computedLatestStoredTimestampMs = (() => {
       if (latestResponseTimestampMs && latestThreadTimestampMs) {
         return latestResponseTimestampMs > latestThreadTimestampMs ? latestResponseTimestampMs : latestThreadTimestampMs;
       }
       return latestResponseTimestampMs || latestThreadTimestampMs || null;
     })();
+    const latestStoredTimestampMs = forceBackfill ? null : computedLatestStoredTimestampMs;
 
-    const candidates = await fetchInboxThreadCandidatesForUser(gmailClient, latestStoredTimestampMs, normalizedEmail);
+    const candidates = await fetchInboxThreadCandidatesForUser(
+      gmailClient,
+      latestStoredTimestampMs,
+      normalizedEmail,
+      { maxCandidates }
+    );
     if (!candidates.length) {
       return {
         success: true,
@@ -3936,7 +3975,9 @@ async function syncUserInboxFromGmail(userEmail, opts = {}) {
       const persistedThreadId = `thread-${email.threadId || email.id}`;
       return !threadIndexById.has(persistedThreadId) && !responseIndexByThreadId.has(String(email.threadId || '').trim());
     });
-    const classified = await classifySyncedEmailsWithV4ForUser(normalizedEmail, candidatesNeedingCategory);
+    const classified = seedAsOther
+      ? { categoriesX: currentCategories, byId: {} }
+      : await classifySyncedEmailsWithV4ForUser(normalizedEmail, candidatesNeedingCategory);
     const classifiedById = (classified && classified.byId) ? classified.byId : {};
     const categoriesForUser = (Array.isArray(currentCategories) && currentCategories.length)
       ? currentCategories
@@ -3967,10 +4008,12 @@ async function syncUserInboxFromGmail(userEmail, opts = {}) {
       const existingCategories = Array.isArray(existingResponse?.categories) && existingResponse.categories.length
         ? existingResponse.categories.filter(Boolean)
         : (existingResponse?.category ? [existingResponse.category] : []);
-      const category = existingCategories[0] || classifiedCategory || otherCategory;
+      const category = existingCategories[0] || (seedAsOther ? otherCategory : classifiedCategory) || otherCategory;
       const categoriesArr = existingCategories.length ? existingCategories : [category];
       const syncedAt = new Date().toISOString();
-      const explanation = existingResponse?.autoSyncExplanation || (classifiedById[email.id] && classifiedById[email.id].explanation) || '';
+      const explanation = seedAsOther
+        ? (existingResponse?.autoSyncExplanation || 'Initial user seed: defaulted to Other')
+        : (existingResponse?.autoSyncExplanation || (classifiedById[email.id] && classifiedById[email.id].explanation) || '');
       const responseRecord = {
         id: existingSummaryId,
         threadId: rawThreadId || undefined,
