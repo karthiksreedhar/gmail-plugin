@@ -709,14 +709,18 @@ window.__categoryChats = window.__categoryChats || {};
 
             // Build counts from emails (primary + additional categories)
             const categoryCounts = {};
+            const orderedLcMap = new Map(
+                ordered.map(name => [String(name || '').trim().toLowerCase(), String(name || '').trim()])
+            );
             (emails || []).forEach(e => {
                 const arr = Array.isArray(e?.categories) && e.categories.length
                     ? e.categories
                     : (e?.category ? [e.category] : []);
                 arr.forEach(c => {
-                    const name = String(c || '').trim();
-                    if (!name) return;
-                    categoryCounts[name] = (categoryCounts[name] || 0) + 1;
+                    const raw = String(c || '').trim();
+                    if (!raw) return;
+                    const canonical = orderedLcMap.get(raw.toLowerCase()) || raw;
+                    categoryCounts[canonical] = (categoryCounts[canonical] || 0) + 1;
                 });
             });
 
@@ -735,7 +739,11 @@ window.__categoryChats = window.__categoryChats || {};
             }))).filter(Boolean);
 
             // Only render categories with at least 1 email
-            const listToRender = (ordered.length ? ordered : fallbackNames).filter(name => (categoryCounts[name] || 0) > 0);
+            const listToRender = (ordered.length ? ordered : fallbackNames).filter(name => {
+                const count = categoryCounts[name] || 0;
+                const isOther = String(name || '').trim().toLowerCase() === 'other';
+                return count > 0 || isOther;
+            });
 
             // If there are zero emails total, leave LHS empty (only "View All" remains)
             listToRender.forEach(category => {

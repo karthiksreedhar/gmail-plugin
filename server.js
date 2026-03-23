@@ -2253,6 +2253,7 @@ const CANONICAL_CATEGORIES = [
   'Networking',
   'Personal & Life Management'
 ];
+const DEFAULT_NEW_USER_CATEGORIES = ['Other'];
 
 function isCanonicalCategory(name) {
   const lower = String(name || '').toLowerCase();
@@ -2537,7 +2538,7 @@ function ensureMinCategoriesAtLeast(categories, minCount = 5) {
 }
 
 /**
- * Current categories: derived from categories.json if present, otherwise from existing responses (fallback to canonical)
+ * Current categories: derived from categories.json if present, otherwise from existing responses (fallback to Other)
  */
 app.get('/api/current-categories', (req, res) => {
   try {
@@ -2545,13 +2546,13 @@ app.get('/api/current-categories', (req, res) => {
     if (!categories || categories.length === 0) {
       categories = getCurrentCategoriesFromResponses();
       if (!categories || categories.length === 0) {
-        categories = CANONICAL_CATEGORIES.slice();
+        categories = DEFAULT_NEW_USER_CATEGORIES.slice();
       }
     }
     res.json({ categories });
   } catch (e) {
     console.error('Error getting current categories:', e);
-    res.status(500).json({ categories: CANONICAL_CATEGORIES });
+    res.status(500).json({ categories: DEFAULT_NEW_USER_CATEGORIES.slice() });
   }
 });
 
@@ -3585,7 +3586,7 @@ async function writeUserArrayDoc(collection, userEmail, field, value, filePath) 
 function pickCurrentCategoriesForUser(rawCategories) {
   const categories = Array.isArray(rawCategories) ? rawCategories.filter(Boolean) : [];
   if (categories.length) return categories;
-  return CANONICAL_CATEGORIES.slice();
+  return DEFAULT_NEW_USER_CATEGORIES.slice();
 }
 
 async function classifySyncedEmailsWithV4ForUser(userEmail, candidates) {
@@ -4221,7 +4222,7 @@ async function ensureUserBootstrap(userEmail) {
       { collection: 'email_threads', payload: { threads: [] } },
       { collection: 'unreplied_emails', payload: { emails: [] } },
       { collection: 'notes', payload: { notes: [] } },
-      { collection: 'categories', payload: { categories: CANONICAL_CATEGORIES.slice() } },
+      { collection: 'categories', payload: { categories: DEFAULT_NEW_USER_CATEGORIES.slice() } },
       { collection: 'category_guidelines', payload: { categories: [], updatedAt: new Date().toISOString() } },
       { collection: 'category_summaries', payload: { summaries: {}, updatedAt: new Date().toISOString() } },
       { collection: 'email_notes', payload: { notesByEmail: {}, updatedAt: new Date().toISOString() } },
