@@ -1300,13 +1300,31 @@ const pillsHtml = catNames.map(cat => {
 
         function formatDate(dateString) {
             const date = new Date(dateString);
+            if (Number.isNaN(date.getTime())) return '';
+
             const now = new Date();
-            const diffTime = Math.abs(now - date);
-            const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-            
-            if (diffDays === 1) return 'Yesterday';
-            if (diffDays < 7) return `${diffDays} days ago`;
-            return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+            const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+            const startOfEmailDay = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+            const dayDiff = Math.round((startOfToday - startOfEmailDay) / (24 * 60 * 60 * 1000));
+
+            const timeText = date.toLocaleTimeString('en-US', {
+                hour: 'numeric',
+                minute: '2-digit'
+            });
+            const tzPart = new Intl.DateTimeFormat('en-US', { timeZoneName: 'short' })
+                .formatToParts(date)
+                .find(p => p.type === 'timeZoneName');
+            const tzShort = tzPart && tzPart.value ? tzPart.value : '';
+
+            if (dayDiff === 0) return tzShort ? `${timeText} ${tzShort}` : timeText;
+            if (dayDiff === 1) return tzShort ? `Yesterday ${timeText} ${tzShort}` : `Yesterday ${timeText}`;
+
+            const dateText = date.toLocaleDateString('en-US', {
+                month: 'short',
+                day: 'numeric',
+                year: date.getFullYear() === now.getFullYear() ? undefined : 'numeric'
+            });
+            return tzShort ? `${dateText}, ${timeText} ${tzShort}` : `${dateText}, ${timeText}`;
         }
 
         function updateDisplayStats(emails) {
