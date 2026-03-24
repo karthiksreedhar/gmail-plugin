@@ -409,11 +409,64 @@ async function handleLoadExistingFeature() {
   }
 }
 
+async function autoLoadSelectedFeatureForGenerate() {
+  if (currentMode !== 'generate' || !existingFeatureDropdown) return true;
+
+  const selectedFeatureId = String(existingFeatureDropdown.value || '').trim();
+  if (!selectedFeatureId) return true;
+
+  const hasCurrentFiles = !!(currentFiles && Object.keys(currentFiles).length > 0);
+  if (hasCurrentFiles && currentFeatureId === selectedFeatureId) return true;
+
+  if (!sessionId) {
+    await createNewSession();
+    if (!sessionId) {
+      throw new Error('Failed to initialize session');
+    }
+  }
+
+  const response = await fetch(`/api/session/${encodeURIComponent(sessionId)}/load-feature`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ featureId: selectedFeatureId })
+  });
+
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || !data.success) {
+    throw new Error(data.error || `Failed to load selected feature ${selectedFeatureId}`);
+  }
+
+  currentFeatureId = data.featureId;
+  currentFiles = data.files || {};
+  updatedFiles = [];
+  currentDraftSaved = false;
+  currentPrRequested = false;
+  updateCreatePrButton();
+  showPreview();
+  updateFileTabs();
+  selectFile('manifest.json');
+
+  addMessage(
+    'assistant',
+    `Using selected feature \`${data.featureId}\` for in-place edits.\n\nYour next prompt will modify these existing files instead of creating a new feature directory.`
+  );
+  return true;
+}
+
 // Handle send message
 async function handleSend() {
   const message = messageInput.value.trim();
   
   if (!message || isGenerating) return;
+
+  try {
+    await autoLoadSelectedFeatureForGenerate();
+  } catch (error) {
+    console.error('Failed to auto-load selected feature:', error);
+    showToast(error.message || 'Failed to load selected feature', 'error');
+    addMessage('assistant', `Could not load the selected feature for editing.\n\nError: ${error.message}`);
+    return;
+  }
   
   // Clear input
   messageInput.value = '';
