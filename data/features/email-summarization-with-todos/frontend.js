@@ -20,7 +20,12 @@
 
       const response = await API.apiCall('/api/email-summarization-with-todos/summarize', {
         method: 'POST',
-        body: { emailId: email.id }
+        body: {
+          emailId: email.id || '',
+          emailBody: email.body || '',
+          subject: email.subject || '',
+          from: email.from || ''
+        }
       });
 
       if (response.success) {
@@ -125,7 +130,22 @@
       senderName = fromText.split('@')[0];
     }
 
+    let emailId = '';
+    const notesPreview = emailItem.querySelector('.notes-preview[data-email-notes]');
+    if (notesPreview) {
+      emailId = String(notesPreview.getAttribute('data-email-notes') || '').trim();
+    }
+    if (!emailId) {
+      const deleteBtn = emailItem.querySelector('.delete-thread-btn');
+      const onclickRaw = deleteBtn ? String(deleteBtn.getAttribute('onclick') || '') : '';
+      const idMatch = onclickRaw.match(/deleteEmailThread\('([^']+)'/);
+      if (idMatch && idMatch[1]) {
+        emailId = idMatch[1];
+      }
+    }
+
     return {
+      id: emailId,
       senderName,
       senderEmail,
       subject,
