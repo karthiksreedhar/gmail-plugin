@@ -15,6 +15,7 @@ let currentDraftSaved = false;
 let currentPrRequested = false;
 let availableExistingFeatures = [];
 let existingFeaturesLoaded = false;
+const URL_USER_EMAIL = String(new URLSearchParams(window.location.search).get('userEmail') || '').trim().toLowerCase();
 
 // DOM Elements
 const chatMessages = document.getElementById('chatMessages');
@@ -63,6 +64,13 @@ I have access to your Gmail Plugin data and can help you:
 
 Just ask me anything about your emails!`
 };
+
+function getActorUserEmail() {
+  const selected = String(selectedUserDropdown?.value || '').trim().toLowerCase();
+  if (selected) return selected;
+  if (URL_USER_EMAIL) return URL_USER_EMAIL;
+  return '';
+}
 
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
@@ -374,7 +382,7 @@ async function handleLoadExistingFeature() {
     const response = await fetch(`/api/session/${encodeURIComponent(sessionId)}/load-feature`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ featureId })
+      body: JSON.stringify({ featureId, userEmail: getActorUserEmail() || undefined })
     });
 
     const data = await response.json().catch(() => ({}));
@@ -428,7 +436,7 @@ async function autoLoadSelectedFeatureForGenerate() {
   const response = await fetch(`/api/session/${encodeURIComponent(sessionId)}/load-feature`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ featureId: selectedFeatureId })
+    body: JSON.stringify({ featureId: selectedFeatureId, userEmail: getActorUserEmail() || undefined })
   });
 
   const data = await response.json().catch(() => ({}));
@@ -487,6 +495,9 @@ async function handleSend() {
     const requestBody = { sessionId, message };
     if (currentMode === 'chat' && selectedUserDropdown) {
       requestBody.userEmail = selectedUserDropdown.value;
+    } else {
+      const actorUserEmail = getActorUserEmail();
+      if (actorUserEmail) requestBody.userEmail = actorUserEmail;
     }
     
     const response = await fetch(endpoint, {

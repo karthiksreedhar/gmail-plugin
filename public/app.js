@@ -168,7 +168,12 @@
         async function openFeatureGenerator() {
             try {
                 const targetUrl = await getFeatureGeneratorUrl();
-                window.open(targetUrl, '_blank', 'noopener');
+                const currentUserEmail = String(document.getElementById('currentUser')?.textContent || '').trim().toLowerCase();
+                const url = new URL(targetUrl);
+                if (currentUserEmail && currentUserEmail.includes('@')) {
+                    url.searchParams.set('userEmail', currentUserEmail);
+                }
+                window.open(url.toString(), '_blank', 'noopener');
             } catch (error) {
                 console.error('Failed to open feature generator:', error);
             }

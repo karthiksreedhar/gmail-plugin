@@ -244,13 +244,33 @@ const GITHUB_PRODUCTION_BRANCH = String(process.env.GITHUB_PRODUCTION_BRANCH || 
 const FEATURE_GENERATOR_CREATED_BY = String(
   process.env.FEATURE_GENERATOR_CREATED_BY || process.env.CURRENT_USER_EMAIL || ''
 ).trim().toLowerCase();
+const FEATURE_CHAT_LOG_COLLECTION = String(
+  process.env.FEATURE_CHAT_LOG_COLLECTION || 'feature_generator_chat_logs'
+).trim();
 
 // Initialize MongoDB connection
 let mongoInitialized = false;
 let mongoInitError = null;
+let chatLogIndexesEnsured = false;
+
+async function ensureFeatureChatLogIndexes() {
+  if (chatLogIndexesEnsured) return;
+  const db = getDb();
+  const coll = db.collection(FEATURE_CHAT_LOG_COLLECTION);
+  await Promise.all([
+    coll.createIndex({ userEmail: 1, createdAt: -1 }).catch(() => {}),
+    coll.createIndex({ sessionId: 1, createdAt: -1 }).catch(() => {}),
+    coll.createIndex({ mode: 1, createdAt: -1 }).catch(() => {})
+  ]);
+  chatLogIndexesEnsured = true;
+}
+
 initMongo().then(() => {
   mongoInitialized = true;
   mongoInitError = null;
+  ensureFeatureChatLogIndexes().catch((e) => {
+    console.warn('Failed to ensure chat log indexes:', e?.message || e);
+  });
   console.log('MongoDB connected for Email Chat');
 }).catch(err => {
   mongoInitError = err;
@@ -265,6 +285,12 @@ async function ensureMongoReady() {
       .then(() => {
         mongoInitialized = true;
         mongoInitError = null;
+        return ensureFeatureChatLogIndexes().catch((e) => {
+          console.warn('Failed to ensure chat log indexes:', e?.message || e);
+          return true;
+        });
+      })
+      .then(() => {
         return true;
       })
       .catch((err) => {
@@ -277,6 +303,47 @@ async function ensureMongoReady() {
   }
   await mongoInitPromise;
   return true;
+}
+
+function normalizeEmail(raw) {
+  const email = String(raw || '').trim().toLowerCase();
+  return email || null;
+}
+
+function resolveActorEmail(candidate) {
+  return (
+    normalizeEmail(candidate) ||
+    normalizeEmail(FEATURE_GENERATOR_CREATED_BY) ||
+    'unknown@feature-generator.local'
+  );
+}
+
+function clampLogLimit(rawLimit, fallback = 50) {
+  const n = Number(rawLimit);
+  if (!Number.isFinite(n) || n <= 0) return fallback;
+  return Math.min(200, Math.floor(n));
+}
+
+function truncateForLog(text, maxChars = 120000) {
+  const str = String(text || '');
+  if (str.length <= maxChars) return str;
+  return `${str.slice(0, Math.max(0, maxChars - 14))}\n...[truncated]`;
+}
+
+async function persistChatLog(entry = {}) {
+  try {
+    await ensureMongoReady();
+    const db = getDb();
+    await db.collection(FEATURE_CHAT_LOG_COLLECTION).insertOne({
+      ...entry,
+      userEmail: resolveActorEmail(entry.userEmail),
+      createdAt: new Date()
+    });
+    return true;
+  } catch (error) {
+    console.warn('Failed to persist feature chat log:', error?.message || error);
+    return false;
+  }
 }
 
 // Middleware
@@ -307,6 +374,7 @@ function getSession(sessionId) {
       agent: new FeatureGeneratorAgent(),
       generatedFiles: null,
       featureId: null,
+      actorEmail: null,
       chatHistory: [],
       lastAccess: Date.now()
     });
@@ -609,6 +677,7 @@ app.post('/api/session/:sessionId/load-feature', async (req, res) => {
   try {
     const sessionId = String(req.params.sessionId || '').trim();
     const featureId = String(req.body?.featureId || '').trim();
+    const actorEmail = resolveActorEmail(req.body?.userEmail);
 
     if (!sessionId) {
       return res.status(400).json({ success: false, error: 'sessionId is required' });
@@ -629,12 +698,28 @@ app.post('/api/session/:sessionId/load-feature', async (req, res) => {
     const session = sessions.get(sessionId);
     session.lastAccess = Date.now();
     session.featureId = featureId;
+    session.actorEmail = actorEmail;
     session.generatedFiles = files;
     session.chatHistory.push({
       role: 'assistant',
       content: `Loaded existing feature ${featureId} for refinement.`,
       timestamp: Date.now(),
       loadedFeature: true
+    });
+
+    await persistChatLog({
+      userEmail: actorEmail,
+      mode: 'generate',
+      route: '/api/session/:sessionId/load-feature',
+      sessionId: session.id,
+      featureId,
+      requestMessage: `load-feature:${featureId}`,
+      responseMessage: `Loaded existing feature ${featureId} for refinement.`,
+      success: true,
+      metadata: {
+        loadedFeature: true,
+        filesCount: Object.keys(files || {}).length
+      }
     });
 
     return res.json({
@@ -656,7 +741,7 @@ app.post('/api/session/:sessionId/load-feature', async (req, res) => {
 
 // Main chat endpoint - handles both initial generation and refinements
 app.post('/api/chat', async (req, res) => {
-  const { sessionId, message } = req.body;
+  const { sessionId, message, userEmail } = req.body;
   
   if (!message || message.trim() === '') {
     return res.status(400).json({
@@ -667,6 +752,8 @@ app.post('/api/chat', async (req, res) => {
 
   try {
     const { session } = getSession(sessionId);
+    const actorEmail = resolveActorEmail(userEmail || session.actorEmail);
+    session.actorEmail = actorEmail;
     
     // Add user message to history
     session.chatHistory.push({
@@ -715,6 +802,21 @@ app.post('/api/chat', async (req, res) => {
       draftSave: draftSaveResult
     });
 
+    await persistChatLog({
+      userEmail: actorEmail,
+      mode: 'generate',
+      route: '/api/chat',
+      sessionId: session.id,
+      featureId: result.featureId || session.featureId || null,
+      isRefinement: !!isRefinement,
+      requestMessage: truncateForLog(message),
+      responseMessage: truncateForLog(result.response || ''),
+      updatedFiles: Array.isArray(result.updatedFiles) ? result.updatedFiles : [],
+      filesGenerated: Object.keys(result.files || {}),
+      draftSave: draftSaveResult || null,
+      success: true
+    });
+
     res.json({
       success: true,
       sessionId: session.id,
@@ -731,11 +833,29 @@ app.post('/api/chat', async (req, res) => {
     
     // Add error to chat history
     const { session } = getSession(sessionId);
+    const actorEmail = resolveActorEmail(userEmail || session.actorEmail);
+    session.actorEmail = actorEmail;
     session.chatHistory.push({
       role: 'assistant',
       content: `Error: ${error.message}`,
       timestamp: Date.now(),
       isError: true
+    });
+
+    await persistChatLog({
+      userEmail: actorEmail,
+      mode: 'generate',
+      route: '/api/chat',
+      sessionId: session.id,
+      featureId: session.featureId || null,
+      isRefinement: !!session.generatedFiles,
+      requestMessage: truncateForLog(message),
+      responseMessage: '',
+      updatedFiles: [],
+      filesGenerated: [],
+      draftSave: null,
+      success: false,
+      error: error.message || String(error)
     });
 
     res.status(500).json({
@@ -901,6 +1021,39 @@ app.get('/api/history/:sessionId', (req, res) => {
     chatHistory: session.chatHistory,
     featureId: session.featureId
   });
+});
+
+// Query persisted feature/email chat logs.
+// Optional query params: userEmail, sessionId, mode (generate|email-chat), limit
+app.get('/api/chat-logs', async (req, res) => {
+  try {
+    await ensureMongoReady();
+    const db = getDb();
+    const coll = db.collection(FEATURE_CHAT_LOG_COLLECTION);
+
+    const userEmail = normalizeEmail(req.query.userEmail);
+    const sessionId = String(req.query.sessionId || '').trim();
+    const mode = String(req.query.mode || '').trim();
+    const limit = clampLogLimit(req.query.limit, 50);
+
+    const query = {};
+    if (userEmail) query.userEmail = userEmail;
+    if (sessionId) query.sessionId = sessionId;
+    if (mode) query.mode = mode;
+
+    const logs = await coll.find(query).sort({ createdAt: -1 }).limit(limit).toArray();
+    return res.json({
+      success: true,
+      count: logs.length,
+      logs
+    });
+  } catch (error) {
+    console.error('Failed to fetch chat logs:', error);
+    return res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to fetch chat logs'
+    });
+  }
 });
 
 // Clear session (start fresh)
@@ -2356,10 +2509,20 @@ app.post('/api/email-chat', async (req, res) => {
   }
   
   const availableUsers = await getAvailableUsers();
+  const { session } = getSession(sessionId);
   // Validate userEmail if provided
   const normalizedRequested = String(userEmail || '').trim().toLowerCase();
   const selectedUser = normalizedRequested && availableUsers.includes(normalizedRequested) ? normalizedRequested : null;
   const usersToQuery = selectedUser ? [selectedUser] : availableUsers;
+  const actorEmail = resolveActorEmail(selectedUser || session.actorEmail || userEmail);
+  session.actorEmail = actorEmail;
+
+  session.chatHistory.push({
+    role: 'user',
+    content: message,
+    timestamp: Date.now(),
+    mode: 'email-chat'
+  });
   
   // Detect if this is an email list query
   const isEmailQuery = isEmailListQuery(message);
@@ -2382,12 +2545,37 @@ app.post('/api/email-chat', async (req, res) => {
       const assistantResponse = categoryCount
         ? `I analyzed emails currently in "Other" and prepared ${categoryCount} suggested categories. Review them in the preview panel and click Approve or Cancel.`
         : 'I checked emails currently in "Other", but I could not find enough candidates to suggest new categories right now.';
+      const operationsLog = logger.getLog();
+
+      session.chatHistory.push({
+        role: 'assistant',
+        content: assistantResponse,
+        timestamp: Date.now(),
+        mode: 'email-chat'
+      });
+
+      await persistChatLog({
+        userEmail: actorEmail,
+        mode: 'email-chat',
+        route: '/api/email-chat',
+        sessionId: session.id,
+        requestMessage: truncateForLog(message),
+        responseMessage: truncateForLog(assistantResponse),
+        success: true,
+        metadata: {
+          usersQueried: usersToQuery,
+          isEmailQuery: false,
+          categorySuggestionCount: categoryCount,
+          suggestedEmails: emailCount,
+          operationsLog
+        }
+      });
 
       return res.json({
         success: true,
         response: assistantResponse,
         availableUsers,
-        operationsLog: logger.getLog(),
+        operationsLog,
         categorySuggestions,
         isEmailQuery: false,
         summary: {
@@ -2411,6 +2599,31 @@ app.post('/api/email-chat', async (req, res) => {
         const assistantResponse = plan.summary
           ? plan.summary
           : `I identified ${modifications.length} database change${modifications.length !== 1 ? 's' : ''} that require your approval.`;
+
+        session.chatHistory.push({
+          role: 'assistant',
+          content: assistantResponse,
+          timestamp: Date.now(),
+          mode: 'email-chat'
+        });
+
+        await persistChatLog({
+          userEmail: actorEmail,
+          mode: 'email-chat',
+          route: '/api/email-chat',
+          sessionId: session.id,
+          requestMessage: truncateForLog(message),
+          responseMessage: truncateForLog(assistantResponse),
+          success: true,
+          metadata: {
+            usersQueried: usersToQuery,
+            isEmailQuery: false,
+            requiresConfirmation: true,
+            modificationsCount: modifications.length,
+            operationsLog
+          }
+        });
+
         return res.json({
           success: true,
           response: assistantResponse,
@@ -2509,6 +2722,32 @@ app.post('/api/email-chat', async (req, res) => {
     console.log(`📊 Operations Summary: ${operationsLog.mongoQueries.count} MongoDB queries (${operationsLog.mongoQueries.totalDuration}ms), ` +
                 `${operationsLog.apiCalls.count} API calls (${operationsLog.apiCalls.totalDuration}ms), ` +
                 `Total: ${operationsLog.totalDuration}ms`);
+
+    session.chatHistory.push({
+      role: 'assistant',
+      content: assistantResponse,
+      timestamp: Date.now(),
+      mode: 'email-chat'
+    });
+
+    await persistChatLog({
+      userEmail: actorEmail,
+      mode: 'email-chat',
+      route: '/api/email-chat',
+      sessionId: session.id,
+      requestMessage: truncateForLog(message),
+      responseMessage: truncateForLog(assistantResponse),
+      success: true,
+      metadata: {
+        usersQueried: usersToQuery,
+        isEmailQuery: !!isEmailQuery,
+        requiresConfirmation: !!hasModifications,
+        modificationsCount: modifications.length,
+        categorySuggestionsCount: categorySuggestions?.categories?.length || 0,
+        emailListCount: emailList?.count || 0,
+        operationsLog
+      }
+    });
     
     res.json({
       success: true,
@@ -2525,6 +2764,22 @@ app.post('/api/email-chat', async (req, res) => {
   } catch (error) {
     console.error('Email chat error:', error);
     logger.logError('email-chat endpoint', error);
+
+    await persistChatLog({
+      userEmail: actorEmail,
+      mode: 'email-chat',
+      route: '/api/email-chat',
+      sessionId: session.id,
+      requestMessage: truncateForLog(message),
+      responseMessage: '',
+      success: false,
+      error: error.message || String(error),
+      metadata: {
+        usersQueried: usersToQuery,
+        isEmailQuery: !!isEmailQuery,
+        operationsLog: logger.getLog()
+      }
+    });
     
     res.status(500).json({
       success: false,
