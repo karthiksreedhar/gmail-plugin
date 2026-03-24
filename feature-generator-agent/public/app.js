@@ -357,6 +357,49 @@ async function refreshExistingFeaturesList(force = false) {
   }
 }
 
+function isSessionNotFound(response, data) {
+  if (response && response.status === 404) return true;
+  const msg = String(data?.error || '').toLowerCase();
+  return msg.includes('session not found');
+}
+
+async function loadFeatureIntoSession(featureId) {
+  const actorUserEmail = getActorUserEmail() || undefined;
+  let lastError = null;
+
+  for (let attempt = 0; attempt < 2; attempt++) {
+    if (!sessionId) {
+      await createNewSession();
+    }
+    if (!sessionId) {
+      throw new Error('Failed to initialize session');
+    }
+
+    const response = await fetch(`/api/session/${encodeURIComponent(sessionId)}/load-feature`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ featureId, userEmail: actorUserEmail })
+    });
+
+    const data = await response.json().catch(() => ({}));
+    if (response.ok && data.success) return data;
+
+    const errMsg = data?.error || `Failed to load feature ${featureId}`;
+    lastError = new Error(errMsg);
+
+    // Recover from stale/expired session IDs by creating a fresh session and retrying once.
+    if (attempt === 0 && isSessionNotFound(response, data)) {
+      sessionId = null;
+      localStorage.removeItem('featureGeneratorSessionId');
+      await createNewSession();
+      continue;
+    }
+    break;
+  }
+
+  throw lastError || new Error(`Failed to load feature ${featureId}`);
+}
+
 async function handleLoadExistingFeature() {
   const featureId = String(existingFeatureDropdown?.value || '').trim();
   if (!featureId) {
@@ -379,16 +422,7 @@ async function handleLoadExistingFeature() {
   }
 
   try {
-    const response = await fetch(`/api/session/${encodeURIComponent(sessionId)}/load-feature`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ featureId, userEmail: getActorUserEmail() || undefined })
-    });
-
-    const data = await response.json().catch(() => ({}));
-    if (!response.ok || !data.success) {
-      throw new Error(data.error || 'Failed to load feature');
-    }
+    const data = await loadFeatureIntoSession(featureId);
 
     currentFeatureId = data.featureId;
     currentFiles = data.files || {};
@@ -426,23 +460,7 @@ async function autoLoadSelectedFeatureForGenerate() {
   const hasCurrentFiles = !!(currentFiles && Object.keys(currentFiles).length > 0);
   if (hasCurrentFiles && currentFeatureId === selectedFeatureId) return true;
 
-  if (!sessionId) {
-    await createNewSession();
-    if (!sessionId) {
-      throw new Error('Failed to initialize session');
-    }
-  }
-
-  const response = await fetch(`/api/session/${encodeURIComponent(sessionId)}/load-feature`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ featureId: selectedFeatureId, userEmail: getActorUserEmail() || undefined })
-  });
-
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok || !data.success) {
-    throw new Error(data.error || `Failed to load selected feature ${selectedFeatureId}`);
-  }
+  const data = await loadFeatureIntoSession(selectedFeatureId);
 
   currentFeatureId = data.featureId;
   currentFiles = data.files || {};
