@@ -6,8 +6,16 @@
     <title>Gmail Plugin - Response Email Tracker</title>
     <style>
         :root {
-            --app-header-height: 58px;
-            --app-banner-height: 38px;
+            --app-header-height: 64px;
+            --app-banner-height: 34px;
+            --gmail-bg: #f6f8fc;
+            --gmail-surface: #ffffff;
+            --gmail-sidebar: #eef3fb;
+            --gmail-line: #dadce0;
+            --gmail-text: #202124;
+            --gmail-muted: #5f6368;
+            --gmail-blue: #1a73e8;
+            --gmail-blue-soft: #d3e3fd;
         }
 
         * {
@@ -18,8 +26,8 @@
 
         body {
             font-family: 'Google Sans', 'Roboto', Arial, sans-serif;
-            background-color: #ffffff;
-            color: #202124;
+            background-color: var(--gmail-bg);
+            color: var(--gmail-text);
             margin: 0;
             padding: 0;
             height: 100vh;
@@ -46,15 +54,15 @@
         }
 
         .header {
-            background: #d2b48c;
-            border-bottom: 1px solid #e0e0e0;
-            padding: 8px 14px;
+            background: var(--gmail-bg);
+            border-bottom: 1px solid var(--gmail-line);
+            padding: 10px 16px;
             min-height: var(--app-header-height);
             display: flex;
             justify-content: space-between;
             align-items: center;
             gap: 8px;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            box-shadow: none;
             position: fixed;
             top: 0;
             left: 0;
@@ -67,9 +75,9 @@
         }
 
         .header h1 {
-            font-size: 2.2em;
+            font-size: 1.4em;
             font-weight: 500;
-            color: #000000;
+            color: var(--gmail-text);
             margin: 0;
             text-align: center;
             flex: 1;
@@ -105,13 +113,16 @@
         }
 
         .header-compact-btn {
-            padding: 7px 12px;
-            font-size: 0.78em;
+            padding: 8px 12px;
+            font-size: 0.8em;
             line-height: 1.05;
             white-space: nowrap;
             flex: 0 1 auto;
-            border-radius: 6px;
+            border-radius: 18px;
             font-weight: 500;
+            border: 1px solid var(--gmail-line);
+            background: #fff;
+            color: #1f1f1f;
         }
 
         #feature-header-actions {
@@ -124,8 +135,13 @@
         }
 
         #currentUser {
-            font-size: 0.92em;
+            font-size: 0.9em;
             white-space: nowrap;
+            padding: 8px 12px;
+            border-radius: 18px;
+            background: #fff;
+            border: 1px solid var(--gmail-line);
+            color: var(--gmail-muted);
         }
 
         .save-scenario-btn {
@@ -168,10 +184,10 @@
         }
 
         .sidebar {
-            width: 480px;
-            background: #f5f0e8;
-            border-right: 1px solid #e0e0e0;
-            padding: 8px 0;
+            width: 300px;
+            background: var(--gmail-sidebar);
+            border-right: 1px solid var(--gmail-line);
+            padding: 12px 0;
             overflow-y: auto;
             max-height: 100vh;
         }
@@ -187,12 +203,12 @@
         }
 
         .sidebar-section h3 {
-            font-size: 26px;
+            font-size: 13px;
             font-weight: 500;
-            color: #5f6368;
-            margin: 16px 0 8px 0;
+            color: var(--gmail-muted);
+            margin: 14px 0 6px 0;
             text-transform: uppercase;
-            letter-spacing: 0.25px;
+            letter-spacing: 0.5px;
             white-space: nowrap;
         }
 
@@ -203,7 +219,7 @@
         .category-item {
             display: flex;
             align-items: center;
-            padding: 8px 12px;
+            padding: 10px 14px;
             border-radius: 0 20px 20px 0;
             cursor: pointer;
             transition: background-color 0.2s;
@@ -211,39 +227,43 @@
         }
 
         .category-item:hover {
-            background-color: #f1f3f4;
+            background-color: #e8f0fe;
         }
 
         .category-item.active {
-            background-color: #fce8e6;
-            color: #d93025;
+            background-color: var(--gmail-blue-soft);
+            color: #0b57d0;
             font-weight: 500;
         }
 
         .category-icon {
-            margin-right: 14px;
-            font-size: 22px;
+            margin-right: 10px;
+            font-size: 14px;
         }
 
         .category-name {
             flex: 1;
-            font-size: 22px;
+            font-size: 16px;
             white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
         }
 
         .category-count {
-            font-size: 16px;
-            color: #5f6368;
-            background: #f1f3f4;
-            padding: 4px 10px;
+            font-size: 12px;
+            color: var(--gmail-muted);
+            background: #fff;
+            padding: 3px 9px;
             border-radius: 12px;
             min-width: 28px;
             text-align: center;
+            border: 1px solid var(--gmail-line);
         }
 
         .category-item.active .category-count {
-            background: #d93025;
-            color: white;
+            background: #fff;
+            color: #0b57d0;
+            border-color: #aecbfa;
         }
 
         .people-refresh-btn {
@@ -412,15 +432,17 @@
             display: flex;
             flex-direction: column;
             overflow: hidden;
+            background: var(--gmail-surface);
         }
 
         .stats-bar {
-            background: #ffffff;
-            border-bottom: 1px solid #e0e0e0;
-            padding: 20px 24px;
+            background: #fff;
+            border-bottom: 1px solid var(--gmail-line);
+            padding: 12px 20px;
             display: flex;
             align-items: center;
             justify-content: space-between;
+            gap: 12px;
         }
 
         /* Search bar */
@@ -432,31 +454,33 @@
         .search-input {
             width: 420px;
             max-width: 560px;
-            padding: 12px 16px;
-            border: 1px solid #ddd;
-            border-radius: 8px;
-            font-size: 16px;
+            padding: 10px 16px;
+            border: 1px solid #dde3ea;
+            border-radius: 20px;
+            font-size: 14px;
+            background: #f1f3f4;
         }
         .search-input:focus {
             outline: none;
-            border-color: #4285f4;
-            box-shadow: 0 0 0 2px rgba(66,133,244,0.15);
+            border-color: #aecbfa;
+            background: #fff;
+            box-shadow: 0 1px 2px rgba(60,64,67,.3), 0 1px 3px rgba(60,64,67,.15);
         }
         /* Make the search/clear buttons larger without affecting other .select-email-btn */
         #searchBtn,
         #clearSearchBtn {
-            padding: 10px 16px;
-            font-size: 16px;
-            border-radius: 8px;
+            padding: 8px 14px;
+            font-size: 13px;
+            border-radius: 18px;
         }
 
         .stats-info {
-            font-size: 22px;
-            color: #5f6368;
+            font-size: 18px;
+            color: var(--gmail-muted);
         }
         #currentFilter {
             font-weight: 600;
-            color: #202124;
+            color: var(--gmail-text);
         }
 
         .stats-count {
@@ -465,13 +489,13 @@
 
         .email-list {
             flex: 1;
-            background: #ffffff;
+            background: #fff;
             overflow-y: auto;
         }
 
         .email-item {
-            border-bottom: 1px solid #e0e0e0;
-            padding: 24px 28px;
+            border-bottom: 1px solid #edf0f2;
+            padding: 14px 18px;
             cursor: pointer;
             transition: background-color 0.1s;
             display: flex;
@@ -479,7 +503,7 @@
         }
 
         .email-item:hover {
-            background-color: #f1f3f4;
+            background-color: #f6f9fe;
         }
 
         .email-item:last-child {
@@ -498,9 +522,9 @@
         }
 
         .email-from {
-            font-size: 22px;
-            font-weight: 400;
-            color: #202124;
+            font-size: 15px;
+            font-weight: 600;
+            color: var(--gmail-text);
             margin-right: 8px;
             white-space: nowrap;
             overflow: visible;
@@ -509,27 +533,27 @@
         }
 
         .email-date {
-            font-size: 20px;
-            color: #5f6368;
+            font-size: 12px;
+            color: var(--gmail-muted);
             margin-left: auto;
             white-space: nowrap;
         }
 
         .email-subject {
-            font-size: 22px;
-            color: #202124;
+            font-size: 14px;
+            color: var(--gmail-text);
             margin-bottom: 6px;
             white-space: nowrap;
             overflow: hidden;
             text-overflow: ellipsis;
-            font-weight: 400;
+            font-weight: 500;
         }
 
         .email-category {
             display: inline-block;
-            padding: 6px 14px;
+            padding: 4px 10px;
             border-radius: 14px;
-            font-size: 16px;
+            font-size: 11px;
             font-weight: 500;
             text-transform: uppercase;
             margin-top: 8px;
@@ -581,63 +605,65 @@
         }
 
         .refresh-btn {
-            background: #667eea;
-            color: white;
-            border: none;
-            padding: 12px 24px;
-            border-radius: 6px;
+            background: #fff;
+            color: #1f1f1f;
+            border: 1px solid var(--gmail-line);
+            padding: 8px 14px;
+            border-radius: 18px;
             cursor: pointer;
-            font-size: 1em;
+            font-size: 0.9em;
             transition: background-color 0.3s ease;
         }
 
         .refresh-btn:hover {
-            background: #5a67d8;
+            background: #f1f3f4;
         }
 
         .generate-btn {
-            background: #667eea;
+            background: var(--gmail-blue);
             color: white;
             border: none;
-            padding: 12px 24px;
-            border-radius: 6px;
+            padding: 8px 14px;
+            border-radius: 18px;
             cursor: pointer;
-            font-size: 1em;
+            font-size: 0.9em;
             transition: background-color 0.3s ease;
         }
 
         .generate-btn:hover {
-            background: #5a67d8;
+            background: #0b57d0;
         }
 
         .view-refinements-btn {
-            background: #667eea;
+            background: #fff;
             color: white;
-            border: none;
-            padding: 12px 24px;
-            border-radius: 6px;
+            color: #1f1f1f;
+            border: 1px solid var(--gmail-line);
+            padding: 8px 14px;
+            border-radius: 18px;
             cursor: pointer;
-            font-size: 1em;
+            font-size: 0.9em;
             transition: background-color 0.3s ease;
         }
 
         .view-refinements-btn:hover {
-            background: #5a67d8;
+            background: #f1f3f4;
         }
 
         .view-saved-generations-btn {
-            background: #667eea;
+            background: #fff;
             color: white;
-            border: none;
-            padding: 12px 24px;
-            border-radius: 6px;
+            color: #1f1f1f;
+            border: 1px solid var(--gmail-line);
+            padding: 8px 14px;
+            border-radius: 18px;
             cursor: pointer;
-            font-size: 1em;
+            font-size: 0.9em;
             transition: background-color 0.3s ease;
         }
 
         .view-saved-generations-btn:hover {
-            background: #5a67d8;
+            background: #f1f3f4;
         }
 
         @media (max-width: 1600px) {
@@ -669,9 +695,9 @@
         }
 
         .email-item:hover {
-            background-color: #f8f9ff;
-            transform: translateY(-1px);
-            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+            background-color: #f6f9fe;
+            transform: none;
+            box-shadow: none;
         }
 
         .email-actions {
@@ -707,12 +733,12 @@
         .open-gmail-btn {
             display: inline-block;
             margin-left: 10px;
-            padding: 8px 14px;
+            padding: 6px 11px;
             border-radius: 18px;
             border: 1px solid #dadce0;
-            background: #f1f3f4;
-            color: #1a73e8;
-            font-size: 14px;
+            background: #fff;
+            color: #0b57d0;
+            font-size: 12px;
             line-height: 1.2;
             text-decoration: none;
             cursor: pointer;
@@ -902,7 +928,7 @@
         }
 
         .modal-header {
-            background: linear-gradient(135deg, #d2b48c 0%, #c19a6b 100%);
+            background: #1a73e8;
             color: white;
             padding: 20px;
             border-radius: 10px 10px 0 0;
@@ -944,7 +970,7 @@
         }
 
         .thread-message.response {
-            border-left: 4px solid #d2b48c;
+            border-left: 4px solid #1a73e8;
         }
 
         .thread-message.original {
@@ -952,9 +978,9 @@
         }
 
         .message-header {
-            background: #f5f3f0;
+            background: #f8f9fa;
             padding: 15px;
-            border-bottom: 1px solid #d2b48c;
+            border-bottom: 1px solid #e0e0e0;
         }
 
         .message-from {
@@ -982,7 +1008,7 @@
 
         .response-badge {
             display: inline-block;
-            background: #d2b48c;
+            background: #1a73e8;
             color: white;
             padding: 2px 8px;
             border-radius: 12px;
@@ -1019,13 +1045,13 @@
         }
 
         .select-email-btn {
-            background: #4285f4;
+            background: #1a73e8;
             color: white;
             border: none;
-            padding: 8px 16px;
-            border-radius: 6px;
+            padding: 8px 14px;
+            border-radius: 18px;
             cursor: pointer;
-            font-size: 0.9em;
+            font-size: 0.85em;
             margin-right: 10px;
         }
 
@@ -2769,7 +2795,7 @@
             border-bottom: 1px solid #e0e0e0;
         }
         .thread-message-card.response {
-            border-left: 4px solid #d2b48c;
+            border-left: 4px solid #1a73e8;
         }
         .thread-message-card.original {
             border-left: 4px solid #9aa0a6;
@@ -2805,14 +2831,14 @@
             left: 0;
             right: 0;
             z-index: 95;
-            background: #e8f0fe;
-            color: #1a3f8b;
-            border-bottom: 1px solid #c7d7ff;
+            background: #eaf1ff;
+            color: #174ea6;
+            border-bottom: 1px solid #d3e3fd;
             min-height: var(--app-banner-height);
             padding: 0 16px;
             text-align: center;
-            font-size: 14px;
-            font-weight: 700;
+            font-size: 13px;
+            font-weight: 600;
             display: flex;
             align-items: center;
             justify-content: center;
@@ -2820,7 +2846,7 @@
     </style>
 </head>
 <body>
-    <div id="loginScreen" style="display:none; height:100vh; width:100vw; flex-direction:column; align-items:center; justify-content:center; background-color:#f5f0e8;">
+    <div id="loginScreen" style="display:none; height:100vh; width:100vw; flex-direction:column; align-items:center; justify-content:center; background-color:#f6f8fc;">
         <div style="background:white; padding:48px; border-radius:12px; box-shadow:0 8px 32px rgba(0,0,0,0.1); text-align:center;">
             <h1 style="margin-bottom:24px; color:#202124;">Email Assistant</h1>
             <p style="margin-bottom:32px; color:#5f6368; font-size:18px;">Sign in with your Gmail account to manage your emails.</p>
@@ -2853,7 +2879,7 @@
                 <button class="view-refinements-btn header-compact-btn" style="background-color: #d93025;" onclick="window.location.href='/api/auth/logout'">Logout</button>
             </div>
         </div>
-        <div id="autoSyncBanner" class="auto-sync-banner" style="display:flex; background:#e8f0fe; color:#1a3f8b; border-bottom:1px solid #c7d7ff;">
+        <div id="autoSyncBanner" class="auto-sync-banner" style="display:flex;">
             Next Update in...
         </div>
 
