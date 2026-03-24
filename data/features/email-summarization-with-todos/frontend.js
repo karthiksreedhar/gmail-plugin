@@ -15,8 +15,9 @@
 
   // Function to summarize email and extract todos
   async function summarizeEmail(email) {
+    let loadingModal = null;
     try {
-      API.showModal('<div style="text-align: center;">Summarizing email...<br><img src="https://upload.wikimedia.org/wikipedia/commons/b/b1/Loading_icon.gif" width="50"></div>', 'Summarizing...');
+      loadingModal = API.showModal('<div style="text-align: center;">Summarizing email...<br><img src="https://upload.wikimedia.org/wikipedia/commons/b/b1/Loading_icon.gif" width="50"></div>', 'Summarizing...');
 
       const response = await API.apiCall('/api/email-summarization-with-todos/summarize', {
         method: 'POST',
@@ -29,6 +30,11 @@
       });
 
       if (response.success) {
+        if (loadingModal && typeof loadingModal.remove === 'function') {
+          loadingModal.remove();
+          loadingModal = null;
+        }
+
         const summary = response.data.summary;
         const todos = response.data.todos;
 
@@ -53,9 +59,17 @@
 
         API.showModal(modalContent, 'Email Summary and To-Dos');
       } else {
+        if (loadingModal && typeof loadingModal.remove === 'function') {
+          loadingModal.remove();
+          loadingModal = null;
+        }
         API.showError('Failed to summarize email: ' + response.error);
       }
     } catch (error) {
+      if (loadingModal && typeof loadingModal.remove === 'function') {
+        loadingModal.remove();
+        loadingModal = null;
+      }
       console.error('Email Summarization with To-Do Extraction: Error summarizing email:', error);
       API.showError('Failed to summarize email.');
     }
