@@ -1,0 +1,13 @@
+{
+  "id": "ft-digest-briefing",
+  "name": "FT Digest Briefing",
+  "version": "1.0.0",
+  "description": "Summarizes recent FT digest emails and lists article links in a dedicated page.",
+  "author": "Feature Generator Agent",
+  "backend": "backend.js",
+  "frontend": "frontend.js",
+  "permissions": [
+    "emails:read",
+    "api:custom"
+  ]
+}
