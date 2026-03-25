@@ -743,12 +743,14 @@ window.__categoryChats = window.__categoryChats || {};
                 return arr;
             }))).filter(Boolean);
 
-            // Only render categories with at least 1 email
-            const listToRender = (ordered.length ? ordered : fallbackNames).filter(name => {
-                const count = categoryCounts[name] || 0;
-                const isOther = String(name || '').trim().toLowerCase() === 'other';
-                return count > 0 || isOther;
-            });
+            // Render all authoritative categories (including zero-count user-created categories).
+            const listToRender = ordered.length
+                ? ordered
+                : (fallbackNames.filter(name => {
+                    const count = categoryCounts[name] || 0;
+                    const isOther = String(name || '').trim().toLowerCase() === 'other';
+                    return count > 0 || isOther;
+                }));
 
             // If there are zero emails total, leave LHS empty (only "View All" remains)
             listToRender.forEach(category => {
@@ -769,11 +771,169 @@ window.__categoryChats = window.__categoryChats || {};
                 `;
 
                 categoryDiv.setAttribute('data-category', category);
+                const isOther = String(category || '').trim().toLowerCase() === 'other';
+                if (!isOther) {
+                    const deleteBtn = document.createElement('button');
+                    deleteBtn.type = 'button';
+                    deleteBtn.className = 'sidebar-category-delete';
+                    deleteBtn.title = `Delete "${category}"`;
+                    deleteBtn.textContent = '🗑️';
+                    deleteBtn.addEventListener('click', (ev) => handleSidebarCategoryDelete(ev, category, count));
+                    categoryDiv.appendChild(deleteBtn);
+                }
                 categoryList.appendChild(categoryDiv);
             });
 
             // Populate people section
             populatePeople(emails);
+        }
+
+        function startNewCategoryInlineInput() {
+            try {
+                const categoryList = document.getElementById('categoryList');
+                if (!categoryList) return;
+
+                const existing = categoryList.querySelector('.category-item-add-input .new-category-input');
+                if (existing) {
+                    existing.focus();
+                    existing.select();
+                    return;
+                }
+
+                const row = document.createElement('div');
+                row.className = 'category-item category-item-add-input';
+                row.innerHTML = `
+                    <span class="category-icon">➕</span>
+                    <input type="text" class="new-category-input" placeholder="New category name" maxlength="80" />
+                `;
+                categoryList.appendChild(row);
+
+                const input = row.querySelector('.new-category-input');
+                if (!input) return;
+                input.focus();
+
+                let saving = false;
+                const cancel = () => {
+                    if (!saving) {
+                        row.remove();
+                    }
+                };
+
+                const submit = async () => {
+                    if (saving) return;
+                    const name = String(input.value || '').trim();
+                    if (!name) {
+                        row.remove();
+                        return;
+                    }
+                    const exists = (Array.isArray(currentCategoriesOrder) ? currentCategoriesOrder : [])
+                        .some(c => String(c || '').trim().toLowerCase() === name.toLowerCase());
+                    if (exists) {
+                        showErrorPopup(`Category "${name}" already exists.`, 'Duplicate Category');
+                        input.focus();
+                        input.select();
+                        return;
+                    }
+
+                    saving = true;
+                    try {
+                        const resp = await fetch('/api/categories/add', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ name })
+                        });
+                        const data = await resp.json().catch(() => ({}));
+                        if (!resp.ok || !data.success) {
+                            throw new Error(data.error || 'Failed to add category');
+                        }
+                        currentCategoriesOrder = Array.isArray(data.categories) ? data.categories : currentCategoriesOrder;
+                        populateCategories(allEmails || []);
+                        showSuccessPopup(`Added category "${name}".`, 'Category Added');
+                    } catch (e) {
+                        console.error('Failed to add category from sidebar:', e);
+                        showErrorPopup('Failed to add category. Please try again.', 'Add Category Failed');
+                    } finally {
+                        saving = false;
+                        row.remove();
+                    }
+                };
+
+                input.addEventListener('keydown', (ev) => {
+                    if (ev.key === 'Enter') {
+                        ev.preventDefault();
+                        submit();
+                    } else if (ev.key === 'Escape') {
+                        ev.preventDefault();
+                        cancel();
+                    }
+                });
+                input.addEventListener('blur', () => {
+                    setTimeout(() => {
+                        cancel();
+                    }, 120);
+                });
+            } catch (e) {
+                console.error('startNewCategoryInlineInput failed:', e);
+                showErrorPopup('Failed to start adding a category.', 'Add Category Failed');
+            }
+        }
+
+        async function deleteCategoryFromSidebar(name) {
+            const resp = await fetch(`/api/categories/${encodeURIComponent(name)}`, { method: 'DELETE' });
+            const data = await resp.json().catch(() => ({}));
+            if (!resp.ok || !data.success) {
+                throw new Error(data.error || 'Failed to delete category');
+            }
+            return data;
+        }
+
+        function handleSidebarCategoryDelete(ev, name, count) {
+            if (ev && typeof ev.stopPropagation === 'function') ev.stopPropagation();
+            const rawName = String(name || '').trim();
+            if (!rawName) return;
+
+            const runDelete = async () => {
+                try {
+                    const data = await deleteCategoryFromSidebar(rawName);
+                    const movedR = (data.moved && typeof data.moved.responses === 'number') ? data.moved.responses : 0;
+                    const movedU = (data.moved && typeof data.moved.unreplied === 'number') ? data.moved.unreplied : 0;
+                    if ((movedR + movedU) > 0) {
+                        showSuccessPopup(`Deleted "${rawName}". Moved ${movedR + movedU} email(s) to "Other".`, 'Category Deleted');
+                    } else {
+                        showSuccessPopup(`Deleted "${rawName}".`, 'Category Deleted');
+                    }
+                    try { await loadCurrentCategories(); } catch (_) {}
+                    try { await loadEmails(); } catch (_) {}
+                } catch (e) {
+                    console.error('handleSidebarCategoryDelete failed:', e);
+                    showErrorPopup('Failed to delete category. Please try again.', 'Delete Failed');
+                }
+            };
+
+            (async () => {
+                let numericCount = Number(count) || 0;
+                try {
+                    const resp = await fetch('/api/categories/all-with-counts');
+                    const data = await resp.json().catch(() => ({}));
+                    if (resp.ok && data && Array.isArray(data.categories)) {
+                        const found = data.categories.find(c => String(c?.name || '').trim().toLowerCase() === rawName.toLowerCase());
+                        if (found && Number.isFinite(found.count)) {
+                            numericCount = Number(found.count) || 0;
+                        }
+                    }
+                } catch (_) {}
+
+                if (numericCount > 0) {
+                    showConfirmPopup(
+                        `Delete category "${rawName}"? Emails in this category will be moved to "Other".`,
+                        runDelete,
+                        () => {},
+                        'Delete Category'
+                    );
+                    return;
+                }
+                runDelete();
+            })();
         }
 
         function populatePeople(emails) {

@@ -212,6 +212,39 @@
             white-space: nowrap;
         }
 
+        .sidebar-title-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            margin: 0 0 6px 0;
+        }
+
+        .sidebar-title-row h3 {
+            margin: 14px 0 6px 0;
+        }
+
+        .category-add-btn {
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            border: 1px solid var(--gmail-line);
+            background: #fff;
+            color: #1f1f1f;
+            cursor: pointer;
+            font-size: 17px;
+            line-height: 1;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            margin-top: 8px;
+        }
+
+        .category-add-btn:hover {
+            background: #e8f0fe;
+            border-color: #aecbfa;
+        }
+
         .category-list {
             margin: 0;
         }
@@ -264,6 +297,48 @@
             background: #fff;
             color: #0b57d0;
             border-color: #aecbfa;
+        }
+
+        .sidebar-category-delete {
+            margin-left: 8px;
+            border: none;
+            background: transparent;
+            color: #5f6368;
+            font-size: 13px;
+            cursor: pointer;
+            opacity: 0;
+            transition: opacity 0.15s ease;
+            padding: 2px 4px;
+            border-radius: 6px;
+        }
+
+        #categoryList .category-item:hover .sidebar-category-delete {
+            opacity: 1;
+        }
+
+        .sidebar-category-delete:hover {
+            background: #fce8e6;
+            color: #b3261e;
+        }
+
+        .category-item-add-input {
+            background: #fff;
+            border: 1px dashed #aecbfa;
+        }
+
+        .new-category-input {
+            flex: 1;
+            border: 1px solid #d2d8e1;
+            border-radius: 12px;
+            padding: 6px 10px;
+            font-size: 14px;
+            outline: none;
+            min-width: 0;
+        }
+
+        .new-category-input:focus {
+            border-color: #1a73e8;
+            box-shadow: 0 0 0 2px rgba(26, 115, 232, 0.15);
         }
 
         .people-refresh-btn {
@@ -2888,7 +2963,10 @@
             <!-- Left Sidebar -->
             <div class="sidebar">
                 <div class="sidebar-section">
-                    <h3>User Specified Categories</h3>
+                    <div class="sidebar-title-row">
+                        <h3>User Specified Categories</h3>
+                        <button id="addCategoryBtn" class="category-add-btn" type="button" onclick="startNewCategoryInlineInput()" title="Add category">+</button>
+                    </div>
                                         <div class="category-list">
                         <div class="category-item active" onclick="filterByCategory('all')" id="viewAll">
                             <span class="category-icon">📧</span>
