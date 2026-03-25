@@ -43,18 +43,32 @@
     const existing = emailItem.querySelector('.todos-inline-line');
     if (existing) existing.remove();
 
-    const anchor = emailItem.querySelector('.email-meta-row');
+    const anchor = emailItem.querySelector('.email-categories') || emailItem.querySelector('.email-meta-row');
     if (!anchor) return;
 
     const line = document.createElement('span');
     line.className = 'todos-inline-line';
-    line.style.cssText = 'margin-left:10px;font-size:12px;line-height:1.3;color:#5f6368;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:58%;display:inline-block;vertical-align:middle;';
+    line.style.cssText = [
+      'margin-left:6px',
+      'font-size:12px',
+      'line-height:1.3',
+      'color:#5f6368',
+      'display:inline-flex',
+      'align-items:center',
+      'gap:4px',
+      'max-width:70%',
+      'white-space:nowrap',
+      'overflow:hidden',
+      'text-overflow:ellipsis',
+      'vertical-align:middle',
+      'flex:0 1 auto'
+    ].join(';');
     if (todos === null) {
       line.innerHTML = '<strong style="color:#3c4043;">TODOs:</strong> Loading...';
     } else {
       const list = Array.isArray(todos) ? todos.filter(Boolean) : [];
       if (list.length) {
-        line.innerHTML = `<strong style="color:#3c4043;">TODOs:</strong> ${escapeHtml(list.join(' | '))}`;
+        line.innerHTML = `<strong style="color:#3c4043;">TODOs:</strong> ${escapeHtml(list.join(' • '))}`;
       } else {
         line.innerHTML = '<strong style="color:#3c4043;">TODOs:</strong> None';
       }

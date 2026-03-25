@@ -8,6 +8,7 @@ module.exports = {
     const { app, getUserDoc, setUserDoc, invokeGemini, getGeminiModel, getCurrentUser, normalizeUserEmailForData } = context;
     const CACHE_COLLECTION = 'feature_todos_cache';
     const CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000; // 24h
+    const TODO_SCHEMA_VERSION = 'v2_short_action_items';
 
     function safeStr(value) {
       return String(value || '').trim();
@@ -16,7 +17,29 @@ module.exports = {
     function signatureForEmail(email) {
       const subject = safeStr(email?.subject);
       const body = safeStr(email?.body || email?.originalBody || email?.snippet);
-      return `${subject}::${body.slice(0, 2000)}`;
+      return `${TODO_SCHEMA_VERSION}::${subject}::${body.slice(0, 2000)}`;
+    }
+
+    function normalizeTodoItem(raw) {
+      let text = safeStr(raw);
+      if (!text) return '';
+
+      text = text
+        .replace(/^[-*•\d.)\s]+/, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+
+      const lower = text.toLowerCase();
+      if (!text || lower === 'no apparent todos' || lower === 'none') return '';
+      if (/(summary|recap|newsletter|digest)/i.test(text) && !/(reply|submit|send|pay|schedule|confirm|book|review|complete|apply)/i.test(text)) {
+        return '';
+      }
+
+      const words = text.split(/\s+/);
+      if (words.length > 9) {
+        text = words.slice(0, 9).join(' ');
+      }
+      return text;
     }
 
     function parseSummarizerStyleTodos(raw) {
@@ -32,10 +55,9 @@ module.exports = {
         const parsed = JSON.parse(jsonText);
         const todosRaw = Array.isArray(parsed?.todos) ? parsed.todos : [];
         const cleaned = todosRaw
-          .map(item => safeStr(item))
+          .map(normalizeTodoItem)
           .filter(Boolean)
-          .filter(item => item.toLowerCase() !== 'no apparent todos')
-          .slice(0, 5);
+          .slice(0, 4);
         return cleaned;
       } catch (_) {
         return [];
@@ -109,7 +131,9 @@ Required JSON shape:
 
 Rules:
 - "summary" must be at most one sentence.
-- "todos" must be an array of actionable items.
+- "todos" must be an array of concrete action items only.
+- Each todo must be short, imperative, and <= 9 words.
+- Avoid explanations/context; only action phrase.
 - If there are no apparent TODOs, set todos to ["No apparent TODOs"] exactly.
 - Do not include markdown or any text outside JSON.
 
