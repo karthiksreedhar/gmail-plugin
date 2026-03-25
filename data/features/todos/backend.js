@@ -31,6 +31,14 @@ module.exports = {
 
       const lower = text.toLowerCase();
       if (!text || lower === 'no apparent todos' || lower === 'none') return '';
+      if (
+        /\b(all|every)\b/.test(lower) &&
+        /\b(events?|articles?|newsletters?|items?)\b/.test(lower)
+      ) return '';
+      if (
+        /\b(read|attend|review)\b/.test(lower) &&
+        /\b(all|everything)\b/.test(lower)
+      ) return '';
       if (/(summary|recap|newsletter|digest)/i.test(text) && !/(reply|submit|send|pay|schedule|confirm|book|review|complete|apply)/i.test(text)) {
         return '';
       }
@@ -133,6 +141,10 @@ Rules:
 - "summary" must be at most one sentence.
 - "todos" must be an array of concrete action items only.
 - Each todo must be short, imperative, and <= 9 words.
+- Only include actions with a clear next step from the email.
+- Exclude broad/high-level goals (e.g., "attend all events", "read all articles").
+- Prefer specific actions like RSVP, reply, submit, schedule, pay, confirm, upload.
+- If email is informational/newsletter without a required action, return ["No apparent TODOs"].
 - Avoid explanations/context; only action phrase.
 - If there are no apparent TODOs, set todos to ["No apparent TODOs"] exactly.
 - Do not include markdown or any text outside JSON.
