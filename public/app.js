@@ -226,13 +226,35 @@
             return data.features || [];
         }
 
+        const FEATURE_DEMO_AUTHOR = 'ks4190@columbia.edu';
+        let featureRegistryOwnerFilter = 'demos'; // 'demos' | 'user_created'
+
+        function applyFeatureOwnerFilter(features) {
+            const list = Array.isArray(features) ? features : [];
+            if (featureRegistryOwnerFilter === 'demos') {
+                return list.filter(feature => String(feature?.createdBy || '').trim().toLowerCase() === FEATURE_DEMO_AUTHOR);
+            }
+            return list.filter(feature => String(feature?.createdBy || '').trim().toLowerCase() !== FEATURE_DEMO_AUTHOR);
+        }
+
         function renderFeatureRegistry(root, features) {
+            const filteredFeatures = applyFeatureOwnerFilter(features);
             const sections = { available: [], awaiting: [], deploying: [], hidden: [], other: [] };
-            (features || []).forEach(feature => {
+            filteredFeatures.forEach(feature => {
                 sections[classifyFeatureSection(feature)].push(feature);
             });
 
-            const html = Object.entries(sections)
+            const controlsHtml = `
+                <div style="display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:16px; padding:12px; border:1px solid #e0e0e0; border-radius:10px; background:#fff;">
+                    <div style="font-size:13px; color:#5f6368;">Filter by feature owner</div>
+                    <div style="display:flex; gap:8px;">
+                        <button type="button" data-feature-owner-filter="demos" style="border:1px solid ${featureRegistryOwnerFilter === 'demos' ? '#1a73e8' : '#dadce0'}; background:${featureRegistryOwnerFilter === 'demos' ? '#e8f0fe' : '#fff'}; color:${featureRegistryOwnerFilter === 'demos' ? '#1a73e8' : '#202124'}; border-radius:16px; padding:6px 12px; font-size:13px; cursor:pointer; font-weight:600;">Demos</button>
+                        <button type="button" data-feature-owner-filter="user_created" style="border:1px solid ${featureRegistryOwnerFilter === 'user_created' ? '#1a73e8' : '#dadce0'}; background:${featureRegistryOwnerFilter === 'user_created' ? '#e8f0fe' : '#fff'}; color:${featureRegistryOwnerFilter === 'user_created' ? '#1a73e8' : '#202124'}; border-radius:16px; padding:6px 12px; font-size:13px; cursor:pointer; font-weight:600;">User Created</button>
+                    </div>
+                </div>
+            `;
+
+            const listHtml = Object.entries(sections)
                 .filter(([, items]) => items.length > 0)
                 .map(([section, items]) => `
                     <div style="margin-bottom:20px;">
@@ -286,7 +308,7 @@
                     </div>
                 `).join('');
 
-            root.innerHTML = html || '<div style="color:#5f6368;">No features found yet.</div>';
+            root.innerHTML = controlsHtml + (listHtml || '<div style="color:#5f6368;">No features found for this owner filter yet.</div>');
         }
 
         async function refreshFeatureRegistryModal(root) {
@@ -371,6 +393,20 @@
                     showErrorPopup(error.message || 'Failed to update feature preference.', 'Update Failed');
                 } finally {
                     target.disabled = false;
+                }
+            });
+
+            overlay.addEventListener('click', async (event) => {
+                const target = event.target;
+                if (!(target instanceof HTMLElement)) return;
+                const filter = target.getAttribute('data-feature-owner-filter');
+                if (!filter) return;
+                if (filter !== 'demos' && filter !== 'user_created') return;
+                featureRegistryOwnerFilter = filter;
+                try {
+                    await refreshFeatureRegistryModal(root);
+                } catch (error) {
+                    root.innerHTML = `<div style="color:#b3261e;">${escapeHtml(error.message || 'Failed to load feature registry.')}</div>`;
                 }
             });
 

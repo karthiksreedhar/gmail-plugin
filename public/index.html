@@ -301,18 +301,15 @@
 
         #categoryList .category-item {
             position: relative;
-            padding-right: 46px;
         }
 
         #categoryList .category-count {
             margin-left: auto;
-            min-width: 34px;
-            width: 34px;
         }
 
         .sidebar-category-delete {
             position: absolute;
-            right: 10px;
+            right: -18px;
             top: 50%;
             transform: translateY(-50%);
             border: none;
@@ -2956,8 +2953,6 @@
                 </div>
             </div>
             <div class="header-center-actions">
-                <button class="refresh-btn header-compact-btn" onclick="window.location.href='/seed.html'" title="Seed initial categories from important inbox">Seed Categories</button>
-                <button class="generate-btn header-compact-btn" onclick="openTestClassifier()" title="Run classifier evaluation on labeled emails">Test Classifier</button>
                 <!-- Feature extension point: header actions -->
                 <div id="feature-header-actions">
                     <button id="openFeatureManagerBtn" class="generate-btn header-compact-btn" type="button" title="Manage deployed features">Features</button>
