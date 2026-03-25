@@ -92,6 +92,7 @@ module.exports = {
       if (u.includes('/preferences') || u.includes('/unsubscribe') || u.includes('/privacy') || u.includes('/terms')) return false;
       if (u.includes('/wf/open') || u.includes('/register') || u.includes('/login')) return false;
       if (u.includes('email.news-alerts.ft.com/c/')) return true;
+      if (u.includes('ft.com/')) return true;
       if (u.includes('ft.com/content/')) return true;
       return false;
     }
@@ -113,6 +114,8 @@ module.exports = {
         t === 'us' ||
         t === 'markets' ||
         t === 'opinion' ||
+        t === 'more new stories available in your feed in myft' ||
+        t.includes('more new stories available in your feed') ||
         t.includes('daily digest of stories from topics') ||
         t.includes('terms') ||
         t.includes('privacy') ||
@@ -135,6 +138,7 @@ module.exports = {
       if (!lower) return true;
       return (
         lower.startsWith('myft daily digest') ||
+        lower.includes('more new stories available in your feed in myft') ||
         lower.includes('best ft comment and analysis') ||
         lower.includes('most popular stories in the last 24 hours') ||
         lower.includes('see all your stories in the order they were published') ||
@@ -206,10 +210,7 @@ module.exports = {
         }
       }
 
-      return articles.filter(article => {
-        const t = safeStr(article?.title).toLowerCase();
-        return t && !isNonArticleTitle(t);
-      });
+      return articles.filter(article => safeStr(article?.title) && safeStr(article?.url));
     }
 
     function parseJsonArray(raw) {
@@ -465,7 +466,13 @@ ${body}`;
         const extracted = extractArticlesFromEmail(email);
         const aiExtracted = await extractArticlesFromEmailWithGemini(email);
         const chosen = aiExtracted.length ? aiExtracted : extracted;
-        for (const article of chosen) {
+        let filtered = chosen.filter(article => !isNonArticleTitle(article?.title));
+        if (!filtered.length) {
+          // Safety fallback: if filters are too strict for a given digest, keep raw extracted items.
+          filtered = chosen;
+        }
+
+        for (const article of filtered) {
           const key = `${safeStr(article.url)}::${safeStr(article.title).toLowerCase()}`;
           if (seen.has(key)) continue;
           seen.add(key);
