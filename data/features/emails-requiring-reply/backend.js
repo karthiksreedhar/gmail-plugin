@@ -5,7 +5,8 @@
 
 module.exports = {
   initialize(context) {
-    const { app, getUserDoc, getCurrentUser, normalizeUserEmailForData, invokeGemini, getGeminiModel } = context;
+    const { app, getUserDoc, setUserDoc, getCurrentUser, normalizeUserEmailForData, invokeGemini, getGeminiModel } = context;
+    const DISMISS_COLLECTION = 'feature_emails_requiring_reply_dismissed';
 
     function safeStr(value) {
       return String(value || '').trim();
@@ -56,6 +57,12 @@ module.exports = {
       return from.includes(userEmail) || from.includes(`<${userEmail}>`);
     }
 
+    function isFromUser(fromRaw, userEmail) {
+      const from = lower(fromRaw);
+      if (!from) return false;
+      return from.includes(userEmail) || from.includes(`<${userEmail}>`);
+    }
+
     function buildThreadMaps(threads, userEmail) {
       const byKey = new Map();
 
@@ -78,6 +85,7 @@ module.exports = {
           responseId: safeStr(thread?.responseId),
           inboundCount,
           userReplyCount,
+          latestIsUser,
           hasUserEverReplied: userReplyCount > 0,
           hasPendingInbound,
           userResponseAfterLatestInbound,
@@ -103,7 +111,7 @@ module.exports = {
       return byKey;
     }
 
-    function buildCandidate(email, threadHistory) {
+    function buildCandidate(email, threadHistory, userEmail) {
       return {
         id: safeStr(email?.id),
         date: safeStr(email?.date),
@@ -113,11 +121,13 @@ module.exports = {
         category: safeStr(Array.isArray(email?.categories) && email.categories.length ? email.categories[0] : email?.category),
         signals: {
           likelyAutomated: isLikelyAutomated(email),
-          hasReplyIntentLanguage: hasReplyIntentSignal(email)
+          hasReplyIntentLanguage: hasReplyIntentSignal(email),
+          latestSenderIsUser: !!threadHistory?.latestIsUser || isFromUser(email?.originalFrom || email?.from, userEmail)
         },
         threadHistory: threadHistory || {
           inboundCount: 0,
           userReplyCount: 0,
+          latestIsUser: false,
           hasUserEverReplied: false,
           hasPendingInbound: true,
           userResponseAfterLatestInbound: false,
@@ -166,7 +176,7 @@ module.exports = {
       });
 
       return scored
-        .filter(x => x.score > 0)
+        .filter(x => x.score > 0 && !x?.candidate?.signals?.latestSenderIsUser)
         .sort((a, b) => (b.score - a.score) || (dateMs(b.candidate?.date) - dateMs(a.candidate?.date)))
         .slice(0, 5)
         .map((x, i) => ({
@@ -216,6 +226,7 @@ Important reasoning rules:
    - Automated/newsletter/no-reply notifications.
    - FYI announcements with no implied response needed.
    - Threads where user already replied after latest inbound.
+   - Any item where the user is the latest sender.
 3) Recency:
    - Between similar candidates, pick the newer one.
 4) Precision:
@@ -233,6 +244,7 @@ Constraints:
 - 0 to 5 entries.
 - Rank should start at 1 and be unique.
 - Reasons must be concise and tied to signals/history.
+- HARD CONSTRAINT: Never select an email when latest sender is the user.
 
 Candidates JSON:
 ${JSON.stringify(modelInput)}`;
@@ -260,6 +272,8 @@ ${JSON.stringify(modelInput)}`;
         for (const item of parsed) {
           const id = safeStr(item?.id);
           if (!id || seen.has(id) || !candidateIds.has(id)) continue;
+          const matchCandidate = candidates.find(c => safeStr(c?.id) === id);
+          if (matchCandidate?.signals?.latestSenderIsUser) continue;
           seen.add(id);
           selected.push({
             id,
@@ -281,6 +295,18 @@ ${JSON.stringify(modelInput)}`;
       }
     }
 
+    async function loadDismissedMap(userEmail) {
+      const doc = await getUserDoc(DISMISS_COLLECTION, userEmail).catch(() => null);
+      return (doc && typeof doc.dismissedByEmailId === 'object' && doc.dismissedByEmailId)
+        ? doc.dismissedByEmailId
+        : {};
+    }
+
+    async function saveDismissedMap(userEmail, dismissedByEmailId) {
+      if (typeof setUserDoc !== 'function') return;
+      await setUserDoc(DISMISS_COLLECTION, userEmail, { dismissedByEmailId: dismissedByEmailId || {} });
+    }
+
     app.post('/api/emails-requiring-reply/top-five', async (req, res) => {
       try {
         const userEmail = resolveUserEmail(req);
@@ -297,19 +323,24 @@ ${JSON.stringify(modelInput)}`;
           ? Array.from(new Set(req.body.emailIds.map(v => safeStr(v)).filter(Boolean)))
           : [];
         const allow = requestedIds.length ? new Set(requestedIds) : null;
+        const dismissedByEmailId = await loadDismissedMap(userEmail);
+        const dismissedIds = new Set(Object.keys(dismissedByEmailId || {}).map(safeStr).filter(Boolean));
 
         const threadMap = buildThreadMaps(threads, userEmail);
 
         const candidates = emails
           .filter(e => safeStr(e?.id))
           .filter(e => !allow || allow.has(safeStr(e?.id)))
+          .filter(e => !dismissedIds.has(safeStr(e?.id)))
           .sort((a, b) => dateMs(b?.date) - dateMs(a?.date))
           .slice(0, 120)
           .map(email => {
             const id = safeStr(email?.id);
             const history = threadMap.get(id) || null;
-            return buildCandidate(email, history);
-          });
+            return buildCandidate(email, history, userEmail);
+          })
+          .filter(c => !c?.signals?.latestSenderIsUser)
+          .filter(c => c?.threadHistory?.hasPendingInbound !== false);
 
         const selected = await selectReplyPriority(candidates, userEmail);
         const selectedIds = selected.map(x => safeStr(x.id)).filter(Boolean);
@@ -330,6 +361,27 @@ ${JSON.stringify(modelInput)}`;
       } catch (error) {
         console.error('emails-requiring-reply top-five failed:', error);
         return res.status(500).json({ success: false, error: error.message || 'Failed to prioritize reply-needed emails' });
+      }
+    });
+
+    app.post('/api/emails-requiring-reply/dismiss', async (req, res) => {
+      try {
+        const userEmail = resolveUserEmail(req);
+        const emailId = safeStr(req.body?.emailId);
+        if (!userEmail) {
+          return res.status(400).json({ success: false, error: 'Missing current user' });
+        }
+        if (!emailId) {
+          return res.status(400).json({ success: false, error: 'emailId is required' });
+        }
+
+        const dismissedByEmailId = await loadDismissedMap(userEmail);
+        dismissedByEmailId[emailId] = new Date().toISOString();
+        await saveDismissedMap(userEmail, dismissedByEmailId);
+        return res.json({ success: true, emailId });
+      } catch (error) {
+        console.error('emails-requiring-reply dismiss failed:', error);
+        return res.status(500).json({ success: false, error: error.message || 'Failed to dismiss email' });
       }
     });
 

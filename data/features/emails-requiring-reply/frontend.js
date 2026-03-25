@@ -11,6 +11,7 @@
 
   const API = window.EmailAssistant;
   const selectedById = new Map(); // emailId -> { rank, reason }
+  const dismissedIds = new Set();
   let inflight = false;
 
   function getEmailId(emailItem) {
@@ -53,6 +54,55 @@
     row.appendChild(marker);
   }
 
+  function clearDismissButton(emailItem) {
+    const existing = emailItem.querySelector('.reply-dismiss-btn');
+    if (existing) existing.remove();
+  }
+
+  function renderDismissButton(emailItem, id) {
+    const actions = emailItem.querySelector('.email-actions');
+    if (!actions || !id) return;
+    clearDismissButton(emailItem);
+
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'reply-dismiss-btn';
+    btn.textContent = 'No Reply Needed';
+    btn.style.cssText = [
+      'background:#f1f3f4',
+      'color:#174ea6',
+      'border:1px solid #c6dafc',
+      'padding:6px 10px',
+      'border-radius:12px',
+      'cursor:pointer',
+      'font-size:12px',
+      'margin-right:8px'
+    ].join(';');
+    btn.title = 'Remove this from reply-priority list';
+    btn.addEventListener('click', async (ev) => {
+      ev.stopPropagation();
+      btn.disabled = true;
+      try {
+        const resp = await API.apiCall('/api/emails-requiring-reply/dismiss', {
+          method: 'POST',
+          body: { emailId: id }
+        });
+        if (!resp || !resp.success) {
+          throw new Error(resp?.error || 'Dismiss failed');
+        }
+        dismissedIds.add(id);
+        selectedById.delete(id);
+        applyTopFivePriority();
+      } catch (error) {
+        console.error('emails-requiring-reply dismiss failed:', error);
+        API.showError('Failed to mark as no-reply-needed.');
+      } finally {
+        btn.disabled = false;
+      }
+    });
+    actions.insertBefore(btn, actions.firstChild || null);
+  }
+
   function applyTopFivePriority() {
     const container = document.getElementById('emailContainer');
     if (!container) return;
@@ -71,6 +121,7 @@
         item.style.backgroundColor = '#EEF4FF';
         item.style.borderLeft = '4px solid #1A73E8';
         renderReplyMarker(item, info);
+        renderDismissButton(item, id);
         selected.push({ item, rank: Number(info.rank) || 999, index });
       } else {
         if (item.style.borderLeft === '4px solid rgb(26, 115, 232)' || item.style.borderLeft === '4px solid #1A73E8') {
@@ -78,6 +129,7 @@
         }
         const marker = item.querySelector('.reply-priority-marker');
         if (marker) marker.remove();
+        clearDismissButton(item);
         normal.push({ item, index });
       }
     });
@@ -111,6 +163,7 @@
       selectedById.clear();
       Object.entries(response.selectedById).forEach(([id, info]) => {
         if (!id || !info) return;
+        if (dismissedIds.has(id)) return;
         selectedById.set(id, {
           rank: Number(info.rank) || 999,
           reason: String(info.reason || '')
