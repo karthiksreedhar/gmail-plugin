@@ -3877,6 +3877,34 @@ async function fetchInboxThreadCandidatesForUser(gmailClient, latestStoredTimest
   return filtered.length > CAP ? filtered.slice(0, CAP) : filtered;
 }
 
+async function precomputeTodosForUser(userEmail, emailIds = []) {
+  try {
+    const ids = Array.from(new Set((emailIds || []).map(id => String(id || '').trim()).filter(Boolean))).slice(0, 25);
+    if (!ids.length) return;
+    const ctrl = new AbortController();
+    const timeout = setTimeout(() => ctrl.abort(), 12000);
+    try {
+      const resp = await fetch(`${BASE_URL}/api/todos/extract-batch`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userEmail: normalizeUserEmailForData(userEmail),
+          emailIds: ids
+        }),
+        signal: ctrl.signal
+      });
+      if (!resp.ok) {
+        const text = await resp.text().catch(() => '');
+        console.warn(`[AutoSync][TODOs] precompute failed user=${userEmail} status=${resp.status} body=${text.slice(0, 160)}`);
+      }
+    } finally {
+      clearTimeout(timeout);
+    }
+  } catch (e) {
+    console.warn(`[AutoSync][TODOs] precompute error user=${userEmail}:`, e?.message || e);
+  }
+}
+
 async function syncUserInboxFromGmail(userEmail, opts = {}) {
   const normalizedEmail = normalizeUserEmailForData(userEmail);
   const forceBackfill = !!opts.forceBackfill;
@@ -3989,6 +4017,7 @@ async function syncUserInboxFromGmail(userEmail, opts = {}) {
 
     const meEmail = normalizedEmail;
     let added = 0;
+    const newlyAddedResponseIds = [];
 
     for (const email of candidates) {
       if (!email?.id) continue;
@@ -4085,6 +4114,7 @@ async function syncUserInboxFromGmail(userEmail, opts = {}) {
         });
         threadIndexById.set(persistedThreadId, nextThreads.length - 1);
         added++;
+        if (existingSummaryId) newlyAddedResponseIds.push(existingSummaryId);
       }
     }
 
@@ -4093,6 +4123,11 @@ async function syncUserInboxFromGmail(userEmail, opts = {}) {
         writeUserArrayDoc('email_threads', normalizedEmail, 'threads', nextThreads, paths.EMAIL_THREADS_PATH),
         writeUserArrayDoc('response_emails', normalizedEmail, 'emails', nextResponses, paths.RESPONSE_EMAILS_PATH)
       ]);
+      if (newlyAddedResponseIds.length > 0) {
+        setTimeout(() => {
+          precomputeTodosForUser(normalizedEmail, newlyAddedResponseIds).catch(() => {});
+        }, 0);
+      }
     }
 
     return {

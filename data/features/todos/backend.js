@@ -5,7 +5,7 @@
 
 module.exports = {
   initialize(context) {
-    const { app, getUserDoc, setUserDoc, invokeGemini, getGeminiModel, getCurrentUser } = context;
+    const { app, getUserDoc, setUserDoc, invokeGemini, getGeminiModel, getCurrentUser, normalizeUserEmailForData } = context;
     const CACHE_COLLECTION = 'feature_todos_cache';
     const CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000; // 24h
 
@@ -84,9 +84,84 @@ module.exports = {
       await setUserDoc(CACHE_COLLECTION, userEmail, { itemsByEmailId });
     }
 
+    function resolveUserEmail(req) {
+      const override = safeStr(req?.body?.userEmail);
+      const fromReq = override || safeStr(getCurrentUser());
+      if (!fromReq) return '';
+      if (typeof normalizeUserEmailForData === 'function') {
+        return normalizeUserEmailForData(fromReq);
+      }
+      return fromReq.toLowerCase();
+    }
+
+    async function computeTodosForMissingItems(missingItems) {
+      const out = {};
+      for (const item of missingItems) {
+        let todos = [];
+        if (typeof invokeGemini === 'function') {
+          const prompt = `Analyze the following email and return STRICT JSON only.
+
+Required JSON shape:
+{
+  "summary": "One sentence maximum summary.",
+  "todos": ["TODO item 1", "TODO item 2"]
+}
+
+Rules:
+- "summary" must be at most one sentence.
+- "todos" must be an array of actionable items.
+- If there are no apparent TODOs, set todos to ["No apparent TODOs"] exactly.
+- Do not include markdown or any text outside JSON.
+
+Email:
+From: ${safeStr(item.email?.originalFrom || item.email?.from)}
+Subject: ${safeStr(item.email?.subject)}
+Body: ${safeStr(item.email?.body || item.email?.originalBody || item.email?.snippet).slice(0, 6000)}`;
+
+          try {
+            const completion = await invokeGemini({
+              model: typeof getGeminiModel === 'function' ? getGeminiModel() : undefined,
+              messages: [
+                { role: 'system', content: 'You are an email summarization assistant.' },
+                { role: 'user', content: prompt }
+              ],
+              temperature: 0.3,
+              maxOutputTokens: 450
+            });
+            todos = parseSummarizerStyleTodos(completion?.content || '');
+          } catch (_) {
+            todos = [];
+          }
+        }
+        out[item.id] = todos;
+      }
+      return out;
+    }
+
+    app.post('/api/todos/cached-batch', async (req, res) => {
+      try {
+        const userEmail = resolveUserEmail(req);
+        const idsInput = Array.isArray(req.body?.emailIds) ? req.body.emailIds : [];
+        const emailIds = Array.from(new Set(idsInput.map(safeStr).filter(Boolean))).slice(0, 50);
+        if (!emailIds.length) {
+          return res.status(400).json({ success: false, error: 'emailIds are required' });
+        }
+        const cache = await getCache(userEmail);
+        const todosByEmailId = {};
+        for (const id of emailIds) {
+          const cached = cache[id];
+          todosByEmailId[id] = Array.isArray(cached?.todos) ? cached.todos : null;
+        }
+        return res.json({ success: true, todosByEmailId });
+      } catch (error) {
+        console.error('TODOs cached-batch error:', error);
+        return res.status(500).json({ success: false, error: error.message || 'Failed to load cached TODOs' });
+      }
+    });
+
     app.post('/api/todos/extract-batch', async (req, res) => {
       try {
-        const userEmail = getCurrentUser();
+        const userEmail = resolveUserEmail(req);
         const idsInput = Array.isArray(req.body?.emailIds) ? req.body.emailIds : [];
         const emailIds = Array.from(new Set(idsInput.map(safeStr).filter(Boolean))).slice(0, 25);
         if (!emailIds.length) {
@@ -117,43 +192,9 @@ module.exports = {
         }
 
         if (missing.length) {
+          const generated = await computeTodosForMissingItems(missing);
           for (const item of missing) {
-            let todos = [];
-            if (typeof invokeGemini === 'function') {
-              const prompt = `Analyze the following email and return STRICT JSON only.
-
-Required JSON shape:
-{
-  "summary": "One sentence maximum summary.",
-  "todos": ["TODO item 1", "TODO item 2"]
-}
-
-Rules:
-- "summary" must be at most one sentence.
-- "todos" must be an array of actionable items.
-- If there are no apparent TODOs, set todos to ["No apparent TODOs"] exactly.
-- Do not include markdown or any text outside JSON.
-
-Email:
-From: ${safeStr(item.email?.originalFrom || item.email?.from)}
-Subject: ${safeStr(item.email?.subject)}
-Body: ${safeStr(item.email?.body || item.email?.originalBody || item.email?.snippet).slice(0, 6000)}`;
-
-              try {
-                const completion = await invokeGemini({
-                  model: typeof getGeminiModel === 'function' ? getGeminiModel() : undefined,
-                  messages: [
-                    { role: 'system', content: 'You are an email summarization assistant.' },
-                    { role: 'user', content: prompt }
-                  ],
-                  temperature: 0.3,
-                  maxOutputTokens: 450
-                });
-                todos = parseSummarizerStyleTodos(completion?.content || '');
-              } catch (_) {
-                todos = [];
-              }
-            }
+            const todos = Array.isArray(generated[item.id]) ? generated[item.id] : [];
             todosByEmailId[item.id] = todos;
             cache[item.id] = {
               todos,

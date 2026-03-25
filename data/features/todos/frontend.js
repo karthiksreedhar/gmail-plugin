@@ -93,9 +93,26 @@
       const visibleIds = collectVisibleEmailIds();
       if (!visibleIds.length) return;
 
+      const unknown = visibleIds.filter(id => !todosCache.has(id) && !pendingIds.has(id));
+      if (unknown.length) {
+        const cachedResp = await API.apiCall('/api/todos/cached-batch', {
+          method: 'POST',
+          body: { emailIds: unknown }
+        });
+        if (cachedResp && cachedResp.success && cachedResp.todosByEmailId && typeof cachedResp.todosByEmailId === 'object') {
+          Object.entries(cachedResp.todosByEmailId).forEach(([id, todos]) => {
+            if (Array.isArray(todos)) {
+              todosCache.set(id, todos);
+            }
+          });
+        }
+      }
+
       const missing = visibleIds.filter(id => !todosCache.has(id) && !pendingIds.has(id));
       const batchIds = missing.slice(0, BATCH_SIZE); // newest first (DOM order)
-      batchIds.forEach(id => pendingIds.add(id));
+      if (batchIds.length) {
+        batchIds.forEach(id => pendingIds.add(id));
+      }
       renderAllFromCache();
 
       if (batchIds.length) {
