@@ -1,133 +1,157 @@
 /**
  * Deadline Email Prioritization Frontend
- * Prioritizes emails with deadlines within the next three days by moving them to the top of the inbox and highlighting them in yellow.
+ * Automatically promotes imminent-deadline emails to the top and highlights them.
  */
 
 (function() {
-  console.log('Deadline Email Prioritization: Frontend loading...');
-
   if (!window.EmailAssistant) {
-    console.error('Deadline Email Prioritization: EmailAssistant API not available');
+    console.error('Deadline Email Prioritization: EmailAssistant API unavailable');
     return;
   }
 
   const API = window.EmailAssistant;
+  const urgentById = new Map(); // emailId -> { dueAt, matchedText }
+  let inflight = false;
 
-  // Function to highlight emails with deadlines
-  function highlightDeadlineEmails() {
-    try {
-      const emailItems = document.querySelectorAll('.email-item');
+  function getEmailId(emailItem) {
+    const notesPreview = emailItem.querySelector('.notes-preview[data-email-notes]');
+    if (notesPreview) {
+      const fromNotes = String(notesPreview.getAttribute('data-email-notes') || '').trim();
+      if (fromNotes) return fromNotes;
+    }
 
-      emailItems.forEach(emailItem => {
-        const subjectElement = emailItem.querySelector('.email-subject');
-        const subject = subjectElement ? subjectElement.textContent.trim() : '';
-        const fromElement = emailItem.querySelector('.email-from');
-        const from = fromElement ? fromElement.textContent.trim() : '';
+    const deleteBtn = emailItem.querySelector('.delete-thread-btn');
+    const onclickRaw = deleteBtn ? String(deleteBtn.getAttribute('onclick') || '') : '';
+    const match = onclickRaw.match(/deleteEmailThread\('([^']+)'/);
+    if (match && match[1]) return match[1];
+    return '';
+  }
 
-        // Extract email data
-        const emailData = extractEmailData(emailItem);
+  function formatDueAt(isoText) {
+    const dt = new Date(isoText);
+    if (Number.isNaN(dt.getTime())) return '';
+    return dt.toLocaleString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit'
+    });
+  }
 
-        // Check if the email has already been highlighted
-        if (emailItem.classList.contains('deadline-highlighted')) {
-          return; // Skip if already highlighted
+  function renderDeadlineMarker(emailItem, info) {
+    const row = emailItem.querySelector('.email-meta-row');
+    if (!row) return;
+
+    const existing = row.querySelector('.deadline-priority-marker');
+    if (existing) existing.remove();
+
+    if (!info) return;
+    const marker = document.createElement('span');
+    marker.className = 'deadline-priority-marker';
+    marker.style.cssText = [
+      'display:inline-flex',
+      'align-items:center',
+      'margin-left:8px',
+      'padding:2px 8px',
+      'border-radius:999px',
+      'background:#fbbc04',
+      'color:#5f370e',
+      'font-size:11px',
+      'font-weight:700'
+    ].join(';');
+    marker.textContent = `Deadline: ${formatDueAt(info.dueAt)}`;
+    row.appendChild(marker);
+  }
+
+  function applyPriorityStylingAndOrder() {
+    const container = document.getElementById('emailContainer');
+    if (!container) return;
+
+    const emailItems = Array.from(container.querySelectorAll('.email-item'));
+    if (!emailItems.length) return;
+
+    const urgent = [];
+    const normal = [];
+
+    emailItems.forEach((item, index) => {
+      const id = getEmailId(item);
+      const info = id ? urgentById.get(id) : null;
+
+      if (info) {
+        item.style.backgroundColor = '#FFF4CC';
+        item.style.borderLeft = '4px solid #F4B400';
+        renderDeadlineMarker(item, info);
+        urgent.push({ item, dueAt: new Date(info.dueAt).getTime() || Number.MAX_SAFE_INTEGER, index });
+      } else {
+        if (item.style.borderLeft === '4px solid rgb(244, 180, 0)' || item.style.borderLeft === '4px solid #F4B400') {
+          item.style.borderLeft = '';
         }
+        const marker = item.querySelector('.deadline-priority-marker');
+        if (marker) marker.remove();
+        normal.push({ item, index });
+      }
+    });
 
-        // Make API call to check for deadlines
-        API.apiCall('/api/deadline-email-prioritization/check-deadline', {
-          method: 'POST',
-          body: { subject: emailData.subject, from: emailData.from }
-        })
-        .then(response => {
-          if (response.success && response.hasDeadline) {
-            // Highlight the email item
-            emailItem.style.backgroundColor = 'yellow';
-            emailItem.classList.add('deadline-highlighted');
+    urgent.sort((a, b) => (a.dueAt - b.dueAt) || (a.index - b.index));
 
-            // Move the email to the top of the inbox
-            const inbox = emailItem.parentNode;
-            if (inbox && inbox.firstChild !== emailItem) {
-              inbox.insertBefore(emailItem, inbox.firstChild);
-            }
-          }
-        })
-        .catch(error => {
-          console.error('Deadline Email Prioritization: Error checking deadline:', error);
-        });
+    const reordered = [
+      ...urgent.map(entry => entry.item),
+      ...normal.map(entry => entry.item)
+    ];
+    reordered.forEach(node => container.appendChild(node));
+  }
+
+  function collectVisibleEmailIds() {
+    const emailItems = Array.from(document.querySelectorAll('#emailContainer .email-item'));
+    const ids = emailItems.map(getEmailId).filter(Boolean);
+    return Array.from(new Set(ids));
+  }
+
+  async function refreshUrgentDeadlines() {
+    if (inflight) return;
+    inflight = true;
+    try {
+      const visibleIds = collectVisibleEmailIds();
+      if (!visibleIds.length) return;
+
+      const response = await API.apiCall('/api/deadline-email-prioritization/scan', {
+        method: 'POST',
+        body: { emailIds: visibleIds }
       });
+
+      if (!response || !response.success || typeof response.urgentByEmailId !== 'object') {
+        return;
+      }
+
+      urgentById.clear();
+      Object.entries(response.urgentByEmailId).forEach(([id, info]) => {
+        if (!id || !info || !info.dueAt) return;
+        urgentById.set(id, info);
+      });
+
+      applyPriorityStylingAndOrder();
     } catch (error) {
-      console.error('Deadline Email Prioritization: Error highlighting emails:', error);
+      console.error('Deadline Email Prioritization refresh failed:', error);
+    } finally {
+      inflight = false;
     }
   }
 
-  function extractEmailData(emailItem) {
-    const fromElement = emailItem.querySelector('.email-from');
-    const subjectElement = emailItem.querySelector('.email-subject');
-    const dateElement = emailItem.querySelector('.email-date');
-    const categoryPills = emailItem.querySelectorAll('.email-category');
-    
-    const fromText = fromElement ? fromElement.textContent.trim() : '';
-    const subject = subjectElement ? subjectElement.textContent.trim() : '';
-    const date = dateElement ? dateElement.textContent.trim() : '';
-    const categories = Array.from(categoryPills).map(pill => pill.textContent.trim());
-    
-    // Parse sender name and email from "Name <email@domain.com>" format
-    let senderName = fromText;
-    let senderEmail = fromText;
-    
-    const emailMatch = fromText.match(/^([^<]+)<([^>]+)>/);
-    if (emailMatch) {
-      senderName = emailMatch[1].trim();
-      senderEmail = emailMatch[2].trim();
-    } else if (fromText.includes('@')) {
-      senderEmail = fromText;
-      senderName = fromText.split('@')[0];
-    }
-    
-    return {
-      senderName,
-      senderEmail,
-      subject,
-      date,
-      categories,
-      from: fromText
-    };
-  }
-
-  // Function to add a header button (optional)
-  function addHeaderButton() {
-    API.addHeaderButton('Prioritize Deadlines', () => {
-      highlightDeadlineEmails();
-      API.showSuccess('Deadline prioritization applied.');
-    }, { className: 'btn btn-primary' });
-  }
-
-  // Initialize the feature
   function initialize() {
-    // Add header button
-    addHeaderButton();
+    // Auto-run continuously; no manual button by design.
+    setTimeout(() => refreshUrgentDeadlines(), 250);
+    setInterval(() => refreshUrgentDeadlines(), 30000);
 
-    // Highlight emails on load and refresh
-    API.on('emailsLoaded', highlightDeadlineEmails);
-
-    // Initial highlighting
-    setTimeout(highlightDeadlineEmails, 500);
-
-    // Periodic refresh
-    setInterval(highlightDeadlineEmails, 3000);
-
-    // Hook into displayEmails if it exists
     if (typeof window.displayEmails === 'function') {
       const originalDisplayEmails = window.displayEmails;
       window.displayEmails = async function(...args) {
-        const result = await originalDisplayEmails.apply(this, args);
-        setTimeout(() => highlightDeadlineEmails(), 50);
-        return result;
+        const out = await originalDisplayEmails.apply(this, args);
+        setTimeout(() => refreshUrgentDeadlines(), 60);
+        return out;
       };
     }
   }
 
-  // Initialize when the frontend is loaded
   initialize();
-
-  console.log('Deadline Email Prioritization: Frontend loaded successfully');
+  console.log('Deadline Email Prioritization: Frontend initialized');
 })();
