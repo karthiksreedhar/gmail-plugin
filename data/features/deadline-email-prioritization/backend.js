@@ -6,6 +6,12 @@
 module.exports = {
   initialize(context) {
     const { app, getUserDoc, getCurrentUser, normalizeUserEmailForData } = context;
+    const TRACKED_CATEGORIES = new Set([
+      'scu',
+      'class announcements',
+      'appointments',
+      'law review'
+    ]);
     const WEEKDAY_INDEX = {
       sunday: 0,
       monday: 1,
@@ -178,6 +184,15 @@ module.exports = {
       return inWindow[0];
     }
 
+    function isTrackedCategoryEmail(email) {
+      const categories = Array.isArray(email?.categories) && email.categories.length
+        ? email.categories
+        : (email?.category ? [email.category] : []);
+      if (!categories.length) return false;
+
+      return categories.some(category => TRACKED_CATEGORIES.has(safeStr(category).toLowerCase()));
+    }
+
     app.post('/api/deadline-email-prioritization/scan', async (req, res) => {
       try {
         const userEmail = resolveUserEmail(req);
@@ -200,6 +215,7 @@ module.exports = {
           const id = safeStr(email?.id);
           if (!id) continue;
           if (allowed && !allowed.has(id)) continue;
+          if (!isTrackedCategoryEmail(email)) continue;
 
           const match = evaluateEmailForUrgency(email, now, windowEnd);
           if (!match) continue;
