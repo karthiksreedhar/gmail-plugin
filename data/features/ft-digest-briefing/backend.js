@@ -5,7 +5,16 @@
 
 module.exports = {
   initialize(context) {
-    const { app, getCurrentUser, getUserDoc, loadResponseEmails, invokeGemini, getGeminiModel } = context;
+    const {
+      app,
+      getCurrentUser,
+      getUserDoc,
+      loadResponseEmails,
+      loadEmailThreads,
+      loadUnrepliedEmails,
+      invokeGemini,
+      getGeminiModel
+    } = context;
 
     function safeStr(value) {
       return String(value || '').trim();
@@ -52,12 +61,21 @@ module.exports = {
       const cats = Array.isArray(email?.categories) && email.categories.length
         ? email.categories
         : (email?.category ? [email.category] : []);
-      const categoryHit = cats.some(cat => safeStr(cat).toLowerCase() === 'financial times digests');
+      const categoryHit = cats.some(cat => {
+        const label = safeStr(cat).toLowerCase();
+        return label === 'financial times digests'
+          || (label.includes('financial times') && label.includes('digest'))
+          || (label.includes('ft') && label.includes('digest'));
+      });
       if (categoryHit) return true;
 
       const from = safeStr(email?.originalFrom || email?.from).toLowerCase();
       const subject = safeStr(email?.subject).toLowerCase();
-      return from.includes('news-alerts.ft.com') || from.includes('myft@') || subject.includes('myft daily digest');
+      return from.includes('news-alerts.ft.com')
+        || from.includes('myft@')
+        || from.includes('@ft.com')
+        || subject.includes('myft daily digest')
+        || subject.includes('financial times');
     }
 
     function isLikelyArticleUrl(url) {
@@ -144,6 +162,56 @@ module.exports = {
       return Number.isFinite(ms) ? ms : 0;
     }
 
+    function normalizeEmailShape(entry, fallbackIdPrefix) {
+      if (!entry || typeof entry !== 'object') return null;
+      const id = safeStr(entry.id || entry.threadId || entry.messageId || '');
+      return {
+        ...entry,
+        id: id || `${fallbackIdPrefix}-${Math.random().toString(36).slice(2, 10)}`
+      };
+    }
+
+    function flattenThreadCollection(rawThreads) {
+      const out = [];
+      if (!Array.isArray(rawThreads)) return out;
+
+      for (const thread of rawThreads) {
+        const messages = Array.isArray(thread?.messages) ? thread.messages : [];
+        if (messages.length) {
+          const latest = messages[messages.length - 1] || {};
+          out.push({
+            id: safeStr(thread?.id || latest?.id || latest?.messageId),
+            threadId: safeStr(thread?.id || latest?.threadId),
+            subject: latest?.subject || thread?.subject,
+            body: latest?.body || latest?.originalBody,
+            snippet: latest?.snippet || thread?.snippet,
+            originalBody: latest?.originalBody,
+            from: latest?.from,
+            originalFrom: latest?.originalFrom || thread?.originalFrom,
+            date: latest?.date || thread?.lastUpdated || thread?.date,
+            category: latest?.category || thread?.category,
+            categories: latest?.categories || thread?.categories
+          });
+          continue;
+        }
+
+        out.push({
+          id: safeStr(thread?.id || thread?.threadId),
+          subject: thread?.subject,
+          body: thread?.body || thread?.originalBody,
+          snippet: thread?.snippet,
+          originalBody: thread?.originalBody,
+          from: thread?.from,
+          originalFrom: thread?.originalFrom,
+          date: thread?.date || thread?.lastUpdated,
+          category: thread?.category,
+          categories: thread?.categories
+        });
+      }
+
+      return out;
+    }
+
     async function buildHighlights(articles) {
       const input = (articles || []).slice(0, 12).map((a, index) => ({
         i: index + 1,
@@ -205,8 +273,42 @@ module.exports = {
         emails = loadResponseEmails() || [];
       }
 
-      const digestEmails = (Array.isArray(emails) ? emails : [])
-        .filter(email => email && email.id && isFtDigestEmail(email))
+      // If response_emails misses FT digests, also search additional stores used by the app.
+      const sources = [];
+      sources.push(Array.isArray(emails) ? emails : []);
+
+      try {
+        const doc = await getUserDoc('email_threads', userEmail);
+        if (doc && Array.isArray(doc.threads)) {
+          sources.push(flattenThreadCollection(doc.threads));
+        }
+      } catch (_) {
+        sources.push(flattenThreadCollection(loadEmailThreads() || []));
+      }
+
+      try {
+        const doc = await getUserDoc('unreplied_emails', userEmail);
+        if (doc && Array.isArray(doc.emails)) {
+          sources.push(doc.emails);
+        }
+      } catch (_) {
+        sources.push(loadUnrepliedEmails() || []);
+      }
+
+      const unified = [];
+      const seenIds = new Set();
+      for (let sourceIndex = 0; sourceIndex < sources.length; sourceIndex++) {
+        const source = Array.isArray(sources[sourceIndex]) ? sources[sourceIndex] : [];
+        for (const rawEmail of source) {
+          const email = normalizeEmailShape(rawEmail, `ft-${sourceIndex}`);
+          if (!email || !email.id || seenIds.has(email.id)) continue;
+          seenIds.add(email.id);
+          unified.push(email);
+        }
+      }
+
+      const digestEmails = unified
+        .filter(email => isFtDigestEmail(email))
         .sort((a, b) => dateMs(b.date) - dateMs(a.date))
         .slice(0, 12);
 
