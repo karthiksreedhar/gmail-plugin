@@ -183,6 +183,19 @@ module.exports = {
       return 'Apartment Listing';
     }
 
+    function hasStrongListingSignal(email) {
+      const subject = safeStr(email?.subject);
+      const snippet = safeStr(email?.snippet);
+      const body = safeStr(email?.body || email?.originalBody || '');
+      const text = `${subject}\n${snippet}\n${body}`;
+
+      if (parsePrice(email) !== null) return true;
+      if (/\b([0-9])\s*(?:bed|br|bedroom)\b/i.test(text) || /\bstudio\b/i.test(text)) return true;
+      if (/\b\d{1,5}\s+[A-Za-z0-9.\- ]{3,60}(?:st|street|ave|avenue|rd|road|blvd|boulevard|dr|drive|ln|lane)\b/i.test(text)) return true;
+      if (/\b(square feet|sq ?ft|doorman|laundry|elevator|lease term|broker fee|move-in)\b/i.test(text)) return true;
+      return false;
+    }
+
     function isLikelyPromotion(email) {
       const text = [
         safeStr(email?.subject),
@@ -192,6 +205,7 @@ module.exports = {
       ].join(' ').toLowerCase();
 
       if (!text) return false;
+      if (hasStrongListingSignal(email)) return false;
       return (
         text.includes('unsubscribe') ||
         text.includes('sponsored') ||
@@ -260,7 +274,7 @@ module.exports = {
       const categoryOnly = allEmails.filter(isApartmentCategoryEmail);
       const seedEmails = categoryOnly.length ? categoryOnly : allEmails.filter(isApartmentEmail);
       const apartmentEmails = seedEmails
-        .filter(email => !isLikelyPromotion(email))
+        .filter(email => !isLikelyPromotion(email) || hasStrongListingSignal(email))
         .sort((a, b) => dateMs(b.date) - dateMs(a.date));
 
       const apartmentsRaw = apartmentEmails.map(email => ({
