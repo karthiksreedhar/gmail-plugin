@@ -1,0 +1,12 @@
+{
+  "id": "job-application-tracker",
+  "name": "Job Application Tracker",
+  "version": "1.0.0",
+  "description": "Extracts company, role, and application status from emails in the 'job applications' category and displays them in a structured list.",
+  "author": "Feature Generator Agent",
+  "backend": "backend.js",
+  "frontend": "frontend.js",
+  "permissions": [
+    "emails:read"
+  ]
+}
