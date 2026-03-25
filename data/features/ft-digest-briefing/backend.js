@@ -115,7 +115,10 @@ module.exports = {
         t === 'markets' ||
         t === 'opinion' ||
         t === 'more new stories available in your feed in myft' ||
+        t === 'visit your myft feed.' ||
+        t === 'visit your myft feed' ||
         t.includes('more new stories available in your feed') ||
+        t.includes('visit your myft feed') ||
         t.includes('daily digest of stories from topics') ||
         t.includes('terms') ||
         t.includes('privacy') ||
@@ -139,6 +142,7 @@ module.exports = {
       return (
         lower.startsWith('myft daily digest') ||
         lower.includes('more new stories available in your feed in myft') ||
+        lower.includes('visit your myft feed') ||
         lower.includes('best ft comment and analysis') ||
         lower.includes('most popular stories in the last 24 hours') ||
         lower.includes('see all your stories in the order they were published') ||
@@ -360,6 +364,37 @@ ${body}`;
       return safeStr(item.bullet || item.text || item.summary || item.title || item.item || '');
     }
 
+    function fallbackHighlightsFromArticles(articles) {
+      const input = Array.isArray(articles) ? articles : [];
+      if (!input.length) return [];
+
+      const stop = new Set([
+        'the', 'and', 'for', 'with', 'from', 'that', 'this', 'into', 'over', 'under', 'after', 'before', 'amid',
+        'about', 'your', 'their', 'more', 'new', 'stories', 'story', 'daily', 'digest', 'myft', 'ft', 'visit',
+        'feed', 'available', 'are', 'is', 'in', 'on', 'to', 'of', 'by', 'at', 'as', 'an', 'a'
+      ]);
+      const scores = new Map();
+
+      for (const article of input.slice(0, 18)) {
+        const text = safeStr(article?.title).toLowerCase().replace(/[^a-z0-9\s]/g, ' ');
+        const words = text.split(/\s+/).filter(Boolean);
+        for (const word of words) {
+          if (word.length < 4 || stop.has(word)) continue;
+          scores.set(word, (scores.get(word) || 0) + 1);
+        }
+      }
+
+      const topWords = Array.from(scores.entries())
+        .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+        .slice(0, 5)
+        .map(([word]) => word);
+
+      if (!topWords.length) {
+        return input.slice(0, 4).map(a => safeStr(a?.title)).filter(Boolean);
+      }
+      return topWords.map(word => `${word[0].toUpperCase()}${word.slice(1)} update`);
+    }
+
     async function buildHighlights(articles) {
       const input = (articles || []).slice(0, 12).map((a, index) => ({
         i: index + 1,
@@ -369,7 +404,7 @@ ${body}`;
       if (!input.length) return [];
 
       if (typeof invokeGemini !== 'function') {
-        return input.slice(0, 5).map(item => item.title);
+        return fallbackHighlightsFromArticles(articles).slice(0, 5);
       }
 
       try {
@@ -378,19 +413,30 @@ ${body}`;
           messages: [
             {
               role: 'system',
-              content: 'Summarize FT digest headlines. Return JSON array of max 5 concise bullets, each under 120 chars.'
+              content: 'Create very short digest highlights. Output must be strict JSON array of strings only.'
             },
             {
               role: 'user',
-              content: JSON.stringify({ articles: input })
+              content: `Summarize these FT article titles into 3 to 5 short highlight phrases.
+
+Requirements:
+- Return STRICT JSON array only, e.g. ["US legal setback for Musk", "French election momentum shift"].
+- Each highlight must be 3 to 8 words.
+- Do NOT copy article titles verbatim.
+- Focus on themes and key developments.
+- Exclude boilerplate like "Visit your myFT feed" or "More new stories...".
+- No numbering, no markdown, no extra text.
+
+Articles:
+${JSON.stringify({ articles: input })}`
             }
           ],
-          temperature: 0.2,
+          temperature: 0.15,
           maxOutputTokens: 500
         });
 
         const raw = safeStr(response?.content);
-        if (!raw) return input.slice(0, 5).map(item => item.title);
+        if (!raw) return fallbackHighlightsFromArticles(articles).slice(0, 5);
 
         let parsed = null;
         const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
@@ -400,11 +446,22 @@ ${body}`;
         } catch (_) {
           parsed = null;
         }
-        if (!Array.isArray(parsed)) return input.slice(0, 5).map(item => item.title);
-        return parsed.map(normalizeHighlightItem).filter(Boolean).slice(0, 5);
+        if (!Array.isArray(parsed)) return fallbackHighlightsFromArticles(articles).slice(0, 5);
+        const cleaned = parsed
+          .map(normalizeHighlightItem)
+          .filter(Boolean)
+          .map(line => htmlDecode(line))
+          .filter(line => {
+            const lower = safeStr(line).toLowerCase();
+            if (!lower) return false;
+            if (lower.includes('visit your myft feed')) return false;
+            if (lower.includes('more new stories available in your feed')) return false;
+            return true;
+          });
+        return cleaned.length ? cleaned.slice(0, 5) : fallbackHighlightsFromArticles(articles).slice(0, 5);
       } catch (error) {
         console.error('FT Digest Briefing: highlight generation failed:', error?.message || error);
-        return input.slice(0, 5).map(item => item.title);
+        return fallbackHighlightsFromArticles(articles).slice(0, 5);
       }
     }
 
@@ -532,6 +589,12 @@ ${body}`;
     .item p { margin:8px 0 0; color:#3c4043; font-size:13px; line-height:1.45; }
     .muted { color:#5f6368; font-size:12px; margin-top:8px; }
     .empty { color:#5f6368; font-size:14px; padding:16px 4px; }
+    .modal { position:fixed; inset:0; display:none; align-items:center; justify-content:center; background:rgba(32,33,36,.35); z-index:1200; }
+    .modal.show { display:flex; }
+    .modal-card { width:min(460px, 92vw); background:#fff; border:1px solid #e6e9ef; border-radius:12px; padding:18px; box-shadow:0 10px 28px rgba(0,0,0,.12); }
+    .modal-title { font-size:16px; font-weight:700; margin:0 0 6px; color:#202124; }
+    .modal-msg { font-size:13px; color:#5f6368; min-height:18px; }
+    .modal-steps { margin-top:10px; padding-left:16px; color:#3c4043; font-size:12px; line-height:1.6; }
     @media (max-width: 900px) {
       .grid { grid-template-columns: 1fr; }
     }
@@ -558,12 +621,34 @@ ${body}`;
       </div>
     </div>
   </div>
+  <div id="loadingModal" class="modal" aria-hidden="true">
+    <div class="modal-card">
+      <h3 class="modal-title">Generating FT briefing...</h3>
+      <div id="loadingMessage" class="modal-msg">Starting…</div>
+      <ul class="modal-steps">
+        <li>Scanning recent digest emails</li>
+        <li>Extracting and filtering article links</li>
+        <li>Generating concise highlights</li>
+      </ul>
+    </div>
+  </div>
 
   <script>
     const refreshBtn = document.getElementById('refreshBtn');
     const meta = document.getElementById('meta');
     const highlightsEl = document.getElementById('highlights');
     const articlesEl = document.getElementById('articles');
+    const loadingModal = document.getElementById('loadingModal');
+    const loadingMessage = document.getElementById('loadingMessage');
+    const progressMessages = [
+      'Scanning Financial Times digest emails…',
+      'Extracting candidate article links…',
+      'Filtering boilerplate and feed links…',
+      'Generating digest highlights…',
+      'Finalizing article briefing…'
+    ];
+    let progressTimer = null;
+    let progressIndex = 0;
 
     function esc(v){ return String(v||'').replace(/[&<>\"']/g, s => ({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',\"'\":'&#39;'}[s])); }
     function fmtDate(v){
@@ -571,8 +656,31 @@ ${body}`;
       if (Number.isNaN(d.getTime())) return 'Unknown date';
       return d.toLocaleString(undefined, { year:'numeric', month:'short', day:'numeric', hour:'numeric', minute:'2-digit' });
     }
+    function showLoadingModal() {
+      if (!loadingModal) return;
+      progressIndex = 0;
+      if (loadingMessage) loadingMessage.textContent = progressMessages[0];
+      loadingModal.classList.add('show');
+      loadingModal.setAttribute('aria-hidden', 'false');
+      if (progressTimer) clearInterval(progressTimer);
+      progressTimer = setInterval(() => {
+        progressIndex = Math.min(progressIndex + 1, progressMessages.length - 1);
+        if (loadingMessage) loadingMessage.textContent = progressMessages[progressIndex];
+      }, 1200);
+    }
+    function hideLoadingModal() {
+      if (progressTimer) {
+        clearInterval(progressTimer);
+        progressTimer = null;
+      }
+      if (!loadingModal) return;
+      loadingModal.classList.remove('show');
+      loadingModal.setAttribute('aria-hidden', 'true');
+    }
 
     async function load() {
+      showLoadingModal();
+      refreshBtn.disabled = true;
       meta.textContent = 'Loading...';
       highlightsEl.innerHTML = '';
       articlesEl.innerHTML = '<div class="empty">Loading recent FT digest articles...</div>';
@@ -610,6 +718,9 @@ ${body}`;
       } catch (error) {
         meta.textContent = 'Failed to load';
         articlesEl.innerHTML = '<div class="empty">Failed to load FT digest briefing.</div>';
+      } finally {
+        refreshBtn.disabled = false;
+        hideLoadingModal();
       }
     }
 
