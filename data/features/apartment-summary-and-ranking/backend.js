@@ -217,12 +217,19 @@ module.exports = {
       );
     }
 
-    function listingFingerprint(listing) {
-      const title = normalizeForSearch(listing.title).replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
-      const hood = normalizeForSearch(listing.neighborhood).replace(/\s+/g, ' ').trim();
-      const price = Number.isFinite(listing.price) ? String(Math.round(listing.price)) : 'na';
-      const beds = normalizeForSearch(listing.bedrooms);
-      return `${title}|${hood}|${price}|${beds}`;
+    function canonicalAddressKey(listing) {
+      const title = safeStr(listing?.title);
+      const subject = safeStr(listing?.sourceSubject);
+      const combined = `${title} ${subject}`;
+
+      // Prefer stable street-address style keys.
+      const match = combined.match(/\b\d{1,5}\s+[A-Za-z0-9.\- ]{2,60}(?:st|street|ave|avenue|rd|road|blvd|boulevard|dr|drive|ln|lane)\b/i);
+      if (match && match[0]) {
+        return normalizeForSearch(match[0]).replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+      }
+
+      // Fallback for cases where no explicit street address is present.
+      return normalizeForSearch(title).replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
     }
 
     async function loadAllCandidateEmails(userEmail) {
@@ -288,14 +295,31 @@ module.exports = {
         from: safeStr(email.originalFrom || email.from)
       }));
 
-      const deduped = [];
-      const seen = new Set();
+      const dedupedByAddress = new Map();
       for (const apt of apartmentsRaw) {
-        const fp = listingFingerprint(apt);
-        if (seen.has(fp)) continue;
-        seen.add(fp);
-        deduped.push(apt);
+        const key = canonicalAddressKey(apt);
+        if (!key) continue;
+
+        const existing = dedupedByAddress.get(key);
+        if (!existing) {
+          dedupedByAddress.set(key, apt);
+          continue;
+        }
+
+        // For duplicate addresses across multiple emails, keep the "best" row:
+        // 1) lower price, then 2) newer date.
+        const existingPrice = Number.isFinite(existing.price) ? existing.price : Number.MAX_SAFE_INTEGER;
+        const currentPrice = Number.isFinite(apt.price) ? apt.price : Number.MAX_SAFE_INTEGER;
+        if (currentPrice < existingPrice) {
+          dedupedByAddress.set(key, apt);
+          continue;
+        }
+        if (currentPrice === existingPrice && dateMs(apt.date) > dateMs(existing.date)) {
+          dedupedByAddress.set(key, apt);
+        }
       }
+
+      const deduped = Array.from(dedupedByAddress.values());
 
       deduped.sort((a, b) => {
         const ap = Number.isFinite(a.price) ? a.price : Number.MAX_SAFE_INTEGER;
