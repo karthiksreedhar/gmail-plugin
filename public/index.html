@@ -299,8 +299,22 @@
             border-color: #aecbfa;
         }
 
+        #categoryList .category-item {
+            position: relative;
+            padding-right: 46px;
+        }
+
+        #categoryList .category-count {
+            margin-left: auto;
+            min-width: 34px;
+            width: 34px;
+        }
+
         .sidebar-category-delete {
-            margin-left: 8px;
+            position: absolute;
+            right: 10px;
+            top: 50%;
+            transform: translateY(-50%);
             border: none;
             background: transparent;
             color: #5f6368;
@@ -310,10 +324,12 @@
             transition: opacity 0.15s ease;
             padding: 2px 4px;
             border-radius: 6px;
+            pointer-events: none;
         }
 
         #categoryList .category-item:hover .sidebar-category-delete {
             opacity: 1;
+            pointer-events: auto;
         }
 
         .sidebar-category-delete:hover {
