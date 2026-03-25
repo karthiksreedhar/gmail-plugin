@@ -3443,6 +3443,9 @@ function keywordCategorizeUnreplied(subject, body, from) {
 
 const AUTO_SYNC_INTERVAL_MS = 5 * 60 * 1000;
 const AUTO_SYNC_BACKFILL_COUNT = 50;
+const ONE_TIME_EXTRA_BACKFILL_USER = 'jwang28@scu.edu';
+const ONE_TIME_EXTRA_BACKFILL_KEY = 'jwang28_load_200_once_v1';
+const ONE_TIME_EXTRA_BACKFILL_COUNT = 200;
 const AUTO_SYNC_LOCK_TTL_MS = 3 * 60 * 1000;
 const AUTO_SYNC_GMAIL_FETCH_CONCURRENCY = 8;
 const AUTO_SYNC_LLM_TIMEOUT_MS = parseInt(process.env.AUTO_SYNC_LLM_TIMEOUT_MS || '20000', 10);
@@ -4281,12 +4284,60 @@ async function ensureUserBootstrap(userEmail) {
 function triggerAutoSyncForUser(userEmail, reason = 'manual-trigger') {
   const normalizedEmail = normalizeUserEmailForData(userEmail);
   setTimeout(() => {
-    syncUserInboxFromGmail(normalizedEmail, { forceBackfill: false })
+    (async () => {
+      let syncOpts = { forceBackfill: false };
+      let runReason = reason;
+      let oneTimeMode = false;
+
+      if (normalizedEmail === ONE_TIME_EXTRA_BACKFILL_USER) {
+        try {
+          const state = await getUserDoc('user_state', normalizedEmail).catch(() => null);
+          const flags = (state && typeof state.oneTimeBackfills === 'object' && state.oneTimeBackfills) ? state.oneTimeBackfills : {};
+          const alreadyDone = !!flags[ONE_TIME_EXTRA_BACKFILL_KEY];
+          if (!alreadyDone) {
+            oneTimeMode = true;
+            syncOpts = {
+              forceBackfill: true,
+              maxCandidates: ONE_TIME_EXTRA_BACKFILL_COUNT
+            };
+            runReason = `${reason}:one-time-200-backfill`;
+          }
+        } catch (e) {
+          console.warn(`[AutoSync] one-time backfill check failed for ${normalizedEmail}:`, e?.message || e);
+        }
+      }
+
+      const result = await syncUserInboxFromGmail(normalizedEmail, syncOpts);
+
+      if (oneTimeMode && result?.success) {
+        try {
+          const existingState = await getUserDoc('user_state', normalizedEmail).catch(() => null);
+          const existingFlags = (existingState && typeof existingState.oneTimeBackfills === 'object' && existingState.oneTimeBackfills)
+            ? existingState.oneTimeBackfills
+            : {};
+          await setUserDoc('user_state', normalizedEmail, {
+            ...(existingState || {}),
+            oneTimeBackfills: {
+              ...existingFlags,
+              [ONE_TIME_EXTRA_BACKFILL_KEY]: {
+                doneAt: new Date().toISOString(),
+                added: Number(result?.added) || 0
+              }
+            }
+          });
+        } catch (e) {
+          console.warn(`[AutoSync] failed to record one-time backfill flag for ${normalizedEmail}:`, e?.message || e);
+        }
+      }
+
+      return { result, runReason };
+    })()
       .then((result) => {
-        const added = Number(result?.added) || 0;
-        const status = result?.success ? 'ok' : 'failed';
-        const details = result?.reason ? ` reason=${result.reason}` : '';
-        console.log(`[AutoSync] trigger=${reason} user=${normalizedEmail} status=${status} added=${added}${details}`);
+        const syncResult = result?.result || {};
+        const added = Number(syncResult?.added) || 0;
+        const status = syncResult?.success ? 'ok' : 'failed';
+        const details = syncResult?.reason ? ` reason=${syncResult.reason}` : '';
+        console.log(`[AutoSync] trigger=${result?.runReason || reason} user=${normalizedEmail} status=${status} added=${added}${details}`);
       })
       .catch((err) => {
         console.error(`[AutoSync] trigger=${reason} user=${normalizedEmail} failed:`, err?.message || err);
