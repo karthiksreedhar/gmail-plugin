@@ -19,55 +19,26 @@ module.exports = {
       return `${subject}::${body.slice(0, 2000)}`;
     }
 
-    function heuristicTodos(email) {
-      const body = safeStr(email?.body || email?.originalBody || email?.snippet);
-      if (!body) return [];
-      const lines = body
-        .split('\n')
-        .map(l => l.trim())
-        .filter(Boolean)
-        .slice(0, 120);
+    function parseSummarizerStyleTodos(raw) {
+      const source = safeStr(raw);
+      if (!source) return [];
 
-      const out = [];
-      const bulletRe = /^[-*•]\s+(.+)$/;
-      const actionRe = /\b(please|need to|action item|todo|to do|follow up|by\s+\w+day|deadline|send|review|submit|complete|schedule|book)\b/i;
-      for (const line of lines) {
-        const m = line.match(bulletRe);
-        if (m && m[1]) {
-          out.push(m[1]);
-          continue;
-        }
-        if (actionRe.test(line) && line.length <= 180) out.push(line);
-      }
-      return Array.from(new Set(out.map(v => safeStr(v)).filter(Boolean))).slice(0, 5);
-    }
-
-    function parseModelTodos(raw, expectedIds) {
-      const txt = safeStr(raw);
-      const fallback = {};
-      (expectedIds || []).forEach(id => { fallback[id] = []; });
-      if (!txt) return fallback;
-
-      const fenceMatch = txt.match(/```(?:json)?\s*([\s\S]*?)```/i);
-      const candidate = fenceMatch ? fenceMatch[1].trim() : txt;
-      const jsonMatch = candidate.match(/\{[\s\S]*\}/);
-      const jsonText = jsonMatch ? jsonMatch[0] : candidate;
+      const fenceMatch = source.match(/```(?:json)?\s*([\s\S]*?)```/i);
+      const candidate = fenceMatch ? fenceMatch[1].trim() : source;
+      const jsonBlockMatch = candidate.match(/\{[\s\S]*\}/);
+      const jsonText = (jsonBlockMatch ? jsonBlockMatch[0] : candidate).trim();
 
       try {
         const parsed = JSON.parse(jsonText);
-        const items = Array.isArray(parsed?.items) ? parsed.items : [];
-        const out = { ...fallback };
-        for (const item of items) {
-          const id = safeStr(item?.id);
-          if (!id || !out.hasOwnProperty(id)) continue;
-          const todos = Array.isArray(item?.todos)
-            ? item.todos.map(t => safeStr(t)).filter(Boolean).slice(0, 5)
-            : [];
-          out[id] = todos;
-        }
-        return out;
+        const todosRaw = Array.isArray(parsed?.todos) ? parsed.todos : [];
+        const cleaned = todosRaw
+          .map(item => safeStr(item))
+          .filter(Boolean)
+          .filter(item => item.toLowerCase() !== 'no apparent todos')
+          .slice(0, 5);
+        return cleaned;
       } catch (_) {
-        return fallback;
+        return [];
       }
     }
 
@@ -146,44 +117,43 @@ module.exports = {
         }
 
         if (missing.length) {
-          let modelOutput = {};
-          if (typeof invokeGemini === 'function') {
-            const payload = missing.map(m => ({
-              id: m.id,
-              subject: safeStr(m.email?.subject),
-              from: safeStr(m.email?.originalFrom || m.email?.from),
-              body: safeStr(m.email?.body || m.email?.originalBody || m.email?.snippet).slice(0, 4000)
-            }));
-
-            const prompt = `Return strict JSON only.
-Shape:
-{
-  "items": [
-    { "id": "email-id", "todos": ["todo 1", "todo 2"] }
-  ]
-}
-Rules:
-- Use only IDs provided.
-- todos should contain actionable items only.
-- If none, return [] for that id.
-- Max 5 todos per id.
-
-Emails:
-${JSON.stringify(payload, null, 2)}`;
-
-            const completion = await invokeGemini({
-              model: typeof getGeminiModel === 'function' ? getGeminiModel() : undefined,
-              messages: [{ role: 'user', content: prompt }],
-              temperature: 0.2,
-              maxOutputTokens: 900
-            });
-
-            modelOutput = parseModelTodos(completion?.content || '', missing.map(m => m.id));
-          }
-
           for (const item of missing) {
-            const fromModel = Array.isArray(modelOutput[item.id]) ? modelOutput[item.id] : [];
-            const todos = fromModel.length ? fromModel : heuristicTodos(item.email);
+            let todos = [];
+            if (typeof invokeGemini === 'function') {
+              const prompt = `Analyze the following email and return STRICT JSON only.
+
+Required JSON shape:
+{
+  "summary": "One sentence maximum summary.",
+  "todos": ["TODO item 1", "TODO item 2"]
+}
+
+Rules:
+- "summary" must be at most one sentence.
+- "todos" must be an array of actionable items.
+- If there are no apparent TODOs, set todos to ["No apparent TODOs"] exactly.
+- Do not include markdown or any text outside JSON.
+
+Email:
+From: ${safeStr(item.email?.originalFrom || item.email?.from)}
+Subject: ${safeStr(item.email?.subject)}
+Body: ${safeStr(item.email?.body || item.email?.originalBody || item.email?.snippet).slice(0, 6000)}`;
+
+              try {
+                const completion = await invokeGemini({
+                  model: typeof getGeminiModel === 'function' ? getGeminiModel() : undefined,
+                  messages: [
+                    { role: 'system', content: 'You are an email summarization assistant.' },
+                    { role: 'user', content: prompt }
+                  ],
+                  temperature: 0.3,
+                  maxOutputTokens: 450
+                });
+                todos = parseSummarizerStyleTodos(completion?.content || '');
+              } catch (_) {
+                todos = [];
+              }
+            }
             todosByEmailId[item.id] = todos;
             cache[item.id] = {
               todos,

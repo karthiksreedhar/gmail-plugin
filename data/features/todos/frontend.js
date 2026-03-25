@@ -11,6 +11,8 @@
 
   const API = window.EmailAssistant;
   const todosCache = new Map(); // emailId -> string[]
+  const pendingIds = new Set();
+  const BATCH_SIZE = 3;
   let inflight = false;
 
   function escapeHtml(text) {
@@ -44,17 +46,21 @@
     const anchor = emailItem.querySelector('.email-meta-row');
     if (!anchor) return;
 
-    const line = document.createElement('div');
+    const line = document.createElement('span');
     line.className = 'todos-inline-line';
-    line.style.cssText = 'margin-top:6px;font-size:12px;line-height:1.4;color:#5f6368;';
-    const list = Array.isArray(todos) ? todos.filter(Boolean) : [];
-    if (list.length) {
-      line.innerHTML = `<strong style="color:#3c4043;">TODOs:</strong> ${escapeHtml(list.join(' | '))}`;
+    line.style.cssText = 'margin-left:10px;font-size:12px;line-height:1.3;color:#5f6368;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:58%;display:inline-block;vertical-align:middle;';
+    if (todos === null) {
+      line.innerHTML = '<strong style="color:#3c4043;">TODOs:</strong> Loading...';
     } else {
-      line.innerHTML = `<strong style="color:#3c4043;">TODOs:</strong> None`;
+      const list = Array.isArray(todos) ? todos.filter(Boolean) : [];
+      if (list.length) {
+        line.innerHTML = `<strong style="color:#3c4043;">TODOs:</strong> ${escapeHtml(list.join(' | '))}`;
+      } else {
+        line.innerHTML = '<strong style="color:#3c4043;">TODOs:</strong> None';
+      }
     }
 
-    anchor.insertAdjacentElement('afterend', line);
+    anchor.appendChild(line);
   }
 
   function collectVisibleEmailIds() {
@@ -72,7 +78,11 @@
     for (const item of emailItems) {
       const id = getEmailId(item);
       if (!id) continue;
-      renderTodosLine(item, todosCache.get(id) || []);
+      if (todosCache.has(id)) {
+        renderTodosLine(item, todosCache.get(id) || []);
+      } else {
+        renderTodosLine(item, null);
+      }
     }
   }
 
@@ -83,16 +93,23 @@
       const visibleIds = collectVisibleEmailIds();
       if (!visibleIds.length) return;
 
-      const missing = visibleIds.filter(id => !todosCache.has(id));
-      if (missing.length) {
+      const missing = visibleIds.filter(id => !todosCache.has(id) && !pendingIds.has(id));
+      const batchIds = missing.slice(0, BATCH_SIZE); // newest first (DOM order)
+      batchIds.forEach(id => pendingIds.add(id));
+      renderAllFromCache();
+
+      if (batchIds.length) {
         const response = await API.apiCall('/api/todos/extract-batch', {
           method: 'POST',
-          body: { emailIds: missing }
+          body: { emailIds: batchIds }
         });
         if (response && response.success && response.todosByEmailId && typeof response.todosByEmailId === 'object') {
           Object.entries(response.todosByEmailId).forEach(([id, todos]) => {
             todosCache.set(id, Array.isArray(todos) ? todos : []);
+            pendingIds.delete(id);
           });
+        } else {
+          batchIds.forEach(id => pendingIds.delete(id));
         }
       }
 
@@ -110,7 +127,7 @@
     });
 
     setTimeout(() => { hydrateTodos(); }, 200);
-    setInterval(() => { hydrateTodos(); }, 2500);
+    setInterval(() => { hydrateTodos(); }, 900);
 
     if (typeof window.displayEmails === 'function') {
       const original = window.displayEmails;
