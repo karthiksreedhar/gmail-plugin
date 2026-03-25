@@ -4962,7 +4962,47 @@ app.post('/api/auto-sync/run', async (req, res) => {
     if (force) {
       clearedLock = clearAutoSyncLockForUser(normalizedEmail);
     }
-    const result = await syncUserInboxFromGmail(normalizedEmail, { forceBackfill: false });
+    let syncOpts = { forceBackfill: false };
+    let oneTimeMode = false;
+    if (normalizedEmail === ONE_TIME_EXTRA_BACKFILL_USER) {
+      try {
+        const state = await getUserDoc('user_state', normalizedEmail).catch(() => null);
+        const flags = (state && typeof state.oneTimeBackfills === 'object' && state.oneTimeBackfills) ? state.oneTimeBackfills : {};
+        const alreadyDone = !!flags[ONE_TIME_EXTRA_BACKFILL_KEY];
+        if (!alreadyDone) {
+          oneTimeMode = true;
+          syncOpts = {
+            forceBackfill: true,
+            maxCandidates: ONE_TIME_EXTRA_BACKFILL_COUNT
+          };
+        }
+      } catch (e) {
+        console.warn(`[AutoSync] one-time backfill check failed for ${normalizedEmail}:`, e?.message || e);
+      }
+    }
+
+    const result = await syncUserInboxFromGmail(normalizedEmail, syncOpts);
+
+    if (oneTimeMode && result?.success && !result?.skipped) {
+      try {
+        const existingState = await getUserDoc('user_state', normalizedEmail).catch(() => null);
+        const existingFlags = (existingState && typeof existingState.oneTimeBackfills === 'object' && existingState.oneTimeBackfills)
+          ? existingState.oneTimeBackfills
+          : {};
+        await setUserDoc('user_state', normalizedEmail, {
+          ...(existingState || {}),
+          oneTimeBackfills: {
+            ...existingFlags,
+            [ONE_TIME_EXTRA_BACKFILL_KEY]: {
+              doneAt: new Date().toISOString(),
+              added: Number(result?.added) || 0
+            }
+          }
+        });
+      } catch (e) {
+        console.warn(`[AutoSync] failed to record one-time backfill flag for ${normalizedEmail}:`, e?.message || e);
+      }
+    }
     autoSyncLastSummary = {
       reason: (req.body && req.body.reason) || 'manual',
       usersProcessed: 1,
@@ -4974,6 +5014,7 @@ app.post('/api/auto-sync/run', async (req, res) => {
     return res.json({
       success: !!result?.success,
       result,
+      oneTimeBackfill: oneTimeMode,
       force,
       clearedLock,
       intervalMs: AUTO_SYNC_INTERVAL_MS,
