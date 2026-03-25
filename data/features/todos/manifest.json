@@ -1,0 +1,13 @@
+{
+  "id": "todos",
+  "name": "TODOs",
+  "version": "1.0.0",
+  "description": "Automatically displays TODO items under each email's category pills.",
+  "author": "Feature Generator Agent",
+  "backend": "backend.js",
+  "frontend": "frontend.js",
+  "permissions": [
+    "emails:read",
+    "api:custom"
+  ]
+}
