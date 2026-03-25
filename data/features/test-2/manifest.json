@@ -1,9 +1,0 @@
-{
-  "id": "test-2",
-  "name": "Test-2",
-  "version": "1.0.0",
-  "description": "Adds a button that displays a popup when clicked.",
-  "author": "Feature Generator Agent",
-  "frontend": "frontend.js",
-  "permissions": []
-}
