@@ -1,0 +1,13 @@
+{
+  "id": "apartment-summary-and-ranking",
+  "name": "Apartment Email Summary and Ranking",
+  "version": "1.0.0",
+  "description": "Summarizes apartment listings in the 'Apartments' folder, ranks them by price, and summarizes neighborhood availability.",
+  "author": "Feature Generator Agent",
+  "backend": "backend.js",
+  "frontend": "frontend.js",
+  "permissions": [
+    "emails:read",
+    "api:custom"
+  ]
+}
