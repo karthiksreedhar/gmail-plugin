@@ -1,0 +1,13 @@
+{
+  "id": "emails-requiring-reply",
+  "name": "Emails Requiring Reply",
+  "version": "1.0.0",
+  "description": "Promotes the 5 latest emails the user is most likely to reply to, based on thread history.",
+  "author": "Feature Generator Agent",
+  "backend": "backend.js",
+  "frontend": "frontend.js",
+  "permissions": [
+    "emails:read",
+    "api:custom"
+  ]
+}
