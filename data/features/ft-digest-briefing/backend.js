@@ -23,10 +23,12 @@ module.exports = {
     function htmlDecode(text) {
       return safeStr(text)
         .replace(/&amp;/g, '&')
+        .replace(/&#39;/g, "'")
+        .replace(/&#x27;/gi, "'")
+        .replace(/&#34;/g, '"')
         .replace(/&lt;/g, '<')
         .replace(/&gt;/g, '>')
-        .replace(/&quot;/g, '"')
-        .replace(/&#39;/g, "'");
+        .replace(/&quot;/g, '"');
     }
 
     function stripHtmlKeepLines(raw) {
@@ -92,6 +94,30 @@ module.exports = {
       if (u.includes('email.news-alerts.ft.com/c/')) return true;
       if (u.includes('ft.com/content/')) return true;
       return false;
+    }
+
+    function isNonArticleTitle(title) {
+      const t = safeStr(title).toLowerCase();
+      if (!t) return true;
+      if (t.startsWith('(?desktop=')) return true;
+      return (
+        t === 'myft daily digest' ||
+        t === 'terms & conditions' ||
+        t === 'privacy policy' ||
+        t === 'register for free' ||
+        t === 'find out more' ||
+        t === 'north america (2)' ||
+        t === 'europe' ||
+        t === 'technology' ||
+        t === 'world' ||
+        t === 'us' ||
+        t === 'markets' ||
+        t === 'opinion' ||
+        t.includes('daily digest of stories from topics') ||
+        t.includes('terms') ||
+        t.includes('privacy') ||
+        t.includes('cookies')
+      );
     }
 
     function looksLikeHeading(text) {
@@ -168,11 +194,11 @@ module.exports = {
             ? titleCandidate
             : (safeStr(email?.subject) || 'FT Article');
           const titleIndex = Math.max(0, i - 1);
-          const summary = findShortSummary(lines, titleIndex, i) || safeStr(email?.snippet).slice(0, 180);
+          const summary = findShortSummary(lines, titleIndex, i);
 
           articles.push({
-            title,
-            summary,
+            title: htmlDecode(title),
+            summary: htmlDecode(summary),
             url,
             date: safeStr(email?.date) || null,
             sourceSubject: safeStr(email?.subject) || 'myFT Daily Digest'
@@ -182,7 +208,7 @@ module.exports = {
 
       return articles.filter(article => {
         const t = safeStr(article?.title).toLowerCase();
-        return t && t !== 'myft daily digest';
+        return t && !isNonArticleTitle(t);
       });
     }
 
@@ -210,12 +236,12 @@ module.exports = {
     }
 
     function normalizeArticleItem(item, fallbackDate, fallbackSubject) {
-      const title = safeStr(item?.title);
-      const summary = safeStr(item?.summary);
+      const title = htmlDecode(safeStr(item?.title));
+      const summary = htmlDecode(safeStr(item?.summary));
       const url = safeStr(item?.url);
       if (!title || !url) return null;
       if (!isLikelyArticleUrl(url)) return null;
-      if (/^myft daily digest$/i.test(title)) return null;
+      if (isNonArticleTitle(title)) return null;
       return {
         title,
         summary,
@@ -223,16 +249,6 @@ module.exports = {
         date: safeStr(item?.date) || fallbackDate || null,
         sourceSubject: fallbackSubject || 'myFT Daily Digest'
       };
-    }
-
-    function needsAiAssist(extracted) {
-      if (!Array.isArray(extracted) || extracted.length < 2) return true;
-      let generic = 0;
-      for (const article of extracted) {
-        const title = safeStr(article?.title).toLowerCase();
-        if (!title || title.includes('daily digest') || title.includes('stories from topics')) generic++;
-      }
-      return generic >= Math.ceil(extracted.length * 0.5);
     }
 
     async function extractArticlesFromEmailWithGemini(email) {
@@ -252,6 +268,7 @@ Return STRICT JSON array only (no markdown), with each entry shaped exactly:
 Rules:
 - Include only real article entries from the digest.
 - Exclude ads, promos, subscriptions, account links, and section headers.
+- Exclude legal/footer links (Privacy Policy, Terms & Conditions, Register for free, cookie/settings links).
 - Keep only items with a valid article URL.
 - Max 12 entries.
 
@@ -446,12 +463,10 @@ ${body}`;
       const seen = new Set();
       for (const email of digestEmails) {
         const extracted = extractArticlesFromEmail(email);
-        const aiExtracted = needsAiAssist(extracted)
-          ? await extractArticlesFromEmailWithGemini(email)
-          : [];
+        const aiExtracted = await extractArticlesFromEmailWithGemini(email);
         const chosen = aiExtracted.length ? aiExtracted : extracted;
         for (const article of chosen) {
-          const key = safeStr(article.url || article.title);
+          const key = `${safeStr(article.url)}::${safeStr(article.title).toLowerCase()}`;
           if (seen.has(key)) continue;
           seen.add(key);
           allArticles.push(article);
