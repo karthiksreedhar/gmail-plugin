@@ -29,12 +29,18 @@ module.exports = {
         .replace(/&#39;/g, "'");
     }
 
-    function stripHtml(raw) {
+    function stripHtmlKeepLines(raw) {
       return safeStr(raw)
-        .replace(/<style[\s\S]*?<\/style>/gi, ' ')
-        .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+        .replace(/<style[\s\S]*?<\/style>/gi, '\n')
+        .replace(/<script[\s\S]*?<\/script>/gi, '\n')
+        .replace(/<br\s*\/?>/gi, '\n')
+        .replace(/<\/p>/gi, '\n')
+        .replace(/<\/div>/gi, '\n')
         .replace(/<[^>]+>/g, ' ')
-        .replace(/\s+/g, ' ')
+        .replace(/\r\n/g, '\n')
+        .replace(/\r/g, '\n')
+        .replace(/[ \t]+/g, ' ')
+        .replace(/\n{3,}/g, '\n\n')
         .trim();
     }
 
@@ -98,13 +104,29 @@ module.exports = {
       return false;
     }
 
+    function isDigestBoilerplateLine(text) {
+      const lower = safeStr(text).toLowerCase();
+      if (!lower) return true;
+      return (
+        lower.startsWith('myft daily digest') ||
+        lower.includes('best ft comment and analysis') ||
+        lower.includes('most popular stories in the last 24 hours') ||
+        lower.includes('see all your stories in the order they were published') ||
+        lower === '--------' ||
+        lower.includes(':header:plain') ||
+        lower.includes(':plain') ||
+        lower.includes('this message came from outside your organization')
+      );
+    }
+
     function findNearestTitle(lines, urlIndex) {
-      for (let i = 1; i <= 4; i++) {
+      for (let i = 1; i <= 8; i++) {
         const candidate = safeStr(lines[urlIndex - i]);
         if (!candidate) continue;
         if (candidate.includes('http://') || candidate.includes('https://')) continue;
+        if (isDigestBoilerplateLine(candidate)) continue;
         if (looksLikeHeading(candidate)) continue;
-        if (candidate.length < 12 || candidate.length > 220) continue;
+        if (candidate.length < 14 || candidate.length > 220) continue;
         return htmlDecode(candidate.replace(/^[-•\s]+/, ''));
       }
       return '';
@@ -115,15 +137,16 @@ module.exports = {
         const text = safeStr(lines[i]);
         if (!text) continue;
         if (text.includes('http://') || text.includes('https://')) continue;
+        if (isDigestBoilerplateLine(text)) continue;
         if (looksLikeHeading(text)) continue;
-        if (text.length < 20 || text.length > 260) continue;
+        if (text.length < 24 || text.length > 240) continue;
         return htmlDecode(text);
       }
       return '';
     }
 
     function extractArticlesFromEmail(email) {
-      const text = stripHtml(email?.body || email?.originalBody || email?.snippet || '');
+      const text = stripHtmlKeepLines(email?.body || email?.originalBody || email?.snippet || '');
       const lines = text.split(/\r?\n/).map(line => safeStr(line)).filter(Boolean);
 
       const articles = [];
@@ -140,9 +163,12 @@ module.exports = {
           if (!url || seenUrls.has(url) || !isLikelyArticleUrl(url)) continue;
           seenUrls.add(url);
 
-          const title = findNearestTitle(lines, i) || safeStr(email?.subject) || 'FT Article';
+          const titleCandidate = findNearestTitle(lines, i);
+          const title = titleCandidate && !/^myft daily digest$/i.test(titleCandidate)
+            ? titleCandidate
+            : (safeStr(email?.subject) || 'FT Article');
           const titleIndex = Math.max(0, i - 1);
-          const summary = findShortSummary(lines, titleIndex, i);
+          const summary = findShortSummary(lines, titleIndex, i) || safeStr(email?.snippet).slice(0, 180);
 
           articles.push({
             title,
@@ -154,7 +180,105 @@ module.exports = {
         }
       }
 
-      return articles;
+      return articles.filter(article => {
+        const t = safeStr(article?.title).toLowerCase();
+        return t && t !== 'myft daily digest';
+      });
+    }
+
+    function parseJsonArray(raw) {
+      const source = safeStr(raw);
+      if (!source) return [];
+      const fenced = source.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
+      const candidate = fenced && fenced[1] ? fenced[1].trim() : source;
+      try {
+        const parsed = JSON.parse(candidate);
+        return Array.isArray(parsed) ? parsed : [];
+      } catch (_) {
+        const start = candidate.indexOf('[');
+        const end = candidate.lastIndexOf(']');
+        if (start >= 0 && end > start) {
+          try {
+            const parsed = JSON.parse(candidate.slice(start, end + 1));
+            return Array.isArray(parsed) ? parsed : [];
+          } catch (_) {
+            return [];
+          }
+        }
+        return [];
+      }
+    }
+
+    function normalizeArticleItem(item, fallbackDate, fallbackSubject) {
+      const title = safeStr(item?.title);
+      const summary = safeStr(item?.summary);
+      const url = safeStr(item?.url);
+      if (!title || !url) return null;
+      if (!isLikelyArticleUrl(url)) return null;
+      if (/^myft daily digest$/i.test(title)) return null;
+      return {
+        title,
+        summary,
+        url,
+        date: safeStr(item?.date) || fallbackDate || null,
+        sourceSubject: fallbackSubject || 'myFT Daily Digest'
+      };
+    }
+
+    function needsAiAssist(extracted) {
+      if (!Array.isArray(extracted) || extracted.length < 2) return true;
+      let generic = 0;
+      for (const article of extracted) {
+        const title = safeStr(article?.title).toLowerCase();
+        if (!title || title.includes('daily digest') || title.includes('stories from topics')) generic++;
+      }
+      return generic >= Math.ceil(extracted.length * 0.5);
+    }
+
+    async function extractArticlesFromEmailWithGemini(email) {
+      if (typeof invokeGemini !== 'function') return [];
+      const body = safeStr(email?.body || email?.originalBody || email?.snippet).slice(0, 14000);
+      if (!body) return [];
+
+      const prompt = `Extract article entries from this Financial Times digest email.
+
+Return STRICT JSON array only (no markdown), with each entry shaped exactly:
+{
+  "title": "Article title",
+  "summary": "One sentence summary (max 30 words)",
+  "url": "https://..."
+}
+
+Rules:
+- Include only real article entries from the digest.
+- Exclude ads, promos, subscriptions, account links, and section headers.
+- Keep only items with a valid article URL.
+- Max 12 entries.
+
+Email:
+Subject: ${safeStr(email?.subject)}
+Body:
+${body}`;
+
+      try {
+        const response = await invokeGemini({
+          model: typeof getGeminiModel === 'function' ? getGeminiModel() : undefined,
+          messages: [
+            { role: 'system', content: 'You extract structured article data from newsletter emails.' },
+            { role: 'user', content: prompt }
+          ],
+          temperature: 0.1,
+          maxOutputTokens: 1500
+        });
+
+        const parsed = parseJsonArray(response?.content || '');
+        return parsed
+          .map(item => normalizeArticleItem(item, safeStr(email?.date), safeStr(email?.subject)))
+          .filter(Boolean);
+      } catch (error) {
+        console.error('FT Digest Briefing: AI extraction failed:', error?.message || error);
+        return [];
+      }
     }
 
     function dateMs(value) {
@@ -212,6 +336,12 @@ module.exports = {
       return out;
     }
 
+    function normalizeHighlightItem(item) {
+      if (typeof item === 'string') return safeStr(item);
+      if (!item || typeof item !== 'object') return '';
+      return safeStr(item.bullet || item.text || item.summary || item.title || item.item || '');
+    }
+
     async function buildHighlights(articles) {
       const input = (articles || []).slice(0, 12).map((a, index) => ({
         i: index + 1,
@@ -253,7 +383,7 @@ module.exports = {
           parsed = null;
         }
         if (!Array.isArray(parsed)) return input.slice(0, 5).map(item => item.title);
-        return parsed.map(item => safeStr(item)).filter(Boolean).slice(0, 5);
+        return parsed.map(normalizeHighlightItem).filter(Boolean).slice(0, 5);
       } catch (error) {
         console.error('FT Digest Briefing: highlight generation failed:', error?.message || error);
         return input.slice(0, 5).map(item => item.title);
@@ -316,8 +446,12 @@ module.exports = {
       const seen = new Set();
       for (const email of digestEmails) {
         const extracted = extractArticlesFromEmail(email);
-        for (const article of extracted) {
-          const key = `${article.title}::${article.url}`;
+        const aiExtracted = needsAiAssist(extracted)
+          ? await extractArticlesFromEmailWithGemini(email)
+          : [];
+        const chosen = aiExtracted.length ? aiExtracted : extracted;
+        for (const article of chosen) {
+          const key = safeStr(article.url || article.title);
           if (seen.has(key)) continue;
           seen.add(key);
           allArticles.push(article);
