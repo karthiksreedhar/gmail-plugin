@@ -5,7 +5,14 @@
 
 module.exports = {
   initialize(context) {
-    const { app, getCurrentUser, getUserDoc, loadResponseEmails } = context;
+    const {
+      app,
+      getCurrentUser,
+      getUserDoc,
+      loadResponseEmails,
+      invokeGemini,
+      getGeminiModel
+    } = context;
 
     function safeStr(v) {
       return String(v || '').trim();
@@ -75,6 +82,170 @@ module.exports = {
       return 'Waiting';
     }
 
+    function stripHtmlAndNoise(raw) {
+      const text = safeStr(raw);
+      if (!text) return '';
+      return text
+        .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+        .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+        .replace(/<[^>]+>/g, ' ')
+        .replace(/https?:\/\/\S+/g, ' ')
+        .replace(/\bZjQcmQRYFpfptBanner(Start|End)\b/gi, ' ')
+        .replace(/This Message Is From an External Sender[\s\S]*?(?=\n\n|$)/gi, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+    }
+
+    function buildStatusInput(email) {
+      const body = stripHtmlAndNoise(email?.body || email?.originalBody || '');
+      const snippet = stripHtmlAndNoise(email?.snippet || '');
+      return {
+        subject: safeStr(email?.subject).slice(0, 300),
+        snippet: snippet.slice(0, 600),
+        body: body.slice(0, 1800)
+      };
+    }
+
+    function parseJsonFromModel(text) {
+      const raw = safeStr(text);
+      if (!raw) return null;
+
+      const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
+      const candidate = fenced && fenced[1] ? fenced[1].trim() : raw;
+
+      try {
+        return JSON.parse(candidate);
+      } catch (_) {
+        const start = candidate.indexOf('[');
+        const end = candidate.lastIndexOf(']');
+        if (start >= 0 && end > start) {
+          try {
+            return JSON.parse(candidate.slice(start, end + 1));
+          } catch (_) {
+            return null;
+          }
+        }
+        return null;
+      }
+    }
+
+    function cleanPosition(value) {
+      const text = safeStr(value)
+        .replace(/\s+/g, ' ')
+        .replace(/^[\-"'\s:]+/, '')
+        .replace(/[\-"'\s:]+$/, '');
+      if (!text) return '';
+      return text
+        .replace(/\s+\(id:\s*[^)]+\)$/i, '')
+        .replace(/\s+\|\s+.+$/i, '')
+        .replace(/\s+-\s+.+$/i, '')
+        .trim();
+    }
+
+    function fallbackPositionFromEmail(email) {
+      const subject = safeStr(email?.subject);
+      const body = stripHtmlAndNoise(email?.body || email?.originalBody || '');
+      const corpus = `${subject}\n${body.slice(0, 1500)}`;
+
+      const patterns = [
+        /thank you for your interest in\s+(.{3,140}?)(?:\.|,|\n|$)/i,
+        /application for\s+(.{3,140}?)(?:\.|,|\n|$)/i,
+        /interview for\s+(.{3,140}?)(?:\.|,|\n|$)/i,
+        /position\s*(?:for|:)?\s+(.{3,140}?)(?:\.|,|\n|$)/i,
+        /role\s*(?:for|:)?\s+(.{3,140}?)(?:\.|,|\n|$)/i
+      ];
+
+      for (const pattern of patterns) {
+        const match = corpus.match(pattern);
+        if (match && match[1]) {
+          const candidate = cleanPosition(match[1]);
+          if (candidate && !/application status|your application/i.test(candidate)) {
+            return candidate;
+          }
+        }
+      }
+
+      const subjectCandidate = cleanPosition(
+        subject
+          .replace(/^re:\s*/i, '')
+          .replace(/^fwd:\s*/i, '')
+          .replace(/your job application status.*$/i, '')
+      );
+      return subjectCandidate || 'Unknown Position';
+    }
+
+    async function classifyApplicationsWithGemini(items) {
+      if (!Array.isArray(items) || !items.length || typeof invokeGemini !== 'function') {
+        return new Map();
+      }
+
+      const limitedItems = items.slice(0, 120).map((item, idx) => ({
+        idx,
+        company: item.company,
+        from: item.from,
+        ...buildStatusInput(item.email)
+      }));
+
+      const systemPrompt = [
+        'You extract job application position title and classify status from latest email updates.',
+        'Return ONLY JSON (no markdown).',
+        'Statuses must be one of: Offer, Rejected, Withdrawn, Interviewing, Assessment, Applied, Under Review, Waiting.',
+        'Use latest email only. Position should be the role title (for example: Software Engineer Intern).',
+        'If position is not identifiable, set position to "Unknown Position".',
+        'If uncertain about status, choose the most conservative status.'
+      ].join(' ');
+
+      const userPrompt = JSON.stringify({
+        task: 'Classify each item status from latest email content',
+        output_format: [
+          {
+            idx: 0,
+            position: 'Software Engineer Intern',
+            status: 'Waiting',
+            confidence: 'low|medium|high',
+            reason: 'brief reason'
+          }
+        ],
+        items: limitedItems
+      });
+
+      try {
+        const response = await invokeGemini({
+          model: typeof getGeminiModel === 'function' ? getGeminiModel() : undefined,
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userPrompt }
+          ],
+          temperature: 0,
+          maxOutputTokens: 2400
+        });
+
+        const parsed = parseJsonFromModel(response?.content || '');
+        if (!Array.isArray(parsed)) return new Map();
+
+        const allowed = new Set(['Offer', 'Rejected', 'Withdrawn', 'Interviewing', 'Assessment', 'Applied', 'Under Review', 'Waiting']);
+        const byIndex = new Map();
+        for (const row of parsed) {
+          const idx = Number(row?.idx);
+          const status = safeStr(row?.status);
+          const position = cleanPosition(row?.position) || 'Unknown Position';
+          if (!Number.isInteger(idx) || idx < 0 || idx >= limitedItems.length) continue;
+          if (!allowed.has(status)) continue;
+          byIndex.set(idx, { status, position });
+        }
+
+        const mapped = new Map();
+        for (let i = 0; i < limitedItems.length; i++) {
+          const entry = byIndex.get(i);
+          if (entry) mapped.set(items[i].key, entry);
+        }
+        return mapped;
+      } catch (error) {
+        console.error('Job Application Tracker: Gemini status classification failed:', error?.message || error);
+        return new Map();
+      }
+    }
+
     function dateMs(email) {
       const ms = new Date(email?.date || 0).getTime();
       return Number.isFinite(ms) ? ms : 0;
@@ -106,14 +277,24 @@ module.exports = {
         }
       }
 
-      const applications = Array.from(byCompany.values())
-        .map(({ company, email }) => ({
+      const companyRows = Array.from(byCompany.values()).map(({ company, email }) => ({
+        key: safeStr(company).toLowerCase(),
+        company,
+        email,
+        from: safeStr(email?.originalFrom || email?.from)
+      }));
+
+      const aiResults = await classifyApplicationsWithGemini(companyRows);
+
+      const applications = companyRows
+        .map(({ key, company, email, from }) => ({
+          position: aiResults.get(key)?.position || fallbackPositionFromEmail(email),
           company,
-          status: statusFromEmail(email),
+          status: aiResults.get(key)?.status || statusFromEmail(email),
           lastUpdated: email?.date || null,
           latestSubject: safeStr(email?.subject) || 'No Subject',
           emailId: safeStr(email?.id),
-          from: safeStr(email?.originalFrom || email?.from)
+          from
         }))
         .sort((a, b) => new Date(b.lastUpdated || 0) - new Date(a.lastUpdated || 0));
 
@@ -209,13 +390,14 @@ module.exports = {
         const rows = list.map(it => \`
           <tr>
             <td><div>\${esc(it.company)}</div><div class="muted">\${esc(it.from || '')}</div></td>
+            <td>\${esc(it.position || 'Unknown Position')}</td>
             <td><span class="status \${statusClass(it.status)}">\${esc(it.status)}</span></td>
             <td>\${esc(fmtDate(it.lastUpdated))}</td>
             <td>\${esc(it.latestSubject)}</td>
           </tr>\`).join('');
         content.innerHTML = \`
           <table>
-            <thead><tr><th>Company</th><th>Status</th><th>Last Updated</th><th>Most Recent Email Subject</th></tr></thead>
+            <thead><tr><th>Company</th><th>Position</th><th>Status</th><th>Last Updated</th><th>Most Recent Email Subject</th></tr></thead>
             <tbody>\${rows}</tbody>
           </table>\`;
       } catch (e) {
