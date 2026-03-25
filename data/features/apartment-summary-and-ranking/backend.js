@@ -93,6 +93,13 @@ module.exports = {
       return /\b(apartment|studio|1br|2br|3br|bedroom|rent|lease|unit)\b/.test(haystack);
     }
 
+    function isApartmentCategoryEmail(email) {
+      const cats = Array.isArray(email?.categories) && email.categories.length
+        ? email.categories
+        : (email?.category ? [email.category] : []);
+      return cats.some(cat => normalizeForSearch(cat).includes('apartment'));
+    }
+
     function parsePrice(email) {
       const haystack = [
         safeStr(email?.subject),
@@ -176,6 +183,34 @@ module.exports = {
       return 'Apartment Listing';
     }
 
+    function isLikelyPromotion(email) {
+      const text = [
+        safeStr(email?.subject),
+        safeStr(email?.snippet),
+        safeStr(email?.body),
+        safeStr(email?.originalBody)
+      ].join(' ').toLowerCase();
+
+      if (!text) return false;
+      return (
+        text.includes('unsubscribe') ||
+        text.includes('sponsored') ||
+        text.includes('advertisement') ||
+        text.includes('promo') ||
+        text.includes('promotion') ||
+        text.includes('recommended for you') ||
+        text.includes('you may also like')
+      );
+    }
+
+    function listingFingerprint(listing) {
+      const title = normalizeForSearch(listing.title).replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+      const hood = normalizeForSearch(listing.neighborhood).replace(/\s+/g, ' ').trim();
+      const price = Number.isFinite(listing.price) ? String(Math.round(listing.price)) : 'na';
+      const beds = normalizeForSearch(listing.bedrooms);
+      return `${title}|${hood}|${price}|${beds}`;
+    }
+
     async function loadAllCandidateEmails(userEmail) {
       let responseEmails = [];
       try {
@@ -222,11 +257,13 @@ module.exports = {
 
     async function buildApartmentRankings(userEmail) {
       const allEmails = await loadAllCandidateEmails(userEmail);
-      const apartmentEmails = allEmails
-        .filter(isApartmentEmail)
+      const categoryOnly = allEmails.filter(isApartmentCategoryEmail);
+      const seedEmails = categoryOnly.length ? categoryOnly : allEmails.filter(isApartmentEmail);
+      const apartmentEmails = seedEmails
+        .filter(email => !isLikelyPromotion(email))
         .sort((a, b) => dateMs(b.date) - dateMs(a.date));
 
-      const apartments = apartmentEmails.map(email => ({
+      const apartmentsRaw = apartmentEmails.map(email => ({
         emailId: safeStr(email.id),
         title: parseAddress(email),
         neighborhood: parseNeighborhood(email),
@@ -237,14 +274,23 @@ module.exports = {
         from: safeStr(email.originalFrom || email.from)
       }));
 
-      apartments.sort((a, b) => {
+      const deduped = [];
+      const seen = new Set();
+      for (const apt of apartmentsRaw) {
+        const fp = listingFingerprint(apt);
+        if (seen.has(fp)) continue;
+        seen.add(fp);
+        deduped.push(apt);
+      }
+
+      deduped.sort((a, b) => {
         const ap = Number.isFinite(a.price) ? a.price : Number.MAX_SAFE_INTEGER;
         const bp = Number.isFinite(b.price) ? b.price : Number.MAX_SAFE_INTEGER;
         if (ap !== bp) return ap - bp;
         return safeStr(a.neighborhood).localeCompare(safeStr(b.neighborhood));
       });
 
-      return apartments.map((apt, idx) => ({
+      return deduped.map((apt, idx) => ({
         rank: idx + 1,
         ...apt
       }));
@@ -371,4 +417,3 @@ module.exports = {
     });
   }
 };
-
