@@ -1,0 +1,11 @@
+{
+  "id": "phd-filter",
+  "name": "PhD Filter",
+  "version": "1.0.0",
+  "description": "Adds a Filter SEAS button that shows only SEAS emails aimed specifically at PhD students.",
+  "author": "ks4190@columbia",
+  "frontend": "frontend.js",
+  "permissions": [
+    "emails:read"
+  ]
+}
