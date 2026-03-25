@@ -109,6 +109,12 @@
 
     const items = Array.from(container.querySelectorAll('.email-item'));
     if (!items.length) return;
+    const allEmails = Array.isArray(API.getEmails()) ? API.getEmails() : [];
+    const dateById = new Map(
+      allEmails
+        .map(e => [String(e?.id || '').trim(), new Date(e?.date || 0).getTime()])
+        .filter(([id, ms]) => id && Number.isFinite(ms))
+    );
 
     const selected = [];
     const normal = [];
@@ -130,11 +136,13 @@
         const marker = item.querySelector('.reply-priority-marker');
         if (marker) marker.remove();
         clearDismissButton(item);
-        normal.push({ item, index });
+        const ms = Number(dateById.get(id));
+        normal.push({ item, index, ms: Number.isFinite(ms) ? ms : -Infinity });
       }
     });
 
     selected.sort((a, b) => (a.rank - b.rank) || (a.index - b.index));
+    normal.sort((a, b) => (b.ms - a.ms) || (a.index - b.index));
     const reordered = [...selected.map(x => x.item), ...normal.map(x => x.item)];
     reordered.forEach(node => container.appendChild(node));
   }
