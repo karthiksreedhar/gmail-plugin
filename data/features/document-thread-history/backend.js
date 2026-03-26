@@ -36,6 +36,8 @@ module.exports = {
     }
 
     function dateMsFromMessage(message) {
+      const fromDate = Date.parse(safeStr(message?.date));
+      if (Number.isFinite(fromDate) && fromDate > 0) return fromDate;
       const internal = Number(message?.internalDate);
       if (Number.isFinite(internal) && internal > 0) return internal;
       const headerDate = Date.parse(getHeader(message, 'Date'));
@@ -56,32 +58,73 @@ module.exports = {
       const emails = await loadDocumentsCategoryEmails(userEmail);
       if (!emails.length) return [];
 
-      const gmailClient = typeof context.gmail === 'function' ? await context.gmail() : null;
-      const byThread = new Map();
+      const wantedThreadIds = new Set();
+      const wantedResponseIds = new Set();
+      const byThreadFallback = new Map();
       for (const email of emails) {
         const id = safeStr(email?.id);
         if (!id) continue;
-        const threadId = normalizeThreadId(email?.threadId || email?.threadID || id);
-        if (!byThread.has(threadId)) byThread.set(threadId, []);
-        byThread.get(threadId).push(email);
+        wantedResponseIds.add(id);
+        const threadId = normalizeThreadId(email?.threadId || email?.threadID);
+        if (threadId) wantedThreadIds.add(threadId);
+        const fallbackKey = threadId || id;
+        if (!byThreadFallback.has(fallbackKey)) byThreadFallback.set(fallbackKey, []);
+        byThreadFallback.get(fallbackKey).push(email);
       }
 
+      const threadDoc = await getUserDoc('email_threads', userEmail).catch(() => null);
+      const allThreads = asArray(threadDoc?.threads);
       const output = [];
-      for (const [threadId, threadEmails] of byThread.entries()) {
+      const seenOutputThreadIds = new Set();
+      for (const thread of allThreads) {
+        const rawId = safeStr(thread?.id || thread?.threadId);
+        const normalizedId = normalizeThreadId(rawId);
+        const responseId = safeStr(thread?.responseId);
+        const isWanted = (normalizedId && wantedThreadIds.has(normalizedId)) || (responseId && wantedResponseIds.has(responseId));
+        if (!isWanted) continue;
+        if (normalizedId && seenOutputThreadIds.has(normalizedId)) continue;
+
+        const threadMessages = asArray(thread?.messages);
+        const sortedMessages = threadMessages
+          .slice()
+          .sort((a, b) => dateMsFromMessage(a) - dateMsFromMessage(b));
+
+        const versions = sortedMessages.map((msg, idx) => ({
+          version: idx + 1,
+          sentAt: safeStr(msg?.date) || (dateMsFromMessage(msg) ? new Date(dateMsFromMessage(msg)).toISOString() : null),
+          from: safeStr(msg?.from) || 'Unknown Sender',
+          subject: safeStr(msg?.subject) || safeStr(thread?.subject) || '(No Subject)',
+          emailId: safeStr(msg?.id)
+        }));
+
+        const fallbackSentAt = safeStr(thread?.date) || null;
+        const lastVersion = versions.length ? versions[versions.length - 1] : null;
+        output.push({
+          threadId: normalizedId || responseId || rawId,
+          subject: safeStr(thread?.subject) || (lastVersion?.subject || '(No Subject)'),
+          participants: Array.from(new Set(versions.map((v) => safeStr(v.from)).filter(Boolean))).slice(0, 8),
+          lastUpdated: (lastVersion?.sentAt || fallbackSentAt || null),
+          emailCount: versions.length || 1,
+          versions: versions.length ? versions : [{
+            version: 1,
+            sentAt: fallbackSentAt,
+            from: safeStr(thread?.originalFrom || thread?.from) || 'Unknown Sender',
+            subject: safeStr(thread?.subject) || '(No Subject)',
+            emailId: safeStr(thread?.responseId || thread?.id)
+          }]
+        });
+
+        if (normalizedId) seenOutputThreadIds.add(normalizedId);
+      }
+
+      // Fallback only for document threads that were not present in email_threads.
+      for (const [threadId, threadEmails] of byThreadFallback.entries()) {
+        if (seenOutputThreadIds.has(threadId)) continue;
         const sortedDesc = threadEmails
           .slice()
           .sort((a, b) => new Date(b?.date || 0).getTime() - new Date(a?.date || 0).getTime());
         const sortedAsc = sortedDesc.slice().sort((a, b) => new Date(a?.date || 0).getTime() - new Date(b?.date || 0).getTime());
-
-        const subject = safeStr(sortedDesc[0]?.subject) || '(No Subject)';
-        const participants = Array.from(
-          new Set(
-            sortedDesc
-              .map((e) => safeStr(e?.from || e?.originalFrom))
-              .filter(Boolean)
-          )
-        ).slice(0, 8);
-        let versions = sortedAsc.map((email, idx) => ({
+        const versions = sortedAsc.map((email, idx) => ({
           version: idx + 1,
           sentAt: email?.date || null,
           from: safeStr(email?.from || email?.originalFrom) || 'Unknown Sender',
@@ -89,37 +132,11 @@ module.exports = {
           emailId: safeStr(email?.id)
         }));
 
-        if (gmailClient && threadId) {
-          try {
-            const threadResp = await gmailClient.users.threads.get({
-              userId: 'me',
-              id: threadId,
-              format: 'metadata',
-              metadataHeaders: ['From', 'Subject', 'Date']
-            });
-            const messages = asArray(threadResp?.data?.messages);
-            if (messages.length) {
-              const msgSorted = messages
-                .slice()
-                .sort((a, b) => dateMsFromMessage(a) - dateMsFromMessage(b));
-              versions = msgSorted.map((msg, idx) => ({
-                version: idx + 1,
-                sentAt: dateMsFromMessage(msg) ? new Date(dateMsFromMessage(msg)).toISOString() : null,
-                from: getHeader(msg, 'From') || 'Unknown Sender',
-                subject: getHeader(msg, 'Subject') || '(No Subject)',
-                emailId: safeStr(msg?.id)
-              }));
-            }
-          } catch (_) {
-            // Keep cached fallback versions.
-          }
-        }
-
         output.push({
           threadId,
-          subject,
+          subject: safeStr(sortedDesc[0]?.subject) || '(No Subject)',
           participants: Array.from(new Set(versions.map((v) => safeStr(v.from)).filter(Boolean))).slice(0, 8),
-          lastUpdated: versions.length ? (versions[versions.length - 1].sentAt || sortedDesc[0]?.date || null) : (sortedDesc[0]?.date || null),
+          lastUpdated: versions.length ? versions[versions.length - 1].sentAt : (sortedDesc[0]?.date || null),
           emailCount: versions.length || sortedDesc.length,
           versions
         });
