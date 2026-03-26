@@ -356,24 +356,35 @@ module.exports = {
             status,
             todos,
             followUpSuggested: !!followUpTodo,
-            followUpDate: addDaysIso(email?.date, 14),
             lastUpdated: email?.date || null,
             latestSubject: safeStr(email?.subject) || 'No Subject',
             emailId: safeStr(email?.id),
             from
           };
         })
-        .sort((a, b) => {
-          const aMs = new Date(a.followUpDate || 0).getTime();
-          const bMs = new Date(b.followUpDate || 0).getTime();
-          const aValid = Number.isFinite(aMs) && aMs > 0;
-          const bValid = Number.isFinite(bMs) && bMs > 0;
-          if (aValid && bValid && aMs !== bMs) return aMs - bMs;
-          if (aValid !== bValid) return aValid ? -1 : 1;
-          return new Date(b.lastUpdated || 0) - new Date(a.lastUpdated || 0);
-        });
+        .sort((a, b) => new Date(b.lastUpdated || 0) - new Date(a.lastUpdated || 0));
 
       return applications;
+    }
+
+    async function loadEmailMapForUser(userEmail, emailIds) {
+      const wanted = new Set((emailIds || []).map(safeStr).filter(Boolean));
+      const map = new Map();
+      if (!wanted.size) return map;
+
+      let emails = [];
+      try {
+        const doc = await getUserDoc('response_emails', userEmail);
+        if (doc && Array.isArray(doc.emails)) emails = doc.emails;
+      } catch (_) {}
+      if (!emails.length) emails = loadResponseEmails() || [];
+
+      for (const e of (Array.isArray(emails) ? emails : [])) {
+        const id = safeStr(e?.id);
+        if (!id || !wanted.has(id)) continue;
+        map.set(id, e);
+      }
+      return map;
     }
 
     app.get('/api/job-application-tracker/list', async (req, res) => {
@@ -389,6 +400,35 @@ module.exports = {
       } catch (error) {
         console.error('Job Application Tracker list failed:', error);
         return res.status(500).json({ success: false, error: 'Failed to load job applications' });
+      }
+    });
+
+    app.post('/api/job-application-tracker/followup-priority', async (req, res) => {
+      try {
+        const user = getCurrentUser();
+        const idsInput = Array.isArray(req.body?.emailIds) ? req.body.emailIds : [];
+        const emailIds = Array.from(new Set(idsInput.map(safeStr).filter(Boolean))).slice(0, 100);
+        if (!emailIds.length) {
+          return res.status(400).json({ success: false, error: 'emailIds are required' });
+        }
+
+        const emailMap = await loadEmailMapForUser(user, emailIds);
+        const followUpByEmailId = {};
+        for (const id of emailIds) {
+          const email = emailMap.get(id);
+          if (!email || !categoryMatch(email)) continue;
+          const ageDays = daysSince(email?.date);
+          if (ageDays === null || ageDays <= 2) continue;
+          followUpByEmailId[id] = {
+            daysOld: ageDays,
+            message: `Follow up suggested (${ageDays} days since last update)`
+          };
+        }
+
+        return res.json({ success: true, followUpByEmailId });
+      } catch (error) {
+        console.error('Job Application Tracker followup-priority failed:', error);
+        return res.status(500).json({ success: false, error: 'Failed to compute follow-up priority' });
       }
     });
 
@@ -479,13 +519,12 @@ module.exports = {
               }).join('');
               return '<ul class=\"todo-list\">' + lis + '</ul>';
             })()}</td>
-            <td>\${esc(fmtDate(it.followUpDate))}</td>
             <td>\${esc(fmtDate(it.lastUpdated))}</td>
             <td>\${esc(it.latestSubject)}</td>
           </tr>\`).join('');
         content.innerHTML = \`
           <table>
-            <thead><tr><th>Company</th><th>Position</th><th>Status</th><th>TODOs (Latest Email)</th><th>Follow Up</th><th>Last Updated</th><th>Most Recent Email Subject</th></tr></thead>
+            <thead><tr><th>Company</th><th>Position</th><th>Status</th><th>TODOs (Latest Email)</th><th>Last Updated</th><th>Most Recent Email Subject</th></tr></thead>
             <tbody>\${rows}</tbody>
           </table>\`;
       } catch (e) {
