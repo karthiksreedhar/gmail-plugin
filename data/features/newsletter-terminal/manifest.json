@@ -2,11 +2,12 @@
   "id": "newsletter-terminal",
   "name": "Newsletter Terminal",
   "version": "1.0.0",
-  "description": "Provides a Bloomberg Terminal-like interface to preview recent newsletters in the inbox.",
+  "description": "Opens a Bloomberg-style terminal page that summarizes newsletter emails and article links.",
   "author": "Feature Generator Agent",
   "backend": "backend.js",
   "frontend": "frontend.js",
   "permissions": [
-    "emails:read"
+    "emails:read",
+    "api:custom"
   ]
 }
