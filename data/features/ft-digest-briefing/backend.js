@@ -47,7 +47,7 @@ module.exports = {
     }
 
     function unwrapUrlDefense(url) {
-      const raw = safeStr(url);
+      const raw = htmlDecode(safeStr(url));
       if (!raw) return '';
 
       let value = raw;
@@ -55,14 +55,28 @@ module.exports = {
       if (wrapped && wrapped[1]) value = wrapped[1];
 
       value = value
-        .replace(/&amp;/g, '&')
         .replace(/[)>.,;]+$/g, '');
 
       try {
-        return decodeURIComponent(value);
+        value = decodeURIComponent(value);
       } catch (_) {
-        return value;
+        // keep best effort
       }
+
+      // Unwrap common redirect wrappers to get the true FT article URL.
+      try {
+        const parsed = new URL(value);
+        const wrappedCandidate =
+          parsed.searchParams.get('u') ||
+          parsed.searchParams.get('url') ||
+          parsed.searchParams.get('target') ||
+          parsed.searchParams.get('redirect');
+        if (wrappedCandidate) {
+          value = unwrapUrlDefense(wrappedCandidate);
+        }
+      } catch (_) {}
+
+      return safeStr(value);
     }
 
     function isFtDigestEmail(email) {
@@ -91,6 +105,7 @@ module.exports = {
       if (!u.startsWith('http')) return false;
       if (u.includes('/preferences') || u.includes('/unsubscribe') || u.includes('/privacy') || u.includes('/terms')) return false;
       if (u.includes('/wf/open') || u.includes('/register') || u.includes('/login')) return false;
+      if (u.includes('/myft') || u.includes('/feed')) return false;
       if (u.includes('email.news-alerts.ft.com/c/')) return true;
       if (u.includes('ft.com/')) return true;
       if (u.includes('ft.com/content/')) return true;
@@ -180,11 +195,47 @@ module.exports = {
     }
 
     function extractArticlesFromEmail(email) {
+      const articles = [];
+      const seenUrls = new Set();
+
+      // Primary path: parse links directly from HTML anchors, which is much more reliable for digests.
+      const htmlSources = [safeStr(email?.body), safeStr(email?.originalBody)].filter(Boolean);
+      const anchorRegex = /<a\b[^>]*href\s*=\s*["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
+
+      for (const html of htmlSources) {
+        let match;
+        while ((match = anchorRegex.exec(html)) !== null) {
+          const url = unwrapUrlDefense(match[1]);
+          if (!url || seenUrls.has(url) || !isLikelyArticleUrl(url)) continue;
+
+          const anchorText = htmlDecode(
+            safeStr(match[2])
+              .replace(/<[^>]+>/g, ' ')
+              .replace(/\s+/g, ' ')
+              .trim()
+          );
+          if (!anchorText || isNonArticleTitle(anchorText)) continue;
+
+          seenUrls.add(url);
+          articles.push({
+            title: anchorText,
+            summary: '',
+            url,
+            date: safeStr(email?.date) || null,
+            sourceSubject: safeStr(email?.subject) || 'myFT Daily Digest'
+          });
+        }
+      }
+
+      // If anchor parsing found good candidates, use those first.
+      if (articles.length >= 2) {
+        return articles;
+      }
+
+      // Fallback path: prior line-based extraction from plain text.
       const text = stripHtmlKeepLines(email?.body || email?.originalBody || email?.snippet || '');
       const lines = text.split(/\r?\n/).map(line => safeStr(line)).filter(Boolean);
 
-      const articles = [];
-      const seenUrls = new Set();
       const urlRegex = /(https?:\/\/[^\s"'<>]+)/g;
 
       for (let i = 0; i < lines.length; i++) {
@@ -522,8 +573,35 @@ ${JSON.stringify({ articles: input })}`
       for (const email of digestEmails) {
         const extracted = extractArticlesFromEmail(email);
         const aiExtracted = await extractArticlesFromEmailWithGemini(email);
-        const chosen = aiExtracted.length ? aiExtracted : extracted;
-        let filtered = chosen.filter(article => !isNonArticleTitle(article?.title));
+
+        // Deterministic extraction is primary; AI output supplements missing links/summaries.
+        const merged = [];
+        const byUrl = new Map();
+        for (const article of extracted) {
+          const key = safeStr(article?.url).toLowerCase();
+          if (!key) continue;
+          byUrl.set(key, article);
+          merged.push(article);
+        }
+        for (const article of aiExtracted) {
+          const key = safeStr(article?.url).toLowerCase();
+          if (!key) continue;
+          const existing = byUrl.get(key);
+          if (existing) {
+            if (!safeStr(existing.summary) && safeStr(article.summary)) {
+              existing.summary = safeStr(article.summary);
+            }
+            if (isNonArticleTitle(existing.title) && !isNonArticleTitle(article.title)) {
+              existing.title = article.title;
+            }
+          } else {
+            byUrl.set(key, article);
+            merged.push(article);
+          }
+        }
+
+        const chosen = merged.length ? merged : extracted;
+        let filtered = chosen.filter(article => !isNonArticleTitle(article?.title) && isLikelyArticleUrl(article?.url));
         if (!filtered.length) {
           // Safety fallback: if filters are too strict for a given digest, keep raw extracted items.
           filtered = chosen;
