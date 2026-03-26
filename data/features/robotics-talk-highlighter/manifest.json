@@ -1,8 +1,8 @@
 {
   "id": "robotics-talk-highlighter",
   "name": "Robotics Talk Highlighter",
-  "version": "1.0.0",
-  "description": "Highlights emails related to robotics talks based on keywords and user-defined rules.",
+  "version": "1.1.0",
+  "description": "Adds a top-button filter that semantically surfaces robotics-related emails, including adjacent topics like VLAs.",
   "author": "Feature Generator Agent",
   "backend": "backend.js",
   "frontend": "frontend.js",

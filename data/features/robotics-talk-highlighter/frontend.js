@@ -1,206 +1,188 @@
 /**
  * Robotics Talk Highlighter Frontend
- * Highlights emails related to robotics talks based on keywords and user-defined rules.
+ * Top-button toggled filter for semantically robotics-related emails.
  */
 
 (function() {
-  console.log('Robotics Talk Highlighter: Frontend loading...');
-
   if (!window.EmailAssistant) {
     console.error('Robotics Talk Highlighter: EmailAssistant API not available');
     return;
   }
 
   const API = window.EmailAssistant;
+  const relevanceById = new Map(); // emailId -> { isRoboticsRelated, confidence, reason }
+  const pendingIds = new Set();
+  let filterActive = false;
+  let inflight = false;
+  let buttonEl = null;
 
-  // State
-  let keywords = ['robotics', 'robot', 'automation', 'AI', 'motion planning', 'SLAM', 'computer vision', 'ROS', 'sensors', 'actuators']; // Default keywords
-  let highlightedEmails = [];
-
-  // Initialize
-  async function initialize() {
-    try {
-      // Load keywords from backend
-      await loadKeywords();
-
-      // Add header button
-      API.addHeaderButton('Robotics Talks', showSettingsModal, {
-        className: 'btn btn-primary',
-        style: { marginRight: '12px' }
-      });
-
-      // Add email action
-      API.addEmailAction('Highlight Robotics Talk', highlightEmail);
-
-      // Listen for emails loaded event
-      API.on('emailsLoaded', highlightRoboticsTalks);
-
-      // Initial highlight
-      highlightRoboticsTalks();
-
-      console.log('Robotics Talk Highlighter: Frontend loaded successfully');
-    } catch (error) {
-      console.error('Robotics Talk Highlighter: Initialization failed:', error);
-      API.showError('Failed to initialize Robotics Talk Highlighter');
-    }
+  function safeStr(value) {
+    return String(value || '').trim();
   }
 
-  // Load keywords from backend
-  async function loadKeywords() {
-    try {
-      const response = await API.apiCall('/api/robotics-talk-highlighter/keywords', { method: 'GET' });
-      if (response.success) {
-        keywords = response.keywords || keywords;
+  function getEmailId(emailItem) {
+    const notesPreview = emailItem.querySelector('.notes-preview[data-email-notes]');
+    if (notesPreview) {
+      const fromNotes = safeStr(notesPreview.getAttribute('data-email-notes'));
+      if (fromNotes) return fromNotes;
+    }
+    const deleteBtn = emailItem.querySelector('.delete-thread-btn');
+    const onclickRaw = deleteBtn ? safeStr(deleteBtn.getAttribute('onclick')) : '';
+    const match = onclickRaw.match(/deleteEmailThread\('([^']+)'/);
+    return match && match[1] ? match[1] : '';
+  }
+
+  function collectAllVisibleEmailIds() {
+    const emailItems = Array.from(document.querySelectorAll('#emailContainer .email-item'));
+    const ids = emailItems.map(getEmailId).filter(Boolean);
+    return Array.from(new Set(ids));
+  }
+
+  function setButtonStateText() {
+    if (!buttonEl) return;
+    buttonEl.textContent = filterActive ? 'Show All Emails' : 'Robotics Talks';
+  }
+
+  function clearRoboticsStyles(emailItem) {
+    emailItem.style.borderLeft = '';
+    emailItem.style.backgroundColor = '';
+    const marker = emailItem.querySelector('.robotics-talk-marker');
+    if (marker) marker.remove();
+  }
+
+  function addRoboticsStyles(emailItem, reason) {
+    clearRoboticsStyles(emailItem);
+    emailItem.style.borderLeft = '4px solid #ffc107';
+    emailItem.style.backgroundColor = '#fffdf3';
+
+    const metaRow = emailItem.querySelector('.email-meta-row');
+    if (!metaRow) return;
+    const marker = document.createElement('span');
+    marker.className = 'robotics-talk-marker';
+    marker.style.cssText = [
+      'display:inline-flex',
+      'align-items:center',
+      'margin-left:8px',
+      'padding:2px 8px',
+      'border-radius:999px',
+      'background:#fbbc04',
+      'color:#5f370e',
+      'font-size:11px',
+      'font-weight:700',
+      'max-width:320px',
+      'white-space:nowrap',
+      'overflow:hidden',
+      'text-overflow:ellipsis'
+    ].join(';');
+    marker.title = reason || 'Robotics-related';
+    marker.textContent = 'Robotics-related';
+    metaRow.appendChild(marker);
+  }
+
+  function applyFilterToDom() {
+    const emailItems = Array.from(document.querySelectorAll('#emailContainer .email-item'));
+    for (const item of emailItems) {
+      const id = getEmailId(item);
+      const classification = id ? relevanceById.get(id) : null;
+      const related = !!classification?.isRoboticsRelated;
+
+      if (related) addRoboticsStyles(item, classification?.reason);
+      else clearRoboticsStyles(item);
+
+      if (filterActive) {
+        item.style.display = related ? '' : 'none';
       } else {
-        API.showError('Failed to load keywords: ' + response.error);
+        item.style.display = '';
       }
-    } catch (error) {
-      console.error('Robotics Talk Highlighter: Failed to load keywords:', error);
-      API.showError('Failed to load keywords');
     }
   }
 
-  // Save keywords to backend
-  async function saveKeywords(newKeywords) {
+  async function classifyIds(emailIds) {
+    const ids = (emailIds || []).filter(Boolean);
+    if (!ids.length || inflight) return;
+
+    const unknown = ids.filter(id => !relevanceById.has(id) && !pendingIds.has(id));
+    if (!unknown.length) return;
+
+    unknown.forEach(id => pendingIds.add(id));
+    inflight = true;
     try {
-      const response = await API.apiCall('/api/robotics-talk-highlighter/keywords', {
+      const response = await API.apiCall('/api/robotics-talk-highlighter/classify-batch', {
         method: 'POST',
-        body: { keywords: newKeywords }
+        body: { emailIds: unknown }
       });
-      if (response.success) {
-        keywords = newKeywords;
-        API.showSuccess('Keywords saved successfully!');
-      } else {
-        API.showError('Failed to save keywords: ' + response.error);
+
+      if (response && response.success && response.classificationsByEmailId && typeof response.classificationsByEmailId === 'object') {
+        Object.entries(response.classificationsByEmailId).forEach(([id, classification]) => {
+          relevanceById.set(id, {
+            isRoboticsRelated: !!classification?.isRoboticsRelated,
+            confidence: Number(classification?.confidence) || 0,
+            reason: safeStr(classification?.reason)
+          });
+        });
       }
     } catch (error) {
-      console.error('Robotics Talk Highlighter: Failed to save keywords:', error);
-      API.showError('Failed to save keywords');
+      console.error('Robotics Talk Highlighter classifyIds failed:', error);
+    } finally {
+      unknown.forEach(id => pendingIds.delete(id));
+      inflight = false;
+      applyFilterToDom();
     }
   }
 
-  // Highlight emails based on keywords
-  function highlightRoboticsTalks() {
-    try {
-      const emails = API.getEmails();
-      if (!emails) return;
+  async function toggleRoboticsFilter() {
+    const ids = collectAllVisibleEmailIds();
+    await classifyIds(ids);
 
-      emails.forEach(emailItem => {
-        const emailData = extractEmailData(emailItem);
-        const subject = emailData.subject.toLowerCase();
-        const body = emailItem.textContent.toLowerCase(); // Use textContent for full content
+    filterActive = !filterActive;
+    setButtonStateText();
+    applyFilterToDom();
 
-        const isRoboticsTalk = keywords.some(keyword => subject.includes(keyword) || body.includes(keyword));
-
-        if (isRoboticsTalk && !highlightedEmails.includes(emailData.senderEmail + emailData.subject)) {
-          emailItem.style.border = '2px solid #ffc107'; // Highlight with yellow border
-          highlightedEmails.push(emailData.senderEmail + emailData.subject);
-        } else {
-          emailItem.style.border = ''; // Remove highlight
-        }
-      });
-    } catch (error) {
-      console.error('Robotics Talk Highlighter: Error highlighting emails:', error);
+    if (filterActive) {
+      const matched = ids.filter(id => relevanceById.get(id)?.isRoboticsRelated).length;
+      API.showSuccess(`Showing ${matched} robotics-related email${matched === 1 ? '' : 's'}.`);
     }
   }
 
-  // Extract email data from DOM
-  function extractEmailData(emailItem) {
-    const fromElement = emailItem.querySelector('.email-from');
-    const subjectElement = emailItem.querySelector('.email-subject');
-    const dateElement = emailItem.querySelector('.email-date');
-    const categoryPills = emailItem.querySelectorAll('.email-category');
-
-    const fromText = fromElement ? fromElement.textContent.trim() : '';
-    const subject = subjectElement ? subjectElement.textContent.trim() : '';
-    const date = dateElement ? dateElement.textContent.trim() : '';
-    const categories = Array.from(categoryPills).map(pill => pill.textContent.trim());
-
-    // Parse sender name and email from "Name <email@domain.com>" format
-    let senderName = fromText;
-    let senderEmail = fromText;
-
-    const emailMatch = fromText.match(/^([^<]+)<([^>]+)>/);
-    if (emailMatch) {
-      senderName = emailMatch[1].trim();
-      senderEmail = emailMatch[2].trim();
-    } else if (fromText.includes('@')) {
-      senderEmail = fromText;
-      senderName = fromText.split('@')[0];
-    }
-
-    return {
-      senderName,
-      senderEmail,
-      subject,
-      date,
-      categories,
-      from: fromText
+  function installDisplayEmailsHook() {
+    if (typeof window.displayEmails !== 'function') return;
+    const originalDisplayEmails = window.displayEmails;
+    window.displayEmails = async function(...args) {
+      const out = await originalDisplayEmails.apply(this, args);
+      setTimeout(async () => {
+        const ids = collectAllVisibleEmailIds();
+        await classifyIds(ids);
+        applyFilterToDom();
+      }, 80);
+      return out;
     };
   }
 
-  // Show settings modal
-  function showSettingsModal() {
-    const keywordList = keywords.map(keyword => `<li>${keyword}</li>`).join('');
+  async function initialize() {
+    API.addHeaderButton('Robotics Talks', toggleRoboticsFilter, {
+      className: 'generate-btn'
+    });
+    buttonEl = Array.from(document.querySelectorAll('button')).find(btn =>
+      safeStr(btn.textContent) === 'Robotics Talks' || safeStr(btn.textContent) === 'Show All Emails'
+    ) || null;
+    setButtonStateText();
 
-    const content = `
-      <div style="padding: 20px;">
-        <h3>Robotics Talk Highlighter Settings</h3>
-        <p>Keywords used to identify robotics talks:</p>
-        <ul>${keywordList}</ul>
-        <label for="new-keywords">New Keywords (comma-separated):</label>
-        <input type="text" id="new-keywords" style="width: 100%; padding: 8px; margin-bottom: 10px;">
-        <div style="text-align: center;">
-          <button class="btn btn-secondary" onclick="this.closest('.modal').remove()">Close</button>
-          <button class="btn btn-primary" onclick="window.saveRoboticsTalkKeywords()">Save</button>
-        </div>
-      </div>
-    `;
+    API.on('emailsLoaded', async () => {
+      const ids = collectAllVisibleEmailIds();
+      await classifyIds(ids);
+      applyFilterToDom();
+    });
 
-    API.showModal(content, 'Robotics Talk Highlighter Settings');
+    installDisplayEmailsHook();
+
+    // Warm classification once so button toggle is immediate.
+    setTimeout(async () => {
+      const ids = collectAllVisibleEmailIds();
+      await classifyIds(ids);
+      applyFilterToDom();
+    }, 180);
   }
 
-  // Save keywords (global function for modal button)
-  window.saveRoboticsTalkKeywords = async function() {
-    const newKeywordsInput = document.getElementById('new-keywords');
-    const newKeywordsString = newKeywordsInput.value.trim();
-    const newKeywords = newKeywordsString.split(',').map(keyword => keyword.trim()).filter(keyword => keyword !== '');
-
-    if (newKeywords.length > 0) {
-      await saveKeywords(newKeywords);
-    } else {
-      API.showWarning('No keywords entered.');
-    }
-
-    // Refresh highlighting
-    highlightRoboticsTalks();
-
-    // Close modal
-    document.querySelector('.modal').remove();
-  };
-
-  // Highlight email action
-  async function highlightEmail(email) {
-    try {
-      const emailItem = Array.from(document.querySelectorAll('.email-item')).find(item => {
-        const emailData = extractEmailData(item);
-        return emailData.senderEmail === email.originalFrom && emailData.subject === email.subject;
-      });
-
-      if (emailItem) {
-        emailItem.style.border = '2px solid #ffc107';
-        API.showSuccess('Email highlighted as a robotics talk.');
-      } else {
-        API.showError('Could not find email to highlight.');
-      }
-    } catch (error) {
-      console.error('Robotics Talk Highlighter: Error highlighting email:', error);
-      API.showError('Failed to highlight email.');
-    }
-  }
-
-  // Initialize when loaded
   initialize();
-
-  console.log('Robotics Talk Highlighter: Frontend loaded successfully');
+  console.log('Robotics Talk Highlighter: Frontend initialized');
 })();
