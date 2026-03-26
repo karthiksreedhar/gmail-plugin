@@ -20,6 +20,29 @@ module.exports = {
       return n === 'document' || n === 'documents';
     }
 
+    function normalizeThreadId(threadId) {
+      const raw = safeStr(threadId);
+      if (!raw) return '';
+      return raw.startsWith('thread-') ? raw.slice('thread-'.length) : raw;
+    }
+
+    function getHeader(message, name) {
+      const wanted = safeStr(name).toLowerCase();
+      const headers = asArray(message?.payload?.headers);
+      for (const h of headers) {
+        if (safeStr(h?.name).toLowerCase() === wanted) return safeStr(h?.value);
+      }
+      return '';
+    }
+
+    function dateMsFromMessage(message) {
+      const internal = Number(message?.internalDate);
+      if (Number.isFinite(internal) && internal > 0) return internal;
+      const headerDate = Date.parse(getHeader(message, 'Date'));
+      if (Number.isFinite(headerDate) && headerDate > 0) return headerDate;
+      return 0;
+    }
+
     async function loadDocumentsCategoryEmails(userEmail) {
       const doc = await getUserDoc('response_emails', userEmail);
       const emails = asArray(doc?.emails);
@@ -33,11 +56,12 @@ module.exports = {
       const emails = await loadDocumentsCategoryEmails(userEmail);
       if (!emails.length) return [];
 
+      const gmailClient = typeof context.gmail === 'function' ? await context.gmail() : null;
       const byThread = new Map();
       for (const email of emails) {
         const id = safeStr(email?.id);
         if (!id) continue;
-        const threadId = safeStr(email?.threadId || email?.threadID || id);
+        const threadId = normalizeThreadId(email?.threadId || email?.threadID || id);
         if (!byThread.has(threadId)) byThread.set(threadId, []);
         byThread.get(threadId).push(email);
       }
@@ -57,7 +81,7 @@ module.exports = {
               .filter(Boolean)
           )
         ).slice(0, 8);
-        const versions = sortedAsc.map((email, idx) => ({
+        let versions = sortedAsc.map((email, idx) => ({
           version: idx + 1,
           sentAt: email?.date || null,
           from: safeStr(email?.from || email?.originalFrom) || 'Unknown Sender',
@@ -65,12 +89,38 @@ module.exports = {
           emailId: safeStr(email?.id)
         }));
 
+        if (gmailClient && threadId) {
+          try {
+            const threadResp = await gmailClient.users.threads.get({
+              userId: 'me',
+              id: threadId,
+              format: 'metadata',
+              metadataHeaders: ['From', 'Subject', 'Date']
+            });
+            const messages = asArray(threadResp?.data?.messages);
+            if (messages.length) {
+              const msgSorted = messages
+                .slice()
+                .sort((a, b) => dateMsFromMessage(a) - dateMsFromMessage(b));
+              versions = msgSorted.map((msg, idx) => ({
+                version: idx + 1,
+                sentAt: dateMsFromMessage(msg) ? new Date(dateMsFromMessage(msg)).toISOString() : null,
+                from: getHeader(msg, 'From') || 'Unknown Sender',
+                subject: getHeader(msg, 'Subject') || '(No Subject)',
+                emailId: safeStr(msg?.id)
+              }));
+            }
+          } catch (_) {
+            // Keep cached fallback versions.
+          }
+        }
+
         output.push({
           threadId,
           subject,
-          participants,
-          lastUpdated: sortedDesc[0]?.date || null,
-          emailCount: sortedDesc.length,
+          participants: Array.from(new Set(versions.map((v) => safeStr(v.from)).filter(Boolean))).slice(0, 8),
+          lastUpdated: versions.length ? (versions[versions.length - 1].sentAt || sortedDesc[0]?.date || null) : (sortedDesc[0]?.date || null),
+          emailCount: versions.length || sortedDesc.length,
           versions
         });
       }
