@@ -288,6 +288,13 @@ module.exports = {
       return Math.floor((Date.now() - ms) / (24 * 60 * 60 * 1000));
     }
 
+    function addDaysIso(dateValue, days) {
+      const ms = new Date(dateValue || 0).getTime();
+      if (!Number.isFinite(ms) || ms <= 0) return null;
+      const dt = new Date(ms + (days * 24 * 60 * 60 * 1000));
+      return dt.toISOString();
+    }
+
     function followUpTodoForStale(status, lastUpdated) {
       const st = safeStr(status).toLowerCase();
       const quietDays = daysSince(lastUpdated);
@@ -349,13 +356,22 @@ module.exports = {
             status,
             todos,
             followUpSuggested: !!followUpTodo,
-          lastUpdated: email?.date || null,
-          latestSubject: safeStr(email?.subject) || 'No Subject',
-          emailId: safeStr(email?.id),
-          from
+            followUpDate: addDaysIso(email?.date, 14),
+            lastUpdated: email?.date || null,
+            latestSubject: safeStr(email?.subject) || 'No Subject',
+            emailId: safeStr(email?.id),
+            from
           };
         })
-        .sort((a, b) => new Date(b.lastUpdated || 0) - new Date(a.lastUpdated || 0));
+        .sort((a, b) => {
+          const aMs = new Date(a.followUpDate || 0).getTime();
+          const bMs = new Date(b.followUpDate || 0).getTime();
+          const aValid = Number.isFinite(aMs) && aMs > 0;
+          const bValid = Number.isFinite(bMs) && bMs > 0;
+          if (aValid && bValid && aMs !== bMs) return aMs - bMs;
+          if (aValid !== bValid) return aValid ? -1 : 1;
+          return new Date(b.lastUpdated || 0) - new Date(a.lastUpdated || 0);
+        });
 
       return applications;
     }
@@ -385,7 +401,7 @@ module.exports = {
   <title>Job Application Tracker</title>
   <style>
     body { margin: 0; font-family: Google Sans, Roboto, Arial, sans-serif; background: #f6f8fc; color: #202124; }
-    .wrap { max-width: 1120px; margin: 0 auto; padding: 20px 16px 28px; }
+    .wrap { max-width: 1480px; margin: 0 auto; padding: 20px 16px 28px; }
     .head { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:16px; }
     .title { font-size: 28px; font-weight: 700; }
     .sub { color:#5f6368; font-size:13px; margin-top:4px; }
@@ -463,12 +479,13 @@ module.exports = {
               }).join('');
               return '<ul class=\"todo-list\">' + lis + '</ul>';
             })()}</td>
+            <td>\${esc(fmtDate(it.followUpDate))}</td>
             <td>\${esc(fmtDate(it.lastUpdated))}</td>
             <td>\${esc(it.latestSubject)}</td>
           </tr>\`).join('');
         content.innerHTML = \`
           <table>
-            <thead><tr><th>Company</th><th>Position</th><th>Status</th><th>TODOs (Latest Email)</th><th>Last Updated</th><th>Most Recent Email Subject</th></tr></thead>
+            <thead><tr><th>Company</th><th>Position</th><th>Status</th><th>TODOs (Latest Email)</th><th>Follow Up</th><th>Last Updated</th><th>Most Recent Email Subject</th></tr></thead>
             <tbody>\${rows}</tbody>
           </table>\`;
       } catch (e) {
