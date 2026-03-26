@@ -1,6 +1,6 @@
 /**
  * Document Thread History Backend
- * Dedicated page for threads in the user's Documents category, with PDF attachments.
+ * Dedicated page for threads in the user's Documents category, with version timestamps.
  */
 
 module.exports = {
@@ -18,26 +18,6 @@ module.exports = {
     function isDocumentsCategory(name) {
       const n = safeStr(name).toLowerCase();
       return n === 'document' || n === 'documents';
-    }
-
-    function walkParts(parts, out) {
-      for (const part of asArray(parts)) {
-        if (!part || typeof part !== 'object') continue;
-        const filename = safeStr(part.filename);
-        const mimeType = safeStr(part.mimeType).toLowerCase();
-        const attachmentId = safeStr(part?.body?.attachmentId);
-        const isPdf = filename.toLowerCase().endsWith('.pdf') || mimeType === 'application/pdf';
-        if (isPdf && attachmentId) {
-          out.push({
-            filename: filename || 'document.pdf',
-            mimeType: mimeType || 'application/pdf',
-            attachmentId
-          });
-        }
-        if (Array.isArray(part.parts) && part.parts.length) {
-          walkParts(part.parts, out);
-        }
-      }
     }
 
     async function loadDocumentsCategoryEmails(userEmail) {
@@ -64,52 +44,34 @@ module.exports = {
 
       const output = [];
       for (const [threadId, threadEmails] of byThread.entries()) {
-        const sorted = threadEmails
+        const sortedDesc = threadEmails
           .slice()
           .sort((a, b) => new Date(b?.date || 0).getTime() - new Date(a?.date || 0).getTime());
+        const sortedAsc = sortedDesc.slice().sort((a, b) => new Date(a?.date || 0).getTime() - new Date(b?.date || 0).getTime());
 
-        const subject = safeStr(sorted[0]?.subject) || '(No Subject)';
+        const subject = safeStr(sortedDesc[0]?.subject) || '(No Subject)';
         const participants = Array.from(
           new Set(
-            sorted
+            sortedDesc
               .map((e) => safeStr(e?.from || e?.originalFrom))
               .filter(Boolean)
           )
         ).slice(0, 8);
+        const versions = sortedAsc.map((email, idx) => ({
+          version: idx + 1,
+          sentAt: email?.date || null,
+          from: safeStr(email?.from || email?.originalFrom) || 'Unknown Sender',
+          subject: safeStr(email?.subject) || '(No Subject)',
+          emailId: safeStr(email?.id)
+        }));
 
-        const documents = [];
-        for (const email of sorted.slice(0, 8)) {
-          const messageId = safeStr(email?.id);
-          if (!messageId || typeof context.getGmailEmail !== 'function') continue;
-          try {
-            const gmailEmail = await context.getGmailEmail(messageId);
-            const found = [];
-            walkParts(gmailEmail?.payload?.parts || [], found);
-            if (gmailEmail?.payload && found.length === 0) {
-              walkParts([gmailEmail.payload], found);
-            }
-            for (const doc of found) {
-              documents.push({
-                messageId,
-                attachmentId: doc.attachmentId,
-                filename: doc.filename,
-                mimeType: doc.mimeType,
-                url: `/api/document-thread-history/download/${encodeURIComponent(messageId)}/${encodeURIComponent(doc.attachmentId)}?filename=${encodeURIComponent(doc.filename)}`
-              });
-            }
-          } catch (_) {
-            // Skip individual message failures but keep the thread.
-          }
-        }
-
-        if (!documents.length) continue;
         output.push({
           threadId,
           subject,
           participants,
-          lastUpdated: sorted[0]?.date || null,
-          emailCount: sorted.length,
-          documents
+          lastUpdated: sortedDesc[0]?.date || null,
+          emailCount: sortedDesc.length,
+          versions
         });
       }
 
@@ -130,37 +92,6 @@ module.exports = {
       } catch (error) {
         console.error('Document Thread History: Error fetching threads:', error);
         return res.status(500).json({ success: false, error: 'Failed to load document threads' });
-      }
-    });
-
-    app.get('/api/document-thread-history/download/:messageId/:attachmentId', async (req, res) => {
-      try {
-        const { messageId, attachmentId } = req.params;
-        const filename = safeStr(req.query?.filename) || 'document.pdf';
-
-        if (typeof context.gmail !== 'function') {
-          return res.status(500).json({ success: false, error: 'Gmail client unavailable' });
-        }
-
-        const gmailClient = await context.gmail();
-        const response = await gmailClient.users.messages.attachments.get({
-          userId: 'me',
-          messageId: decodeURIComponent(messageId),
-          id: decodeURIComponent(attachmentId)
-        });
-
-        const encoded = safeStr(response?.data?.data);
-        if (!encoded) {
-          return res.status(404).json({ success: false, error: 'Attachment not found' });
-        }
-
-        const fileData = Buffer.from(encoded.replace(/-/g, '+').replace(/_/g, '/'), 'base64');
-        res.setHeader('Content-Type', 'application/pdf');
-        res.setHeader('Content-Disposition', `inline; filename="${filename.replace(/"/g, '')}"`);
-        return res.send(fileData);
-      } catch (error) {
-        console.error('Document Thread History: Error downloading attachment:', error);
-        return res.status(500).json({ success: false, error: 'Failed to download attachment' });
       }
     });
 
@@ -194,7 +125,7 @@ module.exports = {
     <div class="head">
       <div>
         <div class="title">Document Thread History</div>
-        <div class="sub">PDF attachments from email threads in your <strong>Documents</strong> category.</div>
+        <div class="sub">Version history from email threads in your <strong>Documents</strong> category.</div>
       </div>
       <button id="refreshBtn" class="btn">Refresh</button>
     </div>
@@ -219,20 +150,25 @@ module.exports = {
         const list = Array.isArray(d.data) ? d.data : [];
         if (!list.length) {
           content.className = 'empty';
-          content.innerHTML = "No PDF documents found in the <strong>Documents</strong> category threads.";
+          content.innerHTML = "No email threads found in the <strong>Documents</strong> category.";
           return;
         }
         const html = list.map((t) => {
-          const docs = Array.isArray(t.documents) ? t.documents : [];
-          const docsHtml = docs.map((doc) =>
-            '<li><a href="' + esc(doc.url) + '" target="_blank" rel="noopener">' + esc(doc.filename || 'document.pdf') + '</a></li>'
+          const versions = Array.isArray(t.versions) ? t.versions : [];
+          const versionsHtml = versions.map((v) =>
+            '<li>' +
+              '<strong>Version ' + esc(String(v.version || '')) + '</strong>: ' +
+              esc(fmtDate(v.sentAt)) +
+              ' · ' + esc(v.from || 'Unknown Sender') +
+            '</li>'
           ).join('');
           const participants = Array.isArray(t.participants) ? t.participants.join(', ') : '';
           return '<div class="card">' +
             '<div class="subject">' + esc(t.subject) + '</div>' +
             '<div class="meta">' + esc(fmtDate(t.lastUpdated)) + ' · ' + esc(String(t.emailCount || 0)) + ' emails in thread</div>' +
             '<div class="meta">' + esc(participants) + '</div>' +
-            '<ul class="doc-list">' + docsHtml + '</ul>' +
+            '<div class="meta"><strong>Version History</strong></div>' +
+            '<ul class="doc-list">' + versionsHtml + '</ul>' +
           '</div>';
         }).join('');
         content.className = 'grid';
