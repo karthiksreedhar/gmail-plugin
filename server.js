@@ -1431,7 +1431,7 @@ async function finalizeLoginForUser(userEmail, tokens) {
   await initializeGmailAPI();
 
   // For first-time users, run a synchronous initial seed so inbox content
-  // appears immediately after redirect: latest 50 items, all in "Other".
+  // appears immediately after redirect: latest 150 items, all in "Other".
   const paths = getUserPaths(normalizedEmail);
   let existingResponses = [];
   try {
@@ -1444,7 +1444,7 @@ async function finalizeLoginForUser(userEmail, tokens) {
     await syncUserInboxFromGmail(normalizedEmail, {
       forceBackfill: true,
       seedAsOther: true,
-      maxCandidates: 50
+      maxCandidates: 150
     });
   } else {
     // Existing users: keep non-blocking refresh behavior.
