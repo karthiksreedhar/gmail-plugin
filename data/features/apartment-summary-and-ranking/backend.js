@@ -202,6 +202,58 @@ module.exports = {
       return out;
     }
 
+    function extractUrlsFromText(text) {
+      const source = safeStr(text);
+      if (!source) return [];
+      const matches = source.match(/https?:\/\/[^\s"'<>]+/gi) || [];
+      return matches.map(unwrapUrl).filter(Boolean);
+    }
+
+    function isStreetEasyHost(url) {
+      try {
+        const parsed = new URL(url);
+        const host = normalizeForSearch(parsed.hostname).replace(/^www\./, '');
+        return host === 'streeteasy.com';
+      } catch (_) {
+        return false;
+      }
+    }
+
+    function isLikelyStreetEasyListing(url) {
+      try {
+        const parsed = new URL(url);
+        if (!isStreetEasyHost(url)) return false;
+        const path = normalizeForSearch(parsed.pathname || '');
+        // Listing-like pages usually have deeper, specific paths.
+        if (path === '/' || path === '/nyc' || path === '/for-sale/nyc' || path === '/rental/nyc') return false;
+        if (path.includes('/saved_searches') || path.includes('/search') || path.includes('/building')) return false;
+        if (path.includes('/for-sale/') || path.includes('/rental/')) return true;
+        // Fallback: any deep path with id-like token.
+        if (path.split('/').filter(Boolean).length >= 2 && /[0-9]/.test(path)) return true;
+        return false;
+      } catch (_) {
+        return false;
+      }
+    }
+
+    function streetEasyListingScore(url) {
+      try {
+        const parsed = new URL(url);
+        const path = normalizeForSearch(parsed.pathname || '');
+        let score = 0;
+        if (path.includes('/rental/')) score += 40;
+        if (path.includes('/for-sale/')) score += 35;
+        if (/[0-9]/.test(path)) score += 20;
+        if (path.split('/').filter(Boolean).length >= 3) score += 10;
+        // Penalize generic/marketing pages.
+        if (path === '/' || path === '/nyc') score -= 50;
+        if (path.includes('/search') || path.includes('/saved_searches') || path.includes('/building')) score -= 30;
+        return score;
+      } catch (_) {
+        return -999;
+      }
+    }
+
     function parseStreetEasyUrl(email) {
       const text = [
         safeStr(email?.subject),
@@ -210,9 +262,15 @@ module.exports = {
         safeStr(email?.originalBody)
       ].join('\n');
 
-      const m = text.match(/https?:\/\/(?:www\.)?streeteasy\.com\/[^\s"'<>]+/i);
-      if (!m || !m[0]) return '';
-      return unwrapUrl(m[0]);
+      const allUrls = extractUrlsFromText(text);
+      const streetEasyUrls = allUrls.filter(isStreetEasyHost);
+      if (!streetEasyUrls.length) return '';
+
+      const listingCandidates = streetEasyUrls.filter(isLikelyStreetEasyListing);
+      if (!listingCandidates.length) return '';
+
+      listingCandidates.sort((a, b) => streetEasyListingScore(b) - streetEasyListingScore(a));
+      return listingCandidates[0] || '';
     }
 
     async function fetchPageHtml(url, timeoutMs = 7000) {
