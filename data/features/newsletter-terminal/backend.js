@@ -36,17 +36,59 @@ module.exports = {
         .trim();
     }
 
+    function decodeHtmlEntities(value) {
+      return safeStr(value)
+        .replace(/&amp;/g, '&')
+        .replace(/&#39;/g, "'")
+        .replace(/&#x27;/gi, "'")
+        .replace(/&#34;/g, '"')
+        .replace(/&quot;/g, '"')
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>');
+    }
+
+    function decodeProofpointToken(token) {
+      let value = safeStr(token);
+      if (!value) return '';
+      value = value.replace(/-([0-9a-fA-F]{2})/g, '%$1');
+      try {
+        value = decodeURIComponent(value);
+      } catch (_) {}
+      if (value.includes('_')) value = value.replace(/_/g, '/');
+      return value;
+    }
+
     function unwrapUrl(url) {
-      const raw = safeStr(url);
+      const raw = decodeHtmlEntities(url);
       if (!raw) return '';
-      let out = raw.replace(/&amp;/g, '&').replace(/[)>.,;]+$/g, '');
+      let out = raw.replace(/[)>.,;]+$/g, '');
       const wrapped = out.match(/__([^_].*?)__/);
       if (wrapped && wrapped[1]) out = wrapped[1];
       try {
-        return decodeURIComponent(out);
+        out = decodeURIComponent(out);
       } catch (_) {
-        return out;
+        // keep best effort
       }
+
+      // Common redirect/tracking wrappers.
+      try {
+        const parsed = new URL(out);
+        const host = safeStr(parsed.hostname).toLowerCase();
+        const wrappedCandidate =
+          parsed.searchParams.get('u') ||
+          parsed.searchParams.get('url') ||
+          parsed.searchParams.get('target') ||
+          parsed.searchParams.get('redirect');
+        if (wrappedCandidate) {
+          if (host.includes('urldefense.proofpoint.com')) {
+            out = decodeProofpointToken(wrappedCandidate);
+          } else {
+            out = unwrapUrl(wrappedCandidate);
+          }
+        }
+      } catch (_) {}
+
+      return safeStr(out);
     }
 
     function getEmailCategories(email) {
@@ -98,18 +140,49 @@ module.exports = {
     }
 
     function extractLinks(email) {
-      const text = stripHtml(email?.body || email?.originalBody || email?.snippet || '');
-      const regex = /(https?:\/\/[^\s"'<>]+)/g;
       const seen = new Set();
       const links = [];
-      let match;
-      while ((match = regex.exec(text)) !== null) {
-        const url = unwrapUrl(match[1]);
-        if (!url || seen.has(url) || isNoiseLink(url)) continue;
-        seen.add(url);
-        links.push(url);
-        if (links.length >= 3) break;
+
+      function add(url) {
+        const cleaned = unwrapUrl(url);
+        if (!cleaned || seen.has(cleaned) || isNoiseLink(cleaned)) return;
+        seen.add(cleaned);
+        links.push(cleaned);
       }
+
+      const rawBody = safeStr(email?.body);
+      const rawOriginalBody = safeStr(email?.originalBody);
+      const rawSnippet = safeStr(email?.snippet);
+
+      // 1) Parse href links directly from raw HTML first.
+      const htmlSources = [rawBody, rawOriginalBody].filter(Boolean);
+      const hrefRegex = /href\s*=\s*["']([^"']+)["']/gi;
+      for (const html of htmlSources) {
+        let m;
+        while ((m = hrefRegex.exec(html)) !== null) {
+          add(m[1]);
+          if (links.length >= 5) return links;
+        }
+      }
+
+      // 2) Fallback to plain URL scan from both raw and stripped text.
+      const textCandidates = [
+        rawBody,
+        rawOriginalBody,
+        rawSnippet,
+        stripHtml(rawBody),
+        stripHtml(rawOriginalBody),
+        stripHtml(rawSnippet)
+      ].filter(Boolean);
+      const urlRegex = /(https?:\/\/[^\s"'<>]+)/g;
+      for (const text of textCandidates) {
+        let match;
+        while ((match = urlRegex.exec(text)) !== null) {
+          add(match[1]);
+          if (links.length >= 5) return links;
+        }
+      }
+
       return links;
     }
 
