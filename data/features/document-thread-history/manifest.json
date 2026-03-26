@@ -1,0 +1,12 @@
+{
+  "id": "document-thread-history",
+  "name": "Document Thread History",
+  "version": "1.0.0",
+  "description": "Displays a history of PDF documents from email threads within the 'document' folder, creating a dedicated 'Gmail Drive Space' for easy document retrieval and version control.",
+  "author": "Feature Generator Agent",
+  "backend": "backend.js",
+  "frontend": "frontend.js",
+  "permissions": [
+    "emails:read"
+  ]
+}
