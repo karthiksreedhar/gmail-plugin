@@ -1,0 +1,13 @@
+{
+  "id": "robotics-talk-highlighter",
+  "name": "Robotics Talk Highlighter",
+  "version": "1.0.0",
+  "description": "Highlights emails related to robotics talks based on keywords and user-defined rules.",
+  "author": "Feature Generator Agent",
+  "backend": "backend.js",
+  "frontend": "frontend.js",
+  "permissions": [
+    "emails:read",
+    "api:custom"
+  ]
+}
