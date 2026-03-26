@@ -142,6 +142,32 @@ module.exports = {
         .trim();
     }
 
+    function cleanTodo(value) {
+      return safeStr(value)
+        .replace(/\s+/g, ' ')
+        .replace(/^(todo[:\s-]*)/i, '')
+        .replace(/[•\-\s]+$/, '')
+        .trim();
+    }
+
+    function sanitizeTodos(values) {
+      const out = [];
+      const seen = new Set();
+      const arr = Array.isArray(values) ? values : [];
+      for (const raw of arr) {
+        const item = cleanTodo(raw);
+        if (!item) continue;
+        if (/(https?:\/\/|www\.)/i.test(item)) continue;
+        if (/^no (apparent )?todos?$/i.test(item)) continue;
+        const key = item.toLowerCase();
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push(item);
+        if (out.length >= 3) break;
+      }
+      return out;
+    }
+
     function fallbackPositionFromEmail(email) {
       const subject = safeStr(email?.subject);
       const body = stripHtmlAndNoise(email?.body || email?.originalBody || '');
@@ -192,7 +218,10 @@ module.exports = {
         'Statuses must be one of: Offer, Rejected, Withdrawn, Interviewing, Assessment, Applied, Under Review, Waiting.',
         'Use latest email only. Position should be the role title (for example: Software Engineer Intern).',
         'If position is not identifiable, set position to "Unknown Position".',
-        'If uncertain about status, choose the most conservative status.'
+        'If uncertain about status, choose the most conservative status.',
+        'Also extract immediate action TODOs from the latest email only.',
+        'Do not include URLs in TODOs.',
+        'If there is no immediate action, return todos as [].'
       ].join(' ');
 
       const userPrompt = JSON.stringify({
@@ -202,6 +231,7 @@ module.exports = {
             idx: 0,
             position: 'Software Engineer Intern',
             status: 'Waiting',
+            todos: ['Send follow-up if no response in 10 business days'],
             confidence: 'low|medium|high',
             reason: 'brief reason'
           }
@@ -229,9 +259,10 @@ module.exports = {
           const idx = Number(row?.idx);
           const status = safeStr(row?.status);
           const position = cleanPosition(row?.position) || 'Unknown Position';
+          const todos = sanitizeTodos(row?.todos);
           if (!Number.isInteger(idx) || idx < 0 || idx >= limitedItems.length) continue;
           if (!allowed.has(status)) continue;
-          byIndex.set(idx, { status, position });
+          byIndex.set(idx, { status, position, todos });
         }
 
         const mapped = new Map();
@@ -249,6 +280,22 @@ module.exports = {
     function dateMs(email) {
       const ms = new Date(email?.date || 0).getTime();
       return Number.isFinite(ms) ? ms : 0;
+    }
+
+    function daysSince(dateValue) {
+      const ms = new Date(dateValue || 0).getTime();
+      if (!Number.isFinite(ms) || ms <= 0) return null;
+      return Math.floor((Date.now() - ms) / (24 * 60 * 60 * 1000));
+    }
+
+    function followUpTodoForStale(status, lastUpdated) {
+      const st = safeStr(status).toLowerCase();
+      const quietDays = daysSince(lastUpdated);
+      if (quietDays === null) return '';
+      const pendingStates = new Set(['waiting', 'applied', 'under review', 'assessment', 'interviewing']);
+      if (!pendingStates.has(st)) return '';
+      if (quietDays < 10) return '';
+      return `Follow up with recruiter/hiring team (${quietDays} days since last update).`;
     }
 
     async function loadTrackedApplications(userEmail) {
@@ -287,15 +334,27 @@ module.exports = {
       const aiResults = await classifyApplicationsWithGemini(companyRows);
 
       const applications = companyRows
-        .map(({ key, company, email, from }) => ({
-          position: aiResults.get(key)?.position || fallbackPositionFromEmail(email),
-          company,
-          status: aiResults.get(key)?.status || statusFromEmail(email),
+        .map(({ key, company, email, from }) => {
+          const ai = aiResults.get(key) || {};
+          const status = ai.status || statusFromEmail(email);
+          const modelTodos = sanitizeTodos(ai.todos);
+          const followUpTodo = followUpTodoForStale(status, email?.date);
+          const todos = followUpTodo
+            ? sanitizeTodos([...modelTodos, followUpTodo])
+            : modelTodos;
+
+          return {
+            position: ai.position || fallbackPositionFromEmail(email),
+            company,
+            status,
+            todos,
+            followUpSuggested: !!followUpTodo,
           lastUpdated: email?.date || null,
           latestSubject: safeStr(email?.subject) || 'No Subject',
           emailId: safeStr(email?.id),
           from
-        }))
+          };
+        })
         .sort((a, b) => new Date(b.lastUpdated || 0) - new Date(a.lastUpdated || 0));
 
       return applications;
@@ -340,6 +399,9 @@ module.exports = {
     .status.offer { color:#137333; }
     .status.rejected, .status.withdrawn { color:#b3261e; }
     .status.interviewing, .status.assessment { color:#0b57d0; }
+    .todo-cell { max-width: 360px; }
+    .todo-list { margin:0; padding-left:16px; color:#3c4043; font-size:13px; line-height:1.4; }
+    .todo-followup { color:#b3261e; font-weight:700; }
     .muted { color:#5f6368; font-size:12px; margin-top:4px; }
     .empty { padding:20px; color:#5f6368; }
   </style>
@@ -392,12 +454,21 @@ module.exports = {
             <td><div>\${esc(it.company)}</div><div class="muted">\${esc(it.from || '')}</div></td>
             <td>\${esc(it.position || 'Unknown Position')}</td>
             <td><span class="status \${statusClass(it.status)}">\${esc(it.status)}</span></td>
+            <td class="todo-cell">\${(() => {
+              const todos = Array.isArray(it.todos) ? it.todos : [];
+              if (!todos.length) return '<span class="muted">None</span>';
+              const lis = todos.map(t => {
+                const follow = /follow up/i.test(String(t || ''));
+                return '<li class=\"' + (follow ? 'todo-followup' : '') + '\">' + esc(t) + '</li>';
+              }).join('');
+              return '<ul class=\"todo-list\">' + lis + '</ul>';
+            })()}</td>
             <td>\${esc(fmtDate(it.lastUpdated))}</td>
             <td>\${esc(it.latestSubject)}</td>
           </tr>\`).join('');
         content.innerHTML = \`
           <table>
-            <thead><tr><th>Company</th><th>Position</th><th>Status</th><th>Last Updated</th><th>Most Recent Email Subject</th></tr></thead>
+            <thead><tr><th>Company</th><th>Position</th><th>Status</th><th>TODOs (Latest Email)</th><th>Last Updated</th><th>Most Recent Email Subject</th></tr></thead>
             <tbody>\${rows}</tbody>
           </table>\`;
       } catch (e) {
