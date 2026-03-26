@@ -11,7 +11,9 @@ module.exports = {
       getUserDoc,
       loadResponseEmails,
       loadEmailThreads,
-      loadUnrepliedEmails
+      loadUnrepliedEmails,
+      invokeGemini,
+      getGeminiModel
     } = context;
 
     function safeStr(value) {
@@ -31,6 +33,28 @@ module.exports = {
         .replace(/<\/p>/gi, '\n')
         .replace(/<\/div>/gi, '\n')
         .replace(/<[^>]+>/g, ' ')
+        .replace(/[ \t]+/g, ' ')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim();
+    }
+
+    function stripArticleHtml(raw) {
+      return safeStr(raw)
+        .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+        .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+        .replace(/<noscript[\s\S]*?<\/noscript>/gi, ' ')
+        .replace(/<svg[\s\S]*?<\/svg>/gi, ' ')
+        .replace(/<header[\s\S]*?<\/header>/gi, ' ')
+        .replace(/<footer[\s\S]*?<\/footer>/gi, ' ')
+        .replace(/<nav[\s\S]*?<\/nav>/gi, ' ')
+        .replace(/<aside[\s\S]*?<\/aside>/gi, ' ')
+        .replace(/<br\s*\/?>/gi, '\n')
+        .replace(/<\/p>/gi, '\n')
+        .replace(/<\/div>/gi, '\n')
+        .replace(/<\/li>/gi, '\n')
+        .replace(/<[^>]+>/g, ' ')
+        .replace(/\r\n/g, '\n')
+        .replace(/\r/g, '\n')
         .replace(/[ \t]+/g, ' ')
         .replace(/\n{3,}/g, '\n\n')
         .trim();
@@ -194,6 +218,116 @@ module.exports = {
       return (firstLine || 'No preview available').slice(0, 220);
     }
 
+    async function fetchPageHtml(url, timeoutMs = 8000) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        const response = await fetch(url, {
+          method: 'GET',
+          redirect: 'follow',
+          signal: controller.signal,
+          headers: {
+            'user-agent': 'Mozilla/5.0 NewsletterTerminal/1.0',
+            'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+          }
+        });
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+        const text = await response.text();
+        return safeStr(text);
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+
+    function extractTitleFromHtml(html) {
+      const h = safeStr(html);
+      if (!h) return '';
+      const og = h.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i);
+      if (og && og[1]) return decodeHtmlEntities(og[1]);
+      const tt = h.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+      if (tt && tt[1]) return decodeHtmlEntities(tt[1].replace(/\s+/g, ' ').trim());
+      return '';
+    }
+
+    function fallbackSummaryFromText(text) {
+      const cleaned = safeStr(text).replace(/\s+/g, ' ').trim();
+      if (!cleaned) return 'Could not extract readable article text.';
+      const sentences = cleaned.match(/[^.!?]+[.!?]+/g) || [];
+      const summary = (sentences.slice(0, 2).join(' ') || cleaned.slice(0, 280)).trim();
+      return summary.slice(0, 320);
+    }
+
+    const summaryCache = new Map();
+
+    async function summarizeArticleUrl(url) {
+      const key = safeStr(url);
+      if (!key) return { url: '', summary: 'Invalid URL.', title: '' };
+      if (summaryCache.has(key)) return summaryCache.get(key);
+
+      let result = { url: key, title: '', summary: 'Unable to summarize this article.' };
+      try {
+        const html = await fetchPageHtml(key, 9000);
+        const title = extractTitleFromHtml(html);
+        const articleText = stripArticleHtml(html).slice(0, 14000);
+        if (!articleText) {
+          result = { url: key, title, summary: 'Could not extract readable text from this page.' };
+          summaryCache.set(key, result);
+          return result;
+        }
+
+        if (typeof invokeGemini === 'function') {
+          try {
+            const llm = await invokeGemini({
+              model: typeof getGeminiModel === 'function' ? getGeminiModel() : undefined,
+              messages: [
+                {
+                  role: 'system',
+                  content: 'Summarize article content for a newsletter feed. Be factual and concise.'
+                },
+                {
+                  role: 'user',
+                  content: `Summarize this article in 2-3 sentences.
+
+Requirements:
+- Focus on concrete facts and the key development.
+- Do not include fluff or generic commentary.
+- If the page is not an article, say so briefly.
+
+URL: ${key}
+Title: ${title || '(unknown)'}
+Content:
+${articleText}`
+                }
+              ],
+              temperature: 0.15,
+              maxOutputTokens: 240
+            });
+            const summary = safeStr(llm?.content || '');
+            if (summary) {
+              result = { url: key, title: title || key, summary: summary.slice(0, 600) };
+              summaryCache.set(key, result);
+              return result;
+            }
+          } catch (_) {
+            // fall through to fallback summarization
+          }
+        }
+
+        result = { url: key, title: title || key, summary: fallbackSummaryFromText(articleText) };
+      } catch (error) {
+        result = {
+          url: key,
+          title: '',
+          summary: `Could not fetch article (${safeStr(error?.message) || 'network error'}).`
+        };
+      }
+
+      summaryCache.set(key, result);
+      return result;
+    }
+
     function normalizeEmailShape(entry, fallbackIdPrefix) {
       if (!entry || typeof entry !== 'object') return null;
       const id = safeStr(entry.id || entry.threadId || entry.messageId || '');
@@ -316,6 +450,25 @@ module.exports = {
       } catch (error) {
         console.error('Newsletter Terminal feed failed:', error);
         return res.status(500).json({ success: false, error: 'Failed to load newsletter terminal feed' });
+      }
+    });
+
+    app.post('/api/newsletter-terminal/summarize-links', async (req, res) => {
+      try {
+        const links = Array.isArray(req.body?.links) ? req.body.links.map(v => safeStr(v)).filter(Boolean) : [];
+        if (!links.length) {
+          return res.status(400).json({ success: false, error: 'No links provided' });
+        }
+
+        const unique = Array.from(new Set(links.map(unwrapUrl).filter(Boolean))).slice(0, 5);
+        const summaries = [];
+        for (const link of unique) {
+          summaries.push(await summarizeArticleUrl(link));
+        }
+        return res.json({ success: true, summaries });
+      } catch (error) {
+        console.error('Newsletter Terminal summarize-links failed:', error);
+        return res.status(500).json({ success: false, error: 'Failed to summarize links' });
       }
     });
 
@@ -533,7 +686,7 @@ module.exports = {
   </div>
 
   <script>
-    const state = { entries: [], selectedId: null };
+    const state = { entries: [], selectedId: null, summariesById: {}, summarizeBusyById: {} };
     const listEl = document.getElementById('list');
     const detailEl = document.getElementById('detail');
     const listStatusEl = document.getElementById('listStatus');
@@ -602,12 +755,62 @@ module.exports = {
       const linksHtml = links.length
         ? ('<div class="links">' + links.map(link => '<a class="link" href="' + esc(link) + '" target="_blank" rel="noopener noreferrer">' + esc(link) + '</a>').join('') + '</div>')
         : '<div class="empty">No clean links extracted from this email.</div>';
+      const busy = !!state.summarizeBusyById[entry.id];
+      const summaries = Array.isArray(state.summariesById[entry.id]) ? state.summariesById[entry.id] : [];
+      const summarizeButton = links.length
+        ? ('<div style="margin-top:10px;"><button id="summarizeBtn" class="btn" ' + (busy ? 'disabled' : '') + '>' + (busy ? 'Summarizing...' : 'Summarize Articles') + '</button></div>')
+        : '';
+      const summaryHtml = summaries.length
+        ? ('<div class="links" style="margin-top:10px;">' + summaries.map(item =>
+            '<div class="link" style="color:#f2f2f2;">' +
+              '<div style="color:#ffb347; font-weight:700; margin-bottom:4px;">' + esc(item.title || 'Article') + '</div>' +
+              '<div style="color:#d9d9d9; line-height:1.5;">' + esc(item.summary || '') + '</div>' +
+            '</div>'
+          ).join('') + '</div>')
+        : '';
 
       detailEl.innerHTML =
         '<h2>' + esc(entry.subject) + '</h2>' +
         '<div class="m">' + esc(entry.from) + ' · ' + esc(fmtDate(entry.date)) + ' · ' + esc(entry.category || 'Uncategorized') + '</div>' +
         '<p>' + esc(entry.preview || 'No preview available') + '</p>' +
-        linksHtml;
+        linksHtml +
+        summarizeButton +
+        summaryHtml;
+
+      const summarizeBtn = document.getElementById('summarizeBtn');
+      if (summarizeBtn) {
+        summarizeBtn.addEventListener('click', async () => {
+          await summarizeEntry(entry);
+        });
+      }
+    }
+
+    async function summarizeEntry(entry) {
+      const id = String(entry?.id || '');
+      if (!id) return;
+      if (state.summarizeBusyById[id]) return;
+      state.summarizeBusyById[id] = true;
+      renderDetail(id);
+      try {
+        const response = await fetch('/api/newsletter-terminal/summarize-links', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ links: Array.isArray(entry.links) ? entry.links : [] })
+        });
+        const data = await response.json();
+        if (!response.ok || !data.success) {
+          throw new Error(data.error || 'Failed to summarize links');
+        }
+        state.summariesById[id] = Array.isArray(data.summaries) ? data.summaries : [];
+      } catch (error) {
+        state.summariesById[id] = [{
+          title: 'Summary unavailable',
+          summary: String(error?.message || 'Failed to summarize article links')
+        }];
+      } finally {
+        state.summarizeBusyById[id] = false;
+        if (String(state.selectedId) === id) renderDetail(id);
+      }
     }
 
     async function loadFeed() {
