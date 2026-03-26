@@ -11,8 +11,14 @@ module.exports = {
       getUserDoc,
       loadResponseEmails,
       loadUnrepliedEmails,
-      loadEmailThreads
+      loadEmailThreads,
+      invokeGemini,
+      getGeminiModel
     } = context;
+
+    const savesByUrlCache = new Map(); // url -> { value, updatedAt }
+    const neighborhoodInsightCache = new Map(); // neighborhood -> { value, updatedAt }
+    const CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
 
     function safeStr(value) {
       return String(value || '').trim();
@@ -183,6 +189,100 @@ module.exports = {
       return 'Apartment Listing';
     }
 
+    function unwrapUrl(url) {
+      const raw = safeStr(url);
+      if (!raw) return '';
+      let out = raw.replace(/&amp;/g, '&').replace(/[)>.,;]+$/g, '');
+      try { out = decodeURIComponent(out); } catch (_) {}
+      try {
+        const parsed = new URL(out);
+        const wrapped = parsed.searchParams.get('u') || parsed.searchParams.get('url') || parsed.searchParams.get('target');
+        if (wrapped) return unwrapUrl(wrapped);
+      } catch (_) {}
+      return out;
+    }
+
+    function parseStreetEasyUrl(email) {
+      const text = [
+        safeStr(email?.subject),
+        safeStr(email?.snippet),
+        safeStr(email?.body),
+        safeStr(email?.originalBody)
+      ].join('\n');
+
+      const m = text.match(/https?:\/\/(?:www\.)?streeteasy\.com\/[^\s"'<>]+/i);
+      if (!m || !m[0]) return '';
+      return unwrapUrl(m[0]);
+    }
+
+    async function fetchPageHtml(url, timeoutMs = 7000) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        const response = await fetch(url, {
+          method: 'GET',
+          redirect: 'follow',
+          signal: controller.signal,
+          headers: {
+            'user-agent': 'Mozilla/5.0 ApartmentRanking/1.0',
+            'accept': 'text/html,application/xhtml+xml'
+          }
+        });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        return await response.text();
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+
+    function parseSavesCountFromHtml(html) {
+      const source = safeStr(html);
+      if (!source) return null;
+
+      // Typical visible label formats.
+      const patterns = [
+        /this home has been saved by\s+([0-9]{1,3}(?:,[0-9]{3})*)\s+users?/i,
+        /([0-9]{1,3}(?:,[0-9]{3})*)\s+Saves?\b/i,
+        /"savesCount"\s*:\s*([0-9]+)/i,
+        /"saved_count"\s*:\s*([0-9]+)/i
+      ];
+      for (const p of patterns) {
+        const m = source.match(p);
+        if (m && m[1]) {
+          const n = Number(String(m[1]).replace(/,/g, ''));
+          if (Number.isFinite(n) && n >= 0 && n < 1000000) return n;
+        }
+      }
+      return null;
+    }
+
+    function competitionNoteFromSaves(saves) {
+      const n = Number(saves);
+      if (!Number.isFinite(n) || n < 0) return '';
+      if (n >= 100) return `Highly competitive (${n} saves)`;
+      if (n >= 50) return `Competitive (${n} saves)`;
+      if (n >= 20) return `Moderately competitive (${n} saves)`;
+      return `Lower competition (${n} saves)`;
+    }
+
+    async function fetchStreetEasySavesCount(url) {
+      const key = safeStr(url);
+      if (!key) return null;
+      const cached = savesByUrlCache.get(key);
+      if (cached && (Date.now() - cached.updatedAt) < CACHE_TTL_MS) return cached.value;
+
+      let value = null;
+      try {
+        const html = await fetchPageHtml(key, 7000);
+        value = parseSavesCountFromHtml(html);
+      } catch (_) {
+        value = null;
+      }
+
+      savesByUrlCache.set(key, { value, updatedAt: Date.now() });
+      return value;
+    }
+
     function hasStrongListingSignal(email) {
       const subject = safeStr(email?.subject);
       const snippet = safeStr(email?.snippet);
@@ -290,6 +390,7 @@ module.exports = {
         neighborhood: parseNeighborhood(email),
         price: parsePrice(email),
         bedrooms: parseBedrooms(email),
+        streetEasyUrl: parseStreetEasyUrl(email),
         date: safeStr(email.date) || null,
         sourceSubject: safeStr(email.subject) || 'Apartment Listing',
         from: safeStr(email.originalFrom || email.from)
@@ -321,6 +422,23 @@ module.exports = {
 
       const deduped = Array.from(dedupedByAddress.values());
 
+      // Enrich with StreetEasy saves counts where available.
+      const uniqueUrls = Array.from(new Set(
+        deduped.map(item => safeStr(item.streetEasyUrl)).filter(Boolean)
+      ));
+      const savesByUrl = new Map();
+      for (const url of uniqueUrls) {
+        const saves = await fetchStreetEasySavesCount(url);
+        savesByUrl.set(url, saves);
+      }
+
+      for (const apt of deduped) {
+        const url = safeStr(apt.streetEasyUrl);
+        const savesCount = url ? savesByUrl.get(url) : null;
+        apt.savesCount = Number.isFinite(savesCount) ? savesCount : null;
+        apt.competitionNote = competitionNoteFromSaves(apt.savesCount);
+      }
+
       deduped.sort((a, b) => {
         const ap = Number.isFinite(a.price) ? a.price : Number.MAX_SAFE_INTEGER;
         const bp = Number.isFinite(b.price) ? b.price : Number.MAX_SAFE_INTEGER;
@@ -332,6 +450,52 @@ module.exports = {
         rank: idx + 1,
         ...apt
       }));
+    }
+
+    async function getNeighborhoodInsight(neighborhood) {
+      const key = normalizeForSearch(neighborhood);
+      if (!key || key === 'unknown') return 'Neighborhood details unavailable.';
+
+      const cached = neighborhoodInsightCache.get(key);
+      if (cached && (Date.now() - cached.updatedAt) < CACHE_TTL_MS) {
+        return cached.value;
+      }
+
+      let insight = '';
+      if (typeof invokeGemini === 'function') {
+        const prompt = `You are helping a renter in their early/mid 20s evaluate NYC neighborhoods.
+
+Neighborhood: ${safeStr(neighborhood)}
+
+Return exactly 3 sentences total:
+1) One concrete pro.
+2) One concrete con.
+3) One balanced takeaway for someone in their early/mid 20s.
+
+Keep it practical (commute, social scene, safety, noise, cost, amenities). Avoid fluff.`;
+
+        try {
+          const completion = await invokeGemini({
+            model: typeof getGeminiModel === 'function' ? getGeminiModel() : undefined,
+            messages: [
+              { role: 'system', content: 'You provide concise neighborhood pros/cons.' },
+              { role: 'user', content: prompt }
+            ],
+            temperature: 0.2,
+            maxOutputTokens: 220
+          });
+          insight = safeStr(completion?.content || '');
+        } catch (_) {
+          insight = '';
+        }
+      }
+
+      if (!insight) {
+        insight = `A major pro is neighborhood-specific convenience and amenities; a major con is that rent and lifestyle fit can vary block by block. For someone in their early/mid 20s, visit at day and night and compare commute plus social fit before deciding.`;
+      }
+
+      neighborhoodInsightCache.set(key, { value: insight, updatedAt: Date.now() });
+      return insight;
     }
 
     app.get('/api/apartment-summary-and-ranking/list', async (req, res) => {
@@ -347,6 +511,20 @@ module.exports = {
       } catch (error) {
         console.error('Apartment Summary And Ranking API failed:', error);
         return res.status(500).json({ success: false, error: 'Failed to load apartment rankings' });
+      }
+    });
+
+    app.post('/api/apartment-summary-and-ranking/neighborhood-insight', async (req, res) => {
+      try {
+        const neighborhood = safeStr(req.body?.neighborhood);
+        if (!neighborhood) {
+          return res.status(400).json({ success: false, error: 'neighborhood is required' });
+        }
+        const insight = await getNeighborhoodInsight(neighborhood);
+        return res.json({ success: true, neighborhood, insight });
+      } catch (error) {
+        console.error('Apartment neighborhood-insight API failed:', error);
+        return res.status(500).json({ success: false, error: 'Failed to load neighborhood insight' });
       }
     });
 
@@ -371,8 +549,19 @@ module.exports = {
     th { color:#5f6368; font-weight:600; font-size:12px; text-transform:uppercase; letter-spacing:.4px; background:#fbfcfe; }
     tr:last-child td { border-bottom:none; }
     .price { font-weight:700; color:#137333; }
+    .neighborhood-link { color:#0b57d0; text-decoration:none; cursor:pointer; font-weight:600; }
+    .neighborhood-link:hover { text-decoration:underline; }
     .muted { color:#5f6368; font-size:12px; margin-top:4px; }
+    .competition-high { color:#b3261e; font-weight:700; }
+    .competition-med { color:#9a6700; font-weight:700; }
+    .competition-low { color:#137333; font-weight:700; }
     .empty { color:#5f6368; font-size:14px; padding:18px; }
+    .modal { position:fixed; inset:0; background:rgba(32,33,36,.35); display:none; align-items:center; justify-content:center; z-index:1200; }
+    .modal.show { display:flex; }
+    .modal-card { width:min(560px, 92vw); background:#fff; border:1px solid #e6e9ef; border-radius:12px; padding:16px; box-shadow:0 10px 28px rgba(0,0,0,.12); }
+    .modal-title { font-size:18px; font-weight:700; margin:0 0 8px; }
+    .modal-text { font-size:14px; color:#3c4043; line-height:1.6; white-space:pre-wrap; }
+    .modal-actions { margin-top:12px; display:flex; justify-content:flex-end; }
   </style>
 </head>
 <body>
@@ -389,11 +578,24 @@ module.exports = {
       <div id="content" class="empty">Loading apartment listings...</div>
     </div>
   </div>
+  <div id="neighborhoodModal" class="modal" aria-hidden="true">
+    <div class="modal-card">
+      <h3 id="neighborhoodTitle" class="modal-title">Neighborhood Insight</h3>
+      <div id="neighborhoodText" class="modal-text">Loading...</div>
+      <div class="modal-actions">
+        <button id="closeNeighborhoodBtn" class="btn">Close</button>
+      </div>
+    </div>
+  </div>
 
   <script>
     const content = document.getElementById('content');
     const meta = document.getElementById('meta');
     const refreshBtn = document.getElementById('refreshBtn');
+    const neighborhoodModal = document.getElementById('neighborhoodModal');
+    const neighborhoodTitle = document.getElementById('neighborhoodTitle');
+    const neighborhoodText = document.getElementById('neighborhoodText');
+    const closeNeighborhoodBtn = document.getElementById('closeNeighborhoodBtn');
 
     function esc(v){ return String(v||'').replace(/[&<>\"']/g, s => ({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',\"'\":'&#39;'}[s])); }
     function fmtDate(v){
@@ -405,6 +607,40 @@ module.exports = {
       const n = Number(v);
       if (!Number.isFinite(n)) return 'N/A';
       return '$' + n.toLocaleString();
+    }
+    function competitionClass(note){
+      const n = String(note || '').toLowerCase();
+      if (n.includes('highly competitive') || n.includes('competitive (')) return 'competition-high';
+      if (n.includes('moderately')) return 'competition-med';
+      if (n.includes('lower')) return 'competition-low';
+      return '';
+    }
+    function openNeighborhoodModal(name, text){
+      neighborhoodTitle.textContent = name ? ('Neighborhood: ' + name) : 'Neighborhood Insight';
+      neighborhoodText.textContent = text || 'No insight available.';
+      neighborhoodModal.classList.add('show');
+      neighborhoodModal.setAttribute('aria-hidden', 'false');
+    }
+    function closeNeighborhoodModal(){
+      neighborhoodModal.classList.remove('show');
+      neighborhoodModal.setAttribute('aria-hidden', 'true');
+    }
+
+    async function loadNeighborhoodInsight(neighborhood){
+      if (!neighborhood || neighborhood === 'Unknown') return;
+      openNeighborhoodModal(neighborhood, 'Loading neighborhood pros/cons...');
+      try {
+        const r = await fetch('/api/apartment-summary-and-ranking/neighborhood-insight', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ neighborhood })
+        });
+        const d = await r.json();
+        if (!r.ok || !d.success) throw new Error(d.error || 'Failed');
+        openNeighborhoodModal(neighborhood, d.insight || 'No insight available.');
+      } catch (error) {
+        openNeighborhoodModal(neighborhood, 'Failed to load neighborhood insight.');
+      }
     }
 
     async function load() {
@@ -424,12 +660,21 @@ module.exports = {
         }
 
         const rows = list.map(item => {
+          const listingTitle = item.streetEasyUrl
+            ? ('<a href=\"' + esc(item.streetEasyUrl) + '\" target=\"_blank\" rel=\"noopener noreferrer\">' + esc(item.title || 'Apartment Listing') + '</a>')
+            : esc(item.title || 'Apartment Listing');
+          const neighborhoodHtml = item.neighborhood && item.neighborhood !== 'Unknown'
+            ? ('<a class=\"neighborhood-link\" data-neighborhood=\"' + esc(item.neighborhood) + '\">' + esc(item.neighborhood) + '</a>')
+            : esc(item.neighborhood || 'Unknown');
+          const competition = item.competitionNote || (Number.isFinite(Number(item.savesCount)) ? (String(item.savesCount) + ' saves') : 'Unknown');
+          const compClass = competitionClass(competition);
           return (
             '<tr>' +
               '<td><strong>' + esc(item.rank) + '</strong></td>' +
-              '<td><div>' + esc(item.title || 'Apartment Listing') + '</div><div class="muted">' + esc(item.sourceSubject || '') + '</div></td>' +
-              '<td>' + esc(item.neighborhood || 'Unknown') + '</td>' +
+              '<td><div>' + listingTitle + '</div><div class="muted">' + esc(item.sourceSubject || '') + '</div></td>' +
+              '<td>' + neighborhoodHtml + '</td>' +
               '<td class="price">' + esc(fmtPrice(item.price)) + '</td>' +
+              '<td><span class=\"' + esc(compClass) + '\">' + esc(competition) + '</span></td>' +
               '<td>' + esc(item.bedrooms || '—') + '</td>' +
               '<td>' + esc(fmtDate(item.date)) + '</td>' +
             '</tr>'
@@ -438,15 +683,26 @@ module.exports = {
 
         content.innerHTML =
           '<table>' +
-            '<thead><tr><th>Rank</th><th>Listing</th><th>Neighborhood</th><th>Price</th><th>Beds</th><th>Date</th></tr></thead>' +
+            '<thead><tr><th>Rank</th><th>Listing</th><th>Neighborhood</th><th>Price</th><th>Competition</th><th>Beds</th><th>Date</th></tr></thead>' +
             '<tbody>' + rows + '</tbody>' +
           '</table>';
+
+        content.querySelectorAll('.neighborhood-link').forEach(el => {
+          el.addEventListener('click', () => {
+            const neighborhood = el.getAttribute('data-neighborhood') || '';
+            loadNeighborhoodInsight(neighborhood);
+          });
+        });
       } catch (error) {
         meta.textContent = 'Failed to load rankings';
         content.innerHTML = '<div class="empty">Failed to load apartment rankings.</div>';
       }
     }
 
+    closeNeighborhoodBtn.addEventListener('click', closeNeighborhoodModal);
+    neighborhoodModal.addEventListener('click', (e) => {
+      if (e.target === neighborhoodModal) closeNeighborhoodModal();
+    });
     refreshBtn.addEventListener('click', load);
     load();
   </script>
