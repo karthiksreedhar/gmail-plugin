@@ -752,36 +752,31 @@ ${articleText}`
       }
       detailStatusEl.textContent = 'Rank #' + Number(entry.rank || 0);
       const links = Array.isArray(entry.links) ? entry.links : [];
-      const linksHtml = links.length
-        ? ('<div class="links">' + links.map(link => '<a class="link" href="' + esc(link) + '" target="_blank" rel="noopener noreferrer">' + esc(link) + '</a>').join('') + '</div>')
-        : '<div class="empty">No clean links extracted from this email.</div>';
       const busy = !!state.summarizeBusyById[entry.id];
       const summaries = Array.isArray(state.summariesById[entry.id]) ? state.summariesById[entry.id] : [];
-      const summarizeButton = links.length
-        ? ('<div style="margin-top:10px;"><button id="summarizeBtn" class="btn" ' + (busy ? 'disabled' : '') + '>' + (busy ? 'Summarizing...' : 'Summarize Articles') + '</button></div>')
+
+      const loadingHtml = (links.length && busy && !summaries.length)
+        ? '<div class="empty">Summarizing linked articles...</div>'
         : '';
+
       const summaryHtml = summaries.length
         ? ('<div class="links" style="margin-top:10px;">' + summaries.map(item =>
             '<div class="link" style="color:#f2f2f2;">' +
-              '<div style="color:#ffb347; font-weight:700; margin-bottom:4px;">' + esc(item.title || 'Article') + '</div>' +
+              '<div style="margin-bottom:4px;"><a href="' + esc(item.url || '#') + '" target="_blank" rel="noopener noreferrer" style="color:#ffb347; font-weight:700; text-decoration:none;">' + esc(item.title || 'Article') + '</a></div>' +
               '<div style="color:#d9d9d9; line-height:1.5;">' + esc(item.summary || '') + '</div>' +
             '</div>'
           ).join('') + '</div>')
-        : '';
+        : (links.length ? loadingHtml : '<div class="empty">No clean links extracted from this email.</div>');
 
       detailEl.innerHTML =
         '<h2>' + esc(entry.subject) + '</h2>' +
         '<div class="m">' + esc(entry.from) + ' · ' + esc(fmtDate(entry.date)) + ' · ' + esc(entry.category || 'Uncategorized') + '</div>' +
         '<p>' + esc(entry.preview || 'No preview available') + '</p>' +
-        linksHtml +
-        summarizeButton +
         summaryHtml;
 
-      const summarizeBtn = document.getElementById('summarizeBtn');
-      if (summarizeBtn) {
-        summarizeBtn.addEventListener('click', async () => {
-          await summarizeEntry(entry);
-        });
+      // Auto-summarize when a message is selected.
+      if (links.length && !summaries.length && !busy) {
+        summarizeEntry(entry);
       }
     }
 
@@ -801,9 +796,14 @@ ${articleText}`
         if (!response.ok || !data.success) {
           throw new Error(data.error || 'Failed to summarize links');
         }
-        state.summariesById[id] = Array.isArray(data.summaries) ? data.summaries : [];
+        state.summariesById[id] = (Array.isArray(data.summaries) ? data.summaries : []).map(item => ({
+          url: String(item?.url || ''),
+          title: String(item?.title || item?.url || 'Article'),
+          summary: String(item?.summary || '')
+        }));
       } catch (error) {
         state.summariesById[id] = [{
+          url: '',
           title: 'Summary unavailable',
           summary: String(error?.message || 'Failed to summarize article links')
         }];
