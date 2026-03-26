@@ -288,13 +288,6 @@ module.exports = {
       return Math.floor((Date.now() - ms) / (24 * 60 * 60 * 1000));
     }
 
-    function addDaysIso(dateValue, days) {
-      const ms = new Date(dateValue || 0).getTime();
-      if (!Number.isFinite(ms) || ms <= 0) return null;
-      const dt = new Date(ms + (days * 24 * 60 * 60 * 1000));
-      return dt.toISOString();
-    }
-
     function followUpTodoForStale(status, lastUpdated) {
       const st = safeStr(status).toLowerCase();
       const quietDays = daysSince(lastUpdated);
