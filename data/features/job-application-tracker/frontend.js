@@ -10,7 +10,7 @@
   }
 
   const API = window.EmailAssistant;
-  const followUpById = new Map(); // emailId -> { daysOld, message }
+  const followUpById = new Map(); // emailId -> { daysOld, priorityRank, message }
   let inflight = false;
 
   function safeStr(v) {
@@ -77,7 +77,12 @@
         item.style.backgroundColor = '#FFF4CC';
         item.style.borderLeft = '4px solid #F4B400';
         renderMarker(item, info);
-        urgent.push({ item, age: Number(info.daysOld) || 0, index });
+        urgent.push({
+          item,
+          age: Number(info.daysOld) || 0,
+          priorityRank: Number(info.priorityRank) || 0,
+          index
+        });
       } else {
         item.style.backgroundColor = '';
         if (item.style.borderLeft === '4px solid rgb(244, 180, 0)' || item.style.borderLeft === '4px solid #F4B400') {
@@ -89,7 +94,10 @@
     });
 
     // Oldest stale job-app emails first.
-    urgent.sort((a, b) => (b.age - a.age) || (a.index - b.index));
+    urgent.sort((a, b) => {
+      if (b.priorityRank !== a.priorityRank) return b.priorityRank - a.priorityRank;
+      return (b.age - a.age) || (a.index - b.index);
+    });
     const reordered = [...urgent.map(x => x.item), ...normal.map(x => x.item)];
     reordered.forEach(node => container.appendChild(node));
   }
@@ -111,6 +119,7 @@
         if (!id || !info) return;
         followUpById.set(id, {
           daysOld: Number(info.daysOld) || 0,
+          priorityRank: Number(info.priorityRank) || 0,
           message: safeStr(info.message)
         });
       });

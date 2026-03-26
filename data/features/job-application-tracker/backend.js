@@ -407,14 +407,28 @@ module.exports = {
 
         const emailMap = await loadEmailMapForUser(user, emailIds);
         const followUpByEmailId = {};
+        const isSouthwestEmail = (email) => {
+          const from = safeStr(email?.originalFrom || email?.from).toLowerCase();
+          const subject = safeStr(email?.subject).toLowerCase();
+          const body = safeStr(email?.body).toLowerCase();
+          const snippet = safeStr(email?.snippet).toLowerCase();
+          const haystack = `${from}\n${subject}\n${snippet}\n${body}`;
+          return /\bsouthwest\b/.test(haystack) || /@southwest\./.test(haystack);
+        };
+
         for (const id of emailIds) {
           const email = emailMap.get(id);
           if (!email || !categoryMatch(email)) continue;
           const ageDays = daysSince(email?.date);
-          if (ageDays === null || ageDays <= 2) continue;
+          const southwestPriority = isSouthwestEmail(email);
+          const staleForFollowUp = ageDays !== null && ageDays > 2;
+          if (!southwestPriority && !staleForFollowUp) continue;
           followUpByEmailId[id] = {
-            daysOld: ageDays,
-            message: `Follow up suggested (${ageDays} days since last update)`
+            daysOld: ageDays === null ? 0 : ageDays,
+            priorityRank: southwestPriority ? 1000 : 100,
+            message: southwestPriority
+              ? 'SouthWest Airlines thread prioritized'
+              : `Follow up suggested (${ageDays} days since last update)`
           };
         }
 
