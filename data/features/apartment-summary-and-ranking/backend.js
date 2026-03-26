@@ -297,18 +297,41 @@ module.exports = {
       const source = safeStr(html);
       if (!source) return null;
 
-      // Typical visible label formats.
+      function parseNum(raw) {
+        const n = Number(String(raw || '').replace(/,/g, ''));
+        return (Number.isFinite(n) && n >= 0 && n < 1000000) ? n : null;
+      }
+
+      // 1) Highest-priority extraction from the exact visible sentence requested by user.
+      // Normalize HTML to plain text so tags/newlines between words do not break matching.
+      const text = source
+        .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+        .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+        .replace(/<[^>]+>/g, ' ')
+        .replace(/&nbsp;/gi, ' ')
+        .replace(/&#39;/g, "'")
+        .replace(/&quot;/g, '"')
+        .replace(/&amp;/g, '&')
+        .replace(/\s+/g, ' ')
+        .trim();
+
+      const exactLine = text.match(/this home has been saved by\s+([0-9]{1,3}(?:,[0-9]{3})*)\s+users?\b/i);
+      if (exactLine && exactLine[1]) {
+        const n = parseNum(exactLine[1]);
+        if (n !== null) return n;
+      }
+
+      // 2) Fallbacks only if the exact sentence is unavailable.
       const patterns = [
-        /this home has been saved by\s+([0-9]{1,3}(?:,[0-9]{3})*)\s+users?/i,
-        /([0-9]{1,3}(?:,[0-9]{3})*)\s+Saves?\b/i,
         /"savesCount"\s*:\s*([0-9]+)/i,
-        /"saved_count"\s*:\s*([0-9]+)/i
+        /"saved_count"\s*:\s*([0-9]+)/i,
+        /([0-9]{1,3}(?:,[0-9]{3})*)\s+Saves?\b/i
       ];
       for (const p of patterns) {
         const m = source.match(p);
         if (m && m[1]) {
-          const n = Number(String(m[1]).replace(/,/g, ''));
-          if (Number.isFinite(n) && n >= 0 && n < 1000000) return n;
+          const n = parseNum(m[1]);
+          if (n !== null) return n;
         }
       }
       return null;
