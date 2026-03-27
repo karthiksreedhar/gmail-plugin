@@ -1,14 +1,11 @@
 {
   "id": "auto-reply-student-emails",
-  "name": "Automated Student Email Responses",
+  "name": "Auto Reply Student Emails",
   "version": "1.0.0",
-  "description": "Automatically replies to student emails regarding Slack issues (directing them to Courseworks) and late submissions/extensions (acknowledging receipt).",
-  "author": "Feature Generator Agent",
-  "backend": "backend.js",
+  "description": "Adds quick reply buttons for UI 4170 student logistics emails and pre-fills extension/logistics response templates.",
+  "author": "ks4190@columbia.edu",
   "frontend": "frontend.js",
   "permissions": [
-    "emails:read",
-    "emails:write",
-    "api:custom"
+    "emails:read"
   ]
 }
