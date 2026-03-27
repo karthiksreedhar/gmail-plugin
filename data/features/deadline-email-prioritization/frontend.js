@@ -12,6 +12,7 @@
   const API = window.EmailAssistant;
   const urgentById = new Map(); // emailId -> { dueAt, matchedText }
   const BUTTON_CLASS = 'deadline-priority-ignore-btn';
+  const baseOrderById = new Map(); // emailId -> chronological index from base list render
   let inflight = false;
 
   function getEmailId(emailItem) {
@@ -87,6 +88,9 @@
         renderDeadlineMarker(item, info);
         urgent.push({ item, dueAt: new Date(info.dueAt).getTime() || Number.MAX_SAFE_INTEGER, index });
       } else {
+        if (item.style.backgroundColor === 'rgb(255, 244, 204)' || item.style.backgroundColor === '#FFF4CC') {
+          item.style.backgroundColor = '';
+        }
         if (item.style.borderLeft === '4px solid rgb(244, 180, 0)' || item.style.borderLeft === '4px solid #F4B400') {
           item.style.borderLeft = '';
         }
@@ -97,6 +101,13 @@
     });
 
     urgent.sort((a, b) => (a.dueAt - b.dueAt) || (a.index - b.index));
+    normal.sort((a, b) => {
+      const aId = getEmailId(a.item);
+      const bId = getEmailId(b.item);
+      const aBase = baseOrderById.has(aId) ? baseOrderById.get(aId) : a.index;
+      const bBase = baseOrderById.has(bId) ? baseOrderById.get(bId) : b.index;
+      return aBase - bBase;
+    });
 
     const reordered = [
       ...urgent.map(entry => entry.item),
@@ -146,7 +157,7 @@
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.className = BUTTON_CLASS;
-      btn.textContent = 'Not a deadline';
+      btn.textContent = 'Hide';
       btn.style.cssText = [
         'background:#fff',
         'color:#8a4b00',
@@ -176,6 +187,15 @@
     const emailItems = Array.from(document.querySelectorAll('#emailContainer .email-item'));
     const ids = emailItems.map(getEmailId).filter(Boolean);
     return Array.from(new Set(ids));
+  }
+
+  function snapshotBaseChronologicalOrder() {
+    const emailItems = Array.from(document.querySelectorAll('#emailContainer .email-item'));
+    emailItems.forEach((item, index) => {
+      const id = getEmailId(item);
+      if (!id) return;
+      baseOrderById.set(id, index);
+    });
   }
 
   async function refreshUrgentDeadlines() {
@@ -210,6 +230,7 @@
 
   function initialize() {
     // Auto-run continuously; no manual button by design.
+    setTimeout(() => snapshotBaseChronologicalOrder(), 220);
     setTimeout(() => refreshUrgentDeadlines(), 250);
     setInterval(() => refreshUrgentDeadlines(), 30000);
 
@@ -217,6 +238,7 @@
       const originalDisplayEmails = window.displayEmails;
       window.displayEmails = async function(...args) {
         const out = await originalDisplayEmails.apply(this, args);
+        setTimeout(() => snapshotBaseChronologicalOrder(), 40);
         setTimeout(() => refreshUrgentDeadlines(), 60);
         setTimeout(() => ensureIgnoreButtons(), 90);
         return out;
