@@ -65,14 +65,28 @@ module.exports = {
       return rounded;
     }
 
+    function normalizeDateTimeText(raw) {
+      return safeStr(raw)
+        .replace(/\b(\d{1,2})(am|pm)\b/gi, '$1 $2')
+        .replace(/\b(a)\.?\s*m\.?\b/gi, 'AM')
+        .replace(/\b(p)\.?\s*m\.?\b/gi, 'PM')
+        .replace(/\bat\s+/gi, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+    }
+
     function parseDateCandidate(raw, now, clientTimezoneOffsetMinutes) {
-      const text = safeStr(raw);
+      const text = normalizeDateTimeText(raw);
       if (!text) return null;
 
       const hasYear = /\b\d{4}\b/.test(text) || /\b\d{1,2}\/\d{1,2}\/\d{2,4}\b/.test(text);
       const hasTime = /\b\d{1,2}:\d{2}\b/.test(text) || /\b\d{1,2}\s*(?:a\.?m\.?|p\.?m\.?)\b/i.test(text);
       const hasExplicitTimezone = /\b(?:UTC|GMT|PST|PDT|MST|MDT|CST|CDT|EST|EDT)\b|[+-]\d{2}:?\d{2}\b/i.test(text);
-      const parsed = new Date(text);
+      let parsed = new Date(text);
+      if (Number.isNaN(parsed.getTime())) {
+        const noShortTz = text.replace(/\b(?:PT|ET|CT|MT)\b/gi, '').replace(/\s+/g, ' ').trim();
+        parsed = new Date(noShortTz);
+      }
       if (Number.isNaN(parsed.getTime())) return null;
 
       // Date strings in emails usually do not include timezone and should be
@@ -192,6 +206,9 @@ module.exports = {
 
       const dateRe = /\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+\d{1,2}(?:st|nd|rd|th)?(?:,?\s+\d{4})?(?:,?\s*(?:at\s*)?\d{1,2}(?::\d{2})?\s*(?:a\.?m\.?|p\.?m\.?)?(?:\s*(?:pt|pst|pdt|mt|mst|mdt|ct|cst|cdt|et|est|edt|utc|gmt))?)?\b|\b\d{1,2}\/\d{1,2}(?:\/\d{2,4})?(?:,?\s*(?:at\s*)?\d{1,2}(?::\d{2})?\s*(?:a\.?m\.?|p\.?m\.?)?(?:\s*(?:pt|pst|pdt|mt|mst|mdt|ct|cst|cdt|et|est|edt|utc|gmt))?)?\b/gi;
       const relativeRe = /\b(day after tomorrow|tomorrow|today|tonight|in\s+\d+\s+days?|(?:this|next)\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/gi;
+      const explicitTimeRe = /\b\d{1,2}:\d{2}\b|\b\d{1,2}\s*(?:a\.?\s*m\.?|p\.?\s*m\.?)\b/i;
+      const nearbyTimeRe = /\b(?:at\s*)?\d{1,2}(?::\d{2})?\s*(?:a\.?\s*m\.?|p\.?\s*m\.?)(?:\s*(?:pt|pst|pdt|mt|mst|mdt|ct|cst|cdt|et|est|edt|utc|gmt))?\b/i;
+      const nearby24hTimeRe = /\b(?:at\s*)?(?:[01]?\d|2[0-3]):[0-5]\d(?:\s*(?:pt|pst|pdt|mt|mst|mdt|ct|cst|cdt|et|est|edt|utc|gmt))?\b/i;
 
       const candidates = [];
       let match;
@@ -204,12 +221,22 @@ module.exports = {
         const contextWindow = source.slice(start, end);
         if (!hasDeadlineSignal(contextWindow)) continue;
 
-        const dueAt = parseDateCandidate(rawDateText, now, clientTimezoneOffsetMinutes);
+        let candidateText = rawDateText;
+        if (!explicitTimeRe.test(candidateText)) {
+          const after = source.slice(match.index + rawDateText.length, Math.min(source.length, match.index + rawDateText.length + 100));
+          const before = source.slice(Math.max(0, match.index - 70), match.index);
+          const timeMatch = after.match(nearbyTimeRe) || before.match(nearbyTimeRe) || after.match(nearby24hTimeRe) || before.match(nearby24hTimeRe);
+          if (timeMatch && timeMatch[0]) {
+            candidateText = `${rawDateText} ${safeStr(timeMatch[0])}`;
+          }
+        }
+
+        const dueAt = parseDateCandidate(candidateText, now, clientTimezoneOffsetMinutes);
         if (!dueAt) continue;
 
         candidates.push({
           dueAt,
-          matchedText: rawDateText
+          matchedText: candidateText
         });
       }
 
