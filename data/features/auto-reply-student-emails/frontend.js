@@ -80,10 +80,10 @@
     }
     if (!name) return 'there';
 
-    if (name.split(/\s+/).length === 1 && name.length <= 3) {
-      return name.toUpperCase();
-    }
-    return toNameCase(name);
+    const full = toNameCase(name);
+    const first = full.split(/\s+/).filter(Boolean)[0] || 'there';
+    if (first.length <= 3) return first.toUpperCase();
+    return first;
   }
 
   function waitFor(conditionFn, timeoutMs = 10000, intervalMs = 80) {
@@ -173,7 +173,7 @@
       return [
         `Hi ${senderName},`,
         '',
-        `No worries, let me know when you are able to submit ${classification.assignment}.`,
+        `No worries, you can submit ${classification.assignment} when you are able.`,
         '',
         'Thanks,',
         'Riya'
@@ -186,7 +186,6 @@
         "Yeah, I've been getting a lot of similar emails from other students and I'm working on figuring out the issue.",
         '',
         'For now, please check the announcements page on CourseWorks for updates.',
-        'If you still cannot find the info there, feel free to reach out again.',
         '',
         'Thanks,',
         'Riya'
@@ -196,7 +195,6 @@
       `Hi ${senderName},`,
       '',
       'Please check the announcements page on CourseWorks for updates.',
-      'If you still cannot find the info there, feel free to reach out again.',
       '',
       'Thanks,',
       'Riya'
