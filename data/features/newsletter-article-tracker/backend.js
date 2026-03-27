@@ -47,6 +47,16 @@ module.exports = {
         .replace(/&gt;/g, '>');
     }
 
+    function cleanDisplayText(value) {
+      return safeStr(decodeHtmlEntities(value))
+        .replace(/https?:\/\/\S+/gi, ' ')
+        .replace(/urldefense\.com\S*/gi, ' ')
+        .replace(/[\u2600-\u27BF]/g, ' ')
+        .replace(/[^\x20-\x7E]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+    }
+
     function decodeProofpointToken(token) {
       let value = safeStr(token);
       if (!value) return '';
@@ -327,8 +337,9 @@ module.exports = {
         const parts = parsed.pathname.split('/').map(p => safeStr(p)).filter(Boolean);
         const candidate = decodeURIComponent(parts[parts.length - 1] || '').replace(/[-_]+/g, ' ').replace(/\.[a-z0-9]+$/i, '');
         const normalized = candidate.replace(/\s+/g, ' ').trim();
+        if (!normalized || /urldefense|proofpoint|redirect|click here/i.test(normalized)) return '';
         if (normalized && normalized.length > 8 && normalized.length < 120) {
-          return normalized.replace(/\b\w/g, c => c.toUpperCase());
+          return cleanDisplayText(normalized.replace(/\b\w/g, c => c.toUpperCase()));
         }
       } catch (_) {}
       return '';
@@ -350,10 +361,12 @@ module.exports = {
         if (!/[a-zA-Z]/.test(line)) continue;
         const likelyHeadline = /[:\-]/.test(line) || /^[A-Z][^.!?]{20,}$/.test(line) || /(today|weekly|news|update|research|article)/i.test(line);
         if (!likelyHeadline) continue;
-        const key = line.toLowerCase();
+        const cleaned = cleanDisplayText(line);
+        if (!cleaned || cleaned.length < 18) continue;
+        const key = cleaned.toLowerCase();
         if (seen.has(key)) continue;
         seen.add(key);
-        out.push(line);
+        out.push(cleaned);
         if (out.length >= 8) break;
       }
       return out;
@@ -361,9 +374,9 @@ module.exports = {
 
     function extractPreview(email) {
       const snippet = safeStr(email?.snippet);
-      if (snippet) return snippet.slice(0, 240);
+      if (snippet) return cleanDisplayText(snippet).slice(0, 240);
       const text = stripHtml(email?.body || email?.originalBody || '');
-      const firstLine = safeStr(text.split(/\r?\n/).find(line => safeStr(line)));
+      const firstLine = cleanDisplayText(text.split(/\r?\n/).find(line => safeStr(line)));
       return (firstLine || 'No preview available').slice(0, 240);
     }
 
@@ -381,7 +394,7 @@ module.exports = {
         const cards = Array.isArray(entry?.articles) ? entry.articles : [];
 
         for (const card of cards) {
-          const title = safeStr(card?.title || card?.url);
+          const title = cleanDisplayText(card?.title || card?.url);
           if (!title) continue;
           const cardText = `${title}\n${entryText}`;
           if (!aiPattern.test(cardText)) continue;
@@ -392,7 +405,7 @@ module.exports = {
             title,
             url: safeStr(card?.url),
             date: entry?.date || null,
-            newsletter: entry?.newsletter || 'Unknown Newsletter'
+            newsletter: cleanDisplayText(entry?.newsletter || 'Unknown Newsletter')
           });
           if (items.length >= 24) break;
         }
@@ -468,14 +481,15 @@ module.exports = {
           if (!eventSignal.test(blob)) continue;
           const whenIso = parseUpcomingDateFromText(blob) || parseUpcomingDateFromText(`${entry?.subject || ''} ${entry?.preview || ''}`);
           if (!whenIso) continue;
-          const title = blob.length > 140 ? blob.slice(0, 140) : blob;
+          const title = cleanDisplayText(blob.length > 140 ? blob.slice(0, 140) : blob);
+          if (!title) continue;
           const key = `${title.toLowerCase()}::${whenIso}`;
           if (seen.has(key)) continue;
           seen.add(key);
           out.push({
             title,
             when: whenIso,
-            newsletter: entry?.newsletter || 'Unknown Newsletter'
+            newsletter: cleanDisplayText(entry?.newsletter || 'Unknown Newsletter')
           });
           if (out.length >= 16) break;
         }
@@ -607,7 +621,8 @@ module.exports = {
 
         for (const url of links) {
           if (articleCards.length >= 12) break;
-          const title = guessTitleFromUrl(url) || url;
+          const title = cleanDisplayText(guessTitleFromUrl(url) || '');
+          if (!title) continue;
           const key = `${title.toLowerCase()}::${url}`;
           if (seenArticleKeys.has(key)) continue;
           seenArticleKeys.add(key);
@@ -624,7 +639,7 @@ module.exports = {
           from: safeStr(email.originalFrom || email.from) || 'Unknown sender',
           date: safeStr(email.date) || null,
           categories,
-          preview: extractPreview(email),
+          preview: cleanDisplayText(extractPreview(email)),
           articles: articleCards
         };
       });
@@ -746,6 +761,14 @@ module.exports = {
     let upcomingEvents = [];
     let selectedGroup = 'All';
     function esc(v){ return String(v||'').replace(/[&<>"']/g, (s) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',\"'\":'&#39;'}[s])); }
+    function cleanLabel(v){
+      return String(v || '')
+        .replace(/https?:\\/\\/\\S+/gi, ' ')
+        .replace(/urldefense\\.com\\S*/gi, ' ')
+        .replace(/[^\\x20-\\x7E]/g, ' ')
+        .replace(/\\s+/g, ' ')
+        .trim();
+    }
     function fmtDate(v){
       const d = new Date(v || 0);
       if (Number.isNaN(d.getTime())) return 'Unknown date';
@@ -782,20 +805,21 @@ module.exports = {
       }
       const html = list.map((entry) => {
         const pills = (Array.isArray(entry.categories) ? entry.categories : []).slice(0, 5)
-          .map(c => '<span class="pill">' + esc(c) + '</span>').join('');
+          .map(c => '<span class="pill">' + esc(cleanLabel(c)) + '</span>').join('');
         const articles = Array.isArray(entry.articles) ? entry.articles : [];
         const articleHtml = articles.length
           ? articles.map(a => {
-              if (a.url) return '<li><a href="' + esc(a.url) + '" target="_blank" rel="noopener">' + esc(a.title || a.url) + '</a></li>';
-              return '<li>' + esc(a.title || '') + '</li>';
+              const label = cleanLabel(a.title || '');
+              if (a.url) return '<li><a href="' + esc(a.url) + '" target="_blank" rel="noopener">' + esc(label || 'Read article') + '</a></li>';
+              return '<li>' + esc(label || '') + '</li>';
             }).join('')
           : '<li>No article items extracted from this email.</li>';
         return '<div class="card">' +
-          '<div class="subject">' + esc(entry.subject) + '</div>' +
-          '<div class="meta">' + esc(fmtDate(entry.date)) + ' · ' + esc(entry.from) + '</div>' +
-          '<div class="meta"><strong>' + esc(entry.newsletter || 'Unknown Newsletter') + '</strong></div>' +
+          '<div class="subject">' + esc(cleanLabel(entry.subject)) + '</div>' +
+          '<div class="meta">' + esc(fmtDate(entry.date)) + ' · ' + esc(cleanLabel(entry.from)) + '</div>' +
+          '<div class="meta"><strong>' + esc(cleanLabel(entry.newsletter || 'Unknown Newsletter')) + '</strong></div>' +
           '<div>' + pills + '</div>' +
-          '<div class="preview">' + esc(entry.preview || '') + '</div>' +
+          '<div class="preview">' + esc(cleanLabel(entry.preview || '')) + '</div>' +
           '<ul class="articles">' + articleHtml + '</ul>' +
         '</div>';
       }).join('');
@@ -818,10 +842,14 @@ module.exports = {
         summary.textContent = (d.totalScanned || 0) + ' emails scanned · ' + (d.categoryCount || 0) + ' in Newsletters · ' + (d.relevantExtraCount || 0) + ' relevant extras · ' + (d.spamFilteredOut || 0) + ' filtered as spam';
 
         aiTopList.innerHTML = topAiArticles.length
-          ? topAiArticles.map(a => '<li>' + (a.url ? '<a href="' + esc(a.url) + '" target="_blank" rel="noopener">' + esc(a.title || a.url) + '</a>' : esc(a.title || 'AI article')) + ' <span style="color:#5f6368;">(' + esc(a.newsletter || 'Unknown') + ')</span></li>').join('')
+          ? topAiArticles.map(a => {
+              const label = cleanLabel(a.title || '');
+              if (a.url) return '<li><a href="' + esc(a.url) + '" target="_blank" rel="noopener">' + esc(label || 'Read article') + '</a> <span style="color:#5f6368;">(' + esc(cleanLabel(a.newsletter || 'Unknown')) + ')</span></li>';
+              return '<li>' + esc(label || 'AI article') + ' <span style="color:#5f6368;">(' + esc(cleanLabel(a.newsletter || 'Unknown')) + ')</span></li>';
+            }).join('')
           : '<li>No recent AI articles found.</li>';
         eventsList.innerHTML = upcomingEvents.length
-          ? upcomingEvents.map(ev => '<li><strong>' + esc(ev.title || 'Event') + '</strong> · ' + esc(fmtDate(ev.when)) + ' <span style="color:#5f6368;">(' + esc(ev.newsletter || 'Unknown') + ')</span></li>').join('')
+          ? upcomingEvents.map(ev => '<li><strong>' + esc(cleanLabel(ev.title || 'Event')) + '</strong> · ' + esc(fmtDate(ev.when)) + ' <span style="color:#5f6368;">(' + esc(cleanLabel(ev.newsletter || 'Unknown')) + ')</span></li>').join('')
           : '<li>No upcoming events found in the next week.</li>';
 
         if (!allEntries.length) {
