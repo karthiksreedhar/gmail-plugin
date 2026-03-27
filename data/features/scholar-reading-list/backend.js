@@ -149,72 +149,146 @@ module.exports = {
       return true;
     }
 
+    function normalizeTitleForMatch(value) {
+      return safeStr(value)
+        .replace(/^\[pdf\]\s*/i, '')
+        .replace(/[^\w\s:,-]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .toLowerCase();
+    }
+
+    function extractInterestedAuthor(subject) {
+      const s = safeStr(subject);
+      if (!s) return '';
+      const m = s.match(/^(.+?)\s*-\s*new related research/i);
+      if (m && m[1]) return safeStr(m[1]);
+      const m2 = s.match(/^new related research\s*for\s*(.+)$/i);
+      if (m2 && m2[1]) return safeStr(m2[1]);
+      return '';
+    }
+
+    function isScholarNoiseLine(line) {
+      const l = normalizeTitleForMatch(line);
+      if (!l) return true;
+      if (/^(view all versions|save|share|cite|related articles|add to library)$/.test(l)) return true;
+      if (/^(twitter|linkedin|facebook|email)$/.test(l)) return true;
+      if (/unsubscribe|privacy|terms|preferences|manage/i.test(l)) return true;
+      if (/^https?:\/\//i.test(l)) return true;
+      return false;
+    }
+
+    function looksLikeScholarTitle(line) {
+      const clean = safeStr(line).replace(/^\[PDF\]\s*/i, '');
+      if (clean.length < 18 || clean.length > 220) return false;
+      if (/^https?:\/\//i.test(clean)) return false;
+      if (/unsubscribe|privacy|terms|view in browser|manage preferences/i.test(clean)) return false;
+      if (/^[\d\s.,;:'"()[\]\/-]+$/.test(clean)) return false;
+      if (/^(google scholar|new related research|new articles|new citations)$/i.test(clean)) return false;
+      const words = clean.split(/\s+/).filter(Boolean).length;
+      return words >= 4;
+    }
+
+    function fallbackScholarSearchUrl(title) {
+      const q = encodeURIComponent(safeStr(title));
+      return q ? `https://scholar.google.com/scholar?q=${q}` : '';
+    }
+
     function extractScholarArticles(email) {
       const bodyHtml = safeStr(email?.body || email?.originalBody || '');
       const bodyText = stripHtml(bodyHtml);
-      const candidates = [];
-
+      const anchorCandidates = [];
       const anchorRegex = /<a[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
       let a;
       while ((a = anchorRegex.exec(bodyHtml)) !== null) {
-        candidates.push({
-          rawUrl: a[1],
-          titleHint: toCleanSentence(a[2], 140),
-          context: toCleanSentence(bodyHtml.slice(Math.max(0, a.index - 220), a.index + 320), 220)
+        const title = toCleanSentence(a[2], 220).replace(/^\[PDF\]\s*/i, '');
+        const titleNorm = normalizeTitleForMatch(title);
+        const normalizedUrl = normalizeScholarArticleUrl(a[1]);
+        if (!titleNorm || !normalizedUrl || !isLikelyArticleUrl(normalizedUrl)) continue;
+        if (/^(twitter|linkedin|facebook|share|save|cite|related articles)$/i.test(title)) continue;
+        anchorCandidates.push({
+          title,
+          titleNorm,
+          url: normalizedUrl,
+          index: a.index
         });
       }
 
-      const urlRegex = /(https?:\/\/[^\s"'<>]+)/g;
-      let m;
-      while ((m = urlRegex.exec(bodyHtml)) !== null) {
-        candidates.push({
-          rawUrl: m[1],
-          titleHint: '',
-          context: toCleanSentence(bodyHtml.slice(Math.max(0, m.index - 220), m.index + 320), 220)
-        });
-      }
+      const lines = bodyText
+        .split(/\r?\n/)
+        .map((line) => safeStr(line))
+        .filter(Boolean);
 
-      // Scholar and alert emails are often plain text with title + summary lines before a URL.
-      const lines = bodyText.split(/\r?\n/).map((line) => safeStr(line));
+      const items = [];
       for (let i = 0; i < lines.length; i++) {
         const line = lines[i];
-        if (!/^https?:\/\//i.test(line)) continue;
-        const prev1 = safeStr(lines[i - 1]);
-        const prev2 = safeStr(lines[i - 2]);
-        const next1 = safeStr(lines[i + 1]);
-        const next2 = safeStr(lines[i + 2]);
-        const titleCandidate = prev1 && !/^https?:\/\//i.test(prev1) ? prev1 : prev2;
-        const contextCandidate = next1 && !/^https?:\/\//i.test(next1) ? `${next1} ${next2}` : `${prev1} ${next1}`;
-        candidates.push({
-          rawUrl: line,
-          titleHint: toCleanSentence(titleCandidate, 150),
-          context: toCleanSentence(contextCandidate, 220)
-        });
-      }
+        if (!looksLikeScholarTitle(line)) continue;
 
-      const out = [];
-      const seen = new Set();
-      for (const c of candidates) {
-        const url = normalizeScholarArticleUrl(c.rawUrl);
-        if (!isLikelyArticleUrl(url)) continue;
-        if (seen.has(url)) continue;
-        seen.add(url);
+        const title = safeStr(line).replace(/^\[PDF\]\s*/i, '').trim();
+        const titleNorm = normalizeTitleForMatch(title);
+        if (!titleNorm) continue;
 
-        let title = safeStr(c.titleHint);
-        if (!title || /^(view article|read more|open source|link)$/i.test(title)) {
-          try {
-            const parsed = new URL(url);
-            const tail = decodeURIComponent((parsed.pathname.split('/').pop() || '').replace(/[-_]+/g, ' '));
-            title = toCleanSentence(tail, 130);
-          } catch (_) {}
+        let authors = '';
+        let summary = '';
+        for (let j = i + 1; j < Math.min(i + 7, lines.length); j++) {
+          const candidate = safeStr(lines[j]);
+          if (!candidate || isScholarNoiseLine(candidate) || looksLikeScholarTitle(candidate)) {
+            if (looksLikeScholarTitle(candidate)) break;
+            continue;
+          }
+          if (!authors) {
+            authors = candidate;
+            continue;
+          }
+          if (!summary) {
+            summary = candidate;
+            break;
+          }
         }
-        if (!title) title = 'Open Article';
 
-        const summary = toCleanSentence(c.context || bodyText || email?.snippet || '', 180) || 'Research article from your scholar feed.';
-        out.push({ title, url, summary });
-        if (out.length >= 4) break;
+        const titleIdx = bodyText.toLowerCase().indexOf(title.toLowerCase());
+        let bestUrl = '';
+        for (const c of anchorCandidates) {
+          if (c.titleNorm === titleNorm || c.titleNorm.includes(titleNorm) || titleNorm.includes(c.titleNorm)) {
+            bestUrl = c.url;
+            break;
+          }
+        }
+        if (!bestUrl && titleIdx >= 0) {
+          let bestDistance = Number.MAX_SAFE_INTEGER;
+          for (const c of anchorCandidates) {
+            const distance = Math.abs(c.index - titleIdx);
+            if (distance < bestDistance) {
+              bestDistance = distance;
+              bestUrl = c.url;
+            }
+          }
+        }
+        if (!bestUrl) bestUrl = fallbackScholarSearchUrl(title);
+
+        const cleanSummary = toCleanSentence(summary, 260) ||
+          toCleanSentence(email?.snippet || '', 180) ||
+          'No summary available in this email snippet.';
+
+        items.push({
+          title,
+          coAuthors: toCleanSentence(authors, 240),
+          summary: cleanSummary,
+          url: bestUrl
+        });
+        i += 1;
+        if (items.length >= 5) break;
       }
-      return out;
+
+      const deduped = [];
+      const seen = new Set();
+      for (const item of items) {
+        const key = `${normalizeTitleForMatch(item.title)}::${safeStr(item.url)}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        deduped.push(item);
+      }
+      return deduped;
     }
 
     function getEmailCategories(email) {
@@ -432,6 +506,7 @@ module.exports = {
         return {
           rank: idx + 1,
           id: safeStr(email.sourceId),
+          interestedAuthor: extractInterestedAuthor(email.subject),
           subject: safeStr(email.subject) || '(No subject)',
           from: safeStr(email.originalFrom || email.from) || 'Unknown sender',
           date: safeStr(email.date) || null,
@@ -533,16 +608,22 @@ module.exports = {
           const itemHtml = items.length
             ? items.map(it => {
                 const title = esc(it.title || 'Open Article');
+                const coAuthors = esc(it.coAuthors || '');
                 const summary = esc(it.summary || 'No summary available.');
                 if (it.url) {
-                  return '<li><a href="' + esc(it.url) + '" target="_blank" rel="noopener">' + title + '</a><div style="color:#5f6368;font-size:12px;margin-top:2px;">' + summary + '</div></li>';
+                  return '<li><a href="' + esc(it.url) + '" target="_blank" rel="noopener">' + title + '</a>' +
+                    (coAuthors ? '<div style="color:#3c4043;font-size:12px;margin-top:2px;">' + coAuthors + '</div>' : '') +
+                    '<div style="color:#5f6368;font-size:12px;margin-top:2px;">' + summary + '</div></li>';
                 }
-                return '<li>' + title + '<div style="color:#5f6368;font-size:12px;margin-top:2px;">' + summary + '</div></li>';
+                return '<li>' + title +
+                  (coAuthors ? '<div style="color:#3c4043;font-size:12px;margin-top:2px;">' + coAuthors + '</div>' : '') +
+                  '<div style="color:#5f6368;font-size:12px;margin-top:2px;">' + summary + '</div></li>';
               }).join('')
             : '<li>No article items extracted from this email.</li>';
           return '<div class="card">' +
             '<div class="subject">' + esc(entry.subject) + '</div>' +
             '<div class="meta">' + esc(fmtDate(entry.date)) + ' · ' + esc(entry.from) + '</div>' +
+            (entry.interestedAuthor ? '<div class="meta"><strong>Interested Author:</strong> ' + esc(entry.interestedAuthor) + '</div>' : '') +
             '<div>' + pills + '</div>' +
             '<div class="preview">' + esc(entry.preview || '') + '</div>' +
             '<ul class="items">' + itemHtml + '</ul>' +
