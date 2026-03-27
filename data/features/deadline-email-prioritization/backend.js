@@ -29,6 +29,24 @@ module.exports = {
       return String(value || '').trim();
     }
 
+    function stripHtml(raw) {
+      return safeStr(raw)
+        .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+        .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+        .replace(/<br\s*\/?>/gi, '\n')
+        .replace(/<\/p>/gi, '\n')
+        .replace(/<\/div>/gi, '\n')
+        .replace(/<[^>]+>/g, ' ')
+        .replace(/&nbsp;/gi, ' ')
+        .replace(/&amp;/gi, '&')
+        .replace(/&#39;|&#x27;/gi, "'")
+        .replace(/&#34;|&quot;/gi, '"')
+        .replace(/&lt;/gi, '<')
+        .replace(/&gt;/gi, '>')
+        .replace(/\s+/g, ' ')
+        .trim();
+    }
+
     function resolveUserEmail(req) {
       const override = safeStr(req?.body?.userEmail);
       const current = override || safeStr(getCurrentUser());
@@ -52,7 +70,7 @@ module.exports = {
       if (!text) return null;
 
       const hasYear = /\b\d{4}\b/.test(text) || /\b\d{1,2}\/\d{1,2}\/\d{2,4}\b/.test(text);
-      const hasTime = /\b\d{1,2}:\d{2}\b/.test(text) || /\b\d{1,2}\s*(am|pm)\b/i.test(text);
+      const hasTime = /\b\d{1,2}:\d{2}\b/.test(text) || /\b\d{1,2}\s*(?:a\.?m\.?|p\.?m\.?)\b/i.test(text);
       const hasExplicitTimezone = /\b(?:UTC|GMT|PST|PDT|MST|MDT|CST|CDT|EST|EDT)\b|[+-]\d{2}:?\d{2}\b/i.test(text);
       const parsed = new Date(text);
       if (Number.isNaN(parsed.getTime())) return null;
@@ -163,7 +181,8 @@ module.exports = {
     function prepareDeadlineText(email) {
       const subject = safeStr(email?.subject);
       const bodyRaw = safeStr(email?.body || email?.originalBody || email?.snippet);
-      const body = stripQuotedReplyContent(bodyRaw);
+      const bodyText = stripHtml(bodyRaw);
+      const body = stripQuotedReplyContent(bodyText);
       return `${subject}\n${body}`.slice(0, 12000);
     }
 
@@ -171,7 +190,7 @@ module.exports = {
       const source = safeStr(text);
       if (!source) return [];
 
-      const dateRe = /\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+\d{1,2}(?:st|nd|rd|th)?(?:,?\s+\d{4})?(?:,?\s*(?:at\s*)?\d{1,2}(?::\d{2})?\s*(?:am|pm)?(?:\s*(?:pt|pst|pdt|mt|mst|mdt|ct|cst|cdt|et|est|edt|utc|gmt))?)?\b|\b\d{1,2}\/\d{1,2}(?:\/\d{2,4})?(?:,?\s*(?:at\s*)?\d{1,2}(?::\d{2})?\s*(?:am|pm)?(?:\s*(?:pt|pst|pdt|mt|mst|mdt|ct|cst|cdt|et|est|edt|utc|gmt))?)?\b/gi;
+      const dateRe = /\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+\d{1,2}(?:st|nd|rd|th)?(?:,?\s+\d{4})?(?:,?\s*(?:at\s*)?\d{1,2}(?::\d{2})?\s*(?:a\.?m\.?|p\.?m\.?)?(?:\s*(?:pt|pst|pdt|mt|mst|mdt|ct|cst|cdt|et|est|edt|utc|gmt))?)?\b|\b\d{1,2}\/\d{1,2}(?:\/\d{2,4})?(?:,?\s*(?:at\s*)?\d{1,2}(?::\d{2})?\s*(?:a\.?m\.?|p\.?m\.?)?(?:\s*(?:pt|pst|pdt|mt|mst|mdt|ct|cst|cdt|et|est|edt|utc|gmt))?)?\b/gi;
       const relativeRe = /\b(day after tomorrow|tomorrow|today|tonight|in\s+\d+\s+days?|(?:this|next)\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/gi;
 
       const candidates = [];
