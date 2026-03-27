@@ -1,0 +1,13 @@
+{
+  "id": "scholar-reading-list",
+  "name": "Scholar Reading List",
+  "version": "1.0.0",
+  "description": "Creates a reading list from Google Scholar articles, summarizing key takeaways for efficient skimming.",
+  "author": "Feature Generator Agent",
+  "backend": "backend.js",
+  "frontend": "frontend.js",
+  "permissions": [
+    "emails:read",
+    "api:custom"
+  ]
+}
