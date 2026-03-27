@@ -171,7 +171,7 @@ module.exports = {
       const source = safeStr(text);
       if (!source) return [];
 
-      const dateRe = /\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+\d{1,2}(?:st|nd|rd|th)?(?:,?\s+\d{4})?(?:\s+(?:at\s+)?\d{1,2}(?::\d{2})?\s*(?:am|pm)?)?\b|\b\d{1,2}\/\d{1,2}(?:\/\d{2,4})?(?:\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)?)?\b/gi;
+      const dateRe = /\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+\d{1,2}(?:st|nd|rd|th)?(?:,?\s+\d{4})?(?:,?\s*(?:at\s*)?\d{1,2}(?::\d{2})?\s*(?:am|pm)?(?:\s*(?:pt|pst|pdt|mt|mst|mdt|ct|cst|cdt|et|est|edt|utc|gmt))?)?\b|\b\d{1,2}\/\d{1,2}(?:\/\d{2,4})?(?:,?\s*(?:at\s*)?\d{1,2}(?::\d{2})?\s*(?:am|pm)?(?:\s*(?:pt|pst|pdt|mt|mst|mdt|ct|cst|cdt|et|est|edt|utc|gmt))?)?\b/gi;
       const relativeRe = /\b(day after tomorrow|tomorrow|today|tonight|in\s+\d+\s+days?|(?:this|next)\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/gi;
 
       const candidates = [];
