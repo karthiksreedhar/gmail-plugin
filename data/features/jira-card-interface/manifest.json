@@ -1,12 +1,13 @@
 {
   "id": "jira-card-interface",
-  "name": "Jira Card Interface",
-  "version": "1.0.0",
-  "description": "Provides a dedicated interface within the Gmail plugin to view and manage Jira cards associated with the user's account.",
+  "name": "JIRA Card Interface",
+  "version": "2.0.0",
+  "description": "Shows JIRA cards parsed from emails in the Akify category on a dedicated page.",
   "author": "Feature Generator Agent",
   "backend": "backend.js",
   "frontend": "frontend.js",
   "permissions": [
+    "emails:read",
     "api:custom"
   ]
 }
