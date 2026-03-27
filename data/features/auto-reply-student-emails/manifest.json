@@ -1,0 +1,14 @@
+{
+  "id": "auto-reply-student-emails",
+  "name": "Automated Student Email Responses",
+  "version": "1.0.0",
+  "description": "Automatically replies to student emails regarding Slack issues (directing them to Courseworks) and late submissions/extensions (acknowledging receipt).",
+  "author": "Feature Generator Agent",
+  "backend": "backend.js",
+  "frontend": "frontend.js",
+  "permissions": [
+    "emails:read",
+    "emails:write",
+    "api:custom"
+  ]
+}
