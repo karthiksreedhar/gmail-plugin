@@ -32,12 +32,11 @@
   function formatDueAt(isoText) {
     const dt = new Date(isoText);
     if (Number.isNaN(dt.getTime())) return '';
-    return dt.toLocaleString('en-US', {
+    const datePart = dt.toLocaleDateString('en-US', {
       month: 'short',
-      day: 'numeric',
-      hour: 'numeric',
-      minute: '2-digit'
+      day: 'numeric'
     });
+    return `${datePart}, 11:59 PM`;
   }
 
   function renderDeadlineMarker(emailItem, info) {
