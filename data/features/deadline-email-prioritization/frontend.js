@@ -60,7 +60,10 @@
       'font-size:11px',
       'font-weight:700'
     ].join(';');
-    marker.textContent = `Deadline: ${formatDueAt(info.dueAt)}`;
+    const estimate = Number.isFinite(Number(info.estimatedMinutes))
+      ? ` · Est: ${Number(info.estimatedMinutes)} min`
+      : (info.estimatedLabel ? ` · Est: ${String(info.estimatedLabel)}` : '');
+    marker.textContent = `Deadline: ${formatDueAt(info.dueAt)}${estimate}`;
     row.appendChild(marker);
   }
 

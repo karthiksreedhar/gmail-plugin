@@ -5,7 +5,7 @@
 
 module.exports = {
   initialize(context) {
-    const { app, getUserDoc, setUserDoc, getCurrentUser, normalizeUserEmailForData } = context;
+    const { app, getUserDoc, setUserDoc, getCurrentUser, normalizeUserEmailForData, invokeGemini, getGeminiModel } = context;
     const TRACKED_CATEGORIES = new Set([
       'scu',
       'class announcements',
@@ -23,6 +23,7 @@ module.exports = {
     };
     const DEADLINE_SIGNAL_RE = /\b(deadline|deadline is|due date|due by|due in|due on|by end of day|by eod|must be (?:submitted|received) by|final day|expires(?: on)?|apply by|submit by|rsvp by|register by|pay by|payment due|complete by)\b/i;
     const NEGATIVE_CONTEXT_RE = /\b(privacy policy|terms(?:\s*&\s*conditions)?|unsubscribe|manage preferences|newsletter settings)\b/i;
+    const PAST_CONTEXT_RE = /\b(was due|were due|deadline passed|already passed|past due|missed deadline|expired on)\b/i;
 
     function safeStr(value) {
       return String(value || '').trim();
@@ -57,6 +58,22 @@ module.exports = {
         parsed.setHours(23, 59, 59, 999);
       }
       return parsed;
+    }
+
+    function stripQuotedReplyContent(raw) {
+      const text = safeStr(raw);
+      if (!text) return '';
+      const lines = text.split(/\r?\n/);
+      const kept = [];
+      for (const line of lines) {
+        const trimmed = safeStr(line);
+        if (/^on .+ wrote:$/i.test(trimmed)) break;
+        if (/^(from|sent|to|subject):/i.test(trimmed)) break;
+        if (/^>+/.test(trimmed)) continue;
+        if (/^[-_]{3,}\s*original message\s*[-_]{3,}$/i.test(trimmed)) break;
+        kept.push(line);
+      }
+      return safeStr(kept.join('\n'));
     }
 
     function parseRelativeDateToken(raw, now) {
@@ -114,6 +131,7 @@ module.exports = {
       const ctx = safeStr(contextWindow).toLowerCase();
       if (!ctx) return false;
       if (NEGATIVE_CONTEXT_RE.test(ctx)) return false;
+      if (PAST_CONTEXT_RE.test(ctx)) return false;
       if (DEADLINE_SIGNAL_RE.test(ctx)) return true;
 
       // Secondary patterns for deadline phrasing around explicit dates/tokens.
@@ -121,6 +139,13 @@ module.exports = {
       if (/\bdue\s+(?:(?:today|tomorrow|tonight|monday|tuesday|wednesday|thursday|friday|saturday|sunday)|\d{1,2}\/\d{1,2}(?:\/\d{2,4})?|(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\s+\d{1,2})\b/i.test(ctx)) return true;
       if (/\b(apply|submit|register|rsvp|pay|complete)\b[\s\S]{0,30}\bby\b/i.test(ctx)) return true;
       return false;
+    }
+
+    function prepareDeadlineText(email) {
+      const subject = safeStr(email?.subject);
+      const bodyRaw = safeStr(email?.body || email?.originalBody || email?.snippet);
+      const body = stripQuotedReplyContent(bodyRaw);
+      return `${subject}\n${body}`.slice(0, 12000);
     }
 
     function extractDeadlineCandidates(text, now) {
@@ -171,9 +196,7 @@ module.exports = {
     }
 
     function evaluateEmailForUrgency(email, now, windowEnd) {
-      const body = safeStr(email?.body || email?.originalBody || email?.snippet);
-      const subject = safeStr(email?.subject);
-      const text = `${subject}\n${body}`.slice(0, 20000);
+      const text = prepareDeadlineText(email);
       const candidates = extractDeadlineCandidates(text, now);
 
       const inWindow = candidates
@@ -182,6 +205,58 @@ module.exports = {
 
       if (!inWindow.length) return null;
       return inWindow[0];
+    }
+
+    function heuristicEstimateMinutes(email, matchedText) {
+      const text = `${safeStr(email?.subject)}\n${safeStr(email?.body || email?.originalBody || email?.snippet)}\n${safeStr(matchedText)}`.toLowerCase();
+      if (/\b(project|assignment|homework|problem set|pset|paper|report|brief)\b/.test(text)) return 90;
+      if (/\b(exam|quiz|midterm|final)\b/.test(text)) return 120;
+      if (/\b(application|form|survey|register|registration|rsvp)\b/.test(text)) return 20;
+      if (/\b(payment|pay|invoice|bill)\b/.test(text)) return 15;
+      if (/\b(reply|respond|email back|confirm)\b/.test(text)) return 10;
+      return 30;
+    }
+
+    async function estimateTaskMinutes(email, matchedText) {
+      const fallback = heuristicEstimateMinutes(email, matchedText);
+      if (typeof invokeGemini !== 'function') return fallback;
+
+      const prompt = `Estimate how long the user will likely spend to complete the action implied by this deadline email.
+Return JSON only in this exact shape:
+{"estimatedMinutes": 25}
+
+Rules:
+- Integer minutes only.
+- Range 5 to 240.
+- Estimate user effort, not calendar wait time.
+- Be conservative; avoid extreme values.
+
+Email Subject: ${safeStr(email?.subject).slice(0, 300)}
+Matched deadline phrase: ${safeStr(matchedText).slice(0, 120)}
+Email snippet/body: ${safeStr(stripQuotedReplyContent(email?.body || email?.originalBody || email?.snippet)).slice(0, 2400)}
+`;
+
+      try {
+        const completion = await invokeGemini({
+          model: typeof getGeminiModel === 'function' ? getGeminiModel() : undefined,
+          messages: [
+            { role: 'system', content: 'You estimate task effort time from emails. Return strict JSON only.' },
+            { role: 'user', content: prompt }
+          ],
+          temperature: 0,
+          maxOutputTokens: 120
+        });
+        const raw = safeStr(completion?.content);
+        const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
+        const candidate = fenced && fenced[1] ? fenced[1].trim() : raw;
+        const parsed = JSON.parse(candidate);
+        const value = Number(parsed?.estimatedMinutes);
+        if (Number.isFinite(value)) {
+          const bounded = Math.max(5, Math.min(240, Math.round(value)));
+          return bounded;
+        }
+      } catch (_) {}
+      return fallback;
     }
 
     function isTrackedCategoryEmail(email) {
@@ -268,15 +343,36 @@ module.exports = {
           urgent.push({
             id,
             dueAt: match.dueAt.toISOString(),
-            matchedText: match.matchedText || ''
+            matchedText: match.matchedText || '',
+            _email: email
           });
+        }
+
+        const estimateCap = 20;
+        for (let i = 0; i < urgent.length && i < estimateCap; i++) {
+          const item = urgent[i];
+          const minutes = await estimateTaskMinutes(item._email || {}, item.matchedText || '');
+          item.estimatedMinutes = minutes;
+          item.estimatedLabel = `${minutes} min`;
+        }
+        for (let i = estimateCap; i < urgent.length; i++) {
+          const item = urgent[i];
+          const minutes = heuristicEstimateMinutes(item._email || {}, item.matchedText || '');
+          item.estimatedMinutes = minutes;
+          item.estimatedLabel = `${minutes} min`;
         }
 
         urgent.sort((a, b) => new Date(a.dueAt).getTime() - new Date(b.dueAt).getTime());
         const byEmailId = {};
         urgent.forEach(item => {
-          byEmailId[item.id] = { dueAt: item.dueAt, matchedText: item.matchedText };
+          byEmailId[item.id] = {
+            dueAt: item.dueAt,
+            matchedText: item.matchedText,
+            estimatedMinutes: Number.isFinite(item.estimatedMinutes) ? item.estimatedMinutes : null,
+            estimatedLabel: safeStr(item.estimatedLabel)
+          };
         });
+        urgent.forEach(item => { delete item._email; });
 
         return res.json({
           success: true,
