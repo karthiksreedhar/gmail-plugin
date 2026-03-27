@@ -63,7 +63,7 @@ module.exports = {
       if (!raw) return '';
       let out = raw.replace(/[)>.,;]+$/g, '');
       const wrapped = out.match(/__([^_].*?)__/);
-      if (wrapped && wrapped[1]) out = wrapped[1];
+      if (wrapped && wrapped[1]) out = decodeProofpointToken(wrapped[1]);
       try {
         out = decodeURIComponent(out);
       } catch (_) {}
@@ -174,6 +174,24 @@ module.exports = {
         });
       }
 
+      // Scholar and alert emails are often plain text with title + summary lines before a URL.
+      const lines = bodyText.split(/\r?\n/).map((line) => safeStr(line));
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        if (!/^https?:\/\//i.test(line)) continue;
+        const prev1 = safeStr(lines[i - 1]);
+        const prev2 = safeStr(lines[i - 2]);
+        const next1 = safeStr(lines[i + 1]);
+        const next2 = safeStr(lines[i + 2]);
+        const titleCandidate = prev1 && !/^https?:\/\//i.test(prev1) ? prev1 : prev2;
+        const contextCandidate = next1 && !/^https?:\/\//i.test(next1) ? `${next1} ${next2}` : `${prev1} ${next1}`;
+        candidates.push({
+          rawUrl: line,
+          titleHint: toCleanSentence(titleCandidate, 150),
+          context: toCleanSentence(contextCandidate, 220)
+        });
+      }
+
       const out = [];
       const seen = new Set();
       for (const c of candidates) {
@@ -194,7 +212,7 @@ module.exports = {
 
         const summary = toCleanSentence(c.context || bodyText || email?.snippet || '', 180) || 'Research article from your scholar feed.';
         out.push({ title, url, summary });
-        if (out.length >= 5) break;
+        if (out.length >= 4) break;
       }
       return out;
     }
