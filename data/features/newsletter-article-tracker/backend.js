@@ -139,6 +139,20 @@ module.exports = {
       return subject.includes('spam and low priority digests') || subject.includes('docusign');
     }
 
+    function isCuDigestEmail(email) {
+      const subject = safeStr(email?.subject).toLowerCase();
+      const from = safeStr(email?.originalFrom || email?.from).toLowerCase();
+      return subject.includes('spam and low priority digests') || from.includes('cu digests');
+    }
+
+    function isTowardsDataScienceEmail(email) {
+      const subject = safeStr(email?.subject).toLowerCase();
+      const from = safeStr(email?.originalFrom || email?.from).toLowerCase();
+      const body = stripHtml(email?.body || email?.originalBody || email?.snippet).toLowerCase();
+      const text = `${subject}\n${from}\n${body}`;
+      return /towards data science|t\.?d\.?s\.?|datascience\.com/.test(text);
+    }
+
     function looksLikeIndividualSender(email) {
       const rawFrom = safeStr(email?.originalFrom || email?.from);
       const nameMatch = rawFrom.match(/^([^<]+)</);
@@ -201,6 +215,13 @@ module.exports = {
 
     function isTowardsDataScience(name) {
       return /towards data science/i.test(safeStr(name));
+    }
+
+    function isIncludedForTracker(email) {
+      if (hasExcludedSubject(email)) return false;
+      if (isCuDigestEmail(email)) return false;
+      if (isSpamLikeEmail(email)) return false;
+      return isNewsletterCategory(email) || isTowardsDataScienceEmail(email);
     }
 
     function isSpamLikeEmail(email) {
@@ -346,6 +367,124 @@ module.exports = {
       return (firstLine || 'No preview available').slice(0, 240);
     }
 
+    function collectTopAiArticles(entries) {
+      const cutoff = Date.now() - (4 * 24 * 60 * 60 * 1000);
+      const aiPattern = /(ai\b|artificial intelligence|machine learning|llm|neural|transformer|robotics|nlp|computer vision|agentic)/i;
+      const items = [];
+      const seen = new Set();
+
+      for (const entry of entries) {
+        const ts = dateMs(entry?.date);
+        if (!ts || ts < cutoff) continue;
+
+        const entryText = `${safeStr(entry?.subject)}\n${safeStr(entry?.preview)}`;
+        const cards = Array.isArray(entry?.articles) ? entry.articles : [];
+
+        for (const card of cards) {
+          const title = safeStr(card?.title || card?.url);
+          if (!title) continue;
+          const cardText = `${title}\n${entryText}`;
+          if (!aiPattern.test(cardText)) continue;
+          const key = `${title.toLowerCase()}::${safeStr(card?.url)}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          items.push({
+            title,
+            url: safeStr(card?.url),
+            date: entry?.date || null,
+            newsletter: entry?.newsletter || 'Unknown Newsletter'
+          });
+          if (items.length >= 24) break;
+        }
+      }
+
+      items.sort((a, b) => dateMs(b.date) - dateMs(a.date));
+      return items.slice(0, 10);
+    }
+
+    function parseUpcomingDateFromText(text) {
+      const lower = safeStr(text).toLowerCase();
+      const now = new Date();
+      const end = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+
+      if (/\btomorrow\b/.test(lower)) {
+        const d = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+        return d.toISOString();
+      }
+      if (/\bnext week\b/.test(lower) || /\bthis week\b/.test(lower)) {
+        return new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000).toISOString();
+      }
+
+      const weekdayMap = { sunday: 0, monday: 1, tuesday: 2, wednesday: 3, thursday: 4, friday: 5, saturday: 6 };
+      for (const [name, dayNum] of Object.entries(weekdayMap)) {
+        if (new RegExp(`\\b${name}\\b`, 'i').test(lower)) {
+          const d = new Date(now);
+          const diff = (dayNum - d.getDay() + 7) % 7 || 7;
+          d.setDate(d.getDate() + diff);
+          if (d <= end) return d.toISOString();
+        }
+      }
+
+      const monthNames = '(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)';
+      const m = lower.match(new RegExp(`\\b${monthNames}\\s+(\\d{1,2})\\b`, 'i'));
+      if (m) {
+        const monthLookup = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'];
+        const monthStr = m[1].slice(0, 3).toLowerCase();
+        const day = Number(m[2]);
+        const month = monthLookup.indexOf(monthStr);
+        if (month >= 0 && day >= 1 && day <= 31) {
+          const d = new Date(now.getFullYear(), month, day, 12, 0, 0);
+          if (d < now) d.setFullYear(d.getFullYear() + 1);
+          if (d <= end) return d.toISOString();
+        }
+      }
+
+      const n = lower.match(/\b(\d{1,2})\/(\d{1,2})\b/);
+      if (n) {
+        const mm = Number(n[1]) - 1;
+        const dd = Number(n[2]);
+        const d = new Date(now.getFullYear(), mm, dd, 12, 0, 0);
+        if (d < now) d.setFullYear(d.getFullYear() + 1);
+        if (d <= end) return d.toISOString();
+      }
+
+      return '';
+    }
+
+    function collectUpcomingEvents(entries) {
+      const eventSignal = /(event|seminar|talk|workshop|lecture|colloquium|office hours|webinar|meetup|conference)/i;
+      const out = [];
+      const seen = new Set();
+
+      for (const entry of entries) {
+        const cards = Array.isArray(entry?.articles) ? entry.articles : [];
+        const textBlobs = [
+          safeStr(entry?.subject),
+          safeStr(entry?.preview),
+          ...cards.map(c => safeStr(c?.title))
+        ].filter(Boolean);
+
+        for (const blob of textBlobs) {
+          if (!eventSignal.test(blob)) continue;
+          const whenIso = parseUpcomingDateFromText(blob) || parseUpcomingDateFromText(`${entry?.subject || ''} ${entry?.preview || ''}`);
+          if (!whenIso) continue;
+          const title = blob.length > 140 ? blob.slice(0, 140) : blob;
+          const key = `${title.toLowerCase()}::${whenIso}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          out.push({
+            title,
+            when: whenIso,
+            newsletter: entry?.newsletter || 'Unknown Newsletter'
+          });
+          if (out.length >= 16) break;
+        }
+      }
+
+      out.sort((a, b) => dateMs(a.when) - dateMs(b.when));
+      return out.slice(0, 8);
+    }
+
     function normalizeEmailShape(raw, fallbackPrefix = 'newsletter-article') {
       if (!raw || typeof raw !== 'object') return null;
       const id = safeStr(raw.id || raw.messageId || raw.responseId || raw.threadId);
@@ -442,10 +581,10 @@ module.exports = {
 
       const withoutSpam = unified.filter(email => !isSpamLikeEmail(email));
       const inCategory = withoutSpam.filter(isNewsletterCategory);
-      const relevantExtra = withoutSpam.filter(email => !isNewsletterCategory(email) && isRelevantNewsletterOrCsUpdate(email));
+      const relevantExtra = withoutSpam.filter(email => !isNewsletterCategory(email) && isTowardsDataScienceEmail(email));
 
       const selected = [...inCategory, ...relevantExtra]
-        .filter(isStrictNewsletterCandidate)
+        .filter(isIncludedForTracker)
         .sort((a, b) => dateMs(b.date) - dateMs(a.date))
         .slice(0, 140);
 
@@ -490,17 +629,9 @@ module.exports = {
         };
       });
 
-      const countsByNewsletter = entries.reduce((m, e) => {
-        const key = safeStr(e.newsletter) || 'Unknown Newsletter';
-        m.set(key, (m.get(key) || 0) + 1);
-        return m;
-      }, new Map());
-
-      const filteredEntries = entries.filter((entry) => {
-        const name = safeStr(entry.newsletter) || 'Unknown Newsletter';
-        const count = countsByNewsletter.get(name) || 0;
-        return count > 1 || isTowardsDataScience(name);
-      });
+      const filteredEntries = entries;
+      const topAiArticles = collectTopAiArticles(filteredEntries);
+      const upcomingEvents = collectUpcomingEvents(filteredEntries);
 
       return {
         totalScanned: unified.length,
@@ -515,6 +646,8 @@ module.exports = {
         }, new Map()).entries())
           .map(([name, count]) => ({ name, count }))
           .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name)),
+        topAiArticles,
+        upcomingEvents,
         entries: filteredEntries
       };
     }
@@ -550,6 +683,11 @@ module.exports = {
     .btn { border:1px solid #dadce0; border-radius:18px; background:#fff; color:#1f1f1f; padding:8px 12px; cursor:pointer; font-size:13px; }
     .meta { color:#5f6368; font-size:12px; margin:6px 0 10px; }
     .toolbar { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin-bottom:10px; }
+    .top-panels { display:grid; grid-template-columns: 1fr 1fr; gap:12px; margin: 8px 0 14px; }
+    .panel { background:#fff; border:1px solid #e5e9ef; border-radius:12px; padding:12px; }
+    .panel-title { font-size:13px; color:#5f6368; font-weight:700; margin-bottom:8px; text-transform:uppercase; letter-spacing:.2px; }
+    .panel-list { margin:0; padding-left:18px; }
+    .panel-list li { margin:6px 0; font-size:13px; }
     .label { font-size:12px; color:#5f6368; }
     .select { border:1px solid #dadce0; background:#fff; border-radius:8px; padding:6px 8px; font-size:13px; color:#202124; }
     .chip { border:1px solid #d2e3fc; background:#edf3fe; color:#0b57d0; border-radius:999px; padding:4px 10px; font-size:12px; cursor:pointer; }
@@ -576,6 +714,16 @@ module.exports = {
       <button id="refreshBtn" class="btn">Refresh</button>
     </div>
     <div id="summary" class="meta"></div>
+    <div class="top-panels">
+      <div class="panel">
+        <div class="panel-title">Top AI Articles (Past Few Days)</div>
+        <ul id="aiTopList" class="panel-list"><li>Loading...</li></ul>
+      </div>
+      <div class="panel">
+        <div class="panel-title">Upcoming Events (Next Week)</div>
+        <ul id="eventsList" class="panel-list"><li>Loading...</li></ul>
+      </div>
+    </div>
     <div class="toolbar">
       <span class="label">Group by newsletter:</span>
       <select id="newsletterSelect" class="select"></select>
@@ -590,8 +738,12 @@ module.exports = {
     const refreshBtn = document.getElementById('refreshBtn');
     const newsletterSelect = document.getElementById('newsletterSelect');
     const groupChips = document.getElementById('groupChips');
+    const aiTopList = document.getElementById('aiTopList');
+    const eventsList = document.getElementById('eventsList');
     let allEntries = [];
     let allGroups = [];
+    let topAiArticles = [];
+    let upcomingEvents = [];
     let selectedGroup = 'All';
     function esc(v){ return String(v||'').replace(/[&<>"']/g, (s) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',\"'\":'&#39;'}[s])); }
     function fmtDate(v){
@@ -661,7 +813,17 @@ module.exports = {
         if (!r.ok || !d.success) throw new Error(d.error || 'Failed to load');
         allEntries = Array.isArray(d.entries) ? d.entries : [];
         allGroups = Array.isArray(d.groups) ? d.groups : [];
+        topAiArticles = Array.isArray(d.topAiArticles) ? d.topAiArticles : [];
+        upcomingEvents = Array.isArray(d.upcomingEvents) ? d.upcomingEvents : [];
         summary.textContent = (d.totalScanned || 0) + ' emails scanned · ' + (d.categoryCount || 0) + ' in Newsletters · ' + (d.relevantExtraCount || 0) + ' relevant extras · ' + (d.spamFilteredOut || 0) + ' filtered as spam';
+
+        aiTopList.innerHTML = topAiArticles.length
+          ? topAiArticles.map(a => '<li>' + (a.url ? '<a href="' + esc(a.url) + '" target="_blank" rel="noopener">' + esc(a.title || a.url) + '</a>' : esc(a.title || 'AI article')) + ' <span style="color:#5f6368;">(' + esc(a.newsletter || 'Unknown') + ')</span></li>').join('')
+          : '<li>No recent AI articles found.</li>';
+        eventsList.innerHTML = upcomingEvents.length
+          ? upcomingEvents.map(ev => '<li><strong>' + esc(ev.title || 'Event') + '</strong> · ' + esc(fmtDate(ev.when)) + ' <span style="color:#5f6368;">(' + esc(ev.newsletter || 'Unknown') + ')</span></li>').join('')
+          : '<li>No upcoming events found in the next week.</li>';
+
         if (!allEntries.length) {
           content.className = 'empty';
           content.innerHTML = 'No newsletter/article emails found yet.';
