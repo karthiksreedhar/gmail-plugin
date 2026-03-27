@@ -1,0 +1,12 @@
+{
+  "id": "jira-card-interface",
+  "name": "Jira Card Interface",
+  "version": "1.0.0",
+  "description": "Provides a dedicated interface within the Gmail plugin to view and manage Jira cards associated with the user's account.",
+  "author": "Feature Generator Agent",
+  "backend": "backend.js",
+  "frontend": "frontend.js",
+  "permissions": [
+    "api:custom"
+  ]
+}
