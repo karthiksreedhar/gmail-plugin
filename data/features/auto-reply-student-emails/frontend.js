@@ -161,6 +161,10 @@
     if (extension) {
       return { type: 'extension', assignment: extractAssignment(`${subject}\n${body}`) };
     }
+    const slackIssue = /\b(slack|workspace|channel|invite link|join link|cannot join|can't join|not working|login issue)\b/.test(text);
+    if (slackIssue) {
+      return { type: 'slack' };
+    }
     return { type: 'logistics' };
   }
 
@@ -175,10 +179,24 @@
         'Riya'
       ].join('\n');
     }
+    if (classification.type === 'slack') {
+      return [
+        `Hi ${senderName},`,
+        '',
+        'Thanks for flagging this. For Slack issues, please try the invite link again from a desktop browser first, and if it still does not work, send me a screenshot of the error and I can help you troubleshoot quickly.',
+        '',
+        'Also, please check the announcements page in CourseWorks for updates for now.',
+        '',
+        'Thanks,',
+        'Riya'
+      ].join('\n');
+    }
     return [
       `Hi ${senderName},`,
       '',
-      'Please view the class announcements page for this information!',
+      'Thanks for your question. Happy to help with this.',
+      '',
+      'Please check the announcements page in CourseWorks for updates for now.',
       '',
       'Thanks,',
       'Riya'
