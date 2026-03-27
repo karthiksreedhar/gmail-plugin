@@ -134,6 +134,57 @@ module.exports = {
       return newsletterSignal || (csSignal && articleSignal);
     }
 
+    function isSpamLikeEmail(email) {
+      const subject = safeStr(email?.subject).toLowerCase();
+      const from = safeStr(email?.originalFrom || email?.from).toLowerCase();
+      const body = stripHtml(email?.body || email?.originalBody || email?.snippet).toLowerCase();
+      const categories = getEmailCategories(email).map(v => v.toLowerCase());
+      const text = `${subject}\n${from}\n${body}`;
+
+      const spamCategory = categories.some(c => c.includes('spam') || c.includes('promotion'));
+      const obviousSpam = /(viagra|casino|bitcoin giveaway|claim your prize|free iphone|earn \$\d+\/day|adult content|xxx|lottery winner)/i.test(text);
+      const marketingBlast = /(clearance sale|limited time offer|shop now|promo code|black friday|cyber monday|deals just for you)/i.test(text);
+      const suspiciousSender = /(noreply@.*(deals|offers|promo)|mailer-daemon|postmaster)/i.test(from);
+      return spamCategory || obviousSpam || marketingBlast || suspiciousSender;
+    }
+
+    function isAcademicOrAiRelevant(email) {
+      const subject = safeStr(email?.subject).toLowerCase();
+      const from = safeStr(email?.originalFrom || email?.from).toLowerCase();
+      const body = stripHtml(email?.body || email?.originalBody || email?.snippet).toLowerCase();
+      const text = `${subject}\n${from}\n${body}`;
+
+      const academicSignal = /(university|school|course|class|lecture|seminar|colloquium|department|professor|phd|research|paper|arxiv|campus|seas|piazza|office hours|assignment|deadline)/i.test(text);
+      const aiSignal = /(ai\b|artificial intelligence|machine learning|ml\b|llm|neural|transformer|computer science|cs\b|nlp|robotics|vision|systems|security|programming|software|code)/i.test(text);
+      const newsSignal = /(headlines|top stories|daily digest|weekly digest|briefing|newsletter|news update|roundup)/i.test(text);
+
+      return academicSignal || aiSignal || newsSignal;
+    }
+
+    function pickNewsletterName(email) {
+      const categories = getEmailCategories(email);
+      const preferredCategory = categories.find(c => /piazza|bond ai|seas|newsletter|digest|briefing/i.test(c));
+      if (preferredCategory) return preferredCategory;
+
+      const rawFrom = safeStr(email?.originalFrom || email?.from);
+      const m = rawFrom.match(/^([^<]+)</);
+      let senderName = safeStr(m ? m[1] : rawFrom).replace(/["']/g, '').trim();
+      senderName = senderName
+        .replace(/\b(no[-\s]?reply|noreply|notifications?)\b/ig, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+      if (senderName) return senderName.slice(0, 64);
+
+      const fromEmailMatch = rawFrom.match(/<([^>]+)>/);
+      const fromEmail = safeStr(fromEmailMatch ? fromEmailMatch[1] : rawFrom).toLowerCase();
+      if (fromEmail) {
+        const domain = fromEmail.split('@')[1] || fromEmail;
+        const root = domain.split('.')[0] || domain;
+        return root ? root.replace(/[-_]+/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) : 'Unknown Newsletter';
+      }
+      return 'Unknown Newsletter';
+    }
+
     function extractLinks(email) {
       const seen = new Set();
       const links = [];
@@ -320,10 +371,12 @@ module.exports = {
         }
       }
 
-      const inCategory = unified.filter(isNewsletterCategory);
-      const relevantExtra = unified.filter(email => !isNewsletterCategory(email) && isRelevantNewsletterOrCsUpdate(email));
+      const withoutSpam = unified.filter(email => !isSpamLikeEmail(email));
+      const inCategory = withoutSpam.filter(isNewsletterCategory);
+      const relevantExtra = withoutSpam.filter(email => !isNewsletterCategory(email) && isRelevantNewsletterOrCsUpdate(email));
 
       const selected = [...inCategory, ...relevantExtra]
+        .filter(isAcademicOrAiRelevant)
         .sort((a, b) => dateMs(b.date) - dateMs(a.date))
         .slice(0, 140);
 
@@ -354,9 +407,11 @@ module.exports = {
         }
 
         const categories = getEmailCategories(email);
+        const newsletter = pickNewsletterName(email);
         return {
           rank: index + 1,
           id: safeStr(email.sourceId),
+          newsletter,
           subject: safeStr(email.subject) || '(No subject)',
           from: safeStr(email.originalFrom || email.from) || 'Unknown sender',
           date: safeStr(email.date) || null,
@@ -368,9 +423,17 @@ module.exports = {
 
       return {
         totalScanned: unified.length,
+        spamFilteredOut: Math.max(0, unified.length - withoutSpam.length),
         categoryCount: inCategory.length,
         relevantExtraCount: relevantExtra.length,
         entryCount: entries.length,
+        groups: Array.from(entries.reduce((m, e) => {
+          const key = safeStr(e.newsletter) || 'Unknown Newsletter';
+          m.set(key, (m.get(key) || 0) + 1);
+          return m;
+        }, new Map()).entries())
+          .map(([name, count]) => ({ name, count }))
+          .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name)),
         entries
       };
     }
@@ -405,6 +468,11 @@ module.exports = {
     .sub { color:#5f6368; font-size:13px; margin-top:4px; line-height:1.35; }
     .btn { border:1px solid #dadce0; border-radius:18px; background:#fff; color:#1f1f1f; padding:8px 12px; cursor:pointer; font-size:13px; }
     .meta { color:#5f6368; font-size:12px; margin:6px 0 10px; }
+    .toolbar { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin-bottom:10px; }
+    .label { font-size:12px; color:#5f6368; }
+    .select { border:1px solid #dadce0; background:#fff; border-radius:8px; padding:6px 8px; font-size:13px; color:#202124; }
+    .chip { border:1px solid #d2e3fc; background:#edf3fe; color:#0b57d0; border-radius:999px; padding:4px 10px; font-size:12px; cursor:pointer; }
+    .chip.active { background:#0b57d0; color:#fff; border-color:#0b57d0; }
     .grid { display:grid; grid-template-columns: 1fr; gap:12px; }
     .card { background:#fff; border:1px solid #e5e9ef; border-radius:12px; padding:14px; }
     .subject { font-weight:700; font-size:16px; margin-bottom:6px; }
@@ -427,6 +495,11 @@ module.exports = {
       <button id="refreshBtn" class="btn">Refresh</button>
     </div>
     <div id="summary" class="meta"></div>
+    <div class="toolbar">
+      <span class="label">Group by newsletter:</span>
+      <select id="newsletterSelect" class="select"></select>
+      <div id="groupChips"></div>
+    </div>
     <div id="content" class="empty">Loading tracked articles...</div>
   </div>
 
@@ -434,12 +507,69 @@ module.exports = {
     const content = document.getElementById('content');
     const summary = document.getElementById('summary');
     const refreshBtn = document.getElementById('refreshBtn');
+    const newsletterSelect = document.getElementById('newsletterSelect');
+    const groupChips = document.getElementById('groupChips');
+    let allEntries = [];
+    let allGroups = [];
+    let selectedGroup = 'All';
     function esc(v){ return String(v||'').replace(/[&<>"']/g, (s) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',\"'\":'&#39;'}[s])); }
     function fmtDate(v){
       const d = new Date(v || 0);
       if (Number.isNaN(d.getTime())) return 'Unknown date';
       return d.toLocaleString(undefined, { year:'numeric', month:'short', day:'numeric', hour:'numeric', minute:'2-digit' });
     }
+    function renderGroupControls() {
+      const options = ['All'].concat(allGroups.map(g => g.name));
+      newsletterSelect.innerHTML = options.map(name => '<option value="' + esc(name) + '"' + (name === selectedGroup ? ' selected' : '') + '>' + esc(name) + '</option>').join('');
+      const top = allGroups.slice(0, 6);
+      groupChips.innerHTML = top.map(g => {
+        const active = g.name === selectedGroup ? ' active' : '';
+        return '<button class="chip' + active + '" data-name="' + esc(g.name) + '">' + esc(g.name) + ' (' + esc(String(g.count)) + ')</button>';
+      }).join('');
+      Array.from(groupChips.querySelectorAll('.chip')).forEach(btn => {
+        btn.addEventListener('click', () => {
+          selectedGroup = btn.getAttribute('data-name') || 'All';
+          render();
+        });
+      });
+    }
+
+    function filteredEntries() {
+      if (!selectedGroup || selectedGroup === 'All') return allEntries;
+      return allEntries.filter(e => String(e.newsletter || '') === selectedGroup);
+    }
+
+    function render() {
+      const list = filteredEntries();
+      renderGroupControls();
+      if (!list.length) {
+        content.className = 'empty';
+        content.innerHTML = 'No tracked emails for this newsletter group.';
+        return;
+      }
+      const html = list.map((entry) => {
+        const pills = (Array.isArray(entry.categories) ? entry.categories : []).slice(0, 5)
+          .map(c => '<span class="pill">' + esc(c) + '</span>').join('');
+        const articles = Array.isArray(entry.articles) ? entry.articles : [];
+        const articleHtml = articles.length
+          ? articles.map(a => {
+              if (a.url) return '<li><a href="' + esc(a.url) + '" target="_blank" rel="noopener">' + esc(a.title || a.url) + '</a></li>';
+              return '<li>' + esc(a.title || '') + '</li>';
+            }).join('')
+          : '<li>No article items extracted from this email.</li>';
+        return '<div class="card">' +
+          '<div class="subject">' + esc(entry.subject) + '</div>' +
+          '<div class="meta">' + esc(fmtDate(entry.date)) + ' · ' + esc(entry.from) + '</div>' +
+          '<div class="meta"><strong>' + esc(entry.newsletter || 'Unknown Newsletter') + '</strong></div>' +
+          '<div>' + pills + '</div>' +
+          '<div class="preview">' + esc(entry.preview || '') + '</div>' +
+          '<ul class="articles">' + articleHtml + '</ul>' +
+        '</div>';
+      }).join('');
+      content.className = 'grid';
+      content.innerHTML = html;
+    }
+
     async function load(){
       content.className = 'empty';
       content.textContent = 'Loading tracked articles...';
@@ -448,38 +578,27 @@ module.exports = {
         const r = await fetch('/api/newsletter-article-tracker/feed');
         const d = await r.json();
         if (!r.ok || !d.success) throw new Error(d.error || 'Failed to load');
-        const list = Array.isArray(d.entries) ? d.entries : [];
-        summary.textContent = (d.totalScanned || 0) + ' emails scanned · ' + (d.categoryCount || 0) + ' in Newsletters · ' + (d.relevantExtraCount || 0) + ' relevant extras';
-        if (!list.length) {
+        allEntries = Array.isArray(d.entries) ? d.entries : [];
+        allGroups = Array.isArray(d.groups) ? d.groups : [];
+        summary.textContent = (d.totalScanned || 0) + ' emails scanned · ' + (d.categoryCount || 0) + ' in Newsletters · ' + (d.relevantExtraCount || 0) + ' relevant extras · ' + (d.spamFilteredOut || 0) + ' filtered as spam';
+        if (!allEntries.length) {
           content.className = 'empty';
           content.innerHTML = 'No newsletter/article emails found yet.';
+          newsletterSelect.innerHTML = '<option value="All">All</option>';
+          groupChips.innerHTML = '';
           return;
         }
-        const html = list.map((entry) => {
-          const pills = (Array.isArray(entry.categories) ? entry.categories : []).slice(0, 5)
-            .map(c => '<span class="pill">' + esc(c) + '</span>').join('');
-          const articles = Array.isArray(entry.articles) ? entry.articles : [];
-          const articleHtml = articles.length
-            ? articles.map(a => {
-                if (a.url) return '<li><a href="' + esc(a.url) + '" target="_blank" rel="noopener">' + esc(a.title || a.url) + '</a></li>';
-                return '<li>' + esc(a.title || '') + '</li>';
-              }).join('')
-            : '<li>No article items extracted from this email.</li>';
-          return '<div class="card">' +
-            '<div class="subject">' + esc(entry.subject) + '</div>' +
-            '<div class="meta">' + esc(fmtDate(entry.date)) + ' · ' + esc(entry.from) + '</div>' +
-            '<div>' + pills + '</div>' +
-            '<div class="preview">' + esc(entry.preview || '') + '</div>' +
-            '<ul class="articles">' + articleHtml + '</ul>' +
-          '</div>';
-        }).join('');
-        content.className = 'grid';
-        content.innerHTML = html;
+        if (selectedGroup !== 'All' && !allGroups.some(g => g.name === selectedGroup)) selectedGroup = 'All';
+        render();
       } catch (e) {
         content.className = 'empty';
         content.innerHTML = 'Failed to load tracked articles: ' + esc(e.message || String(e));
       }
     }
+    newsletterSelect.addEventListener('change', (e) => {
+      selectedGroup = e.target.value || 'All';
+      render();
+    });
     refreshBtn.addEventListener('click', load);
     load();
   </script>
