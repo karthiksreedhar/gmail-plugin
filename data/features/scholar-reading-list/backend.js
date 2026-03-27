@@ -84,6 +84,121 @@ module.exports = {
       return safeStr(out);
     }
 
+    function toCleanSentence(text, maxLen = 220) {
+      const cleaned = stripHtml(text)
+        .replace(/https?:\/\/\S+/gi, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+      if (!cleaned) return '';
+      const firstSentence = (cleaned.match(/[^.!?]+[.!?]+/) || [cleaned])[0].trim();
+      return firstSentence.slice(0, maxLen);
+    }
+
+    function normalizeScholarArticleUrl(url) {
+      let current = unwrapUrl(url);
+      if (!current) return '';
+
+      for (let i = 0; i < 5; i++) {
+        let parsed;
+        try {
+          parsed = new URL(current);
+        } catch (_) {
+          break;
+        }
+        const host = safeStr(parsed.hostname).toLowerCase();
+        const path = safeStr(parsed.pathname).toLowerCase();
+        const nextCandidate =
+          parsed.searchParams.get('url') ||
+          parsed.searchParams.get('q') ||
+          parsed.searchParams.get('target') ||
+          parsed.searchParams.get('dest') ||
+          parsed.searchParams.get('redirect');
+
+        const isRedirectHost =
+          host.includes('scholar.google.') ||
+          host.includes('google.com') ||
+          host.includes('googleusercontent.com') ||
+          host.includes('urldefense.proofpoint.com') ||
+          host.includes('mail.google.com');
+
+        if (nextCandidate && (isRedirectHost || path.includes('scholar_url') || path === '/url')) {
+          const next = unwrapUrl(nextCandidate);
+          if (next && next !== current) {
+            current = next;
+            continue;
+          }
+        }
+        break;
+      }
+
+      let finalUrl = safeStr(current);
+      try {
+        const parsed = new URL(finalUrl);
+        const noisyParams = ['utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content', 'sa', 'ei', 'scisig', 'hl', 'ved', 'oi', 'usg'];
+        noisyParams.forEach((k) => parsed.searchParams.delete(k));
+        finalUrl = parsed.toString();
+      } catch (_) {}
+      return finalUrl;
+    }
+
+    function isLikelyArticleUrl(url) {
+      const u = safeStr(url).toLowerCase();
+      if (!u.startsWith('http')) return false;
+      if (/unsubscribe|privacy|terms|preferences|manage-subscription|support\.google\.com/.test(u)) return false;
+      if (/scholar\.google\./.test(u) && !/[?&](url|q)=/.test(u)) return false;
+      return true;
+    }
+
+    function extractScholarArticles(email) {
+      const bodyHtml = safeStr(email?.body || email?.originalBody || '');
+      const bodyText = stripHtml(bodyHtml);
+      const candidates = [];
+
+      const anchorRegex = /<a[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
+      let a;
+      while ((a = anchorRegex.exec(bodyHtml)) !== null) {
+        candidates.push({
+          rawUrl: a[1],
+          titleHint: toCleanSentence(a[2], 140),
+          context: toCleanSentence(bodyHtml.slice(Math.max(0, a.index - 220), a.index + 320), 220)
+        });
+      }
+
+      const urlRegex = /(https?:\/\/[^\s"'<>]+)/g;
+      let m;
+      while ((m = urlRegex.exec(bodyHtml)) !== null) {
+        candidates.push({
+          rawUrl: m[1],
+          titleHint: '',
+          context: toCleanSentence(bodyHtml.slice(Math.max(0, m.index - 220), m.index + 320), 220)
+        });
+      }
+
+      const out = [];
+      const seen = new Set();
+      for (const c of candidates) {
+        const url = normalizeScholarArticleUrl(c.rawUrl);
+        if (!isLikelyArticleUrl(url)) continue;
+        if (seen.has(url)) continue;
+        seen.add(url);
+
+        let title = safeStr(c.titleHint);
+        if (!title || /^(view article|read more|open source|link)$/i.test(title)) {
+          try {
+            const parsed = new URL(url);
+            const tail = decodeURIComponent((parsed.pathname.split('/').pop() || '').replace(/[-_]+/g, ' '));
+            title = toCleanSentence(tail, 130);
+          } catch (_) {}
+        }
+        if (!title) title = 'Open Article';
+
+        const summary = toCleanSentence(c.context || bodyText || email?.snippet || '', 180) || 'Research article from your scholar feed.';
+        out.push({ title, url, summary });
+        if (out.length >= 5) break;
+      }
+      return out;
+    }
+
     function getEmailCategories(email) {
       const fromArray = Array.isArray(email?.categories) ? email.categories : [];
       const fromPrimary = email?.category ? [email.category] : [];
@@ -295,17 +410,7 @@ module.exports = {
         .slice(0, 150);
 
       const entries = selected.map((email, idx) => {
-        const links = extractLinks(email).map(url => ({ title: 'Open Source', url }));
-        const headlines = extractHeadlines(email).map(title => ({ title, url: '' }));
-        const cards = [];
-        const seenCards = new Set();
-        for (const item of [...headlines, ...links]) {
-          const key = `${safeStr(item.title).toLowerCase()}::${safeStr(item.url)}`;
-          if (!key || seenCards.has(key)) continue;
-          seenCards.add(key);
-          cards.push(item);
-          if (cards.length >= 12) break;
-        }
+        const cards = extractScholarArticles(email);
         return {
           rank: idx + 1,
           id: safeStr(email.sourceId),
@@ -408,9 +513,14 @@ module.exports = {
             .map(c => '<span class="pill">' + esc(c) + '</span>').join('');
           const items = Array.isArray(entry.items) ? entry.items : [];
           const itemHtml = items.length
-            ? items.map(it => it.url
-                ? '<li><a href="' + esc(it.url) + '" target="_blank" rel="noopener">' + esc(it.title || it.url) + '</a></li>'
-                : '<li>' + esc(it.title || '') + '</li>').join('')
+            ? items.map(it => {
+                const title = esc(it.title || 'Open Article');
+                const summary = esc(it.summary || 'No summary available.');
+                if (it.url) {
+                  return '<li><a href="' + esc(it.url) + '" target="_blank" rel="noopener">' + title + '</a><div style="color:#5f6368;font-size:12px;margin-top:2px;">' + summary + '</div></li>';
+                }
+                return '<li>' + title + '<div style="color:#5f6368;font-size:12px;margin-top:2px;">' + summary + '</div></li>';
+              }).join('')
             : '<li>No article items extracted from this email.</li>';
           return '<div class="card">' +
             '<div class="subject">' + esc(entry.subject) + '</div>' +
