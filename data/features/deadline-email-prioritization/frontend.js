@@ -11,6 +11,7 @@
 
   const API = window.EmailAssistant;
   const urgentById = new Map(); // emailId -> { dueAt, matchedText }
+  const BUTTON_CLASS = 'deadline-priority-ignore-btn';
   let inflight = false;
 
   function getEmailId(emailItem) {
@@ -99,6 +100,73 @@
       ...normal.map(entry => entry.item)
     ];
     reordered.forEach(node => container.appendChild(node));
+    ensureIgnoreButtons();
+  }
+
+  async function markEmailAsNotDeadline(emailId) {
+    if (!emailId) return;
+    try {
+      const response = await API.apiCall('/api/deadline-email-prioritization/ignore', {
+        method: 'POST',
+        body: { emailId, ignored: true }
+      });
+      if (!response || !response.success) {
+        throw new Error(response?.error || 'Failed to save ignored deadline');
+      }
+      urgentById.delete(emailId);
+      applyPriorityStylingAndOrder();
+      API.showSuccess('Marked as not a deadline. It will stay excluded in future runs.');
+    } catch (error) {
+      console.error('Deadline Email Prioritization ignore failed:', error);
+      API.showError('Failed to mark email as not a deadline.');
+    }
+  }
+
+  function ensureIgnoreButtons() {
+    const emailItems = Array.from(document.querySelectorAll('#emailContainer .email-item'));
+    if (!emailItems.length) return;
+
+    emailItems.forEach((emailItem) => {
+      const id = getEmailId(emailItem);
+      const actions = emailItem.querySelector('.email-actions');
+      if (!id || !actions) return;
+
+      const existing = actions.querySelector(`.${BUTTON_CLASS}`);
+      const isUrgent = urgentById.has(id);
+
+      if (!isUrgent) {
+        if (existing) existing.remove();
+        return;
+      }
+
+      if (existing) return;
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = BUTTON_CLASS;
+      btn.textContent = 'Not a deadline';
+      btn.style.cssText = [
+        'background:#fff',
+        'color:#8a4b00',
+        'border:1px solid #f4b400',
+        'padding:6px 8px',
+        'border-radius:6px',
+        'cursor:pointer',
+        'font-size:11px',
+        'margin-right:8px'
+      ].join(';');
+      btn.addEventListener('click', async (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        await markEmailAsNotDeadline(id);
+      });
+
+      const deleteBtn = actions.querySelector('.delete-thread-btn');
+      if (deleteBtn) {
+        actions.insertBefore(btn, deleteBtn);
+      } else {
+        actions.appendChild(btn);
+      }
+    });
   }
 
   function collectVisibleEmailIds() {
@@ -147,6 +215,7 @@
       window.displayEmails = async function(...args) {
         const out = await originalDisplayEmails.apply(this, args);
         setTimeout(() => refreshUrgentDeadlines(), 60);
+        setTimeout(() => ensureIgnoreButtons(), 90);
         return out;
       };
     }

@@ -5,7 +5,7 @@
 
 module.exports = {
   initialize(context) {
-    const { app, getUserDoc, getCurrentUser, normalizeUserEmailForData } = context;
+    const { app, getUserDoc, setUserDoc, getCurrentUser, normalizeUserEmailForData } = context;
     const TRACKED_CATEGORIES = new Set([
       'scu',
       'class announcements',
@@ -193,6 +193,49 @@ module.exports = {
       return categories.some(category => TRACKED_CATEGORIES.has(safeStr(category).toLowerCase()));
     }
 
+    async function loadIgnoredEmailIdSet(userEmail) {
+      const doc = await getUserDoc('deadline_email_prioritization_prefs', userEmail).catch(() => null);
+      const ids = Array.isArray(doc?.ignoredEmailIds) ? doc.ignoredEmailIds : [];
+      return new Set(ids.map(v => safeStr(v)).filter(Boolean));
+    }
+
+    app.post('/api/deadline-email-prioritization/ignore', async (req, res) => {
+      try {
+        const userEmail = resolveUserEmail(req);
+        if (!userEmail) {
+          return res.status(400).json({ success: false, error: 'Missing current user' });
+        }
+
+        const emailId = safeStr(req.body?.emailId);
+        const ignored = req.body?.ignored !== false;
+        if (!emailId) {
+          return res.status(400).json({ success: false, error: 'emailId is required' });
+        }
+
+        const ignoredSet = await loadIgnoredEmailIdSet(userEmail);
+        if (ignored) {
+          ignoredSet.add(emailId);
+        } else {
+          ignoredSet.delete(emailId);
+        }
+
+        await setUserDoc('deadline_email_prioritization_prefs', userEmail, {
+          ignoredEmailIds: Array.from(ignoredSet),
+          updatedAt: new Date().toISOString()
+        });
+
+        return res.json({
+          success: true,
+          emailId,
+          ignored,
+          ignoredCount: ignoredSet.size
+        });
+      } catch (error) {
+        console.error('Deadline Email Prioritization ignore update failed:', error);
+        return res.status(500).json({ success: false, error: error.message || 'Failed to update ignored deadlines list' });
+      }
+    });
+
     app.post('/api/deadline-email-prioritization/scan', async (req, res) => {
       try {
         const userEmail = resolveUserEmail(req);
@@ -205,6 +248,7 @@ module.exports = {
         const requestedIds = Array.isArray(req.body?.emailIds)
           ? Array.from(new Set(req.body.emailIds.map(v => safeStr(v)).filter(Boolean)))
           : [];
+        const ignoredSet = await loadIgnoredEmailIdSet(userEmail);
 
         const allowed = requestedIds.length ? new Set(requestedIds) : null;
         const now = new Date();
@@ -215,6 +259,7 @@ module.exports = {
           const id = safeStr(email?.id);
           if (!id) continue;
           if (allowed && !allowed.has(id)) continue;
+          if (ignoredSet.has(id)) continue;
           if (!isTrackedCategoryEmail(email)) continue;
 
           const match = evaluateEmailForUrgency(email, now, windowEnd);
@@ -237,6 +282,7 @@ module.exports = {
           success: true,
           urgentEmails: urgent,
           urgentByEmailId: byEmailId,
+          ignoredCount: ignoredSet.size,
           window: {
             from: now.toISOString(),
             to: windowEnd.toISOString()
