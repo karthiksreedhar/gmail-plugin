@@ -183,9 +183,10 @@
       return [
         `Hi ${senderName},`,
         '',
-        'Thanks for flagging this. For Slack issues, please try the invite link again from a desktop browser first, and if it still does not work, send me a screenshot of the error and I can help you troubleshoot quickly.',
+        "Yeah, I've been getting a lot of similar emails from other students and I'm working on figuring out the issue.",
         '',
-        'Also, please check the announcements page in CourseWorks for updates for now.',
+        'For now, please check the announcements page on CourseWorks for updates.',
+        'If you still cannot find the info there, feel free to reach out again.',
         '',
         'Thanks,',
         'Riya'
@@ -194,9 +195,8 @@
     return [
       `Hi ${senderName},`,
       '',
-      'Thanks for your question. Happy to help with this.',
-      '',
-      'Please check the announcements page in CourseWorks for updates for now.',
+      'Please check the announcements page on CourseWorks for updates.',
+      'If you still cannot find the info there, feel free to reach out again.',
       '',
       'Thanks,',
       'Riya'
