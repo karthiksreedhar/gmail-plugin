@@ -104,10 +104,8 @@ module.exports = {
         parsed.setFullYear(parsed.getFullYear() + 1);
       }
 
-      // Date-only deadlines are typically end-of-day expectations.
-      if (!hasTime) {
-        parsed.setHours(23, 59, 59, 999);
-      }
+      // Force all detected deadlines to end-of-day per requested behavior.
+      parsed.setHours(23, 59, 59, 999);
       return parsed;
     }
 
