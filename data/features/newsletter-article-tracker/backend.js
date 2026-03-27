@@ -134,6 +134,75 @@ module.exports = {
       return newsletterSignal || (csSignal && articleSignal);
     }
 
+    function hasExcludedSubject(email) {
+      const subject = safeStr(email?.subject).toLowerCase();
+      return subject.includes('spam and low priority digests') || subject.includes('docusign');
+    }
+
+    function looksLikeIndividualSender(email) {
+      const rawFrom = safeStr(email?.originalFrom || email?.from);
+      const nameMatch = rawFrom.match(/^([^<]+)</);
+      const displayName = safeStr(nameMatch ? nameMatch[1] : '').replace(/["']/g, '').trim();
+      const lower = displayName.toLowerCase();
+      if (!displayName) return false;
+      const words = displayName.split(/\s+/).filter(Boolean);
+      const looksPersonName = words.length >= 2 && words.length <= 3 && /^[a-zA-Z .'-]+$/.test(displayName);
+      const orgHint = /(newsletter|digest|team|staff|office|updates|news|alerts|community|piazza|substack|medium|towards data science)/i.test(lower);
+      return looksPersonName && !orgHint;
+    }
+
+    function countUrlLikeTokens(email) {
+      const body = safeStr(email?.body || email?.originalBody || email?.snippet);
+      if (!body) return 0;
+      const matches = body.match(/https?:\/\/[^\s"'<>]+/g);
+      return Array.isArray(matches) ? matches.length : 0;
+    }
+
+    function countListLikeLines(email) {
+      const lines = stripHtml(email?.body || email?.originalBody || '').split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+      let count = 0;
+      for (const line of lines) {
+        if (/^[-*•]\s+/.test(line) || /^\d+\.\s+/.test(line)) count += 1;
+        if (/\b(today|this week|upcoming|events|headlines|top stories)\b/i.test(line)) count += 1;
+      }
+      return count;
+    }
+
+    function looksLikeOneTimeEventCommunication(email) {
+      const subject = safeStr(email?.subject).toLowerCase();
+      const body = stripHtml(email?.body || email?.originalBody || email?.snippet).toLowerCase();
+      const text = `${subject}\n${body}`;
+      const oneTimeSignals = /(invitation:|meeting|calendar|office hours|webinar registration|single event|rsvp|join us on|at \d{1,2}:\d{2})/i.test(text);
+      const recurringSignals = /(weekly|daily|monthly|digest|newsletter|roundup|briefing|top stories|issue #|vol\.|edition)/i.test(text);
+      return oneTimeSignals && !recurringSignals;
+    }
+
+    function isStrictNewsletterCandidate(email) {
+      if (hasExcludedSubject(email)) return false;
+      if (isSpamLikeEmail(email)) return false;
+
+      const subject = safeStr(email?.subject).toLowerCase();
+      const from = safeStr(email?.originalFrom || email?.from).toLowerCase();
+      const body = stripHtml(email?.body || email?.originalBody || email?.snippet).toLowerCase();
+      const text = `${subject}\n${from}\n${body}`;
+
+      const baseNewsletter = isNewsletterCategory(email) || isRelevantNewsletterOrCsUpdate(email);
+      if (!baseNewsletter) return false;
+
+      const seriesSignals = /(newsletter|digest|briefing|roundup|weekly|daily|monthly|issue\s*#|edition|top stories|today in)/i.test(text);
+      const listSignals = countUrlLikeTokens(email) >= 2 || countListLikeLines(email) >= 2;
+      const notOneOffEvent = !looksLikeOneTimeEventCommunication(email);
+      const notIndividualPerson = !looksLikeIndividualSender(email) || seriesSignals;
+      const isAcademicOrAi = isAcademicOrAiRelevant(email);
+
+      // Must look like a recurring/list-style newsletter update and be relevant.
+      return isAcademicOrAi && notOneOffEvent && notIndividualPerson && (seriesSignals || listSignals);
+    }
+
+    function isTowardsDataScience(name) {
+      return /towards data science/i.test(safeStr(name));
+    }
+
     function isSpamLikeEmail(email) {
       const subject = safeStr(email?.subject).toLowerCase();
       const from = safeStr(email?.originalFrom || email?.from).toLowerCase();
@@ -376,7 +445,7 @@ module.exports = {
       const relevantExtra = withoutSpam.filter(email => !isNewsletterCategory(email) && isRelevantNewsletterOrCsUpdate(email));
 
       const selected = [...inCategory, ...relevantExtra]
-        .filter(isAcademicOrAiRelevant)
+        .filter(isStrictNewsletterCandidate)
         .sort((a, b) => dateMs(b.date) - dateMs(a.date))
         .slice(0, 140);
 
@@ -421,20 +490,32 @@ module.exports = {
         };
       });
 
+      const countsByNewsletter = entries.reduce((m, e) => {
+        const key = safeStr(e.newsletter) || 'Unknown Newsletter';
+        m.set(key, (m.get(key) || 0) + 1);
+        return m;
+      }, new Map());
+
+      const filteredEntries = entries.filter((entry) => {
+        const name = safeStr(entry.newsletter) || 'Unknown Newsletter';
+        const count = countsByNewsletter.get(name) || 0;
+        return count > 1 || isTowardsDataScience(name);
+      });
+
       return {
         totalScanned: unified.length,
         spamFilteredOut: Math.max(0, unified.length - withoutSpam.length),
         categoryCount: inCategory.length,
         relevantExtraCount: relevantExtra.length,
-        entryCount: entries.length,
-        groups: Array.from(entries.reduce((m, e) => {
+        entryCount: filteredEntries.length,
+        groups: Array.from(filteredEntries.reduce((m, e) => {
           const key = safeStr(e.newsletter) || 'Unknown Newsletter';
           m.set(key, (m.get(key) || 0) + 1);
           return m;
         }, new Map()).entries())
           .map(([name, count]) => ({ name, count }))
           .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name)),
-        entries
+        entries: filteredEntries
       };
     }
 
