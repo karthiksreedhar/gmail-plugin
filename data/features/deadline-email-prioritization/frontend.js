@@ -207,7 +207,10 @@
 
       const response = await API.apiCall('/api/deadline-email-prioritization/scan', {
         method: 'POST',
-        body: { emailIds: visibleIds }
+        body: {
+          emailIds: visibleIds,
+          clientTimezoneOffsetMinutes: new Date().getTimezoneOffset()
+        }
       });
 
       if (!response || !response.success || typeof response.urgentByEmailId !== 'object') {

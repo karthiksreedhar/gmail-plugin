@@ -39,14 +39,33 @@ module.exports = {
       return current.toLowerCase();
     }
 
-    function parseDateCandidate(raw, now) {
+    function parseClientTimezoneOffsetMinutes(req) {
+      const value = Number(req?.body?.clientTimezoneOffsetMinutes);
+      if (!Number.isFinite(value)) return null;
+      const rounded = Math.round(value);
+      if (rounded < -840 || rounded > 840) return null;
+      return rounded;
+    }
+
+    function parseDateCandidate(raw, now, clientTimezoneOffsetMinutes) {
       const text = safeStr(raw);
       if (!text) return null;
 
       const hasYear = /\b\d{4}\b/.test(text) || /\b\d{1,2}\/\d{1,2}\/\d{2,4}\b/.test(text);
       const hasTime = /\b\d{1,2}:\d{2}\b/.test(text) || /\b\d{1,2}\s*(am|pm)\b/i.test(text);
+      const hasExplicitTimezone = /\b(?:UTC|GMT|PST|PDT|MST|MDT|CST|CDT|EST|EDT)\b|[+-]\d{2}:?\d{2}\b/i.test(text);
       const parsed = new Date(text);
       if (Number.isNaN(parsed.getTime())) return null;
+
+      // Date strings in emails usually do not include timezone and should be
+      // interpreted in the viewer's local timezone (not server timezone).
+      if (!hasExplicitTimezone && Number.isFinite(clientTimezoneOffsetMinutes)) {
+        const serverOffsetMinutes = now.getTimezoneOffset();
+        const deltaMinutes = clientTimezoneOffsetMinutes - serverOffsetMinutes;
+        if (deltaMinutes) {
+          parsed.setTime(parsed.getTime() + (deltaMinutes * 60 * 1000));
+        }
+      }
 
       // If no year is provided and parsed date is in the past, assume next year.
       if (!hasYear && parsed.getTime() < (now.getTime() - 24 * 60 * 60 * 1000)) {
@@ -148,7 +167,7 @@ module.exports = {
       return `${subject}\n${body}`.slice(0, 12000);
     }
 
-    function extractDeadlineCandidates(text, now) {
+    function extractDeadlineCandidates(text, now, clientTimezoneOffsetMinutes) {
       const source = safeStr(text);
       if (!source) return [];
 
@@ -166,7 +185,7 @@ module.exports = {
         const contextWindow = source.slice(start, end);
         if (!hasDeadlineSignal(contextWindow)) continue;
 
-        const dueAt = parseDateCandidate(rawDateText, now);
+        const dueAt = parseDateCandidate(rawDateText, now, clientTimezoneOffsetMinutes);
         if (!dueAt) continue;
 
         candidates.push({
@@ -195,9 +214,9 @@ module.exports = {
       return candidates;
     }
 
-    function evaluateEmailForUrgency(email, now, windowEnd) {
+    function evaluateEmailForUrgency(email, now, windowEnd, clientTimezoneOffsetMinutes) {
       const text = prepareDeadlineText(email);
-      const candidates = extractDeadlineCandidates(text, now);
+      const candidates = extractDeadlineCandidates(text, now, clientTimezoneOffsetMinutes);
 
       const inWindow = candidates
         .filter(c => c?.dueAt && c.dueAt.getTime() >= now.getTime() && c.dueAt.getTime() <= windowEnd.getTime())
@@ -324,6 +343,7 @@ Email snippet/body: ${safeStr(stripQuotedReplyContent(email?.body || email?.orig
           ? Array.from(new Set(req.body.emailIds.map(v => safeStr(v)).filter(Boolean)))
           : [];
         const ignoredSet = await loadIgnoredEmailIdSet(userEmail);
+        const clientTimezoneOffsetMinutes = parseClientTimezoneOffsetMinutes(req);
 
         const allowed = requestedIds.length ? new Set(requestedIds) : null;
         const now = new Date();
@@ -337,7 +357,7 @@ Email snippet/body: ${safeStr(stripQuotedReplyContent(email?.body || email?.orig
           if (ignoredSet.has(id)) continue;
           if (!isTrackedCategoryEmail(email)) continue;
 
-          const match = evaluateEmailForUrgency(email, now, windowEnd);
+          const match = evaluateEmailForUrgency(email, now, windowEnd, clientTimezoneOffsetMinutes);
           if (!match) continue;
 
           urgent.push({
