@@ -1,0 +1,11 @@
+{
+  "id": "lydia-filter",
+  "name": "Lydia Filter",
+  "version": "1.0.0",
+  "description": "Adds a header filter for Lydia Chilton emails with segmented views for project emails, Akify emails, and other Lydia emails.",
+  "author": "ks4190@columbia.edu",
+  "frontend": "frontend.js",
+  "permissions": [
+    "emails:read"
+  ]
+}
