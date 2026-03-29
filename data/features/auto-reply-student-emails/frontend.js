@@ -11,9 +11,18 @@
 
   const API = window.EmailAssistant;
   const BUTTON_CLASS = 'auto-reply-student-emails-btn';
+  const NOT_GROUP_BUTTON_CLASS = 'auto-reply-not-group-btn';
   const TARGET_CATEGORIES = new Set(['ui 4170', 'ui4170', 'ui-4170']);
   const GROUP_FILTER_LABEL = 'Need Group';
+  const NOT_GROUP_STORAGE_KEY = 'auto_reply_student_emails_not_group_v1';
+  const HARDCODED_GROUP_NAMES = new Set([
+    'karthik sreedhar',
+    'avishek rao',
+    'minjae bang',
+    'victor bula'
+  ]);
   let groupFilterActive = false;
+  const notGroupEmailIdSet = new Set(loadNotGroupEmailIds());
 
   function normalize(value) {
     return String(value || '').trim().toLowerCase();
@@ -52,13 +61,11 @@
   function isGroupRequestEmailData(email) {
     if (!email) return false;
     if (!isTargetCategoryEmailData(email)) return false;
-    const text = `${String(email?.subject || '')}\n${stripHtml(email?.body || email?.originalBody || email?.snippet || '')}`.toLowerCase();
-    const hasGroupWord = /\bgroup|teammate|team mate|teammate|partner\b/.test(text);
-    const hasNeedSignal = /\b(need|looking|searching|find|join|match|pair|assigned|assignment to a group|not in|without|don't have|do not have|haven't found|have not found|no group|groupless)\b/.test(text);
-    const explicitNeedGroup = /\b(need (a )?group|looking for (a )?group|don't have (a )?group|do not have (a )?group|without (a )?group|not in (a )?group|no group yet|need teammates?|need a partner|group partner|group members?|join (a )?group|find (a )?group|looking for teammates?)\b/.test(text);
-    const questionWithGroup = /\bgroup\b[\s\S]{0,20}\?|\?[\s\S]{0,20}\bgroup\b/.test(text);
-    const hasResolvedSignal = /\b(found (a )?group|have (a )?group already|already in (a )?group|group is full now|no longer need (a )?group|solved|resolved)\b/.test(text);
-    return !hasResolvedSignal && (explicitNeedGroup || (hasGroupWord && (hasNeedSignal || questionWithGroup)));
+    const emailId = String(email?.id || '').trim();
+    if (emailId && notGroupEmailIdSet.has(emailId)) return false;
+    const sender = parseSender(email?.originalFrom || email?.from);
+    const senderName = normalize(sender.name);
+    return HARDCODED_GROUP_NAMES.has(senderName);
   }
 
   function getGroupRequestEmails() {
@@ -86,6 +93,23 @@
       return { name: '', email: String(emailMatch[0] || '').toLowerCase() };
     }
     return { name: text, email: '' };
+  }
+
+  function loadNotGroupEmailIds() {
+    try {
+      const raw = localStorage.getItem(NOT_GROUP_STORAGE_KEY);
+      const parsed = raw ? JSON.parse(raw) : [];
+      if (!Array.isArray(parsed)) return [];
+      return parsed.map((v) => String(v || '').trim()).filter(Boolean);
+    } catch (_) {
+      return [];
+    }
+  }
+
+  function persistNotGroupEmailIds() {
+    try {
+      localStorage.setItem(NOT_GROUP_STORAGE_KEY, JSON.stringify(Array.from(notGroupEmailIdSet)));
+    } catch (_) {}
   }
 
   function renderGroupPeerModal(currentEmailId) {
@@ -348,6 +372,45 @@
 
       const actions = emailItem.querySelector('.email-actions');
       if (!actions) return;
+
+      const emailId = getEmailId(emailItem);
+      const emailData = getEmailById(emailId);
+      const isGroupCandidate = isGroupRequestEmailData(emailData);
+
+      const existingNotGroupBtn = actions.querySelector(`.${NOT_GROUP_BUTTON_CLASS}`);
+      if (isGroupCandidate && !existingNotGroupBtn) {
+        const notGroupBtn = document.createElement('button');
+        notGroupBtn.className = NOT_GROUP_BUTTON_CLASS;
+        notGroupBtn.type = 'button';
+        notGroupBtn.textContent = 'Not Group';
+        notGroupBtn.style.cssText = [
+          'background:#fff',
+          'color:#8a4b00',
+          'border:1px solid #f4b400',
+          'padding:8px 10px',
+          'border-radius:4px',
+          'cursor:pointer',
+          'font-size:12px',
+          'margin-right:8px'
+        ].join(';');
+        notGroupBtn.addEventListener('click', (ev) => {
+          ev.preventDefault();
+          ev.stopPropagation();
+          if (!emailId) return;
+          notGroupEmailIdSet.add(emailId);
+          persistNotGroupEmailIds();
+          if (groupFilterActive) {
+            applyNeedGroupFilter();
+          } else {
+            setTimeout(addButtons, 20);
+          }
+          API.showSuccess('Marked as not a group-request email.');
+        });
+        actions.insertBefore(notGroupBtn, actions.firstChild || null);
+      } else if (!isGroupCandidate && existingNotGroupBtn) {
+        existingNotGroupBtn.remove();
+      }
+
       if (actions.querySelector(`.${BUTTON_CLASS}`)) return;
 
       const btn = document.createElement('button');
