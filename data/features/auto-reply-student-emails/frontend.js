@@ -11,7 +11,7 @@
 
   const API = window.EmailAssistant;
   const BUTTON_CLASS = 'auto-reply-student-emails-btn';
-  const TARGET_CATEGORIES = new Set(['cs 4170', 'cs4170']);
+  const TARGET_CATEGORIES = new Set(['ui 4170', 'ui4170', 'ui-4170']);
   const GROUP_FILTER_LABEL = 'Need Group';
   let groupFilterActive = false;
 
@@ -53,10 +53,12 @@
     if (!email) return false;
     if (!isTargetCategoryEmailData(email)) return false;
     const text = `${String(email?.subject || '')}\n${stripHtml(email?.body || email?.originalBody || email?.snippet || '')}`.toLowerCase();
-
-    const hasNeedGroupSignal = /\b(need (a )?group|need group|looking for (a )?group|don't have (a )?group|do not have (a )?group|without (a )?group|group partner|group members?|join (a )?group|find (a )?group)\b/.test(text);
-    const hasResolvedSignal = /\b(found (a )?group|have (a )?group already|already in (a )?group|group is full now|no longer need (a )?group)\b/.test(text);
-    return hasNeedGroupSignal && !hasResolvedSignal;
+    const hasGroupWord = /\bgroup|teammate|team mate|teammate|partner\b/.test(text);
+    const hasNeedSignal = /\b(need|looking|searching|find|join|match|pair|assigned|assignment to a group|not in|without|don't have|do not have|haven't found|have not found|no group|groupless)\b/.test(text);
+    const explicitNeedGroup = /\b(need (a )?group|looking for (a )?group|don't have (a )?group|do not have (a )?group|without (a )?group|not in (a )?group|no group yet|need teammates?|need a partner|group partner|group members?|join (a )?group|find (a )?group|looking for teammates?)\b/.test(text);
+    const questionWithGroup = /\bgroup\b[\s\S]{0,20}\?|\?[\s\S]{0,20}\bgroup\b/.test(text);
+    const hasResolvedSignal = /\b(found (a )?group|have (a )?group already|already in (a )?group|group is full now|no longer need (a )?group|solved|resolved)\b/.test(text);
+    return !hasResolvedSignal && (explicitNeedGroup || (hasGroupWord && (hasNeedSignal || questionWithGroup)));
   }
 
   function getGroupRequestEmails() {
@@ -112,7 +114,7 @@
     API.showModal(`
       <div>
         <div style="font-size:15px;font-weight:600;margin-bottom:8px;">Students Who Also Need A Group</div>
-        <div style="color:#5f6368;font-size:13px;margin-bottom:8px;">From the CS 4170 “need group” emails:</div>
+        <div style="color:#5f6368;font-size:13px;margin-bottom:8px;">From the UI 4170 “need group” emails:</div>
         ${listHtml}
       </div>
     `, 'Group Match List');
@@ -381,9 +383,9 @@
       }
       window.displayEmails(matches);
       const cf = document.getElementById('currentFilter');
-      if (cf) cf.textContent = 'CS 4170 Need Group';
+      if (cf) cf.textContent = 'UI 4170 Need Group';
       groupFilterActive = true;
-      API.showSuccess(`Showing ${matches.length} CS 4170 emails where students need a group.`);
+      API.showSuccess(`Showing ${matches.length} UI 4170 emails where students need a group.`);
     } catch (error) {
       console.error('Auto Reply Student Emails: filter failed', error);
       API.showError('Failed to apply need-group filter.');
@@ -416,7 +418,7 @@
       className: 'generate-btn'
     });
     if (filterBtn) {
-      filterBtn.title = 'Toggle CS 4170 emails from students who need a group';
+      filterBtn.title = 'Toggle UI 4170 emails from students who need a group';
     }
 
     setTimeout(addButtons, 120);
