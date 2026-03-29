@@ -11,7 +11,9 @@
 
   const API = window.EmailAssistant;
   const BUTTON_CLASS = 'auto-reply-student-emails-btn';
-  const TARGET_CATEGORIES = new Set(['ui 4170', 'ui4170']);
+  const TARGET_CATEGORIES = new Set(['cs 4170', 'cs4170']);
+  const GROUP_FILTER_LABEL = 'Need Group';
+  let groupFilterActive = false;
 
   function normalize(value) {
     return String(value || '').trim().toLowerCase();
@@ -33,6 +35,87 @@
     const pills = Array.from(emailItem.querySelectorAll('.email-categories .email-category'));
     if (!pills.length) return false;
     return pills.some((pill) => TARGET_CATEGORIES.has(normalize(pill.textContent)));
+  }
+
+  function getEmailCategories(email) {
+    const arr = Array.isArray(email?.categories) && email.categories.length
+      ? email.categories
+      : (email?.category ? [email.category] : []);
+    return arr.map((v) => normalize(v)).filter(Boolean);
+  }
+
+  function isTargetCategoryEmailData(email) {
+    const categories = getEmailCategories(email);
+    return categories.some((c) => TARGET_CATEGORIES.has(c));
+  }
+
+  function isGroupRequestEmailData(email) {
+    if (!email) return false;
+    if (!isTargetCategoryEmailData(email)) return false;
+    const text = `${String(email?.subject || '')}\n${stripHtml(email?.body || email?.originalBody || email?.snippet || '')}`.toLowerCase();
+
+    const hasNeedGroupSignal = /\b(need (a )?group|need group|looking for (a )?group|don't have (a )?group|do not have (a )?group|without (a )?group|group partner|group members?|join (a )?group|find (a )?group)\b/.test(text);
+    const hasResolvedSignal = /\b(found (a )?group|have (a )?group already|already in (a )?group|group is full now|no longer need (a )?group)\b/.test(text);
+    return hasNeedGroupSignal && !hasResolvedSignal;
+  }
+
+  function getGroupRequestEmails() {
+    const emails = Array.isArray(API.getEmails()) ? API.getEmails() : [];
+    return emails.filter((email) => isGroupRequestEmailData(email));
+  }
+
+  function getEmailById(emailId) {
+    const emails = Array.isArray(API.getEmails()) ? API.getEmails() : [];
+    return emails.find((e) => String(e?.id || '') === String(emailId || '')) || null;
+  }
+
+  function parseSender(fromRaw) {
+    const text = String(fromRaw || '').trim();
+    if (!text) return { name: '', email: '' };
+    const angle = text.match(/^(.*?)<([^>]+)>/);
+    if (angle) {
+      return {
+        name: String(angle[1] || '').replace(/^"|"$/g, '').trim(),
+        email: String(angle[2] || '').trim().toLowerCase()
+      };
+    }
+    const emailMatch = text.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
+    if (emailMatch) {
+      return { name: '', email: String(emailMatch[0] || '').toLowerCase() };
+    }
+    return { name: text, email: '' };
+  }
+
+  function renderGroupPeerModal(currentEmailId) {
+    const groupEmails = getGroupRequestEmails();
+    const peers = [];
+    const seenEmails = new Set();
+
+    groupEmails.forEach((email) => {
+      const id = String(email?.id || '');
+      if (!id || id === String(currentEmailId || '')) return;
+      const sender = parseSender(email?.originalFrom || email?.from);
+      const emailAddr = String(sender.email || '').trim().toLowerCase();
+      if (!emailAddr || seenEmails.has(emailAddr)) return;
+      seenEmails.add(emailAddr);
+      peers.push({
+        name: sender.name || emailAddr.split('@')[0],
+        email: emailAddr
+      });
+    });
+
+    peers.sort((a, b) => String(a.name).localeCompare(String(b.name)));
+    const listHtml = peers.length
+      ? `<ul style="margin:8px 0 0 18px;padding:0;">${peers.map((p) => `<li style="margin:8px 0;"><strong>${String(p.name)}</strong> &lt;${String(p.email)}&gt;</li>`).join('')}</ul>`
+      : '<div style="color:#5f6368;">No other students currently found with the same request.</div>';
+
+    API.showModal(`
+      <div>
+        <div style="font-size:15px;font-weight:600;margin-bottom:8px;">Students Who Also Need A Group</div>
+        <div style="color:#5f6368;font-size:13px;margin-bottom:8px;">From the CS 4170 “need group” emails:</div>
+        ${listHtml}
+      </div>
+    `, 'Group Match List');
   }
 
   function getEmailId(emailItem) {
@@ -213,6 +296,12 @@
       const subject = getEmailSubject(emailItem);
       const fallbackDisplayName = getDisplaySender(emailItem);
       if (!emailId) throw new Error('email_id_not_found');
+      const emailData = getEmailById(emailId);
+
+      if (isGroupRequestEmailData(emailData)) {
+        renderGroupPeerModal(emailId);
+        return;
+      }
 
       if (typeof window.openEmailThread !== 'function' || typeof window.replyToCurrentThread !== 'function') {
         throw new Error('thread_actions_unavailable');
@@ -284,7 +373,52 @@
     });
   }
 
+  function applyNeedGroupFilter() {
+    try {
+      const matches = getGroupRequestEmails();
+      if (typeof window.displayEmails !== 'function') {
+        throw new Error('displayEmails unavailable');
+      }
+      window.displayEmails(matches);
+      const cf = document.getElementById('currentFilter');
+      if (cf) cf.textContent = 'CS 4170 Need Group';
+      groupFilterActive = true;
+      API.showSuccess(`Showing ${matches.length} CS 4170 emails where students need a group.`);
+    } catch (error) {
+      console.error('Auto Reply Student Emails: filter failed', error);
+      API.showError('Failed to apply need-group filter.');
+    }
+  }
+
+  function clearNeedGroupFilter() {
+    try {
+      if (typeof window.filterByCategory === 'function') {
+        window.filterByCategory('all');
+      } else if (typeof window.displayEmails === 'function') {
+        window.displayEmails(API.getEmails() || []);
+      }
+      groupFilterActive = false;
+      API.showSuccess('Returned to full inbox view.');
+    } catch (error) {
+      console.error('Auto Reply Student Emails: clear filter failed', error);
+      API.showError('Failed to clear need-group filter.');
+    }
+  }
+
   function initialize() {
+    const filterBtn = API.addHeaderButton(GROUP_FILTER_LABEL, () => {
+      if (groupFilterActive) {
+        clearNeedGroupFilter();
+      } else {
+        applyNeedGroupFilter();
+      }
+    }, {
+      className: 'generate-btn'
+    });
+    if (filterBtn) {
+      filterBtn.title = 'Toggle CS 4170 emails from students who need a group';
+    }
+
     setTimeout(addButtons, 120);
     setInterval(addButtons, 1600);
 
