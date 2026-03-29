@@ -1,0 +1,9 @@
+{
+  "id": "auto-update-demo-button",
+  "name": "Auto-Update Demo Button",
+  "version": "1.0.0",
+  "description": "Adds a button next to the 'Open Feature Generator' button that displays a message demonstrating auto-updates.",
+  "author": "Feature Generator Agent",
+  "frontend": "frontend.js",
+  "permissions": []
+}
