@@ -15,12 +15,22 @@
   const TARGET_CATEGORIES = new Set(['ui 4170', 'ui4170', 'ui-4170']);
   const GROUP_FILTER_LABEL = 'Need Group';
   const NOT_GROUP_STORAGE_KEY = 'auto_reply_student_emails_not_group_v1';
-  const HARDCODED_GROUP_NAMES = new Set([
-    'karthik sreedhar',
-    'avishek rao',
-    'minjae bang',
-    'victor bula'
-  ]);
+  const HARDCODED_GROUP_RULES = [
+    {
+      senderIncludesAny: ['karthik sreedhar'],
+      subjectMustIncludeAny: ['ui 4170'],
+      subjectMustNotIncludeAny: ['ui design 4170']
+    },
+    {
+      senderIncludesAny: ['avishek rao', 'avishek']
+    },
+    {
+      senderIncludesAny: ['minjae bang', 'minjae']
+    },
+    {
+      senderIncludesAny: ['victor bula', 'victor']
+    }
+  ];
   let groupFilterActive = false;
   const notGroupEmailIdSet = new Set(loadNotGroupEmailIds());
 
@@ -63,9 +73,44 @@
     if (!isTargetCategoryEmailData(email)) return false;
     const emailId = String(email?.id || '').trim();
     if (emailId && notGroupEmailIdSet.has(emailId)) return false;
+    return HARDCODED_GROUP_RULES.some((rule) => senderAndSubjectMatchRule(email, rule));
+  }
+
+  function getEmailSubjectData(email) {
+    return String(
+      email?.originalSubject ||
+      email?.subject ||
+      email?.latestSubject ||
+      ''
+    ).trim();
+  }
+
+  function senderAndSubjectMatchRule(email, rule) {
     const sender = parseSender(email?.originalFrom || email?.from);
     const senderName = normalize(sender.name);
-    return HARDCODED_GROUP_NAMES.has(senderName);
+    const senderEmail = normalize(sender.email);
+    const rawFrom = normalize(email?.originalFrom || email?.from || '');
+    const subject = normalize(getEmailSubjectData(email));
+
+    const senderHaystack = [senderName, senderEmail, rawFrom].filter(Boolean).join(' | ');
+    const senderTokens = Array.isArray(rule?.senderIncludesAny) ? rule.senderIncludesAny : [];
+    if (!senderTokens.length) return false;
+    const senderMatched = senderTokens.some((token) => senderHaystack.includes(normalize(token)));
+    if (!senderMatched) return false;
+
+    const includeTokens = Array.isArray(rule?.subjectMustIncludeAny) ? rule.subjectMustIncludeAny : [];
+    if (includeTokens.length) {
+      const hasRequiredSubjectToken = includeTokens.some((token) => subject.includes(normalize(token)));
+      if (!hasRequiredSubjectToken) return false;
+    }
+
+    const excludeTokens = Array.isArray(rule?.subjectMustNotIncludeAny) ? rule.subjectMustNotIncludeAny : [];
+    if (excludeTokens.length) {
+      const hasExcludedToken = excludeTokens.some((token) => subject.includes(normalize(token)));
+      if (hasExcludedToken) return false;
+    }
+
+    return true;
   }
 
   function getGroupRequestEmails() {
