@@ -690,33 +690,166 @@ module.exports = {
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Newsletter Article Tracker</title>
   <style>
-    body { margin:0; font-family: Google Sans, Roboto, Arial, sans-serif; background:#f6f8fc; color:#202124; }
-    .wrap { max-width:1240px; margin:0 auto; padding:20px 16px 28px; }
-    .head { display:flex; align-items:flex-start; justify-content:space-between; gap:10px; margin-bottom:14px; }
-    .title { font-size:28px; font-weight:700; }
-    .sub { color:#5f6368; font-size:13px; margin-top:4px; line-height:1.35; }
-    .btn { border:1px solid #dadce0; border-radius:18px; background:#fff; color:#1f1f1f; padding:8px 12px; cursor:pointer; font-size:13px; }
-    .meta { color:#5f6368; font-size:12px; margin:6px 0 10px; }
-    .toolbar { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin-bottom:10px; }
-    .top-panels { display:grid; grid-template-columns: 1fr 1fr; gap:12px; margin: 8px 0 14px; }
-    .panel { background:#fff; border:1px solid #e5e9ef; border-radius:12px; padding:12px; }
-    .panel-title { font-size:13px; color:#5f6368; font-weight:700; margin-bottom:8px; text-transform:uppercase; letter-spacing:.2px; }
+    :root {
+      --gmail-bg:#f6f8fc;
+      --gmail-surface:#ffffff;
+      --gmail-line:#dadce0;
+      --gmail-line-soft:#edf0f2;
+      --gmail-text:#202124;
+      --gmail-muted:#5f6368;
+      --gmail-blue:#1a73e8;
+      --gmail-pill-bg:#edf3fe;
+      --gmail-pill-border:#d2e3fc;
+      --gmail-pill-text:#0b57d0;
+    }
+    * { box-sizing:border-box; }
+    body { margin:0; font-family: Google Sans, Roboto, Arial, sans-serif; background:var(--gmail-bg); color:var(--gmail-text); }
+    .wrap { max-width:1400px; margin:0 auto; padding:14px 18px 24px; }
+    .head {
+      background:var(--gmail-surface);
+      border:1px solid var(--gmail-line);
+      border-radius:14px;
+      display:flex;
+      align-items:flex-start;
+      justify-content:space-between;
+      gap:12px;
+      margin-bottom:12px;
+      padding:14px 16px;
+    }
+    .title { font-size:26px; font-weight:700; line-height:1.1; }
+    .sub { color:var(--gmail-muted); font-size:13px; margin-top:4px; line-height:1.4; max-width:900px; }
+    .btn {
+      background:#fff;
+      color:#1f1f1f;
+      border:1px solid var(--gmail-line);
+      border-radius:18px;
+      padding:8px 14px;
+      font-size:13px;
+      cursor:pointer;
+    }
+    .btn:hover { background:#f1f3f4; }
+    .meta { color:var(--gmail-muted); font-size:12px; margin:6px 2px 10px; }
+    .top-panels { display:grid; grid-template-columns: 1fr 1fr; gap:12px; margin: 0 0 12px; }
+    .panel {
+      background:var(--gmail-surface);
+      border:1px solid var(--gmail-line);
+      border-radius:12px;
+      padding:12px 14px;
+    }
+    .panel-title {
+      font-size:12px;
+      color:var(--gmail-muted);
+      font-weight:700;
+      margin-bottom:8px;
+      text-transform:uppercase;
+      letter-spacing:.25px;
+    }
     .panel-list { margin:0; padding-left:18px; }
-    .panel-list li { margin:6px 0; font-size:13px; }
-    .label { font-size:12px; color:#5f6368; }
-    .select { border:1px solid #dadce0; background:#fff; border-radius:8px; padding:6px 8px; font-size:13px; color:#202124; }
-    .chip { border:1px solid #d2e3fc; background:#edf3fe; color:#0b57d0; border-radius:999px; padding:4px 10px; font-size:12px; cursor:pointer; }
-    .chip.active { background:#0b57d0; color:#fff; border-color:#0b57d0; }
-    .grid { display:grid; grid-template-columns: 1fr; gap:12px; }
-    .card { background:#fff; border:1px solid #e5e9ef; border-radius:12px; padding:14px; }
-    .subject { font-weight:700; font-size:16px; margin-bottom:6px; }
-    .preview { color:#3c4043; font-size:13px; margin-bottom:10px; }
-    .articles { margin:0; padding-left:18px; }
-    .articles li { margin:6px 0; }
-    .pill { display:inline-block; border:1px solid #d2e3fc; color:#0b57d0; background:#edf3fe; border-radius:999px; padding:2px 8px; font-size:11px; margin-right:6px; margin-bottom:5px; }
-    .empty { background:#fff; border:1px solid #e5e9ef; border-radius:12px; padding:18px; color:#5f6368; }
-    a { color:#0b57d0; text-decoration:none; }
+    .panel-list li { margin:6px 0; font-size:14px; line-height:1.35; }
+    .toolbar {
+      background:var(--gmail-surface);
+      border:1px solid var(--gmail-line);
+      border-radius:12px;
+      display:flex;
+      flex-wrap:wrap;
+      align-items:center;
+      gap:8px;
+      margin-bottom:12px;
+      padding:10px 12px;
+    }
+    .label { font-size:12px; color:var(--gmail-muted); font-weight:600; }
+    .select {
+      border:1px solid var(--gmail-line);
+      background:#fff;
+      border-radius:8px;
+      padding:7px 10px;
+      font-size:13px;
+      color:var(--gmail-text);
+      min-width:170px;
+    }
+    .chip {
+      border:1px solid var(--gmail-pill-border);
+      background:var(--gmail-pill-bg);
+      color:var(--gmail-pill-text);
+      border-radius:999px;
+      padding:5px 10px;
+      font-size:12px;
+      font-weight:600;
+      cursor:pointer;
+    }
+    .chip.active { background:var(--gmail-blue); color:#fff; border-color:var(--gmail-blue); }
+    .list-wrap {
+      background:var(--gmail-surface);
+      border:1px solid var(--gmail-line);
+      border-radius:14px;
+      overflow:hidden;
+    }
+    .email-item {
+      border-bottom:1px solid var(--gmail-line-soft);
+      padding:14px 16px;
+      transition:background-color 0.12s;
+    }
+    .email-item:last-child { border-bottom:none; }
+    .email-item:hover { background:#f6f9fe; }
+    .email-header { display:flex; align-items:center; gap:8px; margin-bottom:4px; }
+    .email-from {
+      flex:1;
+      min-width:0;
+      font-size:16px;
+      font-weight:700;
+      color:var(--gmail-text);
+      line-height:1.3;
+    }
+    .email-date {
+      white-space:nowrap;
+      font-size:12px;
+      color:var(--gmail-muted);
+    }
+    .email-subject {
+      font-size:13px;
+      color:#3c4043;
+      margin-bottom:8px;
+      line-height:1.4;
+    }
+    .email-meta-row {
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:10px;
+      margin-bottom:8px;
+    }
+    .email-categories { display:flex; flex-wrap:wrap; gap:6px; }
+    .pill {
+      display:inline-block;
+      border:1px solid var(--gmail-pill-border);
+      color:var(--gmail-pill-text);
+      background:var(--gmail-pill-bg);
+      border-radius:14px;
+      padding:3px 9px;
+      font-size:11px;
+      font-weight:600;
+    }
+    .preview {
+      color:#3c4043;
+      font-size:13px;
+      line-height:1.4;
+      margin-bottom:8px;
+    }
+    .articles { margin:0; padding-left:20px; }
+    .articles li { margin:6px 0; font-size:14px; line-height:1.35; }
+    .empty {
+      background:var(--gmail-surface);
+      border:1px solid var(--gmail-line);
+      border-radius:14px;
+      padding:20px 18px;
+      color:var(--gmail-muted);
+    }
+    a { color:var(--gmail-pill-text); text-decoration:none; font-weight:600; }
     a:hover { text-decoration:underline; }
+    @media (max-width: 980px) {
+      .top-panels { grid-template-columns: 1fr; }
+      .head { flex-direction:column; align-items:flex-start; }
+    }
   </style>
 </head>
 <body>
@@ -814,16 +947,18 @@ module.exports = {
               return '<li>' + esc(label || '') + '</li>';
             }).join('')
           : '<li>No article items extracted from this email.</li>';
-        return '<div class="card">' +
-          '<div class="subject">' + esc(cleanLabel(entry.subject)) + '</div>' +
-          '<div class="meta">' + esc(fmtDate(entry.date)) + ' · ' + esc(cleanLabel(entry.from)) + '</div>' +
-          '<div class="meta"><strong>' + esc(cleanLabel(entry.newsletter || 'Unknown Newsletter')) + '</strong></div>' +
-          '<div>' + pills + '</div>' +
+        return '<div class="email-item">' +
+          '<div class="email-header">' +
+            '<div class="email-from">' + esc(cleanLabel(entry.subject)) + '</div>' +
+            '<div class="email-date">' + esc(fmtDate(entry.date)) + '</div>' +
+          '</div>' +
+          '<div class="email-subject">' + esc(cleanLabel(entry.newsletter || 'Unknown Newsletter')) + ' · ' + esc(cleanLabel(entry.from)) + '</div>' +
+          '<div class="email-meta-row"><div class="email-categories">' + pills + '</div></div>' +
           '<div class="preview">' + esc(cleanLabel(entry.preview || '')) + '</div>' +
           '<ul class="articles">' + articleHtml + '</ul>' +
         '</div>';
       }).join('');
-      content.className = 'grid';
+      content.className = 'list-wrap';
       content.innerHTML = html;
     }
 
