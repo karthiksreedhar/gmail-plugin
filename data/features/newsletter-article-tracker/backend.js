@@ -49,8 +49,13 @@ module.exports = {
 
     function cleanDisplayText(value) {
       return safeStr(decodeHtmlEntities(value))
+        .replace(/<[^>]*>/g, ' ')
+        .replace(/&nbsp;|&zwnj;|&zwj;|&ndash;|&mdash;/gi, ' ')
         .replace(/https?:\/\/\S+/gi, ' ')
+        .replace(/\bwww\.[^\s<>"']+/gi, ' ')
+        .replace(/mailto:[^\s<>"']+/gi, ' ')
         .replace(/urldefense\.com\S*/gi, ' ')
+        .replace(/__[^_]{8,}__/g, ' ')
         .replace(/[\u2600-\u27BF]/g, ' ')
         .replace(/[^\x20-\x7E]/g, ' ')
         .replace(/\s+/g, ' ')
@@ -736,6 +741,10 @@ module.exports = {
       border-radius:12px;
       padding:12px 14px;
     }
+    .panel.ai-panel {
+      background:#eaf2ff;
+      border-color:#c9dafc;
+    }
     .panel-title {
       font-size:12px;
       color:var(--gmail-muted);
@@ -863,7 +872,7 @@ module.exports = {
     </div>
     <div id="summary" class="meta"></div>
     <div class="top-panels">
-      <div class="panel">
+      <div class="panel ai-panel">
         <div class="panel-title">Top AI Articles (Past Few Days)</div>
         <ul id="aiTopList" class="panel-list"><li>Loading...</li></ul>
       </div>
@@ -894,13 +903,33 @@ module.exports = {
     let upcomingEvents = [];
     let selectedGroup = 'All';
     function esc(v){ return String(v||'').replace(/[&<>"']/g, (s) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',\"'\":'&#39;'}[s])); }
-    function cleanLabel(v){
+    function decodeEntities(v){
       return String(v || '')
+        .replace(/&amp;/g, '&')
+        .replace(/&#39;/g, "'")
+        .replace(/&#x27;/gi, "'")
+        .replace(/&#34;/g, '"')
+        .replace(/&quot;/g, '"')
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>')
+        .replace(/&nbsp;/gi, ' ');
+    }
+    function cleanLabel(v){
+      return decodeEntities(v)
+        .replace(/<[^>]*>/g, ' ')
         .replace(/https?:\\/\\/\\S+/gi, ' ')
+        .replace(/\\bwww\\.[^\\s<>"']+/gi, ' ')
+        .replace(/mailto:[^\\s<>"']+/gi, ' ')
         .replace(/urldefense\\.com\\S*/gi, ' ')
+        .replace(/__[^_]{8,}__/g, ' ')
         .replace(/[^\\x20-\\x7E]/g, ' ')
         .replace(/\\s+/g, ' ')
         .trim();
+    }
+    function looksLikeRawUrlText(v){
+      const text = String(v || '').trim().toLowerCase();
+      if (!text) return false;
+      return /^https?:\\/\\//.test(text) || /^www\\./.test(text) || text.includes('urldefense.proofpoint');
     }
     function fmtDate(v){
       const d = new Date(v || 0);
@@ -940,13 +969,16 @@ module.exports = {
         const pills = (Array.isArray(entry.categories) ? entry.categories : []).slice(0, 5)
           .map(c => '<span class="pill">' + esc(cleanLabel(c)) + '</span>').join('');
         const articles = Array.isArray(entry.articles) ? entry.articles : [];
-        const articleHtml = articles.length
+        const articleHtmlRaw = articles.length
           ? articles.map(a => {
               const label = cleanLabel(a.title || '');
-              if (a.url) return '<li><a href="' + esc(a.url) + '" target="_blank" rel="noopener">' + esc(label || 'Read article') + '</a></li>';
-              return '<li>' + esc(label || '') + '</li>';
-            }).join('')
+              const safeLabel = looksLikeRawUrlText(label) ? '' : label;
+              if (a.url) return '<li><a href="' + esc(a.url) + '" target="_blank" rel="noopener">' + esc(safeLabel || 'Read article') + '</a></li>';
+              if (!safeLabel) return '';
+              return '<li>' + esc(safeLabel) + '</li>';
+            }).filter(Boolean).join('')
           : '<li>No article items extracted from this email.</li>';
+        const articleHtml = articleHtmlRaw || '<li>No article items extracted from this email.</li>';
         return '<div class="email-item">' +
           '<div class="email-header">' +
             '<div class="email-from">' + esc(cleanLabel(entry.subject)) + '</div>' +
