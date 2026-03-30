@@ -218,6 +218,90 @@ module.exports = {
       return (firstLine || 'No preview available').slice(0, 220);
     }
 
+    const REGION_TERMS = [
+      'United States', 'US', 'USA', 'North America', 'Latin America', 'South America',
+      'Europe', 'European Union', 'UK', 'United Kingdom', 'Germany', 'France', 'Italy', 'Spain',
+      'Middle East', 'UAE', 'Saudi Arabia', 'Israel', 'Turkey',
+      'Africa', 'South Africa',
+      'Asia', 'China', 'Japan', 'India', 'Singapore', 'South Korea', 'Taiwan', 'Hong Kong',
+      'Australia', 'New Zealand'
+    ];
+
+    const TICKER_STOPWORDS = new Set([
+      'THE', 'AND', 'FOR', 'WITH', 'FROM', 'THIS', 'THAT', 'WILL', 'HAVE', 'YOUR', 'YOU',
+      'USD', 'EUR', 'CEO', 'CFO', 'GDP', 'ETF', 'IPO', 'SEC', 'API', 'AI', 'ML', 'LLM',
+      'NEWS', 'UPDATE', 'TODAY', 'WEEK', 'NOW', 'NEW', 'ALL', 'ANY', 'NOT', 'ARE', 'HAS'
+    ]);
+
+    function normalizeDisplayRegion(term) {
+      const map = {
+        usa: 'USA',
+        us: 'US',
+        uk: 'UK',
+        uae: 'UAE',
+        'united states': 'United States',
+        'united kingdom': 'United Kingdom',
+        'european union': 'European Union',
+        'north america': 'North America',
+        'south america': 'South America',
+        'latin america': 'Latin America',
+        'middle east': 'Middle East',
+        'south korea': 'South Korea',
+        'new zealand': 'New Zealand',
+        'hong kong': 'Hong Kong'
+      };
+      const key = safeStr(term).toLowerCase();
+      if (map[key]) return map[key];
+      return safeStr(term)
+        .split(/\s+/)
+        .filter(Boolean)
+        .map(w => w[0] ? (w[0].toUpperCase() + w.slice(1).toLowerCase()) : w)
+        .join(' ');
+    }
+
+    function extractKeywordsFromEntry(email, previewText) {
+      const rawText = [
+        safeStr(email?.subject),
+        safeStr(previewText),
+        safeStr(email?.snippet),
+        stripHtml(email?.body || ''),
+        stripHtml(email?.originalBody || '')
+      ].filter(Boolean).join('\n');
+
+      const keywords = [];
+      const seen = new Set();
+
+      const tickerRegex = /(?:\$|\b)([A-Z]{1,5})(?=\b)/g;
+      let m;
+      while ((m = tickerRegex.exec(rawText)) !== null) {
+        const ticker = safeStr(m[1]).toUpperCase();
+        if (!ticker || TICKER_STOPWORDS.has(ticker)) continue;
+        if (/^\d+$/.test(ticker)) continue;
+        const key = `ticker:${ticker}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        keywords.push({ type: 'ticker', value: ticker, label: `$${ticker}` });
+        if (keywords.length >= 12) break;
+      }
+
+      const lowerText = rawText.toLowerCase();
+      for (const term of REGION_TERMS) {
+        const lowerTerm = term.toLowerCase();
+        if (!lowerTerm) continue;
+        const escaped = lowerTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const re = new RegExp(`\\b${escaped}\\b`, 'i');
+        if (!re.test(lowerText)) continue;
+        const display = normalizeDisplayRegion(term);
+        const key = `region:${display.toLowerCase()}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        keywords.push({ type: 'region', value: display, label: display });
+        if (keywords.length >= 20) break;
+      }
+
+      return keywords.slice(0, 20);
+    }
+
     async function fetchPageHtml(url, timeoutMs = 8000) {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -418,6 +502,7 @@ ${articleText}`
       const entries = selected.slice(0, 40).map((email, index) => {
         const categories = getEmailCategories(email);
         const category = categories.find(c => c.toLowerCase().includes('newsletter')) || categories[0] || 'Uncategorized';
+        const preview = extractPreview(email);
         return {
           rank: index + 1,
           id: safeStr(email.id),
@@ -425,8 +510,9 @@ ${articleText}`
           from: safeStr(email.originalFrom || email.from) || 'Unknown sender',
           date: safeStr(email.date) || null,
           category,
-          preview: extractPreview(email),
-          links: extractLinks(email)
+          preview,
+          links: extractLinks(email),
+          keywords: extractKeywordsFromEntry(email, preview)
         };
       });
 
@@ -550,6 +636,48 @@ ${articleText}`
     }
     .stat .k { color: var(--term-dim); font-size: 11px; }
     .stat .v { margin-top: 4px; font-size: 18px; color: var(--term-accent); font-weight: 700; }
+    .filters {
+      background: var(--term-panel);
+      border: 1px solid #2b2b2b;
+      margin-bottom: 12px;
+      padding: 10px 12px;
+    }
+    .filters-head {
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:10px;
+      margin-bottom:8px;
+    }
+    .filters-title {
+      color: var(--term-dim);
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: .6px;
+    }
+    .chips {
+      display:flex;
+      flex-wrap:wrap;
+      gap:6px;
+    }
+    .chip {
+      border:1px solid #3a3a3a;
+      background:#111;
+      color:#d9d9d9;
+      padding:4px 8px;
+      font-size:11px;
+      cursor:pointer;
+    }
+    .chip:hover {
+      border-color: var(--term-accent);
+      color: var(--term-accent);
+    }
+    .chip.active {
+      border-color: var(--term-accent);
+      color: #111;
+      background: var(--term-accent);
+      font-weight:700;
+    }
     .grid {
       display: grid;
       grid-template-columns: minmax(420px, 1fr) minmax(420px, 1fr);
@@ -665,6 +793,14 @@ ${articleText}`
       <div class="stat"><div class="k">Match Mode</div><div id="statMode" class="v">HEUR</div></div>
     </section>
 
+    <section class="filters">
+      <div class="filters-head">
+        <span class="filters-title">Keyword Filter (Tickers + Regions)</span>
+        <button id="clearFilterBtn" class="btn">Clear Filter</button>
+      </div>
+      <div id="keywordChips" class="chips"></div>
+    </section>
+
     <section class="grid">
       <div class="panel">
         <div class="panel-head">
@@ -686,7 +822,7 @@ ${articleText}`
   </div>
 
   <script>
-    const state = { entries: [], selectedId: null, summariesById: {}, summarizeBusyById: {} };
+    const state = { entries: [], selectedId: null, summariesById: {}, summarizeBusyById: {}, activeKeyword: null };
     const listEl = document.getElementById('list');
     const detailEl = document.getElementById('detail');
     const listStatusEl = document.getElementById('listStatus');
@@ -697,6 +833,8 @@ ${articleText}`
     const statModeEl = document.getElementById('statMode');
     const refreshBtn = document.getElementById('refreshBtn');
     const closeBtn = document.getElementById('closeBtn');
+    const keywordChipsEl = document.getElementById('keywordChips');
+    const clearFilterBtn = document.getElementById('clearFilterBtn');
 
     function esc(v) {
       return String(v || '').replace(/[&<>"']/g, s => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[s]));
@@ -714,12 +852,140 @@ ${articleText}`
       });
     }
 
-    function renderList() {
-      if (!state.entries.length) {
-        listEl.innerHTML = '<div class="empty">No newsletters found. Try refreshing after sync.</div>';
+    const REGION_TERMS = [
+      'united states', 'us', 'usa', 'north america', 'latin america', 'south america',
+      'europe', 'european union', 'uk', 'united kingdom', 'germany', 'france', 'italy', 'spain',
+      'middle east', 'uae', 'saudi arabia', 'israel', 'turkey',
+      'africa', 'south africa',
+      'asia', 'china', 'japan', 'india', 'singapore', 'south korea', 'taiwan', 'hong kong',
+      'australia', 'new zealand'
+    ];
+    const TICKER_STOPWORDS = new Set([
+      'THE','AND','FOR','WITH','FROM','THIS','THAT','WILL','HAVE','YOUR','YOU',
+      'USD','EUR','CEO','CFO','GDP','ETF','IPO','SEC','API','AI','ML','LLM',
+      'NEWS','UPDATE','TODAY','WEEK','NOW','NEW','ALL','ANY','NOT','ARE','HAS'
+    ]);
+
+    function keywordKey(k) {
+      return String(k?.type || '') + ':' + String(k?.value || '');
+    }
+
+    function extractKeywordsFromText(text) {
+      const source = String(text || '');
+      const out = [];
+      const seen = new Set();
+
+      const tickerRegex = /(?:\\$|\\b)([A-Z]{1,5})(?=\\b)/g;
+      let m;
+      while ((m = tickerRegex.exec(source)) !== null) {
+        const ticker = String(m[1] || '').toUpperCase();
+        if (!ticker || TICKER_STOPWORDS.has(ticker) || /^\\d+$/.test(ticker)) continue;
+        const key = 'ticker:' + ticker;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push({ type: 'ticker', value: ticker, label: '$' + ticker });
+      }
+
+      function escapeRegex(value) {
+        return String(value || '').replace(/[-\/\\^*+?.()|[\]{}]/g, '\\$&');
+      }
+
+      const lower = source.toLowerCase();
+      for (const term of REGION_TERMS) {
+        const escaped = escapeRegex(term);
+        const re = new RegExp('\\\\b' + escaped + '\\\\b', 'i');
+        if (!re.test(lower)) continue;
+        const label = term.split(/\\s+/).map(w => w ? (w[0].toUpperCase() + w.slice(1)) : w).join(' ');
+        const key = 'region:' + label.toLowerCase();
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push({ type: 'region', value: label, label });
+      }
+      return out;
+    }
+
+    function ensureEntryKeywords(entry) {
+      const base = Array.isArray(entry?.keywords) ? entry.keywords : [];
+      const baseSafe = base
+        .map(k => ({
+          type: String(k?.type || '').toLowerCase(),
+          value: String(k?.value || '').trim(),
+          label: String(k?.label || k?.value || '').trim()
+        }))
+        .filter(k => k.type && k.value);
+
+      if (baseSafe.length) return baseSafe;
+      const inferred = extractKeywordsFromText([entry?.subject, entry?.preview].filter(Boolean).join('\\n'));
+      return inferred.slice(0, 20);
+    }
+
+    function filteredEntries() {
+      if (!state.activeKeyword) return state.entries;
+      const key = keywordKey(state.activeKeyword);
+      return state.entries.filter(entry => ensureEntryKeywords(entry).some(k => keywordKey(k) === key));
+    }
+
+    function renderKeywordChips() {
+      const counts = new Map();
+      for (const entry of state.entries) {
+        const keywords = ensureEntryKeywords(entry);
+        for (const keyword of keywords) {
+          const key = keywordKey(keyword);
+          if (!key || key === ':') continue;
+          const prev = counts.get(key) || { keyword, count: 0 };
+          prev.count += 1;
+          counts.set(key, prev);
+        }
+      }
+
+      const ordered = Array.from(counts.values())
+        .sort((a, b) => b.count - a.count || String(a.keyword.label).localeCompare(String(b.keyword.label)))
+        .slice(0, 24);
+
+      if (!ordered.length) {
+        keywordChipsEl.innerHTML = '<span class="meta">No ticker/region terms found yet.</span>';
         return;
       }
-      listEl.innerHTML = state.entries.map(entry => {
+
+      keywordChipsEl.innerHTML = ordered.map(item => {
+        const keyword = item.keyword || {};
+        const key = keywordKey(keyword);
+        const active = state.activeKeyword && keywordKey(state.activeKeyword) === key;
+        const typeLabel = keyword.type === 'ticker' ? 'Ticker' : 'Region';
+        return '<button class="chip ' + (active ? 'active' : '') + '" data-key="' + esc(key) + '" title="' + esc(typeLabel) + '">' +
+          esc(keyword.label || keyword.value || key) + ' (' + Number(item.count || 0) + ')' +
+        '</button>';
+      }).join('');
+
+      keywordChipsEl.querySelectorAll('.chip').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const key = String(btn.getAttribute('data-key') || '');
+          if (!key) return;
+          if (state.activeKeyword && keywordKey(state.activeKeyword) === key) {
+            state.activeKeyword = null;
+          } else {
+            const parts = key.split(':');
+            state.activeKeyword = { type: parts[0] || '', value: parts.slice(1).join(':') || '' };
+          }
+          renderList();
+          renderKeywordChips();
+        });
+      });
+    }
+
+    function renderList() {
+      const visible = filteredEntries();
+      if (!visible.length) {
+        listEl.innerHTML = '<div class="empty">No newsletters found. Try refreshing after sync.</div>';
+        if (state.activeKeyword) {
+          listStatusEl.textContent = 'No keyword matches';
+        }
+        return;
+      }
+      if (!visible.some(e => String(e.id) === String(state.selectedId))) {
+        state.selectedId = visible[0].id;
+      }
+      listEl.innerHTML = visible.map(entry => {
         const active = state.selectedId === entry.id ? 'active' : '';
         return (
           '<div class="row ' + active + '" data-id="' + esc(entry.id) + '">' +
@@ -732,6 +998,8 @@ ${articleText}`
           '</div>'
         );
       }).join('');
+
+      listStatusEl.textContent = visible.length + ' shown' + (state.activeKeyword ? ' (filtered)' : '');
 
       listEl.querySelectorAll('.row').forEach(row => {
         row.addEventListener('click', () => {
@@ -825,6 +1093,10 @@ ${articleText}`
           throw new Error(data.error || 'Failed to load feed');
         }
         state.entries = Array.isArray(data.entries) ? data.entries : [];
+        state.entries = state.entries.map(entry => ({
+          ...entry,
+          keywords: ensureEntryKeywords(entry)
+        }));
         if (!state.selectedId && state.entries.length) state.selectedId = state.entries[0].id;
         if (state.selectedId && !state.entries.some(e => String(e.id) === String(state.selectedId))) {
           state.selectedId = state.entries.length ? state.entries[0].id : null;
@@ -833,6 +1105,7 @@ ${articleText}`
         statScannedEl.textContent = String(data.totalScanned || 0);
         statMatchedEl.textContent = String(data.matchedCount || 0);
         statModeEl.textContent = data.categoryMatchUsed ? 'CATEGORY' : 'HEUR';
+        renderKeywordChips();
         renderList();
         if (state.selectedId) renderDetail(state.selectedId);
         if (!state.entries.length) {
@@ -853,6 +1126,12 @@ ${articleText}`
 
     refreshBtn.addEventListener('click', loadFeed);
     closeBtn.addEventListener('click', () => window.close());
+    clearFilterBtn.addEventListener('click', () => {
+      state.activeKeyword = null;
+      renderKeywordChips();
+      renderList();
+      if (state.selectedId) renderDetail(state.selectedId);
+    });
     loadFeed();
   </script>
 </body>
