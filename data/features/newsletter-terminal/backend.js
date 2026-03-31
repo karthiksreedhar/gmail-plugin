@@ -271,17 +271,37 @@ module.exports = {
       const keywords = [];
       const seen = new Set();
 
-      const tickerRegex = /(?:\$|(?:NASDAQ|NYSE|NYSEARCA|AMEX)\s*:\s*)([A-Z]{1,5})\b/g;
-      let m;
-      while ((m = tickerRegex.exec(rawText)) !== null) {
-        const ticker = safeStr(m[1]).toUpperCase();
-        if (!ticker || TICKER_STOPWORDS.has(ticker)) continue;
-        if (/^\d+$/.test(ticker)) continue;
+      function addTicker(token) {
+        const ticker = safeStr(token).toUpperCase();
+        if (!ticker || TICKER_STOPWORDS.has(ticker)) return;
+        if (/^\d+$/.test(ticker)) return;
         const key = `ticker:${ticker}`;
-        if (seen.has(key)) continue;
+        if (seen.has(key)) return;
         seen.add(key);
         keywords.push({ type: 'ticker', value: ticker, label: `$${ticker}` });
+      }
+
+      const explicitTickerRegex = /(?:\$|(?:NASDAQ|NYSE|NYSEARCA|AMEX)\s*:\s*)([A-Z]{1,5})\b/g;
+      let m;
+      while ((m = explicitTickerRegex.exec(rawText)) !== null) {
+        addTicker(m[1]);
         if (keywords.length >= 12) break;
+      }
+
+      if (keywords.length < 12) {
+        const contextualTickerRegex = /\b([A-Z]{2,5})\b(?=\s+(?:shares?|stock|stocks|surges?|rises?|falls?|drops?|jumps?|slips?|gains?|sinks?|soars?|plunges?|up|down|\d+%))/g;
+        while ((m = contextualTickerRegex.exec(rawText)) !== null) {
+          addTicker(m[1]);
+          if (keywords.length >= 12) break;
+        }
+      }
+
+      if (keywords.length < 12) {
+        const parentheticalTickerRegex = /\(([A-Z]{2,5})\)/g;
+        while ((m = parentheticalTickerRegex.exec(rawText)) !== null) {
+          addTicker(m[1]);
+          if (keywords.length >= 12) break;
+        }
       }
 
       const lowerText = rawText.toLowerCase();
@@ -896,15 +916,29 @@ ${articleText}`
       const out = [];
       const seen = new Set();
 
-      const tickerRegex = /(?:\\$|(?:NASDAQ|NYSE|NYSEARCA|AMEX)\\s*:\\s*)([A-Z]{1,5})\\b/g;
-      let m;
-      while ((m = tickerRegex.exec(source)) !== null) {
-        const ticker = String(m[1] || '').toUpperCase();
-        if (!ticker || TICKER_STOPWORDS.has(ticker) || /^\\d+$/.test(ticker)) continue;
+      function addTicker(token) {
+        const ticker = String(token || '').toUpperCase();
+        if (!ticker || TICKER_STOPWORDS.has(ticker) || /^\\d+$/.test(ticker)) return;
         const key = 'ticker:' + ticker;
-        if (seen.has(key)) continue;
+        if (seen.has(key)) return;
         seen.add(key);
         out.push({ type: 'ticker', value: ticker, label: '$' + ticker });
+      }
+
+      const explicitTickerRegex = /(?:\\$|(?:NASDAQ|NYSE|NYSEARCA|AMEX)\\s*:\\s*)([A-Z]{1,5})\\b/g;
+      let m;
+      while ((m = explicitTickerRegex.exec(source)) !== null) {
+        addTicker(m[1]);
+      }
+
+      const contextualTickerRegex = /\\b([A-Z]{2,5})\\b(?=\\s+(?:shares?|stock|stocks|surges?|rises?|falls?|drops?|jumps?|slips?|gains?|sinks?|soars?|plunges?|up|down|\\d+%))/g;
+      while ((m = contextualTickerRegex.exec(source)) !== null) {
+        addTicker(m[1]);
+      }
+
+      const parentheticalTickerRegex = /\\(([A-Z]{2,5})\\)/g;
+      while ((m = parentheticalTickerRegex.exec(source)) !== null) {
+        addTicker(m[1]);
       }
 
       function escapeRegex(value) {
