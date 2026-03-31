@@ -232,6 +232,15 @@ module.exports = {
       'USD', 'EUR', 'CEO', 'CFO', 'GDP', 'ETF', 'IPO', 'SEC', 'API', 'AI', 'ML', 'LLM',
       'NEWS', 'UPDATE', 'TODAY', 'WEEK', 'NOW', 'NEW', 'ALL', 'ANY', 'NOT', 'ARE', 'HAS'
     ]);
+    const US_TICKER_ALLOWLIST_TEXT = `
+AAL AAPL ABBV ABC ABT ACN ADBE ADP AIG ALL AMAT AMD AMGN AMZN ANET APD APH ARE ATO AVGO AWK AXP AZO BA BAC BDX BIIB BKNG BLK BMY BRK.B BSX C CAH CAT CB CDNS CHTR CI CL CLX CMCSA CMG CNC COF COP COST CPRT CRM CSCO CSX CTAS CTSH CVS CVX DAL DE DG DHR DIS DLTR DOV DUK ECL ED EFX EIX EL EMR EQIX ETN EW EXC F FAST FCX FDX FIS FISV GD GE GILD GIS GLW GM GOOG GOOGL GS HAL HCA HD HIG HLT HON HPE HPQ HUM IBM ICE IDXX ILMN INTC IT ITW JNJ JPM KHC KMB KMI KO KR LHX LIN LKQ LLY LMT LOW LRCX LUV LVS LYFT MA MAR MAS MCD MCK MCO MDLZ MDT MET META MGM MKC MMC MMM MO MRK MS MSCI MSFT MTD MU NDAQ NEE NEM NFLX NI NOC NOW NRG NSC NUE NVDA ODFL OKE ORCL ORLY PAYX PCAR PEAK PEG PEP PFE PG PH PKG PLD PM PNC PNR PPG PPL PRU PSA PSX PTC PWR PYPL QCOM REGN RMD ROK ROP ROST RTX SBUX SCHW SHW SLB SPGI STE STT STZ SWK SYK SYY T TFC TFX TGT TJX TMO TRV TSCO TSN TT TTWO TXN UAL UBER UNH UNP UPS URI USB V VFC VLO VMC VRSK VRTX VZ WAT WBA WDC WEC WELL WFC WMB WMT WRB WTW WY WYNN XEL XOM XYL YUM ZBH ZBRA ZTS
+AAPL ABNB ADBE ADI ADP ADSK AEP AMAT AMD AMGN AMZN ANSS ASML ATVI AVGO AZN BIIB BKNG CDNS CEG CHTR CMCSA COST CPRT CRWD CSCO CSGP CSX CTAS CTSH DDOG DLTR DXCM EA EBAY ENPH EXC FANG FAST FTNT GILD GOOG GOOGL HON IDXX ILMN INTC INTU ISRG JD KDP KHC KLAC LCID LRCX LULU MAR MCHP MDLZ MELI META MNST MRNA MRVL MSFT MTCH MU NFLX NTES NVDA NXPI ODFL ON ORLY PANW PAYX PCAR PDD PEP PYPL QCOM REGN ROST SBUX SGEN SIRI SNPS TEAM TMUS TSLA TXN VRSK VRTX WBA WDAY XEL ZS AAPL AMGN AXP BA CAT CRM CSCO CVX DIS DOW GS HD HON IBM INTC JNJ JPM KO MCD MMM MRK MSFT NKE PG TRV UNH V VZ WBA WMT
+`;
+    const US_TICKER_ALLOWLIST = new Set(US_TICKER_ALLOWLIST_TEXT.split(/\s+/).filter(Boolean));
+
+    function normalizeTickerCandidate(raw) {
+      return safeStr(raw).toUpperCase().replace(/-/g, '.');
+    }
 
     function normalizeDisplayRegion(term) {
       const map = {
@@ -272,16 +281,17 @@ module.exports = {
       const seen = new Set();
 
       function addTicker(token) {
-        const ticker = safeStr(token).toUpperCase();
+        const ticker = normalizeTickerCandidate(token);
         if (!ticker || TICKER_STOPWORDS.has(ticker)) return;
         if (/^\d+$/.test(ticker)) return;
+        if (!US_TICKER_ALLOWLIST.has(ticker)) return;
         const key = `ticker:${ticker}`;
         if (seen.has(key)) return;
         seen.add(key);
         keywords.push({ type: 'ticker', value: ticker, label: `$${ticker}` });
       }
 
-      const explicitTickerRegex = /(?:\$|(?:NASDAQ|NYSE|NYSEARCA|AMEX)\s*:\s*)([A-Z]{1,5})\b/g;
+      const explicitTickerRegex = /(?:\$|(?:NASDAQ|NYSE|NYSEARCA|AMEX)\s*:\s*)([A-Z]{1,5}(?:\.[A-Z])?)\b/g;
       let m;
       while ((m = explicitTickerRegex.exec(rawText)) !== null) {
         addTicker(m[1]);
@@ -289,7 +299,7 @@ module.exports = {
       }
 
       if (keywords.length < 12) {
-        const contextualTickerRegex = /\b([A-Z]{2,5})\b(?=\s+(?:shares?|stock|stocks|surges?|rises?|falls?|drops?|jumps?|slips?|gains?|sinks?|soars?|plunges?|up|down|\d+%))/g;
+        const contextualTickerRegex = /\b([A-Z]{2,5}(?:\.[A-Z])?)\b(?=\s+(?:shares?|stock|stocks|surges?|rises?|falls?|drops?|jumps?|slips?|gains?|sinks?|soars?|plunges?|up|down|\d+%))/g;
         while ((m = contextualTickerRegex.exec(rawText)) !== null) {
           addTicker(m[1]);
           if (keywords.length >= 12) break;
@@ -297,7 +307,7 @@ module.exports = {
       }
 
       if (keywords.length < 12) {
-        const parentheticalTickerRegex = /\(([A-Z]{2,5})\)/g;
+        const parentheticalTickerRegex = /\(([A-Z]{2,5}(?:\.[A-Z])?)\)/g;
         while ((m = parentheticalTickerRegex.exec(rawText)) !== null) {
           addTicker(m[1]);
           if (keywords.length >= 12) break;
@@ -906,6 +916,11 @@ ${articleText}`
       'USD','EUR','CEO','CFO','GDP','ETF','IPO','SEC','API','AI','ML','LLM',
       'NEWS','UPDATE','TODAY','WEEK','NOW','NEW','ALL','ANY','NOT','ARE','HAS'
     ]);
+    const US_TICKER_ALLOWLIST = new Set(${JSON.stringify('AAL AAPL ABBV ABC ABT ACN ADBE ADP AIG ALL AMAT AMD AMGN AMZN ANET APD APH ARE ATO AVGO AWK AXP AZO BA BAC BDX BIIB BKNG BLK BMY BRK.B BSX C CAH CAT CB CDNS CHTR CI CL CLX CMCSA CMG CNC COF COP COST CPRT CRM CSCO CSX CTAS CTSH CVS CVX DAL DE DG DHR DIS DLTR DOV DUK ECL ED EFX EIX EL EMR EQIX ETN EW EXC F FAST FCX FDX FIS FISV GD GE GILD GIS GLW GM GOOG GOOGL GS HAL HCA HD HIG HLT HON HPE HPQ HUM IBM ICE IDXX ILMN INTC IT ITW JNJ JPM KHC KMB KMI KO KR LHX LIN LKQ LLY LMT LOW LRCX LUV LVS LYFT MA MAR MAS MCD MCK MCO MDLZ MDT MET META MGM MKC MMC MMM MO MRK MS MSCI MSFT MTD MU NDAQ NEE NEM NFLX NI NOC NOW NRG NSC NUE NVDA ODFL OKE ORCL ORLY PAYX PCAR PEAK PEG PEP PFE PG PH PKG PLD PM PNC PNR PPG PPL PRU PSA PSX PTC PWR PYPL QCOM REGN RMD ROK ROP ROST RTX SBUX SCHW SHW SLB SPGI STE STT STZ SWK SYK SYY T TFC TFX TGT TJX TMO TRV TSCO TSN TT TTWO TXN UAL UBER UNH UNP UPS URI USB V VFC VLO VMC VRSK VRTX VZ WAT WBA WDC WEC WELL WFC WMB WMT WRB WTW WY WYNN XEL XOM XYL YUM ZBH ZBRA ZTS AAPL ABNB ADBE ADI ADP ADSK AEP AMAT AMD AMGN AMZN ANSS ASML ATVI AVGO AZN BIIB BKNG CDNS CEG CHTR CMCSA COST CPRT CRWD CSCO CSGP CSX CTAS CTSH DDOG DLTR DXCM EA EBAY ENPH EXC FANG FAST FTNT GILD GOOG GOOGL HON IDXX ILMN INTC INTU ISRG JD KDP KHC KLAC LCID LRCX LULU MAR MCHP MDLZ MELI META MNST MRNA MRVL MSFT MTCH MU NFLX NTES NVDA NXPI ODFL ON ORLY PANW PAYX PCAR PDD PEP PYPL QCOM REGN ROST SBUX SGEN SIRI SNPS TEAM TMUS TSLA TXN VRSK VRTX WBA WDAY XEL ZS AAPL AMGN AXP BA CAT CRM CSCO CVX DIS DOW GS HD HON IBM INTC JNJ JPM KO MCD MMM MRK MSFT NKE PG TRV UNH V VZ WBA WMT')}.split(/\\s+/).filter(Boolean));
+
+    function normalizeTickerCandidate(raw) {
+      return String(raw || '').toUpperCase().replace(/-/g, '.');
+    }
 
     function keywordKey(k) {
       return String(k?.type || '') + ':' + String(k?.value || '');
@@ -917,26 +932,27 @@ ${articleText}`
       const seen = new Set();
 
       function addTicker(token) {
-        const ticker = String(token || '').toUpperCase();
+        const ticker = normalizeTickerCandidate(token);
         if (!ticker || TICKER_STOPWORDS.has(ticker) || /^\\d+$/.test(ticker)) return;
+        if (!US_TICKER_ALLOWLIST.has(ticker)) return;
         const key = 'ticker:' + ticker;
         if (seen.has(key)) return;
         seen.add(key);
         out.push({ type: 'ticker', value: ticker, label: '$' + ticker });
       }
 
-      const explicitTickerRegex = /(?:\\$|(?:NASDAQ|NYSE|NYSEARCA|AMEX)\\s*:\\s*)([A-Z]{1,5})\\b/g;
+      const explicitTickerRegex = /(?:\\$|(?:NASDAQ|NYSE|NYSEARCA|AMEX)\\s*:\\s*)([A-Z]{1,5}(?:\\.[A-Z])?)\\b/g;
       let m;
       while ((m = explicitTickerRegex.exec(source)) !== null) {
         addTicker(m[1]);
       }
 
-      const contextualTickerRegex = /\\b([A-Z]{2,5})\\b(?=\\s+(?:shares?|stock|stocks|surges?|rises?|falls?|drops?|jumps?|slips?|gains?|sinks?|soars?|plunges?|up|down|\\d+%))/g;
+      const contextualTickerRegex = /\\b([A-Z]{2,5}(?:\\.[A-Z])?)\\b(?=\\s+(?:shares?|stock|stocks|surges?|rises?|falls?|drops?|jumps?|slips?|gains?|sinks?|soars?|plunges?|up|down|\\d+%))/g;
       while ((m = contextualTickerRegex.exec(source)) !== null) {
         addTicker(m[1]);
       }
 
-      const parentheticalTickerRegex = /\\(([A-Z]{2,5})\\)/g;
+      const parentheticalTickerRegex = /\\(([A-Z]{2,5}(?:\\.[A-Z])?)\\)/g;
       while ((m = parentheticalTickerRegex.exec(source)) !== null) {
         addTicker(m[1]);
       }
