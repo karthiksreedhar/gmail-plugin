@@ -271,7 +271,7 @@ module.exports = {
       const keywords = [];
       const seen = new Set();
 
-      const tickerRegex = /(?:\$|\b)([A-Z]{1,5})(?=\b)/g;
+      const tickerRegex = /(?:\$|(?:NASDAQ|NYSE|NYSEARCA|AMEX)\s*:\s*)([A-Z]{1,5})\b/g;
       let m;
       while ((m = tickerRegex.exec(rawText)) !== null) {
         const ticker = safeStr(m[1]).toUpperCase();
@@ -660,6 +660,19 @@ ${articleText}`
       flex-wrap:wrap;
       gap:6px;
     }
+    .chip-group {
+      margin-top: 8px;
+    }
+    .chip-group:first-child {
+      margin-top: 0;
+    }
+    .chip-group-title {
+      color: var(--term-dim);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: .5px;
+      margin-bottom: 6px;
+    }
     .chip {
       border:1px solid #3a3a3a;
       background:#111;
@@ -677,6 +690,14 @@ ${articleText}`
       color: #111;
       background: var(--term-accent);
       font-weight:700;
+    }
+    .chip.ticker {
+      border-color: #2f4f73;
+      color: #9ecbff;
+    }
+    .chip.region {
+      border-color: #4b4b4b;
+      color: #d4d4d4;
     }
     .grid {
       display: grid;
@@ -795,10 +816,10 @@ ${articleText}`
 
     <section class="filters">
       <div class="filters-head">
-        <span class="filters-title">Keyword Filter (Tickers + Regions)</span>
+        <span class="filters-title">Keyword Filter (US Tickers + Regions)</span>
         <button id="clearFilterBtn" class="btn">Clear Filter</button>
       </div>
-      <div id="keywordChips" class="chips"></div>
+      <div id="keywordChips"></div>
     </section>
 
     <section class="grid">
@@ -875,7 +896,7 @@ ${articleText}`
       const out = [];
       const seen = new Set();
 
-      const tickerRegex = /(?:\\$|\\b)([A-Z]{1,5})(?=\\b)/g;
+      const tickerRegex = /(?:\\$|(?:NASDAQ|NYSE|NYSEARCA|AMEX)\\s*:\\s*)([A-Z]{1,5})\\b/g;
       let m;
       while ((m = tickerRegex.exec(source)) !== null) {
         const ticker = String(m[1] || '').toUpperCase();
@@ -947,17 +968,27 @@ ${articleText}`
         return;
       }
 
-      keywordChipsEl.innerHTML = ordered.map(item => {
-        const keyword = item.keyword || {};
-        const key = keywordKey(keyword);
-        const active = state.activeKeyword && keywordKey(state.activeKeyword) === key;
-        const typeLabel = keyword.type === 'ticker' ? 'Ticker' : 'Region';
-        return '<button class="chip ' + (active ? 'active' : '') + '" data-key="' + esc(key) + '" title="' + esc(typeLabel) + '">' +
-          esc(keyword.label || keyword.value || key) + ' (' + Number(item.count || 0) + ')' +
-        '</button>';
-      }).join('');
+      const tickerItems = ordered.filter(item => String(item?.keyword?.type || '') === 'ticker');
+      const regionItems = ordered.filter(item => String(item?.keyword?.type || '') === 'region');
 
-      keywordChipsEl.querySelectorAll('.chip').forEach(btn => {
+      function buildGroupHtml(title, items, cls) {
+        if (!items.length) return '';
+        const chipsHtml = items.map(item => {
+          const keyword = item.keyword || {};
+          const key = keywordKey(keyword);
+          const active = state.activeKeyword && keywordKey(state.activeKeyword) === key;
+          return '<button class="chip ' + cls + ' ' + (active ? 'active' : '') + '" data-key="' + esc(key) + '">' +
+            esc(keyword.label || keyword.value || key) + ' (' + Number(item.count || 0) + ')' +
+          '</button>';
+        }).join('');
+        return '<div class="chip-group"><div class="chip-group-title">' + esc(title) + '</div><div class="chips">' + chipsHtml + '</div></div>';
+      }
+
+      keywordChipsEl.innerHTML =
+        buildGroupHtml('US Tickers', tickerItems, 'ticker') +
+        buildGroupHtml('Regions / Countries', regionItems, 'region');
+
+      keywordChipsEl.querySelectorAll('button.chip').forEach(btn => {
         btn.addEventListener('click', () => {
           const key = String(btn.getAttribute('data-key') || '');
           if (!key) return;
