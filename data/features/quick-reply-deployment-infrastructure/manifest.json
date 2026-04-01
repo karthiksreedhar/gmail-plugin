@@ -1,0 +1,11 @@
+{
+  "id": "quick-reply-deployment-infrastructure",
+  "name": "Quick Reply for Deployment Infrastructure Category",
+  "version": "1.0.0",
+  "description": "Adds a 'Quick Reply' button to emails categorized under 'Deployment Infrastructure'. Clicking the button opens a popup displaying 'Test'.",
+  "author": "Feature Generator Agent",
+  "frontend": "frontend.js",
+  "permissions": [
+    "emails:read"
+  ]
+}
