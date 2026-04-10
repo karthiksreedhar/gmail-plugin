@@ -6,7 +6,7 @@
             // Core data access
             getEmails: () => allEmails || [],
             getCurrentFilter: () => currentFilter,
-            getCurrentUser: () => document.getElementById('currentUser')?.textContent || '',
+            getCurrentUser: () => getActualCurrentUserEmail(),
             
             // UI manipulation
             addHeaderButton(label, handler, options = {}) {
@@ -95,6 +95,25 @@
             filterByCategory,
             openEmailThread
         };
+
+        function getActualCurrentUserEmail() {
+            const el = document.getElementById('currentUser');
+            return String(el?.dataset?.actualEmail || el?.textContent || '').trim();
+        }
+
+        function getDisplayEmailForHeader(email) {
+            const normalized = String(email || '').trim().toLowerCase();
+            if (normalized === 'ks4190@columbia.edu') return 'video@gmail.com';
+            return String(email || '').trim();
+        }
+
+        function setCurrentUserHeader(email) {
+            const el = document.getElementById('currentUser');
+            if (!el) return;
+            const actual = String(email || '').trim();
+            el.dataset.actualEmail = actual;
+            el.textContent = getDisplayEmailForHeader(actual);
+        }
         
         /**
          * FEATURE LOADER
@@ -168,7 +187,7 @@
         async function openFeatureGenerator() {
             try {
                 const targetUrl = await getFeatureGeneratorUrl();
-                const currentUserEmail = String(document.getElementById('currentUser')?.textContent || '').trim().toLowerCase();
+                const currentUserEmail = getActualCurrentUserEmail().toLowerCase();
                 const url = new URL(targetUrl);
                 if (currentUserEmail && currentUserEmail.includes('@')) {
                     url.searchParams.set('userEmail', currentUserEmail);
@@ -4802,7 +4821,7 @@ function mapToCurrentCategory(name) {
                 const currentUser = currentUserData.currentUser;
                 
                 // Update current user display
-                document.getElementById('currentUser').textContent = currentUser;
+                setCurrentUserHeader(currentUser);
                 
                 // Populate dropdown
                 const dropdown = document.getElementById('userDropdown');
@@ -4870,7 +4889,7 @@ function mapToCurrentCategory(name) {
                 
                 if (data.success) {
                     // Update UI
-                    currentUserSpan.textContent = userEmail;
+                    setCurrentUserHeader(userEmail);
                     window.currentUserDisplayName = (data.displayName || displayNameFromEmail(userEmail));
                     
                     // Close dropdown
@@ -8978,7 +8997,7 @@ function rejectCurrentEmail() {
                         if (!thread) {
                             const rhs = idToEmail.get(e.id);
                             const pseudoId = `pseudo-${e.id}`;
-                            const fromMe = window.currentUserDisplayName || displayNameFromEmail(document.getElementById('currentUser')?.textContent || '');
+                            const fromMe = window.currentUserDisplayName || displayNameFromEmail(getActualCurrentUserEmail());
                             thread = {
                                 id: pseudoId,
                                 subject: (rhs && rhs.subject) || e.subject || 'No Subject',
@@ -12244,7 +12263,7 @@ function getCategorySeedTokens(name) {
                             map.set(k, (map.get(k) || 0) + 1);
                         };
                         const normalize = s => String(s || '');
-                        const userEmail = (document.getElementById('currentUser')?.textContent || '').toLowerCase();
+                        const userEmail = getActualCurrentUserEmail().toLowerCase();
 
                         for (const t of limitedThreads) {
                             const seenPpl = new Set();
@@ -13544,12 +13563,12 @@ async function renderEmailNotesPreview(el, emailId) {
                 const authStatus = await authStatusResp.json();
 
                 if (authStatus.loggedIn && authStatus.userEmail) {
-                    document.getElementById('currentUser').textContent = authStatus.userEmail;
+                    setCurrentUserHeader(authStatus.userEmail);
                     window.currentUserDisplayName = displayNameFromEmail(authStatus.userEmail);
                 } else {
                     const response = await fetch('/api/current-user');
                     const data = await response.json();
-                    document.getElementById('currentUser').textContent = data.currentUser;
+                    setCurrentUserHeader(data.currentUser);
                     window.currentUserDisplayName = data.displayName || displayNameFromEmail(data.currentUser);
                 }
             } catch (error) {

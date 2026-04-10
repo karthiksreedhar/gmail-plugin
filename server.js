@@ -857,6 +857,90 @@ function normalizeUserEmailForData(email) {
   }
 }
 
+const USER_CATEGORY_RENAME_RULES = {
+  'ks4190@columbia.edu': {
+    'Lydia Chilton': 'Advisor',
+    'Sreedhar Sivakumaran': 'father'
+  }
+};
+
+function getUserCategoryRenameMap(userEmail = CURRENT_USER_EMAIL) {
+  const normalizedEmail = normalizeUserEmailForData(userEmail);
+  const rule = USER_CATEGORY_RENAME_RULES[normalizedEmail] || {};
+  const map = new Map();
+  Object.entries(rule).forEach(([from, to]) => {
+    const fromTrimmed = String(from || '').trim();
+    const toTrimmed = String(to || '').trim();
+    if (!fromTrimmed || !toTrimmed) return;
+    map.set(fromTrimmed.toLowerCase(), toTrimmed);
+  });
+  return map;
+}
+
+function mapCategoryNameForUser(name, userEmail = CURRENT_USER_EMAIL) {
+  const raw = String(name || '').trim();
+  if (!raw) return '';
+  const renameMap = getUserCategoryRenameMap(userEmail);
+  return renameMap.get(raw.toLowerCase()) || raw;
+}
+
+function mapCategoryListForUser(categories, userEmail = CURRENT_USER_EMAIL) {
+  const seen = new Set();
+  const out = [];
+  (Array.isArray(categories) ? categories : []).forEach((name) => {
+    const mapped = mapCategoryNameForUser(name, userEmail);
+    const key = String(mapped || '').toLowerCase();
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    out.push(mapped);
+  });
+  return out;
+}
+
+function mapEmailCategoriesForUser(email, userEmail = CURRENT_USER_EMAIL) {
+  const rec = email && typeof email === 'object' ? { ...email } : {};
+  const primary = mapCategoryNameForUser(rec.category || '', userEmail);
+  const extras = Array.isArray(rec.categories) ? rec.categories : [];
+  const mapped = mapCategoryListForUser([...extras, primary], userEmail);
+  rec.category = primary || (mapped[0] || rec.category || '');
+  rec.categories = mapped;
+  return rec;
+}
+
+function mapCategoryGuidelinesForUser(categories, userEmail = CURRENT_USER_EMAIL) {
+  const byKey = new Map();
+  (Array.isArray(categories) ? categories : []).forEach((item) => {
+    const mappedName = mapCategoryNameForUser(item?.name || '', userEmail);
+    const key = String(mappedName || '').toLowerCase();
+    if (!key) return;
+    if (!byKey.has(key)) {
+      byKey.set(key, {
+        name: mappedName,
+        notes: String(item?.notes || '')
+      });
+      return;
+    }
+    const prev = byKey.get(key);
+    if (!prev.notes && item?.notes) {
+      prev.notes = String(item.notes);
+    }
+  });
+  return Array.from(byKey.values());
+}
+
+function mapCategorySummariesForUser(summaries, userEmail = CURRENT_USER_EMAIL) {
+  const source = (summaries && typeof summaries === 'object') ? summaries : {};
+  const out = {};
+  Object.entries(source).forEach(([name, text]) => {
+    const mappedName = mapCategoryNameForUser(name, userEmail);
+    if (!mappedName) return;
+    const existing = out[mappedName];
+    const incoming = String(text || '');
+    out[mappedName] = (!existing || incoming.length >= String(existing).length) ? incoming : existing;
+  });
+  return out;
+}
+
 // Function to get user-specific paths
 function getUserPaths(userEmail = CURRENT_USER_EMAIL) {
   return getUserPathsWithRoot(userEmail, USER_DATA_ROOT);
@@ -1844,14 +1928,14 @@ function loadEmailData(filePath) {
 function loadResponseEmails() {
   try {
     const doc = getCachedDoc('response_emails', CURRENT_USER_EMAIL);
-    if (doc && Array.isArray(doc.emails)) return doc.emails;
-    if (doc && Array.isArray(doc.responses)) return doc.responses;
+    if (doc && Array.isArray(doc.emails)) return doc.emails.map(e => mapEmailCategoriesForUser(e, CURRENT_USER_EMAIL));
+    if (doc && Array.isArray(doc.responses)) return doc.responses.map(e => mapEmailCategoriesForUser(e, CURRENT_USER_EMAIL));
   } catch (_) {}
   const paths = getCurrentUserPaths();
   const data = loadEmailData(paths.RESPONSE_EMAILS_PATH);
   if (!data) return [];
-  if (Array.isArray(data.emails)) return data.emails;
-  if (Array.isArray(data.responses)) return data.responses;
+  if (Array.isArray(data.emails)) return data.emails.map(e => mapEmailCategoriesForUser(e, CURRENT_USER_EMAIL));
+  if (Array.isArray(data.responses)) return data.responses.map(e => mapEmailCategoriesForUser(e, CURRENT_USER_EMAIL));
   return [];
 }
 
@@ -1881,11 +1965,11 @@ function loadTestEmails() {
 function loadUnrepliedEmails() {
   try {
     const doc = getCachedDoc('unreplied_emails', CURRENT_USER_EMAIL);
-    if (doc && Array.isArray(doc.emails)) return doc.emails;
+    if (doc && Array.isArray(doc.emails)) return doc.emails.map(e => mapEmailCategoriesForUser(e, CURRENT_USER_EMAIL));
   } catch (_) {}
   const paths = getCurrentUserPaths();
   const data = loadEmailData(paths.UNREPLIED_EMAILS_PATH);
-  return data ? data.emails || [] : [];
+  return data ? (Array.isArray(data.emails) ? data.emails.map(e => mapEmailCategoriesForUser(e, CURRENT_USER_EMAIL)) : []) : [];
 }
 
 // Notes persistence helpers
@@ -1932,13 +2016,14 @@ async function saveHiddenThreads(hidden) {
 
 // Store helpers for primary collections
 async function saveResponseEmailsStore(emails) {
+  const mappedEmails = (emails || []).map(e => mapEmailCategoriesForUser(e, CURRENT_USER_EMAIL));
   try {
-    await setUserDoc('response_emails', CURRENT_USER_EMAIL, { emails: emails || [] });
+    await setUserDoc('response_emails', CURRENT_USER_EMAIL, { emails: mappedEmails });
   } catch (e) {
     try {
       const paths = getCurrentUserPaths();
       if (!fs.existsSync(paths.USER_DATA_DIR)) fs.mkdirSync(paths.USER_DATA_DIR, { recursive: true });
-      fs.writeFileSync(paths.RESPONSE_EMAILS_PATH, JSON.stringify({ emails: emails || [] }, null, 2));
+      fs.writeFileSync(paths.RESPONSE_EMAILS_PATH, JSON.stringify({ emails: mappedEmails }, null, 2));
     } catch (_) {}
   }
 }
@@ -1954,13 +2039,14 @@ async function saveEmailThreadsStore(threads) {
   }
 }
 async function saveUnrepliedEmailsStore(emails) {
+  const mappedEmails = (emails || []).map(e => mapEmailCategoriesForUser(e, CURRENT_USER_EMAIL));
   try {
-    await setUserDoc('unreplied_emails', CURRENT_USER_EMAIL, { emails: emails || [] });
+    await setUserDoc('unreplied_emails', CURRENT_USER_EMAIL, { emails: mappedEmails });
   } catch (e) {
     try {
       const paths = getCurrentUserPaths();
       if (!fs.existsSync(paths.USER_DATA_DIR)) fs.mkdirSync(paths.USER_DATA_DIR, { recursive: true });
-      fs.writeFileSync(paths.UNREPLIED_EMAILS_PATH, JSON.stringify({ emails: emails || [] }, null, 2));
+      fs.writeFileSync(paths.UNREPLIED_EMAILS_PATH, JSON.stringify({ emails: mappedEmails }, null, 2));
     } catch (_) {}
   }
 }
@@ -2017,20 +2103,20 @@ async function saveHiddenInbox(hiddenMessages) {
 function loadCategoryGuidelines() {
   try {
     const doc = getCachedDoc('category_guidelines', CURRENT_USER_EMAIL);
-    if (doc && Array.isArray(doc.categories)) return doc.categories;
+    if (doc && Array.isArray(doc.categories)) return mapCategoryGuidelinesForUser(doc.categories, CURRENT_USER_EMAIL);
   } catch (_) {}
   const paths = getCurrentUserPaths();
   const data = loadEmailData(paths.CATEGORY_GUIDELINES_PATH);
-  if (data && Array.isArray(data.categories)) return data.categories;
+  if (data && Array.isArray(data.categories)) return mapCategoryGuidelinesForUser(data.categories, CURRENT_USER_EMAIL);
   return [];
 }
 
 async function saveCategoryGuidelines(categories) {
   const payload = {
-    categories: (categories || []).map(c => ({
+    categories: mapCategoryGuidelinesForUser((categories || []).map(c => ({
       name: String(c?.name || '').trim(),
       notes: String(c?.notes || '')
-    })).filter(c => c.name),
+    })).filter(c => c.name), CURRENT_USER_EMAIL),
     updatedAt: new Date().toISOString()
   };
   try {
@@ -2046,17 +2132,17 @@ async function saveCategoryGuidelines(categories) {
 function loadCategorySummaries() {
   try {
     const doc = getCachedDoc('category_summaries', CURRENT_USER_EMAIL);
-    if (doc && doc.summaries && typeof doc.summaries === 'object') return doc.summaries;
+    if (doc && doc.summaries && typeof doc.summaries === 'object') return mapCategorySummariesForUser(doc.summaries, CURRENT_USER_EMAIL);
   } catch (_) {}
   const paths = getCurrentUserPaths();
   const data = loadEmailData(paths.CATEGORY_SUMMARIES_PATH);
   if (!data) return {};
-  if (data.summaries && typeof data.summaries === 'object') return data.summaries;
-  return (typeof data === 'object' && data) ? data : {};
+  if (data.summaries && typeof data.summaries === 'object') return mapCategorySummariesForUser(data.summaries, CURRENT_USER_EMAIL);
+  return mapCategorySummariesForUser((typeof data === 'object' && data) ? data : {}, CURRENT_USER_EMAIL);
 }
 
 async function saveCategorySummaries(summaries) {
-  const payload = { summaries: summaries || {}, updatedAt: new Date().toISOString() };
+  const payload = { summaries: mapCategorySummariesForUser(summaries || {}, CURRENT_USER_EMAIL), updatedAt: new Date().toISOString() };
   try {
     await setUserDoc('category_summaries', CURRENT_USER_EMAIL, payload);
   } catch (_) {
@@ -2130,18 +2216,18 @@ async function saveEmailNotesStore(store) {
 function loadCategoriesList() {
   try {
     const doc = getCachedDoc('categories', CURRENT_USER_EMAIL);
-    if (doc && Array.isArray(doc.categories)) return doc.categories;
+    if (doc && Array.isArray(doc.categories)) return mapCategoryListForUser(doc.categories, CURRENT_USER_EMAIL);
   } catch (_) {}
   const paths = getCurrentUserPaths();
   const data = loadEmailData(paths.CATEGORIES_PATH);
-  if (data && Array.isArray(data.categories)) return data.categories;
+  if (data && Array.isArray(data.categories)) return mapCategoryListForUser(data.categories, CURRENT_USER_EMAIL);
   return [];
 }
 
 async function saveCategoriesList(categories) {
   const uniq = [];
   const seen = new Set();
-  (categories || []).forEach(n => {
+  mapCategoryListForUser(categories || [], CURRENT_USER_EMAIL).forEach(n => {
     const s = String(n || '').trim();
     if (!s) return;
     const k = s.toLowerCase();
@@ -2612,10 +2698,11 @@ app.get('/api/response-emails', async (req, res) => {
 
       // Ensure all fields have proper values
       // Compute primary and additional categories (multi-category support)
-      const primaryCategory = (email.category && String(email.category).trim())
+      const computedPrimary = (email.category && String(email.category).trim())
         || categorizeEmail(email.subject || '', email.body || '', email.from || '');
+      const primaryCategory = mapCategoryNameForUser(computedPrimary, userEmail);
       const additionalCats = Array.isArray(email.categories)
-        ? email.categories.map(c => String(c || '').trim()).filter(Boolean)
+        ? email.categories.map(c => mapCategoryNameForUser(String(c || '').trim(), userEmail)).filter(Boolean)
         : [];
       // Ensure primary is included and de-duplicate (case-insensitive)
       const catsUniq = (() => {
@@ -3586,8 +3673,8 @@ async function writeUserArrayDoc(collection, userEmail, field, value, filePath) 
   return false;
 }
 
-function pickCurrentCategoriesForUser(rawCategories) {
-  const categories = Array.isArray(rawCategories) ? rawCategories.filter(Boolean) : [];
+function pickCurrentCategoriesForUser(rawCategories, userEmail = CURRENT_USER_EMAIL) {
+  const categories = mapCategoryListForUser(Array.isArray(rawCategories) ? rawCategories.filter(Boolean) : [], userEmail);
   if (categories.length) return categories;
   return DEFAULT_NEW_USER_CATEGORIES.slice();
 }
@@ -3606,11 +3693,13 @@ async function classifySyncedEmailsWithV4ForUser(userEmail, candidates) {
   const derivedCategories = Array.from(new Set((responses || []).flatMap(r => {
     if (!r) return [];
     const cats = Array.isArray(r.categories) ? r.categories : (r.category ? [r.category] : []);
-    return cats.map(c => String(c || '').trim()).filter(Boolean);
+    return cats.map(c => mapCategoryNameForUser(String(c || '').trim(), normalizedEmail)).filter(Boolean);
   })));
 
   const categoriesX = (() => {
-    const fromSaved = Array.isArray(categoriesRaw) ? categoriesRaw.map(c => String(c || '').trim()).filter(Boolean) : [];
+    const fromSaved = Array.isArray(categoriesRaw)
+      ? mapCategoryListForUser(categoriesRaw.map(c => String(c || '').trim()).filter(Boolean), normalizedEmail)
+      : [];
     const base = fromSaved.length ? fromSaved : derivedCategories;
     if (!base.length) return CANONICAL_CATEGORIES.slice();
     return Array.from(new Set(base));
@@ -3645,9 +3734,11 @@ async function classifySyncedEmailsWithV4ForUser(userEmail, candidates) {
     return map;
   })();
 
-  const summaries = (summariesDoc && typeof summariesDoc.summaries === 'object') ? summariesDoc.summaries : {};
+  const summaries = (summariesDoc && typeof summariesDoc.summaries === 'object')
+    ? mapCategorySummariesForUser(summariesDoc.summaries, normalizedEmail)
+    : {};
   const guidelinesMap = (guidelinesDoc && Array.isArray(guidelinesDoc.categories))
-    ? Object.fromEntries(guidelinesDoc.categories.map(c => [c.name, c.notes || '']))
+    ? Object.fromEntries(mapCategoryGuidelinesForUser(guidelinesDoc.categories, normalizedEmail).map(c => [c.name, c.notes || '']))
     : {};
 
   const MAX = 20;
@@ -3953,10 +4044,11 @@ async function syncUserInboxFromGmail(userEmail, opts = {}) {
     const derivedCategoriesFromResponses = Array.from(new Set((responses || []).flatMap(r => {
       if (!r) return [];
       const cats = Array.isArray(r.categories) ? r.categories : (r.category ? [r.category] : []);
-      return cats.map(c => String(c || '').trim()).filter(Boolean);
+      return cats.map(c => mapCategoryNameForUser(String(c || '').trim(), normalizedEmail)).filter(Boolean);
     })));
     const currentCategories = pickCurrentCategoriesForUser(
-      (Array.isArray(categories) && categories.length) ? categories : derivedCategoriesFromResponses
+      (Array.isArray(categories) && categories.length) ? categories : derivedCategoriesFromResponses,
+      normalizedEmail
     );
 
     const latestResponseTimestampMs = getLatestTimestampFromItems(responses);
