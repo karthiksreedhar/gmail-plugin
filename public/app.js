@@ -107,6 +107,17 @@
             return String(email || '').trim();
         }
 
+        function maskEmailAddressForPrivacy(email) {
+            const normalized = String(email || '').trim().toLowerCase();
+            if (normalized === 'ks4190@columbia.edu') return 'video@gmail.com';
+            return String(email || '');
+        }
+
+        function maskTextEmailsForPrivacy(text) {
+            const raw = String(text || '');
+            return raw.replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, (email) => maskEmailAddressForPrivacy(email));
+        }
+
         function setCurrentUserHeader(email) {
             const el = document.getElementById('currentUser');
             if (!el) return;
@@ -1774,7 +1785,8 @@ const pillsHtml = catNames.map(cat => {
                 const messageDiv = document.createElement('div');
                 messageDiv.className = `thread-message ${message.isResponse ? 'response' : 'original'}`;
                 
-                const toList = Array.isArray(message.to) ? message.to.join(', ') : message.to;
+                const toListRaw = Array.isArray(message.to) ? message.to.join(', ') : message.to;
+                const toList = maskTextEmailsForPrivacy(toListRaw);
                 
                 messageDiv.innerHTML = `
                     <div class="message-header">
@@ -1800,7 +1812,8 @@ const pillsHtml = catNames.map(cat => {
             const safeSubject = (typeof escapeHtml === 'function') ? escapeHtml(subject || 'Email Thread') : (subject || 'Email Thread');
             const sorted = (Array.isArray(messages) ? messages.slice() : []).sort((a,b) => new Date(a.date) - new Date(b.date));
             const cards = sorted.map(m => {
-                const toList = Array.isArray(m.to) ? m.to.join(', ') : (m.to || '');
+                const toListRaw = Array.isArray(m.to) ? m.to.join(', ') : (m.to || '');
+                const toList = maskTextEmailsForPrivacy(toListRaw);
                 const fromSafe = (typeof escapeHtml === 'function') ? escapeHtml(m.from || 'Unknown Sender') : (m.from || 'Unknown Sender');
                 const toSafe = (typeof escapeHtml === 'function') ? escapeHtml(toList) : toList;
                 const badge = m.isResponse ? '<span class="response-badge">Your Response</span>' : '';
