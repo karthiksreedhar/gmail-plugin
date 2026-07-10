@@ -1500,12 +1500,12 @@ const pillsHtml = catNames.map(cat => {
                     <div class="email-content">
                         <div class="email-header">
                             <div class="email-from" style="display:flex; align-items:center; gap:8px;">${escapeHtml(originalSender)} ${gmailLinkHtml(email)}<div class="email-categories">${pillsHtml}</div></div>
+                            <div class="email-subject">${escapeHtml(email.subject)}</div>
                             <div class="email-date" style="display:flex; align-items:center; gap:8px;">
                                 ${formatDate(email.date)}
                                 <span style="font-size: 11px; color: #9aa0a6; font-weight: 400;">${escapeHtml(email.id || '')}</span>
                             </div>
                         </div>
-                        <div class="email-subject">${escapeHtml(email.subject)}</div>
                         <div class="notes-preview" data-email-notes="${email.id}" style="display:none;"></div>
                     </div>
                     <div class="email-actions">
