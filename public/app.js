@@ -664,6 +664,35 @@ window.__categoryChats = window.__categoryChats || {};
             }, UI_AUTO_SYNC_INTERVAL_MS);
         }
 
+        async function backfillImportantFlags() {
+            const btn = document.getElementById('backfillImportantBtn');
+            const originalText = btn ? btn.textContent : '';
+            if (btn) {
+                btn.disabled = true;
+                btn.textContent = 'Updating…';
+            }
+            try {
+                const resp = await fetch('/api/backfill-important-flag', { method: 'POST' });
+                const data = await resp.json().catch(() => ({}));
+                if (!resp.ok || !data.success) {
+                    throw new Error(data.error || `Request failed (${resp.status})`);
+                }
+                showSuccessPopup(
+                    `Checked ${data.threadsChecked} thread(s). Updated ${data.updatedResponses} email(s)${data.failed ? `, ${data.failed} failed` : ''}.`,
+                    'Important Flags Updated'
+                );
+                await loadEmails();
+            } catch (error) {
+                console.error('Backfill important flags failed:', error);
+                showErrorPopup(error.message || 'Failed to update important flags.', 'Update Failed');
+            } finally {
+                if (btn) {
+                    btn.disabled = false;
+                    btn.textContent = originalText;
+                }
+            }
+        }
+
         async function loadEmails() {
             const container = document.getElementById('emailContainer');
             container.innerHTML = '<div class="loading">Loading emails...</div>';
@@ -1454,6 +1483,69 @@ async function updateEmailCategory(emailId, newCategory, oldCategory) {
             }
         }
 
+        function buildEmailRowElement(email) {
+            const emailDiv = document.createElement('div');
+            emailDiv.className = 'email-item';
+            emailDiv.onclick = () => openEmailThread(email.id, email.subject);
+
+            // Apply yellow background if this email was recently added
+            if (window.recentlyAddedEmailIds && window.recentlyAddedEmailIds.has(email.id)) {
+                emailDiv.style.backgroundColor = '#FFF9CC';
+            }
+
+            const catNames = Array.isArray(email?.categories) && email.categories.length
+                ? email.categories
+                : (email?.category ? [email.category] : []);
+            const pillsHtml = catNames.map(cat => {
+                const cls = `category-${String(cat).toLowerCase().replace(/\s+/g, '-')}`;
+                const style = getCategoryBadgeStyle(cat);
+                // Make pill clickable to edit category inline (stop parent click)
+                return `<span class="email-category ${cls}" style="${style}; cursor: pointer;" onclick="onCategoryPillClick(event, '${email.id}', '${String(cat).replace(/'/g, "\\'")}')">${cat}</span>`;
+            }).join(' ');
+
+            // Get the original sender from email data
+            let originalSender = 'Unknown Sender';
+            if (email.originalFrom) {
+                originalSender = email.originalFrom.split('<')[0].trim();
+            } else {
+                // Extract from subject if available
+                const subjectMatch = email.subject.match(/Re: (.+)/);
+                if (subjectMatch) {
+                    originalSender = 'Original Sender';
+                }
+            }
+
+            emailDiv.innerHTML = `
+                <div class="email-content">
+                    <div class="email-header">
+                        <div class="email-from" style="display:flex; align-items:center; gap:8px;">${escapeHtml(originalSender)} ${gmailLinkHtml(email)}<div class="email-categories">${pillsHtml}</div></div>
+                        <div class="email-subject">${escapeHtml(email.subject)}</div>
+                        <div class="email-date" style="display:flex; align-items:center; gap:8px;">
+                            ${formatDate(email.date)}
+                            <span style="font-size: 11px; color: #9aa0a6; font-weight: 400;">${escapeHtml(email.id || '')}</span>
+                        </div>
+                    </div>
+                    <div class="notes-preview" data-email-notes="${email.id}" style="display:none;"></div>
+                </div>
+                <div class="email-actions">
+                    <button class="delete-thread-btn" onclick="deleteEmailThread('${email.id}', '${email.subject.replace(/'/g, "\\'")}', event)" title="Delete this thread">
+                        🗑️
+                    </button>
+                </div>
+            `;
+
+            const __notesEl = emailDiv.querySelector(`.notes-preview[data-email-notes="${email.id}"]`);
+            if (__notesEl) { renderEmailNotesPreview(__notesEl, email.id); }
+            return emailDiv;
+        }
+
+        function buildInboxSectionHeader(label, count) {
+            const header = document.createElement('div');
+            header.style.cssText = 'display:flex; align-items:center; gap:8px; padding:10px 4px 6px; margin-top:4px; border-bottom:1px solid #e0e0e0; font-size:13px; font-weight:600; color:#5f6368; text-transform:uppercase; letter-spacing:0.3px;';
+            header.innerHTML = `<span>${escapeHtml(label)}</span><span style="font-weight:400; text-transform:none; color:#9aa0a6;">${count}</span>`;
+            return header;
+        }
+
         async function displayEmails(emails) {
             const container = document.getElementById('emailContainer');
             container.innerHTML = '';
@@ -1464,60 +1556,18 @@ async function updateEmailCategory(emailId, newCategory, oldCategory) {
             }
 
             const sorted = (emails || []).slice().sort((a, b) => new Date(b.date) - new Date(a.date));
-            for (const email of sorted) {
-                const emailDiv = document.createElement('div');
-                emailDiv.className = 'email-item';
-                emailDiv.onclick = () => openEmailThread(email.id, email.subject);
-                
-                // Apply yellow background if this email was recently added
-                if (window.recentlyAddedEmailIds && window.recentlyAddedEmailIds.has(email.id)) {
-                    emailDiv.style.backgroundColor = '#FFF9CC';
-                }
-                
-                const catNames = Array.isArray(email?.categories) && email.categories.length
-                    ? email.categories
-                    : (email?.category ? [email.category] : []);
-const pillsHtml = catNames.map(cat => {
-    const cls = `category-${String(cat).toLowerCase().replace(/\s+/g, '-')}`;
-    const style = getCategoryBadgeStyle(cat);
-    // Make pill clickable to edit category inline (stop parent click)
-    return `<span class="email-category ${cls}" style="${style}; cursor: pointer;" onclick="onCategoryPillClick(event, '${email.id}', '${String(cat).replace(/'/g, "\\'")}')">${cat}</span>`;
-}).join(' ');
-                
-                // Get the original sender from email data
-                let originalSender = 'Unknown Sender';
-                if (email.originalFrom) {
-                    originalSender = email.originalFrom.split('<')[0].trim();
-                } else {
-                    // Extract from subject if available
-                    const subjectMatch = email.subject.match(/Re: (.+)/);
-                    if (subjectMatch) {
-                        originalSender = 'Original Sender';
-                    }
-                }
-                
-                emailDiv.innerHTML = `
-                    <div class="email-content">
-                        <div class="email-header">
-                            <div class="email-from" style="display:flex; align-items:center; gap:8px;">${escapeHtml(originalSender)} ${gmailLinkHtml(email)}<div class="email-categories">${pillsHtml}</div></div>
-                            <div class="email-subject">${escapeHtml(email.subject)}</div>
-                            <div class="email-date" style="display:flex; align-items:center; gap:8px;">
-                                ${formatDate(email.date)}
-                                <span style="font-size: 11px; color: #9aa0a6; font-weight: 400;">${escapeHtml(email.id || '')}</span>
-                            </div>
-                        </div>
-                        <div class="notes-preview" data-email-notes="${email.id}" style="display:none;"></div>
-                    </div>
-                    <div class="email-actions">
-                        <button class="delete-thread-btn" onclick="deleteEmailThread('${email.id}', '${email.subject.replace(/'/g, "\\'")}', event)" title="Delete this thread">
-                            🗑️
-                        </button>
-                    </div>
-                `;
-                
-                const __notesEl = emailDiv.querySelector(`.notes-preview[data-email-notes="${email.id}"]`);
-                if (__notesEl) { renderEmailNotesPreview(__notesEl, email.id); }
-                container.appendChild(emailDiv);
+            const important = sorted.filter(e => e && e.isImportant);
+            const everythingElse = sorted.filter(e => !e || !e.isImportant);
+
+            // Only split into sections when there's at least one important email to distinguish;
+            // otherwise fall back to a single flat list to avoid an empty "Important" header.
+            if (important.length > 0 && everythingElse.length > 0) {
+                container.appendChild(buildInboxSectionHeader('Important', important.length));
+                important.forEach(email => container.appendChild(buildEmailRowElement(email)));
+                container.appendChild(buildInboxSectionHeader('Everything else', everythingElse.length));
+                everythingElse.forEach(email => container.appendChild(buildEmailRowElement(email)));
+            } else {
+                sorted.forEach(email => container.appendChild(buildEmailRowElement(email)));
             }
         }
 

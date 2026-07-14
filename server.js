@@ -2727,7 +2727,8 @@ app.get('/api/response-emails', async (req, res) => {
         category: primaryCategory,
         categories: catsUniq,
         body: email.body || email.originalBody || email.snippet || 'No content available',
-        snippet: email.snippet || (email.body ? email.body.substring(0, 100) + (email.body.length > 100 ? '...' : '') : 'No content available')
+        snippet: email.snippet || (email.body ? email.body.substring(0, 100) + (email.body.length > 100 ? '...' : '') : 'No content available'),
+        isImportant: !!email.isImportant
       };
 
       validatedEmails.push(validatedEmail);
@@ -2754,6 +2755,99 @@ app.get('/api/response-emails', async (req, res) => {
   } catch (error) {
     console.error('Error fetching response emails:', error);
     res.status(500).json({ error: 'Failed to fetch response emails', details: error.message });
+  }
+});
+
+// One-time backfill: past emails synced before the IMPORTANT-label capture was added
+// have no isImportant field. This re-fetches labelIds from Gmail for those threads only
+// and patches response_emails / email_threads in place. Safe to re-run; only touches
+// records missing the field.
+app.post('/api/backfill-important-flag', async (req, res) => {
+  try {
+    const userEmail = getEffectiveUserEmailForRequest(req);
+    const paths = getUserPaths(userEmail);
+
+    const { gmailClient, reason } = await buildGmailClientForUser(userEmail);
+    if (!gmailClient) {
+      return res.status(401).json({ success: false, error: 'Gmail authentication required', reason });
+    }
+
+    const [responses, threads] = await Promise.all([
+      readUserArrayDoc('response_emails', userEmail, 'emails', paths.RESPONSE_EMAILS_PATH),
+      readUserArrayDoc('email_threads', userEmail, 'threads', paths.EMAIL_THREADS_PATH)
+    ]);
+
+    const threadIdsToCheck = new Set();
+    (responses || []).forEach(r => {
+      if (r && typeof r.isImportant !== 'boolean' && r.threadId) threadIdsToCheck.add(String(r.threadId));
+    });
+    (threads || []).forEach(t => {
+      if (t && typeof t.isImportant !== 'boolean' && t.threadId) threadIdsToCheck.add(String(t.threadId));
+    });
+
+    const threadIds = Array.from(threadIdsToCheck);
+    const importantByThreadId = new Map();
+    let failed = 0;
+
+    const workerCount = Math.max(1, Math.min(AUTO_SYNC_GMAIL_FETCH_CONCURRENCY, threadIds.length));
+    let cursor = 0;
+    async function worker() {
+      while (true) {
+        const idx = cursor++;
+        if (idx >= threadIds.length) return;
+        const threadId = threadIds[idx];
+        try {
+          const threadResp = await withTimeout(
+            gmailClient.users.threads.get({ userId: 'me', id: threadId, format: 'minimal' }),
+            AUTO_SYNC_GMAIL_CALL_TIMEOUT_MS,
+            'gmail_thread_get_backfill'
+          );
+          const msgs = Array.isArray(threadResp?.data?.messages) ? threadResp.data.messages : [];
+          const isImportant = msgs.some(m => Array.isArray(m?.labelIds) && m.labelIds.includes('IMPORTANT'));
+          importantByThreadId.set(threadId, isImportant);
+        } catch (e) {
+          failed++;
+          console.warn(`[BackfillImportant] Failed to load thread ${threadId}:`, e?.message || e);
+        }
+      }
+    }
+    await Promise.all(Array.from({ length: workerCount }, () => worker()));
+
+    let updatedResponses = 0;
+    const nextResponses = (responses || []).map(r => {
+      if (!r || typeof r.isImportant === 'boolean' || !r.threadId) return r;
+      const val = importantByThreadId.get(String(r.threadId));
+      if (typeof val !== 'boolean') return r;
+      updatedResponses++;
+      return { ...r, isImportant: val };
+    });
+
+    let updatedThreads = 0;
+    const nextThreads = (threads || []).map(t => {
+      if (!t || typeof t.isImportant === 'boolean' || !t.threadId) return t;
+      const val = importantByThreadId.get(String(t.threadId));
+      if (typeof val !== 'boolean') return t;
+      updatedThreads++;
+      return { ...t, isImportant: val };
+    });
+
+    if (updatedResponses > 0) {
+      await writeUserArrayDoc('response_emails', userEmail, 'emails', nextResponses, paths.RESPONSE_EMAILS_PATH);
+    }
+    if (updatedThreads > 0) {
+      await writeUserArrayDoc('email_threads', userEmail, 'threads', nextThreads, paths.EMAIL_THREADS_PATH);
+    }
+
+    return res.json({
+      success: true,
+      threadsChecked: threadIds.length,
+      updatedResponses,
+      updatedThreads,
+      failed
+    });
+  } catch (error) {
+    console.error('Error backfilling important flag:', error);
+    res.status(500).json({ success: false, error: 'Failed to backfill important flag', details: error.message });
   }
 });
 
@@ -3837,6 +3931,7 @@ function buildAutoSyncMessageEntry(rawMessage, userEmail) {
     }
   })();
   const isResponse = isUserAuthoredMessage(from, userEmail);
+  const isImportant = Array.isArray(rawMessage?.labelIds) && rawMessage.labelIds.includes('IMPORTANT');
 
   return {
     id: String(rawMessage?.id || ''),
@@ -3847,6 +3942,7 @@ function buildAutoSyncMessageEntry(rawMessage, userEmail) {
     body: body || 'No content available',
     snippet,
     isResponse,
+    isImportant,
     webUrl,
     gmailInternalDateMs: Number.isFinite(internalDateMs) && internalDateMs > 0 ? internalDateMs : parsedDate.getTime()
   };
@@ -3927,6 +4023,7 @@ async function fetchInboxThreadCandidatesForUser(gmailClient, latestStoredTimest
         const latestIncoming = allMessages.filter(msg => !msg.isResponse).sort((a, b) => getItemTimestampMs(b) - getItemTimestampMs(a))[0] || latestMessage;
         const firstIncoming = allMessages.find(msg => !msg.isResponse) || latestIncoming;
         const latestThreadTimestampMs = Math.max(...allMessages.map(msg => getItemTimestampMs(msg)));
+        const isImportant = allMessages.some(msg => !!msg.isImportant);
 
         candidates.push({
           id: latestIncoming.id,
@@ -3940,6 +4037,7 @@ async function fetchInboxThreadCandidatesForUser(gmailClient, latestStoredTimest
           snippet: latestIncoming.snippet || 'No content available',
           originalBody: firstIncoming?.body || latestIncoming.body || '',
           webUrl: latestIncoming.webUrl || latestMessage.webUrl || '',
+          isImportant,
           messages: allMessages.map(msg => ({
             id: msg.id,
             from: msg.from,
@@ -3948,6 +4046,7 @@ async function fetchInboxThreadCandidatesForUser(gmailClient, latestStoredTimest
             subject: msg.subject,
             body: msg.isResponse ? msg.body : msg.body,
             isResponse: !!msg.isResponse,
+            isImportant: !!msg.isImportant,
             gmailInternalDateMs: msg.gmailInternalDateMs,
             webUrl: msg.webUrl || ''
           }))
@@ -4139,6 +4238,7 @@ async function syncUserInboxFromGmail(userEmail, opts = {}) {
       const explanation = seedAsOther
         ? (existingResponse?.autoSyncExplanation || 'Initial user seed: defaulted to Other')
         : (existingResponse?.autoSyncExplanation || (classifiedById[email.id] && classifiedById[email.id].explanation) || '');
+      const isImportant = typeof email.isImportant === 'boolean' ? email.isImportant : !!existingResponse?.isImportant;
       const responseRecord = {
         id: existingSummaryId,
         threadId: rawThreadId || undefined,
@@ -4154,6 +4254,7 @@ async function syncUserInboxFromGmail(userEmail, opts = {}) {
         originalBody: email.originalBody || email.body || '',
         webUrl: email.webUrl || '',
         gmailInternalDateMs: Number(email?.gmailInternalDateMs || 0) || undefined,
+        isImportant,
         source: 'auto-sync-v4',
         autoSynced: true,
         autoSyncedAt: syncedAt,
@@ -4178,6 +4279,7 @@ async function syncUserInboxFromGmail(userEmail, opts = {}) {
         from: meEmail,
         date: email.date || new Date().toISOString(),
         gmailInternalDateMs: Number(email?.gmailInternalDateMs || 0) || undefined,
+        isImportant,
         responseId: existingSummaryId,
         source: 'auto-sync-v4',
         autoSynced: true,
