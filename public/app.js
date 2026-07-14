@@ -1539,11 +1539,39 @@ async function updateEmailCategory(emailId, newCategory, oldCategory) {
             return emailDiv;
         }
 
-        function buildInboxSectionHeader(label, count) {
+        // Persists across re-renders (e.g. category filter changes, data refresh)
+        // so a section stays hidden until the user explicitly shows it again.
+        const inboxSectionCollapsed = { important: false, other: false };
+
+        function toggleInboxSection(sectionKey) {
+            inboxSectionCollapsed[sectionKey] = !inboxSectionCollapsed[sectionKey];
+            const collapsed = inboxSectionCollapsed[sectionKey];
+            const rowsWrap = document.getElementById(`inbox-section-rows-${sectionKey}`);
+            if (rowsWrap) rowsWrap.style.display = collapsed ? 'none' : '';
+            const btn = document.getElementById(`inbox-section-toggle-${sectionKey}`);
+            if (btn) btn.textContent = collapsed ? 'Show' : 'Hide';
+        }
+
+        function buildInboxSectionHeader(label, count, sectionKey) {
+            const collapsed = !!inboxSectionCollapsed[sectionKey];
             const header = document.createElement('div');
-            header.style.cssText = 'display:flex; align-items:center; gap:8px; padding:10px 4px 6px; margin-top:4px; border-bottom:1px solid #e0e0e0; font-size:13px; font-weight:600; color:#5f6368; text-transform:uppercase; letter-spacing:0.3px;';
-            header.innerHTML = `<span>${escapeHtml(label)}</span><span style="font-weight:400; text-transform:none; color:#9aa0a6;">${count}</span>`;
+            header.style.cssText = 'display:flex; align-items:center; justify-content:space-between; gap:8px; padding:10px 4px 6px; margin-top:4px; border-bottom:1px solid #e0e0e0;';
+            header.innerHTML = `
+                <span style="font-size:13px; font-weight:600; color:#5f6368; text-transform:uppercase; letter-spacing:0.3px;">
+                    ${escapeHtml(label)} <span style="font-weight:400; text-transform:none; color:#9aa0a6;">${count}</span>
+                </span>
+                <button type="button" id="inbox-section-toggle-${sectionKey}" class="select-email-btn" style="padding:2px 10px; font-size:12px;" onclick="toggleInboxSection('${sectionKey}')">${collapsed ? 'Show' : 'Hide'}</button>
+            `;
             return header;
+        }
+
+        function appendInboxSection(container, sectionKey, label, emailsList) {
+            container.appendChild(buildInboxSectionHeader(label, emailsList.length, sectionKey));
+            const rowsWrap = document.createElement('div');
+            rowsWrap.id = `inbox-section-rows-${sectionKey}`;
+            rowsWrap.style.display = inboxSectionCollapsed[sectionKey] ? 'none' : '';
+            emailsList.forEach(email => rowsWrap.appendChild(buildEmailRowElement(email)));
+            container.appendChild(rowsWrap);
         }
 
         async function displayEmails(emails) {
@@ -1562,10 +1590,8 @@ async function updateEmailCategory(emailId, newCategory, oldCategory) {
             // Only split into sections when there's at least one important email to distinguish;
             // otherwise fall back to a single flat list to avoid an empty "Important" header.
             if (important.length > 0 && everythingElse.length > 0) {
-                container.appendChild(buildInboxSectionHeader('Important', important.length));
-                important.forEach(email => container.appendChild(buildEmailRowElement(email)));
-                container.appendChild(buildInboxSectionHeader('Everything else', everythingElse.length));
-                everythingElse.forEach(email => container.appendChild(buildEmailRowElement(email)));
+                appendInboxSection(container, 'important', 'Important', important);
+                appendInboxSection(container, 'other', 'Everything else', everythingElse);
             } else {
                 sorted.forEach(email => container.appendChild(buildEmailRowElement(email)));
             }
