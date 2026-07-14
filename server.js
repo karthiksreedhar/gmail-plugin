@@ -460,7 +460,7 @@ app.use(session({
 
 app.get('/api/features', async (req, res) => {
   try {
-    const registryEntries = await listFeatureRegistryForUser(CURRENT_USER_EMAIL);
+    const registryEntries = await listFeatureRegistryForUser(getEffectiveUserEmailForRequest(req));
     const features = registryEntries
       .filter(shouldExposeFeature)
       .map(entry => ({
@@ -482,10 +482,11 @@ app.get('/api/features', async (req, res) => {
 
 app.get('/api/feature-registry', async (req, res) => {
   try {
-    const features = await listFeatureRegistryForUser(CURRENT_USER_EMAIL);
+    const userEmail = getEffectiveUserEmailForRequest(req);
+    const features = await listFeatureRegistryForUser(userEmail);
     res.json({
       success: true,
-      currentUser: CURRENT_USER_EMAIL,
+      currentUser: userEmail,
       features
     });
   } catch (error) {
@@ -496,7 +497,7 @@ app.get('/api/feature-registry', async (req, res) => {
 
 app.get('/api/feature-registry-visible', async (req, res) => {
   try {
-    const features = (await listFeatureRegistryForUser(CURRENT_USER_EMAIL)).filter(shouldExposeFeature);
+    const features = (await listFeatureRegistryForUser(getEffectiveUserEmailForRequest(req))).filter(shouldExposeFeature);
     res.json({ success: true, features });
   } catch (error) {
     console.error('Failed to load visible feature registry:', error);
@@ -511,7 +512,7 @@ app.get('/api/feature-registry/:featureId', async (req, res) => {
       return res.status(400).json({ success: false, error: 'Invalid featureId' });
     }
 
-    const feature = await getFeatureRegistryEntryForUser(featureId, CURRENT_USER_EMAIL);
+    const feature = await getFeatureRegistryEntryForUser(featureId, getEffectiveUserEmailForRequest(req));
     if (!feature) {
       return res.status(404).json({ success: false, error: 'Feature not found' });
     }
@@ -539,7 +540,7 @@ app.post('/api/internal/generated-features/save-draft', async (req, res) => {
       return res.status(400).json({ success: false, error: 'files must be a non-empty object of filepath -> content' });
     }
 
-    const createdBy = String(req.body?.createdBy || '').trim().toLowerCase() || CURRENT_USER_EMAIL;
+    const createdBy = String(req.body?.createdBy || '').trim().toLowerCase() || getEffectiveUserEmailForRequest(req);
     const name = String(req.body?.name || featureId).trim();
     const description = String(req.body?.description || '').trim();
     const requestPrompt = String(req.body?.requestPrompt || '').trim();
@@ -673,6 +674,7 @@ app.post('/api/internal/generated-features/:featureId/pr-status', async (req, re
 
 app.post('/api/feature-registry/:featureId/preferences', async (req, res) => {
   try {
+    const userEmail = getEffectiveUserEmailForRequest(req);
     const featureId = sanitizeFeatureId(req.params.featureId);
     if (!featureId) {
       return res.status(400).json({ success: false, error: 'Invalid featureId' });
@@ -693,8 +695,8 @@ app.post('/api/feature-registry/:featureId/preferences', async (req, res) => {
       return res.status(400).json({ success: false, error: 'No valid preference fields provided' });
     }
 
-    const preference = await upsertUserFeaturePreference(CURRENT_USER_EMAIL, featureId, payload);
-    const feature = await getFeatureRegistryEntryForUser(featureId, CURRENT_USER_EMAIL);
+    const preference = await upsertUserFeaturePreference(userEmail, featureId, payload);
+    const feature = await getFeatureRegistryEntryForUser(featureId, userEmail);
     res.json({ success: true, preference, feature });
   } catch (error) {
     console.error('Failed to update feature preferences:', error);
@@ -705,6 +707,7 @@ app.post('/api/feature-registry/:featureId/preferences', async (req, res) => {
 // Publish or update generated features and reload feature plugins at runtime.
 app.post('/api/feature-management/publish', (req, res) => {
   try {
+    const userEmail = getEffectiveUserEmailForRequest(req);
     if (!shouldAllowFeaturePublish(req)) {
       return res.status(401).json({
         success: false,
@@ -760,7 +763,7 @@ app.post('/api/feature-management/publish', (req, res) => {
         deploymentStatus: 'deployed',
         source: 'runtime_publish'
       }),
-      upsertUserFeaturePreference(CURRENT_USER_EMAIL, featureId, {
+      upsertUserFeaturePreference(userEmail, featureId, {
         visible: true,
         enabled: true
       })
