@@ -338,8 +338,8 @@ function getLoadedFeatureMap() {
 
 function getDefaultFeaturePreference() {
   return {
-    visible: true,
-    enabled: true,
+    visible: false,
+    enabled: false,
     pinned: false
   };
 }
