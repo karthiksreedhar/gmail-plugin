@@ -26,6 +26,7 @@ const {
   listUserFeaturePreferences
 } = require('./db');
 const { invokeGemini, getGeminiApiKey, getGeminiModel } = require('./feature-generator-agent/gemini');
+const { invokeAnthropic, getAnthropicApiKey, getAnthropicModel } = require('./anthropic');
 
 /**
  * Initialize OpenAI client using environment variable
@@ -3804,8 +3805,8 @@ async function classifySyncedEmailsWithV4ForUser(userEmail, candidates) {
 
   const byId = {};
   const otherCat = categoriesX.find(c => normalizeKey(c) === 'other') || 'Other';
-  if (!process.env.OPENAI_API_KEY) {
-    list.forEach(e => { byId[e.id] = { category: otherCat, explanation: 'OPENAI_API_KEY missing; defaulted to Other' }; });
+  if (!getAnthropicApiKey()) {
+    list.forEach(e => { byId[e.id] = { category: otherCat, explanation: 'ANTHROPIC_API_KEY missing; defaulted to Other' }; });
     return { categoriesX, byId };
   }
 
@@ -13486,18 +13487,17 @@ Return ONLY strictly valid JSON of the form:
   const systemTokens = SYSTEM.length / 4; // rough estimate: 4 chars per token
   const userTokens = USER.length / 4;
   const totalEstimatedTokens = systemTokens + userTokens;
-  console.log(`[BatchLabel] Calling Gemini (${getGeminiModel()}) with ~${Math.round(totalEstimatedTokens)} estimated tokens (${categories.length} categories, ${newEmails.length} new emails, max ${maxPerCat} examples/category, bundled chars ${totalBundleChars})`);
+  console.log(`[BatchLabel] Calling Anthropic (${getAnthropicModel()}) with ~${Math.round(totalEstimatedTokens)} estimated tokens (${categories.length} categories, ${newEmails.length} new emails, max ${maxPerCat} examples/category, bundled chars ${totalBundleChars})`);
 
   try {
-    const llmPromise = invokeGemini({
-      model: getGeminiModel(),
+    const llmPromise = invokeAnthropic({
+      model: getAnthropicModel(),
       messages: [
         { role: 'system', content: SYSTEM },
         { role: 'user', content: USER }
       ],
       temperature: 0.1,
-      maxOutputTokens: 2000,
-      responseMimeType: 'application/json'
+      maxOutputTokens: 2000
     });
     const timeoutPromise = new Promise((_, reject) => {
       setTimeout(() => reject(new Error(`auto_sync_llm_timeout_${AUTO_SYNC_LLM_TIMEOUT_MS}ms`)), AUTO_SYNC_LLM_TIMEOUT_MS);
@@ -13558,7 +13558,7 @@ Return ONLY strictly valid JSON of the form:
     }
     return results;
   } catch (err) {
-    console.error(`[BatchLabel] Gemini batch labeling FAILED:`, err?.message || err);
+    console.error(`[BatchLabel] Anthropic batch labeling FAILED:`, err?.message || err);
     if (err?.status === 400 || /token|context|size/i.test(String(err?.message || ''))) {
       console.error(`[BatchLabel] HTTP 400 - likely context window exceeded (estimated ${Math.round(totalEstimatedTokens)} tokens)`);
     } else if (err?.status === 429) {
