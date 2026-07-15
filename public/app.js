@@ -1886,7 +1886,7 @@ async function updateEmailCategory(emailId, newCategory, oldCategory) {
             if (!threadPane) return;
 
             const safeSubject = (typeof escapeHtml === 'function') ? escapeHtml(subject || 'Email Thread') : (subject || 'Email Thread');
-            const sorted = (Array.isArray(messages) ? messages.slice() : []).sort((a,b) => new Date(a.date) - new Date(b.date));
+            const sorted = (Array.isArray(messages) ? messages.slice() : []).sort((a,b) => new Date(b.date) - new Date(a.date));
             const cards = sorted.map(m => {
                 const toListRaw = Array.isArray(m.to) ? m.to.join(', ') : (m.to || '');
                 const toList = maskTextEmailsForPrivacy(toListRaw);
