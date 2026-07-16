@@ -11,7 +11,7 @@ const path = require('path');
 const archiver = require('archiver');
 const { v4: uuidv4 } = require('uuid');
 const { FeatureGeneratorAgent } = require('./agent');
-const { invokeGemini, getGeminiModel } = require('./gemini');
+const { invokeAnthropic, getAnthropicModel } = require('./anthropic');
 
 // Import database module from parent directory (graceful fallback in serverless if unavailable)
 let initMongo = async () => { throw new Error('DB module unavailable'); };
@@ -1966,28 +1966,7 @@ async function generateModificationPlanForUsers(message, usersToQuery, logger) {
   const dataContext = await loadUsersData(usersToQuery, logger);
   const availableUsers = await getAvailableUsers();
   const targetUser = usersToQuery[0] || availableUsers[0] || DEFAULT_AVAILABLE_USERS[0];
-  const modelName = getGeminiModel();
-  const modificationSchema = {
-    type: 'OBJECT',
-    properties: {
-      summary: { type: 'STRING' },
-      modifications: {
-        type: 'ARRAY',
-        items: {
-          type: 'OBJECT',
-          properties: {
-            type: { type: 'STRING' },
-            collection: { type: 'STRING' },
-            userEmail: { type: 'STRING' },
-            description: { type: 'STRING' },
-            data: { type: 'OBJECT' }
-          },
-          required: ['type', 'collection', 'description', 'data']
-        }
-      }
-    },
-    required: ['modifications']
-  };
+  const modelName = getAnthropicModel();
 
   const plannerPrompt = `You are planning database changes for an email assistant.
 
@@ -2038,12 +2017,10 @@ ${dataContext}`;
   const started = Date.now();
   let response;
   try {
-    response = await invokeGemini({
+    response = await invokeAnthropic({
       model: modelName,
       temperature: 0.1,
       maxOutputTokens: 1800,
-      responseMimeType: 'application/json',
-      responseSchema: modificationSchema,
       messages: [
         { role: 'user', content: plannerPrompt }
       ]
@@ -2142,52 +2119,11 @@ async function generateCategorySuggestionsForUser(userData, logger, options = {}
   const requestedCategories = Array.isArray(options.requestedCategories)
     ? options.requestedCategories.filter(Boolean)
     : [];
-  const modelName = getGeminiModel();
+  const modelName = getAnthropicModel();
   const otherEmails = (userData?.responseEmails || []).filter(email =>
     email.category === 'Other' || email.category === 'Uncategorized' || !email.category
   );
   const validEmailIds = new Set(otherEmails.map(email => String(email?.id || '').trim()).filter(Boolean));
-  const categorySuggestionSchema = {
-    type: 'OBJECT',
-    properties: {
-      suggestions: {
-        type: 'OBJECT',
-        properties: {
-          action: { type: 'STRING' },
-          categories: {
-            type: 'ARRAY',
-            items: {
-              type: 'OBJECT',
-              properties: {
-                name: { type: 'STRING' },
-                description: { type: 'STRING' },
-                guideline: { type: 'STRING' },
-                confidence: { type: 'NUMBER' },
-                suggestedEmails: {
-                  type: 'ARRAY',
-                  items: {
-                    type: 'OBJECT',
-                    properties: {
-                      id: { type: 'STRING' },
-                      subject: { type: 'STRING' },
-                      from: { type: 'STRING' },
-                      date: { type: 'STRING' },
-                      snippet: { type: 'STRING' },
-                      reason: { type: 'STRING' }
-                    },
-                    required: ['id']
-                  }
-                }
-              },
-              required: ['name', 'suggestedEmails']
-            }
-          }
-        },
-        required: ['categories']
-      }
-    },
-    required: ['suggestions']
-  };
 
   if (otherEmails.length === 0) {
     return {
@@ -2254,12 +2190,10 @@ IMPORTANT:
   const apiStartTime = Date.now();
   let aiResponse;
   try {
-    aiResponse = await invokeGemini({
+    aiResponse = await invokeAnthropic({
       model: modelName,
       temperature: 0.3,
       maxOutputTokens: 2200,
-      responseMimeType: 'application/json',
-      responseSchema: categorySuggestionSchema,
       messages: [
         { role: 'user', content: analysisPrompt }
       ]
@@ -2310,11 +2244,10 @@ ${String(aiResponse.content || '').slice(0, 12000)}`;
 
     const repairStart = Date.now();
     try {
-      const repaired = await invokeGemini({
+      const repaired = await invokeAnthropic({
         model: modelName,
         temperature: 0,
         maxOutputTokens: 2200,
-        responseMimeType: 'application/json',
         messages: [
           { role: 'user', content: repairPrompt }
         ]
@@ -2379,11 +2312,10 @@ ${JSON.stringify(compactEmails, null, 2)}`;
 
   const simpleStart = Date.now();
   try {
-    const simpler = await invokeGemini({
+    const simpler = await invokeAnthropic({
       model: modelName,
       temperature: 0.2,
       maxOutputTokens: 1800,
-      responseMimeType: 'application/json',
       messages: [
         { role: 'user', content: simplerPrompt }
       ]
@@ -2442,11 +2374,10 @@ ${JSON.stringify(compactEmails, null, 2)}`;
 
   const retryStart = Date.now();
   try {
-    const retried = await invokeGemini({
+    const retried = await invokeAnthropic({
       model: modelName,
       temperature: 0.1,
       maxOutputTokens: 1800,
-      responseMimeType: 'application/json',
       messages: [
         { role: 'user', content: retryPrompt }
       ]
@@ -2654,13 +2585,13 @@ app.post('/api/email-chat', async (req, res) => {
       .replace('{{DATA_CONTEXT}}', dataContext);
     
     // Create chat model
-    const modelName = getGeminiModel();
+    const modelName = getAnthropicModel();
     
     // Call the model and track timing
     const apiStartTime = Date.now();
     let response;
     try {
-      response = await invokeGemini({
+      response = await invokeAnthropic({
         model: modelName,
         temperature: 0.7,
         maxOutputTokens: 2000,
@@ -2669,18 +2600,18 @@ app.post('/api/email-chat', async (req, res) => {
           { role: 'user', content: message }
         ]
       });
-      
+
       const apiDuration = Date.now() - apiStartTime;
-      
+
       // Estimate token counts (rough approximation: ~4 chars per token)
       const inputTokens = Math.ceil((systemPrompt.length + message.length) / 4);
       const outputTokens = Math.ceil((response.content?.length || 0) / 4);
-      
+
       logger.logApiCall(modelName, inputTokens, outputTokens, apiDuration, true, null, systemPrompt, message, response.content);
     } catch (apiError) {
       const apiDuration = Date.now() - apiStartTime;
       logger.logApiCall(modelName, 0, 0, apiDuration, false, apiError, systemPrompt, message, null);
-      logger.logError('Gemini API call', apiError);
+      logger.logError('Anthropic API call', apiError);
       throw apiError;
     }
     
