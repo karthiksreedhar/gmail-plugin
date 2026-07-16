@@ -2680,6 +2680,16 @@ function buildThreadParticipants(thread, fallbackName, fallbackUnread) {
   if (!order.length) {
     return [{ name: fallbackName || 'Unknown Sender', isUnread: !!fallbackUnread }];
   }
+
+  // Per-message isUnread wasn't captured until read/unread tracking was added, and the
+  // backfill button only patches the thread's own top-level isUnread, not each message
+  // inside it -- so an older single-correspondent thread can have a correct row-level
+  // flag but a stale/missing per-message one. With only one distinct participant
+  // there's no ambiguity about whose message that is, so trust the top-level flag.
+  if (order.length === 1 && fallbackUnread) {
+    byName.get(order[0]).isUnread = true;
+  }
+
   return order.map(name => byName.get(name));
 }
 
