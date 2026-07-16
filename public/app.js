@@ -1762,8 +1762,14 @@ async function updateEmailCategory(emailId, newCategory, oldCategory) {
             }
         }
 
-        async function openEmailThread(emailId, subject) {
+        async function openEmailThread(emailId, subject, pushHistory = true) {
             try {
+                if (pushHistory) {
+                    const url = new URL(window.location.href);
+                    url.searchParams.set('thread', emailId);
+                    history.pushState({ view: 'thread', emailId }, '', url.toString());
+                }
+
                 const listPane = document.querySelector('.email-list');
                 const threadPane = document.getElementById('threadView');
 
@@ -1780,7 +1786,7 @@ async function updateEmailCategory(emailId, newCategory, oldCategory) {
                     threadPane.innerHTML = `
                         <div class="thread-header">
                             <div class="thread-header-left">
-                                <button class="back-thread-btn" onclick="backToEmailList()">← Back</button>
+                                <button class="back-thread-btn" onclick="goBackFromThread()">← Back</button>
                                 <div class="thread-title">${safeSubject}</div>
                             </div>
                             <button class="reply-thread-btn" onclick="replyToCurrentThread()">Reply</button>
@@ -1848,7 +1854,7 @@ async function updateEmailCategory(emailId, newCategory, oldCategory) {
                     threadPane.innerHTML = `
                         <div class="thread-header">
                             <div class="thread-header-left">
-                                <button class="back-thread-btn" onclick="backToEmailList()">← Back</button>
+                                <button class="back-thread-btn" onclick="goBackFromThread()">← Back</button>
                                 <div class="thread-title">${safeSubject}</div>
                             </div>
                             <button class="reply-thread-btn" onclick="replyToCurrentThread()">Reply</button>
@@ -1954,7 +1960,7 @@ async function updateEmailCategory(emailId, newCategory, oldCategory) {
             threadPane.innerHTML = `
                 <div class="thread-header">
                     <div class="thread-header-left">
-                        <button class="back-thread-btn" onclick="backToEmailList()">← Back</button>
+                        <button class="back-thread-btn" onclick="goBackFromThread()">← Back</button>
                         <div class="thread-title">${safeSubject}</div>
                     </div>
                     <button class="reply-thread-btn" onclick="replyToCurrentThread()">Reply</button>
@@ -1986,6 +1992,33 @@ async function updateEmailCategory(emailId, newCategory, oldCategory) {
                 window.currentThreadContext = null;
             } catch (_) {}
         }
+
+        // "← Back" button: navigate browser history rather than manipulating the DOM
+        // directly, so it stays in sync with the actual back/forward buttons. The
+        // popstate listener below does the real DOM work in response.
+        function goBackFromThread() {
+            if (window.history.state && window.history.state.view === 'thread') {
+                history.back();
+            } else {
+                // No reliable app history to go back to (e.g. a direct/deep link) — just show the list.
+                const url = new URL(window.location.href);
+                url.searchParams.delete('thread');
+                history.replaceState({ view: 'inbox' }, '', url.toString());
+                backToEmailList();
+            }
+        }
+
+        // Keep the URL/back-button in sync with which thread (if any) is open.
+        window.addEventListener('popstate', (event) => {
+            const state = event.state;
+            const threadId = state?.emailId || new URLSearchParams(window.location.search).get('thread');
+            if (state?.view === 'thread' || threadId) {
+                const meta = (Array.isArray(allEmails) ? allEmails : []).find(e => e && e.id === threadId);
+                openEmailThread(threadId, meta?.subject || '', false);
+            } else {
+                backToEmailList();
+            }
+        });
 
         // Reply button entrypoint: open inline Generate Response with latest message filled in
         function replyToCurrentThread() {
@@ -13640,6 +13673,17 @@ async function renderEmailNotesPreview(el, emailId) {
             } catch (_) {}
         }
 
+        // Replace whatever page load put us here (e.g. the OAuth redirect chain) with a
+        // clean "inbox" history entry, so opening a thread pushes on top of THIS entry --
+        // meaning the browser/in-app back button always lands on the inbox, not auth.
+        function establishInboxHistoryBaseline() {
+            try {
+                const url = new URL(window.location.href);
+                url.searchParams.delete('thread');
+                window.history.replaceState({ view: 'inbox' }, '', url.toString());
+            } catch (_) {}
+        }
+
         document.addEventListener('DOMContentLoaded', function() {
             startHardBannerHeartbeat();
             const openFeatureManagerBtn = document.getElementById('openFeatureManagerBtn');
@@ -13664,6 +13708,7 @@ async function renderEmailNotesPreview(el, emailId) {
             loadFeatures(); // Load feature plugins
             initSearchBar();
             showFlashFromQuery();
+            establishInboxHistoryBaseline();
             (async () => {
                 try {
                     await loadEmails();
