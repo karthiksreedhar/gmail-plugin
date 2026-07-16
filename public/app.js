@@ -1504,7 +1504,7 @@ async function updateEmailCategory(emailId, newCategory, oldCategory) {
                 return `<span class="email-category ${cls}" style="${style}; cursor: pointer;" onclick="onCategoryPillClick(event, '${email.id}', '${String(cat).replace(/'/g, "\\'")}')">${cat}</span>`;
             }).join(' ');
 
-            // Get the original sender from email data
+            // Get the original sender from email data (fallback when participants isn't populated)
             let originalSender = 'Unknown Sender';
             if (email.originalFrom) {
                 originalSender = email.originalFrom.split('<')[0].trim();
@@ -1516,10 +1516,31 @@ async function updateEmailCategory(emailId, newCategory, oldCategory) {
                 }
             }
 
+            // Thread participant list: each name bolded independently based on whether
+            // THAT sender has an unread message in the thread (matches Gmail). Long lists
+            // truncate to first + last two, since we don't replicate Gmail's exact algorithm.
+            const participants = Array.isArray(email.participants) && email.participants.length
+                ? email.participants
+                : [{ name: originalSender, isUnread: !!email.isUnread }];
+            const MAX_SHOWN_PARTICIPANTS = 3;
+            const shownParticipants = participants.length <= MAX_SHOWN_PARTICIPANTS
+                ? participants.map(p => ({ ...p }))
+                : [participants[0], { name: '…', ellipsis: true }, ...participants.slice(-2)];
+            const participantsHtml = shownParticipants.map((p, i) => {
+                const isLast = i === shownParticipants.length - 1;
+                const nameHtml = p.ellipsis
+                    ? '<span style="color:#9aa0a6;">…</span>'
+                    : `<span style="font-weight:${p.isUnread ? '700' : '400'}; color:${p.isUnread ? 'var(--gmail-text)' : '#5f6368'};">${escapeHtml(p.name)}</span>`;
+                return nameHtml + (isLast ? '' : ', ');
+            }).join('');
+            const messageCountHtml = Number(email.messageCount) > 1
+                ? `<span style="font-size:12px; color:#9aa0a6; font-weight:400;">${Number(email.messageCount)}</span>`
+                : '';
+
             emailDiv.innerHTML = `
                 <div class="email-content">
                     <div class="email-header">
-                        <div class="email-from" style="display:flex; align-items:center; gap:8px;">${escapeHtml(originalSender)} ${gmailLinkHtml(email)}<div class="email-categories">${pillsHtml}</div></div>
+                        <div class="email-from" style="display:flex; align-items:center; gap:8px;">${participantsHtml} ${messageCountHtml} ${gmailLinkHtml(email)}<div class="email-categories">${pillsHtml}</div></div>
                         <div class="email-subject">${escapeHtml(email.subject)}</div>
                         <div class="email-date" style="display:flex; align-items:center; gap:8px;">
                             ${formatDate(email.date)}

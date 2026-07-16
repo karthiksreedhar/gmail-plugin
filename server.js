@@ -2648,6 +2648,41 @@ app.get('/api/current-categories', (req, res) => {
 });
 
 // API endpoint to get response emails - prioritize JSON data, Gmail API only for specific features
+// Extract a display name from a raw "Name <email@x.com>" header string.
+function extractSenderDisplayName(fromRaw) {
+  const str = String(fromRaw || '').trim();
+  if (!str) return 'Unknown Sender';
+  return str.split('<')[0].trim() || str;
+}
+
+// Build the per-thread participant list (senders other than the current user),
+// deduped by display name, in first-appearance order, each carrying whether
+// ANY of their messages in the thread is still unread.
+function buildThreadParticipants(thread, fallbackName, fallbackUnread) {
+  const messages = Array.isArray(thread?.messages) ? thread.messages : null;
+  if (!messages || !messages.length) {
+    return [{ name: fallbackName || 'Unknown Sender', isUnread: !!fallbackUnread }];
+  }
+
+  const order = [];
+  const byName = new Map();
+  messages.forEach(m => {
+    if (!m || m.isResponse) return; // skip the current user's own sent messages
+    const name = extractSenderDisplayName(m.from);
+    if (!byName.has(name)) {
+      byName.set(name, { name, isUnread: !!m.isUnread });
+      order.push(name);
+    } else if (m.isUnread) {
+      byName.get(name).isUnread = true;
+    }
+  });
+
+  if (!order.length) {
+    return [{ name: fallbackName || 'Unknown Sender', isUnread: !!fallbackUnread }];
+  }
+  return order.map(name => byName.get(name));
+}
+
 app.get('/api/response-emails', async (req, res) => {
   try {
     const userEmail = getEffectiveUserEmailForRequest(req);
@@ -2671,6 +2706,17 @@ app.get('/api/response-emails', async (req, res) => {
       source = 'file';
       responseEmails = await readUserArrayDoc('response_emails', userEmail, 'emails', paths.RESPONSE_EMAILS_PATH);
     }
+
+    // Thread data (message count + per-sender participants) lives in email_threads,
+    // not on the flat response_emails summary records -- join it in here.
+    const emailThreads = await readUserArrayDoc('email_threads', userEmail, 'threads', paths.EMAIL_THREADS_PATH);
+    const threadsByResponseId = new Map();
+    const threadsById = new Map();
+    (emailThreads || []).forEach(t => {
+      if (!t) return;
+      if (t.responseId) threadsByResponseId.set(t.responseId, t);
+      if (t.id) threadsById.set(t.id, t);
+    });
 
     // Recovery fallback: if Mongo has an empty array, try file data for this user.
     if (source === 'mongo' && (!Array.isArray(responseEmails) || responseEmails.length === 0)) {
@@ -2723,6 +2769,10 @@ app.get('/api/response-emails', async (req, res) => {
         return out;
       })();
 
+      const thread = threadsByResponseId.get(email.id) || threadsById.get(email.id);
+      const messageCount = Array.isArray(thread?.messages) && thread.messages.length ? thread.messages.length : 1;
+      const participants = buildThreadParticipants(thread, extractSenderDisplayName(email.originalFrom), email.isUnread);
+
       const validatedEmail = {
         id: email.id,
         subject: email.subject || 'No Subject',
@@ -2735,7 +2785,9 @@ app.get('/api/response-emails', async (req, res) => {
         snippet: email.snippet || (email.body ? email.body.substring(0, 100) + (email.body.length > 100 ? '...' : '') : 'No content available'),
         isImportant: !!email.isImportant,
         isStarred: !!email.isStarred,
-        isUnread: !!email.isUnread
+        isUnread: !!email.isUnread,
+        messageCount,
+        participants
       };
 
       validatedEmails.push(validatedEmail);

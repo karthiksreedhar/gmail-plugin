@@ -599,19 +599,19 @@
         }
 
         /* Read/unread styling, matching Gmail: unread is solid white with bold
-           sender/subject; read is greyed out with normal weight. */
+           subject; read is greyed out with normal weight. Sender names inside
+           .email-from are bolded individually per-participant (inline style,
+           set in JS) rather than as a single row-level toggle. */
         .email-item.email-unread {
             background: #fff;
         }
         .email-item.email-read {
             background: #f2f6fc;
         }
-        .email-item.email-unread .email-from,
         .email-item.email-unread .email-subject {
             font-weight: 700;
             color: var(--gmail-text);
         }
-        .email-item.email-read .email-from,
         .email-item.email-read .email-subject {
             font-weight: 400;
             color: var(--gmail-muted);
