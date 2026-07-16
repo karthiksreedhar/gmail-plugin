@@ -2894,12 +2894,75 @@
         .thread-message-card .message-header {
             background: #f8f9fa;
             border-bottom: 1px solid #e0e0e0;
+            cursor: pointer;
         }
         .thread-message-card.response {
             border-left: 4px solid #1a73e8;
         }
         .thread-message-card.original {
             border-left: 4px solid #9aa0a6;
+        }
+
+        .thread-message-wrapper {
+            margin-bottom: 8px;
+        }
+        .thread-message-wrapper.expanded {
+            margin-bottom: 16px;
+        }
+        .thread-message-wrapper.collapsed .thread-message-card {
+            display: none;
+        }
+        .thread-message-wrapper.expanded .thread-message-collapsed-row {
+            display: none;
+        }
+        .thread-message-collapsed-row {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 10px 14px;
+            border: 1px solid #e0e0e0;
+            border-radius: 8px;
+            background: #fff;
+            cursor: pointer;
+        }
+        .thread-message-collapsed-row:hover {
+            background: #f6f9fe;
+        }
+        .thread-message-avatar {
+            width: 28px;
+            height: 28px;
+            border-radius: 50%;
+            color: #fff;
+            font-size: 13px;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+        }
+        .thread-message-collapsed-from {
+            font-weight: 600;
+            color: #202124;
+            font-size: 13px;
+            flex-shrink: 0;
+            max-width: 180px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .thread-message-collapsed-snippet {
+            color: #5f6368;
+            font-size: 13px;
+            flex: 1;
+            min-width: 0;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .thread-message-collapsed-date {
+            color: #5f6368;
+            font-size: 12px;
+            flex-shrink: 0;
         }
         .thread-subject-row {
             padding: 8px 24px;

@@ -1880,30 +1880,65 @@ async function updateEmailCategory(emailId, newCategory, oldCategory) {
             });
         }
 
-        // Render the thread inside the RHS pane (Gmail-like)
+        const THREAD_AVATAR_COLORS = ['#1a73e8', '#188038', '#e37400', '#c5221f', '#9334e6', '#12a4af'];
+        function threadAvatarColorFor(name) {
+            const str = String(name || '').trim();
+            let hash = 0;
+            for (let i = 0; i < str.length; i++) hash = (hash * 31 + str.charCodeAt(i)) >>> 0;
+            return THREAD_AVATAR_COLORS[hash % THREAD_AVATAR_COLORS.length];
+        }
+        function threadSnippetFor(body) {
+            const plain = String(body || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+            return plain.length > 140 ? plain.slice(0, 140) + '…' : plain;
+        }
+        function toggleThreadMessage(el) {
+            const wrapper = el.closest('.thread-message-wrapper');
+            if (!wrapper) return;
+            const expanded = wrapper.classList.contains('expanded');
+            wrapper.classList.toggle('expanded', !expanded);
+            wrapper.classList.toggle('collapsed', expanded);
+        }
+
+        // Render the thread inside the RHS pane (Gmail-like): chronological order,
+        // only the newest (last) message expanded by default, earlier ones
+        // collapsed to a one-line summary that expands on click.
         function renderThreadInPane(subject, messages, category) {
             const threadPane = document.getElementById('threadView');
             if (!threadPane) return;
 
             const safeSubject = (typeof escapeHtml === 'function') ? escapeHtml(subject || 'Email Thread') : (subject || 'Email Thread');
-            const sorted = (Array.isArray(messages) ? messages.slice() : []).sort((a,b) => new Date(b.date) - new Date(a.date));
-            const cards = sorted.map(m => {
+            const sorted = (Array.isArray(messages) ? messages.slice() : []).sort((a,b) => new Date(a.date) - new Date(b.date));
+            const lastIdx = sorted.length - 1;
+            const cards = sorted.map((m, idx) => {
                 const toListRaw = Array.isArray(m.to) ? m.to.join(', ') : (m.to || '');
                 const toList = maskTextEmailsForPrivacy(toListRaw);
                 const fromSafe = (typeof escapeHtml === 'function') ? escapeHtml(m.from || 'Unknown Sender') : (m.from || 'Unknown Sender');
                 const toSafe = (typeof escapeHtml === 'function') ? escapeHtml(toList) : toList;
                 const badge = m.isResponse ? '<span class="response-badge">Your Response</span>' : '';
                 const bodyHtml = m.body != null ? String(m.body) : '';
+                const senderName = (m.from || 'Unknown Sender').split('<')[0].trim() || 'Unknown Sender';
+                const initial = senderName.charAt(0).toUpperCase() || '?';
+                const avatarColor = threadAvatarColorFor(senderName);
+                const snippetSafe = (typeof escapeHtml === 'function') ? escapeHtml(threadSnippetFor(m.body)) : threadSnippetFor(m.body);
+                const isExpanded = idx === lastIdx;
                 return `
-                    <div class="thread-message-card ${m.isResponse ? 'response' : 'original'}">
-                        <div class="message-header">
-                            <div class="message-from" style="display:flex; align-items:center; gap:8px;">
-                                ${fromSafe} ${badge}
-                            </div>
-                            <div class="message-to">To: ${toSafe}</div>
-                            <div class="message-date">${new Date(m.date).toLocaleString()}</div>
+                    <div class="thread-message-wrapper ${isExpanded ? 'expanded' : 'collapsed'}">
+                        <div class="thread-message-collapsed-row" onclick="toggleThreadMessage(this)">
+                            <div class="thread-message-avatar" style="background:${avatarColor};">${initial}</div>
+                            <div class="thread-message-collapsed-from">${fromSafe}</div>
+                            <div class="thread-message-collapsed-snippet">${snippetSafe}</div>
+                            <div class="thread-message-collapsed-date">${new Date(m.date).toLocaleDateString()}</div>
                         </div>
-                        <div class="message-body">${bodyHtml}</div>
+                        <div class="thread-message-card ${m.isResponse ? 'response' : 'original'}">
+                            <div class="message-header" onclick="toggleThreadMessage(this)">
+                                <div class="message-from" style="display:flex; align-items:center; gap:8px;">
+                                    ${fromSafe} ${badge}
+                                </div>
+                                <div class="message-to">To: ${toSafe}</div>
+                                <div class="message-date">${new Date(m.date).toLocaleString()}</div>
+                            </div>
+                            <div class="message-body">${bodyHtml}</div>
+                        </div>
                     </div>
                 `;
             }).join('');
