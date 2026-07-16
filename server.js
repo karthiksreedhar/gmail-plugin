@@ -2734,7 +2734,8 @@ app.get('/api/response-emails', async (req, res) => {
         body: email.body || email.originalBody || email.snippet || 'No content available',
         snippet: email.snippet || (email.body ? email.body.substring(0, 100) + (email.body.length > 100 ? '...' : '') : 'No content available'),
         isImportant: !!email.isImportant,
-        isStarred: !!email.isStarred
+        isStarred: !!email.isStarred,
+        isUnread: !!email.isUnread
       };
 
       validatedEmails.push(validatedEmail);
@@ -2764,10 +2765,11 @@ app.get('/api/response-emails', async (req, res) => {
   }
 });
 
-// One-time backfill: past emails synced before the IMPORTANT/STARRED-label capture
-// was added have no isImportant/isStarred field. This re-fetches labelIds from Gmail
-// for those threads only (one call covers both flags) and patches response_emails /
-// email_threads in place. Safe to re-run; only touches records missing either field.
+// One-time backfill: past emails synced before the IMPORTANT/STARRED/UNREAD-label
+// capture was added have no isImportant/isStarred/isUnread field. This re-fetches
+// labelIds from Gmail for those threads only (one call covers all three flags) and
+// patches response_emails / email_threads in place. Safe to re-run; only touches
+// records missing any of the three fields.
 app.post('/api/backfill-important-flag', async (req, res) => {
   try {
     const userEmail = getEffectiveUserEmailForRequest(req);
@@ -2783,7 +2785,9 @@ app.post('/api/backfill-important-flag', async (req, res) => {
       readUserArrayDoc('email_threads', userEmail, 'threads', paths.EMAIL_THREADS_PATH)
     ]);
 
-    const needsBackfill = (item) => item && item.threadId && (typeof item.isImportant !== 'boolean' || typeof item.isStarred !== 'boolean');
+    const needsBackfill = (item) => item && item.threadId && (
+      typeof item.isImportant !== 'boolean' || typeof item.isStarred !== 'boolean' || typeof item.isUnread !== 'boolean'
+    );
     const threadIdsToCheck = new Set();
     (responses || []).forEach(r => { if (needsBackfill(r)) threadIdsToCheck.add(String(r.threadId)); });
     (threads || []).forEach(t => { if (needsBackfill(t)) threadIdsToCheck.add(String(t.threadId)); });
@@ -2808,7 +2812,8 @@ app.post('/api/backfill-important-flag', async (req, res) => {
           const msgs = Array.isArray(threadResp?.data?.messages) ? threadResp.data.messages : [];
           const isImportant = msgs.some(m => Array.isArray(m?.labelIds) && m.labelIds.includes('IMPORTANT'));
           const isStarred = msgs.some(m => Array.isArray(m?.labelIds) && m.labelIds.includes('STARRED'));
-          flagsByThreadId.set(threadId, { isImportant, isStarred });
+          const isUnread = msgs.some(m => Array.isArray(m?.labelIds) && m.labelIds.includes('UNREAD'));
+          flagsByThreadId.set(threadId, { isImportant, isStarred, isUnread });
         } catch (e) {
           failed++;
           console.warn(`[BackfillImportant] Failed to load thread ${threadId}:`, e?.message || e);
@@ -2826,7 +2831,8 @@ app.post('/api/backfill-important-flag', async (req, res) => {
       return {
         ...r,
         isImportant: typeof r.isImportant === 'boolean' ? r.isImportant : flags.isImportant,
-        isStarred: typeof r.isStarred === 'boolean' ? r.isStarred : flags.isStarred
+        isStarred: typeof r.isStarred === 'boolean' ? r.isStarred : flags.isStarred,
+        isUnread: typeof r.isUnread === 'boolean' ? r.isUnread : flags.isUnread
       };
     });
 
@@ -2839,7 +2845,8 @@ app.post('/api/backfill-important-flag', async (req, res) => {
       return {
         ...t,
         isImportant: typeof t.isImportant === 'boolean' ? t.isImportant : flags.isImportant,
-        isStarred: typeof t.isStarred === 'boolean' ? t.isStarred : flags.isStarred
+        isStarred: typeof t.isStarred === 'boolean' ? t.isStarred : flags.isStarred,
+        isUnread: typeof t.isUnread === 'boolean' ? t.isUnread : flags.isUnread
       };
     });
 
@@ -2860,6 +2867,53 @@ app.post('/api/backfill-important-flag', async (req, res) => {
   } catch (error) {
     console.error('Error backfilling important flag:', error);
     res.status(500).json({ success: false, error: 'Failed to backfill important flag', details: error.message });
+  }
+});
+
+// Mark a thread as read WITHIN THIS SYSTEM ONLY -- does not touch the user's actual
+// Gmail inbox. Called when a user opens a thread in the app.
+app.post('/api/mark-thread-read/:emailId', async (req, res) => {
+  try {
+    const emailId = req.params.emailId;
+    if (!emailId) {
+      return res.status(400).json({ success: false, error: 'emailId is required' });
+    }
+
+    const userEmail = getEffectiveUserEmailForRequest(req);
+    const paths = getUserPaths(userEmail);
+
+    const [responses, threads] = await Promise.all([
+      readUserArrayDoc('response_emails', userEmail, 'emails', paths.RESPONSE_EMAILS_PATH),
+      readUserArrayDoc('email_threads', userEmail, 'threads', paths.EMAIL_THREADS_PATH)
+    ]);
+
+    let changed = false;
+    const nextResponses = (responses || []).map(r => {
+      if (r && r.id === emailId && r.isUnread !== false) {
+        changed = true;
+        return { ...r, isUnread: false };
+      }
+      return r;
+    });
+    const nextThreads = (threads || []).map(t => {
+      if (t && (t.responseId === emailId || t.id === emailId) && t.isUnread !== false) {
+        changed = true;
+        return { ...t, isUnread: false };
+      }
+      return t;
+    });
+
+    if (changed) {
+      await Promise.all([
+        writeUserArrayDoc('response_emails', userEmail, 'emails', nextResponses, paths.RESPONSE_EMAILS_PATH),
+        writeUserArrayDoc('email_threads', userEmail, 'threads', nextThreads, paths.EMAIL_THREADS_PATH)
+      ]);
+    }
+
+    return res.json({ success: true, changed });
+  } catch (error) {
+    console.error('Error marking thread as read:', error);
+    res.status(500).json({ success: false, error: 'Failed to mark thread as read', details: error.message });
   }
 });
 
@@ -3950,6 +4004,7 @@ function buildAutoSyncMessageEntry(rawMessage, userEmail) {
   const isResponse = isUserAuthoredMessage(from, userEmail);
   const isImportant = Array.isArray(rawMessage?.labelIds) && rawMessage.labelIds.includes('IMPORTANT');
   const isStarred = Array.isArray(rawMessage?.labelIds) && rawMessage.labelIds.includes('STARRED');
+  const isUnread = Array.isArray(rawMessage?.labelIds) && rawMessage.labelIds.includes('UNREAD');
 
   return {
     id: String(rawMessage?.id || ''),
@@ -3962,6 +4017,7 @@ function buildAutoSyncMessageEntry(rawMessage, userEmail) {
     isResponse,
     isImportant,
     isStarred,
+    isUnread,
     webUrl,
     gmailInternalDateMs: Number.isFinite(internalDateMs) && internalDateMs > 0 ? internalDateMs : parsedDate.getTime()
   };
@@ -4044,6 +4100,7 @@ async function fetchInboxThreadCandidatesForUser(gmailClient, latestStoredTimest
         const latestThreadTimestampMs = Math.max(...allMessages.map(msg => getItemTimestampMs(msg)));
         const isImportant = allMessages.some(msg => !!msg.isImportant);
         const isStarred = allMessages.some(msg => !!msg.isStarred);
+        const isUnread = allMessages.some(msg => !!msg.isUnread);
 
         candidates.push({
           id: latestIncoming.id,
@@ -4059,6 +4116,7 @@ async function fetchInboxThreadCandidatesForUser(gmailClient, latestStoredTimest
           webUrl: latestIncoming.webUrl || latestMessage.webUrl || '',
           isImportant,
           isStarred,
+          isUnread,
           messages: allMessages.map(msg => ({
             id: msg.id,
             from: msg.from,
@@ -4069,6 +4127,7 @@ async function fetchInboxThreadCandidatesForUser(gmailClient, latestStoredTimest
             isResponse: !!msg.isResponse,
             isImportant: !!msg.isImportant,
             isStarred: !!msg.isStarred,
+            isUnread: !!msg.isUnread,
             gmailInternalDateMs: msg.gmailInternalDateMs,
             webUrl: msg.webUrl || ''
           }))
@@ -4262,6 +4321,10 @@ async function syncUserInboxFromGmail(userEmail, opts = {}) {
         : (existingResponse?.autoSyncExplanation || (classifiedById[email.id] && classifiedById[email.id].explanation) || '');
       const isImportant = typeof email.isImportant === 'boolean' ? email.isImportant : !!existingResponse?.isImportant;
       const isStarred = typeof email.isStarred === 'boolean' ? email.isStarred : !!existingResponse?.isStarred;
+      // Preserve an in-app "marked read" (isUnread:false) unless Gmail itself sent a fresh
+      // sync for this thread (e.g. a new reply arrived), in which case trust the live value --
+      // a genuinely new message should re-surface the thread as unread.
+      const isUnread = typeof email.isUnread === 'boolean' ? email.isUnread : !!existingResponse?.isUnread;
       const responseRecord = {
         id: existingSummaryId,
         threadId: rawThreadId || undefined,
@@ -4279,6 +4342,7 @@ async function syncUserInboxFromGmail(userEmail, opts = {}) {
         gmailInternalDateMs: Number(email?.gmailInternalDateMs || 0) || undefined,
         isImportant,
         isStarred,
+        isUnread,
         source: 'auto-sync-v4',
         autoSynced: true,
         autoSyncedAt: syncedAt,
@@ -4305,6 +4369,7 @@ async function syncUserInboxFromGmail(userEmail, opts = {}) {
         gmailInternalDateMs: Number(email?.gmailInternalDateMs || 0) || undefined,
         isImportant,
         isStarred,
+        isUnread,
         responseId: existingSummaryId,
         source: 'auto-sync-v4',
         autoSynced: true,

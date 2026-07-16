@@ -679,12 +679,12 @@ window.__categoryChats = window.__categoryChats || {};
                 }
                 showSuccessPopup(
                     `Checked ${data.threadsChecked} thread(s). Updated ${data.updatedResponses} email(s)${data.failed ? `, ${data.failed} failed` : ''}.`,
-                    'Important/Starred Flags Updated'
+                    'Important/Starred/Read Flags Updated'
                 );
                 await loadEmails();
             } catch (error) {
-                console.error('Backfill important/starred flags failed:', error);
-                showErrorPopup(error.message || 'Failed to update important/starred flags.', 'Update Failed');
+                console.error('Backfill important/starred/read flags failed:', error);
+                showErrorPopup(error.message || 'Failed to update important/starred/read flags.', 'Update Failed');
             } finally {
                 if (btn) {
                     btn.disabled = false;
@@ -1485,7 +1485,8 @@ async function updateEmailCategory(emailId, newCategory, oldCategory) {
 
         function buildEmailRowElement(email) {
             const emailDiv = document.createElement('div');
-            emailDiv.className = 'email-item';
+            emailDiv.className = `email-item ${email && email.isUnread ? 'email-unread' : 'email-read'}`;
+            emailDiv.dataset.emailId = email.id;
             emailDiv.onclick = () => openEmailThread(email.id, email.subject);
 
             // Apply yellow background if this email was recently added
@@ -1762,6 +1763,24 @@ async function updateEmailCategory(emailId, newCategory, oldCategory) {
             }
         }
 
+        // Marks a thread read WITHIN THIS SYSTEM ONLY (does not touch the user's real
+        // Gmail inbox). Updates the in-memory list + visible row immediately, and
+        // persists it server-side so it survives a refresh.
+        function markThreadReadLocally(emailId) {
+            try {
+                if (Array.isArray(allEmails)) {
+                    const email = allEmails.find(e => e && e.id === emailId);
+                    if (email && email.isUnread) email.isUnread = false;
+                }
+                const row = document.querySelector(`.email-item[data-email-id="${CSS.escape(emailId)}"]`);
+                if (row) {
+                    row.classList.remove('email-unread');
+                    row.classList.add('email-read');
+                }
+            } catch (_) {}
+            fetch(`/api/mark-thread-read/${encodeURIComponent(emailId)}`, { method: 'POST' }).catch(() => {});
+        }
+
         async function openEmailThread(emailId, subject, pushHistory = true) {
             try {
                 if (pushHistory) {
@@ -1769,6 +1788,7 @@ async function updateEmailCategory(emailId, newCategory, oldCategory) {
                     url.searchParams.set('thread', emailId);
                     history.pushState({ view: 'thread', emailId }, '', url.toString());
                 }
+                markThreadReadLocally(emailId);
 
                 const listPane = document.querySelector('.email-list');
                 const threadPane = document.getElementById('threadView');

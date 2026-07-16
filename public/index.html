@@ -598,6 +598,29 @@
             border-bottom: none;
         }
 
+        /* Read/unread styling, matching Gmail: unread is solid white with bold
+           sender/subject; read is greyed out with normal weight. */
+        .email-item.email-unread {
+            background: #fff;
+        }
+        .email-item.email-read {
+            background: #f2f6fc;
+        }
+        .email-item.email-unread .email-from,
+        .email-item.email-unread .email-subject {
+            font-weight: 700;
+            color: var(--gmail-text);
+        }
+        .email-item.email-read .email-from,
+        .email-item.email-read .email-subject {
+            font-weight: 400;
+            color: var(--gmail-muted);
+        }
+        .email-item.email-unread:hover,
+        .email-item.email-read:hover {
+            background-color: #f6f9fe;
+        }
+
         .inbox-section-toggle-btn {
             border: none;
             background: transparent;
@@ -3036,7 +3059,7 @@
                 </div>
             </div>
             <div class="header-buttons">
-                <button id="backfillImportantBtn" class="view-saved-generations-btn header-compact-btn" onclick="backfillImportantFlags()" title="Fetch the Important and Starred flags from Gmail for emails synced before these features existed">Update Important/Starred Flags</button>
+                <button id="backfillImportantBtn" class="view-saved-generations-btn header-compact-btn" onclick="backfillImportantFlags()" title="Fetch the Important, Starred, and Read/Unread flags from Gmail for emails synced before these features existed">Update Important/Starred/Read Flags</button>
                 <button class="view-saved-generations-btn header-compact-btn" onclick="showViewSavedGenerationsModal()">View Saved Generations</button>
                 <button class="view-refinements-btn header-compact-btn" onclick="showViewRefinementsModal()">View Refinements</button>
                 <button class="view-refinements-btn header-compact-btn" style="background-color: #d93025;" onclick="window.location.href='/api/auth/logout'">Logout</button>
