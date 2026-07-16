@@ -1789,13 +1789,14 @@ function extractEmailBody(payload) {
 }
 
 // Get Gmail email content
-async function getGmailEmail(messageId) {
+async function getGmailEmail(messageId, gmailClientOverride) {
   try {
-    if (!gmail) {
+    const client = gmailClientOverride || gmail;
+    if (!client) {
       throw new Error('Gmail API not initialized');
     }
 
-    const response = await gmail.users.messages.get({
+    const response = await client.users.messages.get({
       userId: 'me',
       id: messageId,
       format: 'full'
@@ -2860,10 +2861,15 @@ app.get('/api/email-thread/:emailId', async (req, res) => {
   try {
     const emailId = req.params.emailId;
     console.log(`Fetching thread for email ID: ${emailId}`);
-    
-    // Load email threads from JSON file
-    const emailThreads = loadEmailThreads();
-    
+
+    // Resolve the user from this request's own session/cookie, not the shared
+    // CURRENT_USER_EMAIL global (loadEmailThreads/loadResponseEmails read that
+    // global, which can be reassigned by a concurrent request from another user).
+    const userEmail = getEffectiveUserEmailForRequest(req);
+    const paths = getUserPaths(userEmail);
+
+    const emailThreads = await readUserArrayDoc('email_threads', userEmail, 'threads', paths.EMAIL_THREADS_PATH);
+
     // Prefer lookup by responseId (new) with legacy fallback by id
     const thread = emailThreads.find(t => t && (t.responseId === emailId || t.id === emailId));
     
@@ -2903,7 +2909,7 @@ app.get('/api/email-thread/:emailId', async (req, res) => {
     }
     
     // If no thread found in JSON, try to construct from response emails
-    const responseEmails = loadResponseEmails();
+    const responseEmails = await readUserArrayDoc('response_emails', userEmail, 'emails', paths.RESPONSE_EMAILS_PATH);
     const email = responseEmails.find(e => e.id === emailId);
     
     if (!email) {
@@ -5351,8 +5357,16 @@ app.get('/api/gmail-message/:id', async (req, res) => {
  */
 app.get('/api/gmail-thread-by-message/:id', async (req, res) => {
   try {
-    if (!gmail) {
-      return gmailAuthRedirectOrJson(req, res, 401, 'Gmail authentication required');
+    // Build a Gmail client scoped to THIS request's authenticated user, rather
+    // than using the shared `gmail` singleton (which is only rebuilt on an
+    // explicit user-switch and does not track per-request session identity --
+    // if another user's request had switched CURRENT_USER_EMAIL, or the
+    // singleton was simply never authenticated as this session's user, calls
+    // through it would fail or operate on the wrong mailbox entirely).
+    const userEmail = getEffectiveUserEmailForRequest(req);
+    const { gmailClient, reason } = await buildGmailClientForUser(userEmail);
+    if (!gmailClient) {
+      return gmailAuthRedirectOrJson(req, res, 401, reason || 'Gmail authentication required');
     }
     const msgId = req.params.id;
     if (!msgId) {
@@ -5360,7 +5374,7 @@ app.get('/api/gmail-thread-by-message/:id', async (req, res) => {
     }
 
     // Get the message to determine its threadId
-    const msgResp = await gmail.users.messages.get({
+    const msgResp = await gmailClient.users.messages.get({
       userId: 'me',
       id: msgId,
       format: 'metadata'
@@ -5371,24 +5385,23 @@ app.get('/api/gmail-thread-by-message/:id', async (req, res) => {
     }
 
     // Fetch the entire thread
-    const threadResp = await gmail.users.threads.get({
+    const threadResp = await gmailClient.users.threads.get({
       userId: 'me',
       id: threadId
     });
     const rawMessages = threadResp?.data?.messages || [];
 
     // Identify "me" for response detection
-    const me1 = (SENDING_EMAIL || CURRENT_USER_EMAIL || '').toLowerCase();
-    const me2 = (CURRENT_USER_EMAIL || '').toLowerCase();
+    const me = userEmail.toLowerCase();
 
     // Build normalized message objects
     const out = [];
     for (const m of rawMessages) {
       try {
-        const data = await getGmailEmail(m.id);
+        const data = await getGmailEmail(m.id, gmailClient);
         const toArr = (data.to || '').split(',').map(e => e.trim()).filter(Boolean);
         const lowerFrom = (data.from || '').toLowerCase();
-        const isResp = lowerFrom.includes(me1) || lowerFrom.includes(me2);
+        const isResp = lowerFrom.includes(me);
         const cleanedBody = isResp ? await cleanResponseBody(data.body) : data.body;
 
         out.push({
