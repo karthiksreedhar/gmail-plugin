@@ -2957,12 +2957,22 @@ app.post('/api/mark-thread-read/:emailId', async (req, res) => {
       }
       return r;
     });
+    // Also reset isUnread on every message stored inside the thread, not just the
+    // thread's own top-level flag -- otherwise per-sender bolding (which reads
+    // each message's isUnread individually) stays stuck showing unread senders
+    // even though the row itself now correctly shows as read.
     const nextThreads = (threads || []).map(t => {
-      if (t && (t.responseId === emailId || t.id === emailId) && t.isUnread !== false) {
-        changed = true;
-        return { ...t, isUnread: false };
-      }
-      return t;
+      if (!t || (t.responseId !== emailId && t.id !== emailId)) return t;
+      const messages = Array.isArray(t.messages) ? t.messages : null;
+      const needsTopLevel = t.isUnread !== false;
+      const needsMessages = !!messages && messages.some(m => m && m.isUnread !== false);
+      if (!needsTopLevel && !needsMessages) return t;
+      changed = true;
+      return {
+        ...t,
+        isUnread: false,
+        messages: messages ? messages.map(m => (m && m.isUnread !== false ? { ...m, isUnread: false } : m)) : t.messages
+      };
     });
 
     if (changed) {
