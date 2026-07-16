@@ -679,12 +679,12 @@ window.__categoryChats = window.__categoryChats || {};
                 }
                 showSuccessPopup(
                     `Checked ${data.threadsChecked} thread(s). Updated ${data.updatedResponses} email(s)${data.failed ? `, ${data.failed} failed` : ''}.`,
-                    'Important Flags Updated'
+                    'Important/Starred Flags Updated'
                 );
                 await loadEmails();
             } catch (error) {
-                console.error('Backfill important flags failed:', error);
-                showErrorPopup(error.message || 'Failed to update important flags.', 'Update Failed');
+                console.error('Backfill important/starred flags failed:', error);
+                showErrorPopup(error.message || 'Failed to update important/starred flags.', 'Update Failed');
             } finally {
                 if (btn) {
                     btn.disabled = false;
@@ -1541,7 +1541,7 @@ async function updateEmailCategory(emailId, newCategory, oldCategory) {
 
         // Persists across re-renders (e.g. category filter changes, data refresh)
         // so a section stays hidden until the user explicitly shows it again.
-        const inboxSectionCollapsed = { important: false, other: false };
+        const inboxSectionCollapsed = { important: false, starred: false, other: false };
 
         function toggleInboxSection(sectionKey) {
             inboxSectionCollapsed[sectionKey] = !inboxSectionCollapsed[sectionKey];
@@ -1587,14 +1587,22 @@ async function updateEmailCategory(emailId, newCategory, oldCategory) {
             }
 
             const sorted = (emails || []).slice().sort((a, b) => new Date(b.date) - new Date(a.date));
+            // Mutually exclusive, matching Gmail's own precedence: an email that's both
+            // important and starred shows once, under Important.
             const important = sorted.filter(e => e && e.isImportant);
-            const everythingElse = sorted.filter(e => !e || !e.isImportant);
+            const starred = sorted.filter(e => e && e.isStarred && !e.isImportant);
+            const everythingElse = sorted.filter(e => !e || (!e.isImportant && !e.isStarred));
 
-            // Only split into sections when there's at least one important email to distinguish;
-            // otherwise fall back to a single flat list to avoid an empty "Important" header.
-            if (important.length > 0 && everythingElse.length > 0) {
-                appendInboxSection(container, 'important', 'Important', important);
-                appendInboxSection(container, 'other', 'Everything else', everythingElse);
+            const sections = [
+                { key: 'important', label: 'Important', items: important },
+                { key: 'starred', label: 'Starred', items: starred },
+                { key: 'other', label: 'Everything else', items: everythingElse }
+            ].filter(s => s.items.length > 0);
+
+            // Only split into sections when there's more than one group to distinguish;
+            // otherwise fall back to a single flat list to avoid a lone header.
+            if (sections.length > 1) {
+                sections.forEach(s => appendInboxSection(container, s.key, s.label, s.items));
             } else {
                 sorted.forEach(email => container.appendChild(buildEmailRowElement(email)));
             }
