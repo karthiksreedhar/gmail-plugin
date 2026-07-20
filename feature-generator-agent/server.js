@@ -1307,9 +1307,13 @@ async function loadUserEmailData(userEmail, logger = null) {
     const categoriesDoc = await getDoc('categories', userEmail);
     data.categories = categoriesDoc?.categories || [];
     
-    // Load category guidelines
+    // Load category guidelines. Canonical shape is { categories: [{name, notes}] }
+    // (matches the main app's classifier); fall back to the older
+    // { guidelines: {name: text} } map shape for docs written before this.
     const guidelinesDoc = await getDoc('category_guidelines', userEmail);
-    data.categoryGuidelines = guidelinesDoc?.guidelines || {};
+    data.categoryGuidelines = Array.isArray(guidelinesDoc?.categories)
+      ? Object.fromEntries(guidelinesDoc.categories.filter(c => c && c.name).map(c => [c.name, c.notes || '']))
+      : (guidelinesDoc?.guidelines || {});
     
     // Load category summaries
     const summariesDoc = await getDoc('category_summaries', userEmail);
@@ -1620,6 +1624,28 @@ async function validateModification(modification) {
   return errors;
 }
 
+// Merge one or more category guidelines into the persisted array-shaped doc
+// -- { categories: [{name, notes}], updatedAt } -- matching the shape the
+// main app's classifier actually reads (root server.js's saveCategoryGuidelines).
+// Falls back to reading the older { guidelines: {name: text} } map shape on
+// read, so nothing already written under that shape is silently lost.
+async function mergeCategoryGuidelines(userEmail, updates) {
+  const doc = await getUserDoc('category_guidelines', userEmail);
+  const existingArray = Array.isArray(doc?.categories)
+    ? doc.categories.slice()
+    : Object.entries(doc?.guidelines || {}).map(([name, notes]) => ({ name, notes }));
+
+  const byName = new Map(existingArray.filter(c => c?.name).map(c => [c.name, c]));
+  for (const update of (updates || [])) {
+    if (!update?.name) continue;
+    byName.set(update.name, { name: update.name, notes: update.notes || '' });
+  }
+  const next = Array.from(byName.values());
+
+  await setUserDoc('category_guidelines', userEmail, { categories: next, updatedAt: new Date().toISOString() });
+  return next;
+}
+
 async function executeModification(modification) {
   const result = {
     success: false,
@@ -1654,9 +1680,7 @@ async function executeModification(modification) {
         
       case 'updateGuideline':
         // Update category guideline
-        const guidelinesDoc = await getUserDoc('category_guidelines', userEmail) || { guidelines: {} };
-        const updatedGuidelines = { ...(guidelinesDoc.guidelines || {}), [data.category]: data.guideline };
-        await setUserDoc('category_guidelines', userEmail, { guidelines: updatedGuidelines });
+        await mergeCategoryGuidelines(userEmail, [{ name: data.category, notes: data.guideline }]);
         result.success = true;
         result.changesPreview = `Updated guideline for '${data.category}': ${data.guideline.substring(0, 100)}...`;
         break;
@@ -2049,7 +2073,11 @@ ${dataContext}`;
   return normalized;
 }
 
-function normalizeCategorySuggestions(input, validEmailIds = new Set()) {
+// emailById: optional Map<id, originalEmailRecord> used to backfill
+// subject/from/date/snippet when the model was only given (and only echoed
+// back) an id + reason, rather than full metadata -- keeps prompts small
+// without ever trusting the model to reproduce metadata accurately.
+function normalizeCategorySuggestions(input, validEmailIds = new Set(), emailById = new Map()) {
   const canonicalIdMap = new Map();
   const canonicalizeId = (value) => String(value || '').trim().replace(/^thread-/i, '');
   for (const id of validEmailIds) {
@@ -2081,12 +2109,13 @@ function normalizeCategorySuggestions(input, validEmailIds = new Set()) {
       if (validEmailIds.size && !validEmailIds.has(id)) continue;
 
       seenIds.add(id);
+      const meta = emailById.get(id) || {};
       suggestedEmails.push({
         id,
-        subject: String(emailObj?.subject || 'No Subject'),
-        from: String(emailObj?.from || 'Unknown Sender'),
-        date: String(emailObj?.date || ''),
-        snippet: String(emailObj?.snippet || '').trim(),
+        subject: String(emailObj?.subject || meta.subject || 'No Subject'),
+        from: String(emailObj?.from || meta.from || 'Unknown Sender'),
+        date: String(emailObj?.date || meta.date || ''),
+        snippet: String(emailObj?.snippet || meta.snippet || '').trim(),
         reason: String(emailObj?.reason || 'This email appears to fit this category.').trim()
       });
     }
@@ -2115,301 +2144,252 @@ function hasSufficientCategorySuggestions(suggestions) {
   return categories.every(cat => (cat?.suggestedEmails || []).length >= 2);
 }
 
+const CATEGORY_SUGGESTION_BATCH_SIZE = 25;
+const CATEGORY_SUGGESTION_BATCH_CONCURRENCY = 3;
+const CATEGORY_SUGGESTION_MAX_OTHER_EMAILS = 150;
+
+// Render existing categories + whatever guideline/summary text is on file for
+// each, so batch/consolidation prompts can avoid proposing new categories
+// that duplicate what already exists.
+function formatExistingCategoriesContext(userData) {
+  const names = Array.isArray(userData?.categories) ? userData.categories : [];
+  if (!names.length) return '(none yet)';
+  return names.map(name => {
+    const summary = userData?.categorySummaries?.[name];
+    const guideline = userData?.categoryGuidelines?.[name];
+    const lines = [`- ${name}`];
+    if (summary) lines.push(`  Summary: ${summary}`);
+    if (guideline) lines.push(`  Guideline: ${guideline}`);
+    return lines.join('\n');
+  }).join('\n');
+}
+
+// Map stage: chunk the (already-capped) "Other" pool into batches and ask the
+// model to propose candidate category clusters per batch, run with bounded
+// concurrency. Each batch only sends id+reason for suggested emails (not full
+// metadata) -- normalizeCategorySuggestions backfills real subject/from/date/
+// snippet from emailById afterward, so nothing depends on the model echoing
+// metadata accurately.
+async function generateCandidateCategoryBatches(otherEmails, userData, logger, modelName, requestedCategories) {
+  const existingCategoriesContext = formatExistingCategoriesContext(userData);
+  const batches = [];
+  for (let i = 0; i < otherEmails.length; i += CATEGORY_SUGGESTION_BATCH_SIZE) {
+    batches.push(otherEmails.slice(i, i + CATEGORY_SUGGESTION_BATCH_SIZE));
+  }
+
+  const candidateCategories = [];
+  let cursor = 0;
+  async function worker() {
+    while (true) {
+      const batchIndex = cursor++;
+      if (batchIndex >= batches.length) return;
+      const batch = batches[batchIndex];
+
+      const batchPrompt = `You are analyzing a BATCH of emails currently categorized as "Other" (batch ${batchIndex + 1} of ${batches.length}) to propose candidate new categories.
+
+Other batches from the same "Other" pool are being analyzed separately and will be merged with this batch's proposals afterward, so:
+- Propose whatever candidate categories genuinely fit THIS batch, even if that's just 1-2
+- Don't force every email into a category; skip emails that don't clearly fit anything
+- It's fine if a category you propose looks similar to one another batch proposes -- they'll be merged later
+
+EXISTING CATEGORIES (do not propose new categories that duplicate these -- if an email clearly fits one of these, leave it out of your suggestions):
+${existingCategoriesContext}
+
+${requestedCategories.length ? `USER REQUESTED THESE CATEGORIES: ${requestedCategories.join(', ')} - prioritize these if they make sense for emails in this batch.` : ''}
+
+EMAILS IN THIS BATCH (${batch.length} emails):
+${batch.map((email, i) => `${i + 1}. ID: ${email.id}\n   Subject: ${email.subject}\n   From: ${email.from}\n   Date: ${email.date || ''}\n   Snippet: ${(email.snippet || '').substring(0, 200)}`).join('\n')}
+
+Respond with ONLY this JSON (no other text):
+{
+  "categories": [
+    {
+      "name": "Category Name",
+      "description": "What this category is for",
+      "guideline": "How to classify emails into this category",
+      "confidence": 0.8,
+      "suggestedEmails": [
+        { "id": "email_id_from_above", "reason": "Why this email fits" }
+      ]
+    }
+  ]
+}
+
+IMPORTANT:
+- Only use email IDs from the batch above
+- Suggest 2+ emails per category when possible
+- Return valid JSON only`;
+
+      const started = Date.now();
+      try {
+        const response = await invokeAnthropic({
+          model: modelName,
+          temperature: 0.3,
+          maxOutputTokens: 1800,
+          messages: [{ role: 'user', content: batchPrompt }]
+        });
+        const duration = Date.now() - started;
+        logger?.logApiCall(
+          modelName,
+          Math.ceil(batchPrompt.length / 4),
+          Math.ceil((response.content?.length || 0) / 4),
+          duration,
+          true,
+          null,
+          null,
+          batchPrompt,
+          response.content
+        );
+
+        const parsed = parseSuggestionEnvelope(response.content);
+        const categories = Array.isArray(parsed?.categories) ? parsed.categories : [];
+        candidateCategories.push(...categories);
+      } catch (error) {
+        const duration = Date.now() - started;
+        logger?.logApiCall(modelName, 0, 0, duration, false, error, null, batchPrompt, null);
+        logger?.logError(`Category suggestion batch ${batchIndex + 1}/${batches.length} API call`, error);
+        // Skip this batch -- other batches still contribute candidates.
+      }
+    }
+  }
+
+  const workerCount = Math.max(1, Math.min(CATEGORY_SUGGESTION_BATCH_CONCURRENCY, batches.length));
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+
+  return candidateCategories;
+}
+
+// Reduce stage: merge near-duplicate/overlapping candidate categories from
+// all batches into a final clean set. Only names/descriptions/counts/email
+// IDs+reasons are sent here, not full email metadata again, keeping this
+// prompt small regardless of how many batches ran.
+async function consolidateCandidateCategories(candidateCategories, userData, logger, modelName, validEmailIds, emailById) {
+  if (!candidateCategories.length) {
+    return { suggestions: { action: 'createCategories', categories: [] }, rawResponse: '' };
+  }
+
+  const existingCategoriesContext = formatExistingCategoriesContext(userData);
+  const compactCandidates = candidateCategories.map(cat => ({
+    name: cat?.name,
+    description: cat?.description,
+    guideline: cat?.guideline,
+    confidence: cat?.confidence,
+    suggestedEmails: (Array.isArray(cat?.suggestedEmails) ? cat.suggestedEmails : [])
+      .map(e => ({ id: e?.id, reason: e?.reason }))
+      .filter(e => e.id)
+  })).filter(cat => cat.name && cat.suggestedEmails.length);
+
+  async function runConsolidation(extraInstruction) {
+    const consolidationPrompt = `You previously analyzed batches of "Other" emails and proposed the CANDIDATE categories below. Different batches were analyzed independently, so some candidates likely overlap or are near-duplicates. Consolidate them into a final, clean set of categories.
+
+EXISTING CATEGORIES (do not recreate these):
+${existingCategoriesContext}
+
+CANDIDATE CATEGORIES (from all batches, may contain duplicates/overlaps):
+${JSON.stringify(compactCandidates, null, 2)}
+
+TASK:
+- Merge near-duplicate or overlapping candidates into a single final category (e.g. "Conference Invites" + "Conference Travel" -> "Conferences")
+- Keep genuinely distinct categories separate
+- Produce 2-6 final categories total
+- For each final category, list every email ID that belongs to it, pulling from the candidates you merged -- use ONLY IDs that appear in the candidates above, never invent new ones
+- Write one clear final name, description, and guideline per category
+${extraInstruction || ''}
+
+Respond with ONLY this JSON (no other text):
+{
+  "categories": [
+    {
+      "name": "Final Category Name",
+      "description": "What this category is for",
+      "guideline": "How to classify emails into this category",
+      "confidence": 0.8,
+      "suggestedEmails": [
+        { "id": "email_id", "reason": "Why this email fits" }
+      ]
+    }
+  ]
+}`;
+
+    const started = Date.now();
+    const response = await invokeAnthropic({
+      model: modelName,
+      temperature: extraInstruction ? 0 : 0.2,
+      maxOutputTokens: 2500,
+      messages: [{ role: 'user', content: consolidationPrompt }]
+    });
+    const duration = Date.now() - started;
+    logger?.logApiCall(
+      modelName,
+      Math.ceil(consolidationPrompt.length / 4),
+      Math.ceil((response.content?.length || 0) / 4),
+      duration,
+      true,
+      null,
+      null,
+      consolidationPrompt,
+      response.content
+    );
+
+    const parsed = parseSuggestionEnvelope(response.content);
+    return { normalized: normalizeCategorySuggestions(parsed, validEmailIds, emailById), rawResponse: response.content };
+  }
+
+  const first = await runConsolidation();
+  if (hasSufficientCategorySuggestions(first.normalized)) {
+    return { suggestions: first.normalized, rawResponse: first.rawResponse };
+  }
+
+  // Single retry of the consolidation prompt only (not the batches) if the
+  // result was too sparse -- replaces the old repair/simpler/retry tiers,
+  // which all re-prompted the same fixed 20-email slice with no new data.
+  try {
+    const retried = await runConsolidation('\nThe previous attempt produced too few categories/emails -- merge more aggressively and be less conservative about which candidate emails to include.');
+    if (hasSufficientCategorySuggestions(retried.normalized)) {
+      return { suggestions: retried.normalized, rawResponse: retried.rawResponse };
+    }
+  } catch (retryError) {
+    logger?.logError('Category suggestions consolidation retry', retryError);
+  }
+
+  throw new Error('AI response was not valid category-suggestion JSON');
+}
+
 async function generateCategorySuggestionsForUser(userData, logger, options = {}) {
   const requestedCategories = Array.isArray(options.requestedCategories)
     ? options.requestedCategories.filter(Boolean)
     : [];
   const modelName = getAnthropicModel();
-  const otherEmails = (userData?.responseEmails || []).filter(email =>
+  const allOtherEmails = (userData?.responseEmails || []).filter(email =>
     email.category === 'Other' || email.category === 'Uncategorized' || !email.category
   );
-  const validEmailIds = new Set(otherEmails.map(email => String(email?.id || '').trim()).filter(Boolean));
 
-  if (otherEmails.length === 0) {
+  if (allOtherEmails.length === 0) {
     return {
       suggestions: { action: 'createCategories', categories: [] },
       otherEmailsCount: 0
     };
   }
 
-  const analysisPrompt = `You are analyzing emails currently categorized as "Other" to suggest better category assignments.
+  // Cap to the most recent N to bound cost/latency; older "Other" emails
+  // beyond that just aren't considered in this run and can be picked up in a
+  // later one as the pool changes.
+  const otherEmails = allOtherEmails
+    .slice()
+    .sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0))
+    .slice(0, CATEGORY_SUGGESTION_MAX_OTHER_EMAILS);
 
-EXISTING CATEGORIES: ${userData.categories.join(', ')}
+  const validEmailIds = new Set(otherEmails.map(email => String(email?.id || '').trim()).filter(Boolean));
+  const emailById = new Map(otherEmails.map(email => [String(email?.id || '').trim(), email]));
 
-EMAILS IN "OTHER" CATEGORY (${otherEmails.length} emails):
-${otherEmails.slice(0, 20).map((email, i) => `
-${i + 1}. ID: ${email.id}
-   Subject: ${email.subject}
-   From: ${email.from}
-   Date: ${email.date || ''}
-   Snippet: ${(email.snippet || '').substring(0, 200)}
-`).join('')}
+  const candidateCategories = await generateCandidateCategoryBatches(otherEmails, userData, logger, modelName, requestedCategories);
+  const { suggestions, rawResponse } = await consolidateCandidateCategories(candidateCategories, userData, logger, modelName, validEmailIds, emailById);
 
-TASK: Analyze these "Other" emails and suggest 2-4 new category names that would better organize them. For each suggested category:
-
-1. Choose a clear, descriptive name
-2. Identify which emails from the "Other" list would fit
-3. Explain why those emails belong together
-
-${requestedCategories.length ? `USER REQUESTED THESE CATEGORIES: ${requestedCategories.join(', ')} - prioritize these if they make sense for the emails.` : ''}
-
-Respond with ONLY this JSON format (no other text):
-
-{
-  "suggestions": {
-    "action": "createCategories",
-    "categories": [
-      {
-        "name": "Category Name",
-        "description": "What this category is for",
-        "guideline": "How to classify emails into this category",
-        "confidence": 0.8,
-        "suggestedEmails": [
-          {
-            "id": "email_id_from_above",
-            "subject": "Email Subject",
-            "from": "sender@example.com",
-            "date": "date_from_email",
-            "snippet": "Brief preview...",
-            "reason": "Why this email fits this category"
-          }
-        ]
-      }
-    ]
-  }
-}
-
-IMPORTANT:
-- Only suggest emails that are actually in the "Other" list above
-- Use the exact email IDs from the list
-- Suggest 3-8 emails per category
-- Keep category names professional and descriptive
-- High confidence (0.7+) suggestions only
-- Return valid JSON only`;
-
-  const apiStartTime = Date.now();
-  let aiResponse;
-  try {
-    aiResponse = await invokeAnthropic({
-      model: modelName,
-      temperature: 0.3,
-      maxOutputTokens: 2200,
-      messages: [
-        { role: 'user', content: analysisPrompt }
-      ]
-    });
-
-    const apiDuration = Date.now() - apiStartTime;
-    const inputTokens = Math.ceil(analysisPrompt.length / 4);
-    const outputTokens = Math.ceil((aiResponse.content?.length || 0) / 4);
-    logger?.logApiCall(modelName, inputTokens, outputTokens, apiDuration, true, null, null, analysisPrompt, aiResponse.content);
-  } catch (apiError) {
-    const apiDuration = Date.now() - apiStartTime;
-    logger?.logApiCall(modelName, 0, 0, apiDuration, false, apiError, null, analysisPrompt, null);
-    logger?.logError('Category suggestions API call', apiError);
-    throw apiError;
-  }
-
-  let suggestions = parseSuggestionEnvelope(aiResponse.content);
-  if (!suggestions) {
-    const repairPrompt = `Fix this into valid JSON for category suggestions.
-
-Return JSON only with this shape:
-{
-  "suggestions": {
-    "action": "createCategories",
-    "categories": [
-      {
-        "name": "Category Name",
-        "description": "Description",
-        "guideline": "Guideline",
-        "confidence": 0.8,
-        "suggestedEmails": [
-          {
-            "id": "email_id",
-            "subject": "Subject",
-            "from": "sender@example.com",
-            "date": "2024-01-01",
-            "snippet": "Preview",
-            "reason": "Why it fits"
-          }
-        ]
-      }
-    ]
-  }
-}
-
-Original response:
-${String(aiResponse.content || '').slice(0, 12000)}`;
-
-    const repairStart = Date.now();
-    try {
-      const repaired = await invokeAnthropic({
-        model: modelName,
-        temperature: 0,
-        maxOutputTokens: 2200,
-        messages: [
-          { role: 'user', content: repairPrompt }
-        ]
-      });
-      const repairDuration = Date.now() - repairStart;
-      logger?.logApiCall(
-        modelName,
-        Math.ceil(repairPrompt.length / 4),
-        Math.ceil((repaired.content?.length || 0) / 4),
-        repairDuration,
-        true,
-        null,
-        null,
-        repairPrompt,
-        repaired.content
-      );
-      suggestions = parseSuggestionEnvelope(repaired.content);
-    } catch (repairError) {
-      const repairDuration = Date.now() - repairStart;
-      logger?.logApiCall(modelName, 0, 0, repairDuration, false, repairError, null, repairPrompt, null);
-      logger?.logError('Category suggestions repair API call', repairError);
-    }
-  }
-
-  const normalized = normalizeCategorySuggestions(suggestions, validEmailIds);
-  if (hasSufficientCategorySuggestions(normalized)) {
-    return {
-      suggestions: normalized,
-      otherEmailsCount: otherEmails.length,
-      rawResponse: aiResponse.content
-    };
-  }
-
-  const compactEmails = otherEmails.slice(0, 20).map(email => ({
-    id: String(email?.id || ''),
-    subject: String(email?.subject || ''),
-    from: String(email?.from || ''),
-    date: String(email?.date || ''),
-    snippet: String(email?.snippet || '').slice(0, 160)
-  }));
-  const simplerPrompt = `Return valid JSON only.
-
-Group these emails currently in Other into 2-4 potential new categories.
-Use ONLY the exact ids provided below. Do not invent or modify ids.
-Try to produce at least 2 categories with at least 2 emails per category when the data supports it.
-
-Output shape:
-{
-  "categories": [
-    {
-      "name": "Category Name",
-      "description": "Short description",
-      "guideline": "Short guideline",
-      "emails": ["exact_id_1", "exact_id_2"],
-      "confidence": 0.8
-    }
-  ]
-}
-
-Emails:
-${JSON.stringify(compactEmails, null, 2)}`;
-
-  const simpleStart = Date.now();
-  try {
-    const simpler = await invokeAnthropic({
-      model: modelName,
-      temperature: 0.2,
-      maxOutputTokens: 1800,
-      messages: [
-        { role: 'user', content: simplerPrompt }
-      ]
-    });
-    const simpleDuration = Date.now() - simpleStart;
-    logger?.logApiCall(
-      modelName,
-      Math.ceil(simplerPrompt.length / 4),
-      Math.ceil((simpler.content?.length || 0) / 4),
-      simpleDuration,
-      true,
-      null,
-      null,
-      simplerPrompt,
-      simpler.content
-    );
-    const simplerParsed = parseSuggestionEnvelope(simpler.content);
-    const simplerNormalized = normalizeCategorySuggestions(simplerParsed, validEmailIds);
-    if (hasSufficientCategorySuggestions(simplerNormalized)) {
-      return {
-        suggestions: simplerNormalized,
-        otherEmailsCount: otherEmails.length,
-        rawResponse: simpler.content
-      };
-    }
-  } catch (simpleError) {
-    const simpleDuration = Date.now() - simpleStart;
-    logger?.logApiCall(modelName, 0, 0, simpleDuration, false, simpleError, null, simplerPrompt, null);
-    logger?.logError('Category suggestions simplified API call', simpleError);
-  }
-
-  const retryPrompt = `Return valid JSON only.
-
-The previous result was too sparse. Re-cluster these emails from Other into 2-4 meaningful new categories.
-Requirements:
-- Produce at least 2 categories
-- Put at least 2 exact email IDs in each category
-- Use ONLY exact IDs from the list below
-- Prefer covering 4-8 total emails
-
-Output shape:
-{
-  "categories": [
-    {
-      "name": "Category Name",
-      "description": "Short description",
-      "guideline": "Short guideline",
-      "emails": ["exact_id_1", "exact_id_2"],
-      "confidence": 0.8
-    }
-  ]
-}
-
-Emails:
-${JSON.stringify(compactEmails, null, 2)}`;
-
-  const retryStart = Date.now();
-  try {
-    const retried = await invokeAnthropic({
-      model: modelName,
-      temperature: 0.1,
-      maxOutputTokens: 1800,
-      messages: [
-        { role: 'user', content: retryPrompt }
-      ]
-    });
-    const retryDuration = Date.now() - retryStart;
-    logger?.logApiCall(
-      modelName,
-      Math.ceil(retryPrompt.length / 4),
-      Math.ceil((retried.content?.length || 0) / 4),
-      retryDuration,
-      true,
-      null,
-      null,
-      retryPrompt,
-      retried.content
-    );
-    const retriedParsed = parseSuggestionEnvelope(retried.content);
-    const retriedNormalized = normalizeCategorySuggestions(retriedParsed, validEmailIds);
-    if (hasSufficientCategorySuggestions(retriedNormalized)) {
-      return {
-        suggestions: retriedNormalized,
-        otherEmailsCount: otherEmails.length,
-        rawResponse: retried.content
-      };
-    }
-  } catch (retryError) {
-    const retryDuration = Date.now() - retryStart;
-    logger?.logApiCall(modelName, 0, 0, retryDuration, false, retryError, null, retryPrompt, null);
-    logger?.logError('Category suggestions retry API call', retryError);
-  }
-
-  throw new Error('AI response was not valid category-suggestion JSON');
+  return {
+    suggestions,
+    otherEmailsCount: allOtherEmails.length,
+    rawResponse
+  };
 }
 
 // Email Chat endpoint
@@ -2783,17 +2763,13 @@ app.post('/api/email-chat-category-suggestions', async (req, res) => {
     }
     
     // Step 2: Add guidelines for new categories
-    const guidelinesDoc = await getUserDoc('category_guidelines', targetUser) || { guidelines: {} };
-    const updatedGuidelines = { ...(guidelinesDoc.guidelines || {}) };
-    
-    for (const cat of categorySuggestions.categories) {
-      if (cat.guideline) {
-        updatedGuidelines[cat.name] = cat.guideline;
-        console.log(`   📝 Added guideline for: ${cat.name}`);
-      }
+    const guidelineUpdates = categorySuggestions.categories
+      .filter(cat => cat.guideline)
+      .map(cat => ({ name: cat.name, notes: cat.guideline }));
+    if (guidelineUpdates.length > 0) {
+      await mergeCategoryGuidelines(targetUser, guidelineUpdates);
+      guidelineUpdates.forEach(u => console.log(`   📝 Added guideline for: ${u.name}`));
     }
-    
-    await setUserDoc('category_guidelines', targetUser, { guidelines: updatedGuidelines });
     
     // Step 3: Add summaries for new categories
     const summariesDoc = await getUserDoc('category_summaries', targetUser) || { summaries: {} };
@@ -3089,12 +3065,81 @@ app.post('/api/category-suggestions', async (req, res) => {
   } catch (error) {
     console.error('Error generating category suggestions:', error);
     logger.logError('category-suggestions endpoint', error);
-    
+
     res.status(500).json({
       success: false,
       error: error.message || 'Failed to generate category suggestions',
       operationsLog: logger.getLog()
     });
+  }
+});
+
+// GET /api/email-thread-preview/:emailId?userEmail=<email>
+// Returns the full stored thread for a suggested email (from email_threads,
+// the same collection the main app uses), or a synthesized single-message
+// preview when no full thread is on file for it.
+app.get('/api/email-thread-preview/:emailId', async (req, res) => {
+  const emailId = req.params.emailId;
+  const { userEmail } = req.query;
+
+  if (!emailId) {
+    return res.status(400).json({ success: false, error: 'emailId is required' });
+  }
+
+  try {
+    await ensureMongoReady();
+  } catch (_) {}
+
+  if (!mongoInitialized) {
+    return res.status(503).json({
+      success: false,
+      error: mongoInitError
+        ? `Database unavailable: ${mongoInitError.message}`
+        : 'Database connection not ready'
+    });
+  }
+
+  const availableUsers = await getAvailableUsers();
+  const normalizedRequested = String(userEmail || '').trim().toLowerCase();
+  const targetUser = normalizedRequested && availableUsers.includes(normalizedRequested)
+    ? normalizedRequested
+    : (availableUsers[0] || DEFAULT_AVAILABLE_USERS[0]);
+
+  try {
+    const userData = await loadUserEmailData(targetUser);
+
+    const thread = (userData.emailThreads || []).find(t => t && (t.responseId === emailId || t.id === emailId));
+    if (thread && Array.isArray(thread.messages) && thread.messages.length > 0) {
+      return res.json({
+        success: true,
+        subject: thread.subject || '',
+        messages: thread.messages,
+        source: 'thread'
+      });
+    }
+
+    const email = (userData.responseEmails || []).find(e => e && String(e.id) === emailId);
+    if (email) {
+      return res.json({
+        success: true,
+        subject: email.subject || '',
+        messages: [{
+          id: email.id,
+          from: email.from || email.originalFrom || 'Unknown Sender',
+          to: [],
+          date: email.date || new Date().toISOString(),
+          subject: email.subject || '',
+          body: email.body || email.snippet || '(no preview available)',
+          isResponse: false
+        }],
+        source: 'synthesized'
+      });
+    }
+
+    return res.status(404).json({ success: false, error: 'Email not found' });
+  } catch (error) {
+    console.error('Error loading email thread preview:', error);
+    res.status(500).json({ success: false, error: error.message || 'Failed to load thread preview' });
   }
 });
 

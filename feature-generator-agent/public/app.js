@@ -2555,7 +2555,7 @@ function syncCategorySelectionUI(categoryName, enabled) {
   const previewPanel = document.querySelector(`.category-panel[data-category="${categoryName}"]`);
   if (previewPanel) previewPanel.classList.toggle('category-disabled', !enabled);
 
-  const rhsPanelEl = document.querySelector(`.rhs-category-panel[data-category="${categoryName}"]`);
+  const rhsPanelEl = document.querySelector(`.rhs-category-tab-panel[data-category="${categoryName}"]`);
   if (rhsPanelEl) rhsPanelEl.classList.toggle('rhs-category-disabled', !enabled);
 }
 
@@ -2768,6 +2768,18 @@ async function refreshAvailableUsers() {
   }
 }
 
+// Format the just-fetched suggestions payload as a chat message, so the chat
+// transcript shows what was proposed alongside the interactive RHS panel.
+function formatCategorySuggestionsForChat(suggestions) {
+  const categories = Array.isArray(suggestions?.categories) ? suggestions.categories : [];
+  const lines = categories.map(cat => {
+    const count = Array.isArray(cat.suggestedEmails) ? cat.suggestedEmails.length : 0;
+    const desc = cat.description ? ` — ${cat.description}` : '';
+    return `- **${cat.name}** (${count} email${count === 1 ? '' : 's'})${desc}`;
+  });
+  return `📂 **Found ${categories.length} category suggestion${categories.length === 1 ? '' : 's'} for "Other" emails**\n\n${lines.join('\n')}\n\nReview and approve in the panel on the right →`;
+}
+
 // Trigger category suggestions
 async function triggerCategorySuggestions() {
   if (isGenerating) return;
@@ -2792,6 +2804,7 @@ async function triggerCategorySuggestions() {
       if (data.suggestions && data.suggestions.categories.length > 0) {
         console.log('📂 Category suggestions received:', data.suggestions);
         showRHSCategorySuggestionPanel(data.suggestions);
+        addMessage('assistant', formatCategorySuggestionsForChat(data.suggestions));
         showToast(`Found ${data.suggestions.categories.length} category suggestions`, 'success');
       } else {
         showToast('No "Other" emails found to categorize', 'info');
@@ -2837,8 +2850,8 @@ function showRHSCategorySuggestionPanel(suggestions) {
   // Update selected count
   updateRHSSelectedCount();
   
-  // Show panel with slide-in animation
-  rhsPanel.style.display = 'block';
+  // Show panel with slide-in animation (flex, matching the CSS's flex-direction:column layout)
+  rhsPanel.style.display = 'flex';
   setTimeout(() => rhsPanel.classList.add('show'), 10);
   
   // Activate first tab
@@ -2876,7 +2889,7 @@ function generateRHSPanels(categories) {
   
   categories.forEach((cat, index) => {
     const panel = document.createElement('div');
-    panel.className = `rhs-category-panel ${index === 0 ? 'active' : ''}`;
+    panel.className = `rhs-category-tab-panel ${index === 0 ? 'active' : ''}`;
     panel.dataset.index = index;
     panel.dataset.category = cat.name;
     
@@ -2965,7 +2978,7 @@ function setupRHSPanelEventListeners() {
   selectAllCheckboxes.forEach(selectAll => {
     selectAll.addEventListener('change', () => {
       const categoryName = selectAll.dataset.category;
-      const panel = rhsCategoryPanels.querySelector(`.rhs-category-panel[data-category="${categoryName}"]`);
+      const panel = rhsCategoryPanels.querySelector(`.rhs-category-tab-panel[data-category="${categoryName}"]`);
       const checkboxes = panel.querySelectorAll('.rhs-email-select-checkbox');
       
       checkboxes.forEach(cb => {
@@ -3015,7 +3028,7 @@ function setupRHSPanelEventListeners() {
 function activateRHSTab(index) {
   // Update tab states
   const tabs = rhsCategoryTabs.querySelectorAll('.rhs-category-tab');
-  const panels = rhsCategoryPanels.querySelectorAll('.rhs-category-panel');
+  const panels = rhsCategoryPanels.querySelectorAll('.rhs-category-tab-panel');
   
   tabs.forEach((tab, i) => {
     tab.classList.toggle('active', i === index);
@@ -3061,19 +3074,9 @@ function updateRHSSelectedCount() {
 }
 
 // Show email thread in RHS panel
-function showRHSEmailThread(emailId) {
-  // Find the email in suggestions
-  let email = null;
-  for (const cat of rhsCategorySuggestions.categories) {
-    if (cat.suggestedEmails) {
-      email = cat.suggestedEmails.find(e => e.id === emailId);
-      if (email) break;
-    }
-  }
-  
-  if (!email) return;
-  
-  // Update thread viewer
+// Fallback snippet-only render (used when the real thread fetch fails or
+// while it's loading) -- this is today's original behavior.
+function renderRHSThreadSnippetFallback(email) {
   document.getElementById('rhsThreadSubject').textContent = email.subject || 'No Subject';
   document.getElementById('rhsThreadContent').innerHTML = `
     <div class="rhs-thread-detail">
@@ -3088,9 +3091,104 @@ function showRHSEmailThread(emailId) {
       </div>
     </div>
   `;
-  
-  // Show thread viewer
+}
+
+const RHS_THREAD_AVATAR_COLORS = ['#6366f1', '#10b981', '#f59e0b', '#ef4444', '#a855f7', '#06b6d4'];
+function rhsThreadAvatarColorFor(name) {
+  const str = String(name || '').trim();
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) hash = (hash * 31 + str.charCodeAt(i)) >>> 0;
+  return RHS_THREAD_AVATAR_COLORS[hash % RHS_THREAD_AVATAR_COLORS.length];
+}
+function rhsThreadSnippetFor(body) {
+  const plain = String(body || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+  return plain.length > 140 ? plain.slice(0, 140) + '…' : plain;
+}
+function toggleRHSThreadMsg(el) {
+  const wrapper = el.closest('.rhs-thread-msg-wrapper');
+  if (!wrapper) return;
+  const expanded = wrapper.classList.contains('expanded');
+  wrapper.classList.toggle('expanded', !expanded);
+  wrapper.classList.toggle('collapsed', expanded);
+}
+
+// Real multi-message thread render, Gmail-style: chronological order, only the
+// newest message expanded by default, earlier ones collapsed to a one-line
+// row that expands on click.
+function renderRHSThreadMessages(subject, messages, source) {
+  document.getElementById('rhsThreadSubject').textContent = subject || 'No Subject';
+
+  const sorted = (Array.isArray(messages) ? messages.slice() : []).sort((a, b) => new Date(a.date) - new Date(b.date));
+  const lastIdx = sorted.length - 1;
+  const previewNotice = (source === 'synthesized')
+    ? '<div class="rhs-thread-preview-notice">Preview only -- full thread not on file for this email.</div>'
+    : '';
+
+  const cards = sorted.map((m, idx) => {
+    const senderName = (m.from || 'Unknown Sender').split('<')[0].trim() || 'Unknown Sender';
+    const initial = senderName.charAt(0).toUpperCase() || '?';
+    const avatarColor = rhsThreadAvatarColorFor(senderName);
+    const fromSafe = escapeHtml(senderName);
+    const snippetSafe = escapeHtml(rhsThreadSnippetFor(m.body));
+    const bodyHtml = m.body != null ? String(m.body) : '';
+    const isExpanded = idx === lastIdx;
+    const badge = m.isResponse ? '<span class="rhs-thread-msg-badge">Your Response</span>' : '';
+
+    return `
+      <div class="rhs-thread-msg-wrapper ${isExpanded ? 'expanded' : 'collapsed'}">
+        <div class="rhs-thread-msg-collapsed-row" onclick="toggleRHSThreadMsg(this)">
+          <div class="rhs-thread-msg-avatar" style="background:${avatarColor};">${initial}</div>
+          <div class="rhs-thread-msg-collapsed-from">${fromSafe}</div>
+          <div class="rhs-thread-msg-collapsed-snippet">${snippetSafe}</div>
+          <div class="rhs-thread-msg-collapsed-date">${new Date(m.date).toLocaleDateString()}</div>
+        </div>
+        <div class="rhs-thread-msg-card">
+          <div class="rhs-thread-msg-header" onclick="toggleRHSThreadMsg(this)">
+            <div class="rhs-thread-msg-from">${fromSafe} ${badge}</div>
+            <div class="rhs-thread-msg-date">${new Date(m.date).toLocaleString()}</div>
+          </div>
+          <div class="rhs-thread-msg-body">${bodyHtml}</div>
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  document.getElementById('rhsThreadContent').innerHTML = `
+    ${previewNotice}
+    ${cards || '<div class="rhs-no-emails">No messages found.</div>'}
+  `;
+}
+
+async function showRHSEmailThread(emailId) {
+  // Find the suggested email as a fallback source (snippet/reason) in case the fetch fails.
+  let email = null;
+  for (const cat of rhsCategorySuggestions.categories) {
+    if (cat.suggestedEmails) {
+      email = cat.suggestedEmails.find(e => e.id === emailId);
+      if (email) break;
+    }
+  }
+  if (!email) return;
+
+  // Loading state
+  document.getElementById('rhsThreadSubject').textContent = email.subject || 'No Subject';
+  document.getElementById('rhsThreadContent').innerHTML = '<div class="rhs-thread-loading">Loading thread...</div>';
   rhsThreadViewer.style.display = 'block';
+
+  try {
+    const userEmail = selectedUserDropdown ? selectedUserDropdown.value : '';
+    const resp = await fetch(`/api/email-thread-preview/${encodeURIComponent(emailId)}?userEmail=${encodeURIComponent(userEmail)}`);
+    const data = await resp.json().catch(() => ({}));
+
+    if (resp.ok && data && data.success && Array.isArray(data.messages) && data.messages.length) {
+      renderRHSThreadMessages(data.subject || email.subject, data.messages, data.source);
+    } else {
+      renderRHSThreadSnippetFallback(email);
+    }
+  } catch (error) {
+    console.error('Failed to load thread preview:', error);
+    renderRHSThreadSnippetFallback(email);
+  }
 }
 
 // Close RHS thread viewer
