@@ -6725,28 +6725,22 @@ app.delete('/api/categories/:name', async (req, res) => {
       catList = [...catList, 'Other'];
     }
 
-    // Helper: reassign a record away from the deleted category
+    // Helper: reassign a record away from the deleted category.
+    // Only touches records that actually had the deleted category -- must
+    // NOT mutate (or re-save) records that never referenced it, and must
+    // NOT append "Other" onto a record that still has a real category left
+    // after removal. "Other" is only the fallback when a record would
+    // otherwise end up with zero categories.
     function reassignEmail(rec) {
-      let changed = false;
-
-      // Primary
-      if (rec.category && String(rec.category).toLowerCase() === targetLc) {
-        rec.category = 'Other';
-        changed = true;
-      }
-
-      // Additional
+      const hadPrimary = !!(rec.category && String(rec.category).toLowerCase() === targetLc);
       const arr = Array.isArray(rec.categories) ? rec.categories.slice() : [];
+      const hadInArray = arr.some(c => String(c || '').toLowerCase() === targetLc);
+
+      if (!hadPrimary && !hadInArray) {
+        return false; // never referenced the deleted category -- leave untouched
+      }
+
       const filtered = arr.filter(c => String(c || '').toLowerCase() !== targetLc);
-
-      if (filtered.length !== arr.length) {
-        changed = true;
-      }
-
-      // Ensure "Other" appears in multi-categories
-      if (!filtered.some(c => String(c || '').toLowerCase() === 'other')) {
-        filtered.push('Other');
-      }
 
       // Deduplicate case-insensitively
       const seen = new Set();
@@ -6758,15 +6752,19 @@ app.delete('/api/categories/:name', async (req, res) => {
           dedup.push(c);
         }
       }
+
+      // Only fall back to "Other" if this record would otherwise have none.
+      if (dedup.length === 0) {
+        dedup.push('Other');
+      }
       rec.categories = dedup;
 
-      // Ensure primary is set (prefer non-Other); otherwise force "Other"
-      if (!rec.category || String(rec.category).trim() === '') {
-        rec.category = rec.categories.find(c => String(c).toLowerCase() !== 'other') || 'Other';
-        changed = true;
+      // Primary: reassign only if it was pointing at the deleted category.
+      if (hadPrimary) {
+        rec.category = dedup.find(c => String(c).toLowerCase() !== 'other') || 'Other';
       }
 
-      return changed;
+      return true;
     }
 
     // Apply to responses

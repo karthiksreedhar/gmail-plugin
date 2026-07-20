@@ -2850,9 +2850,8 @@ function showRHSCategorySuggestionPanel(suggestions) {
   // Update selected count
   updateRHSSelectedCount();
   
-  // Show panel with slide-in animation (flex, matching the CSS's flex-direction:column layout)
+  // Show as a normal inline grid box next to chat (no more slide-in overlay)
   rhsPanel.style.display = 'flex';
-  setTimeout(() => rhsPanel.classList.add('show'), 10);
   
   // Activate first tab
   if (suggestions.categories.length > 0) {
@@ -3264,13 +3263,10 @@ async function handleRHSApprove() {
 
 // Close RHS panel
 function closeRHSPanel() {
-  rhsPanel.classList.remove('show');
-  setTimeout(() => {
-    rhsPanel.style.display = 'none';
-    rhsCategorySuggestions = null;
-    rhsEmailSelections = {};
-    rhsCategorySelections = {};
-  }, 300);
+  rhsPanel.style.display = 'none';
+  rhsCategorySuggestions = null;
+  rhsEmailSelections = {};
+  rhsCategorySelections = {};
 }
 
 // Update the existing setMode function to show/hide category suggestion trigger
