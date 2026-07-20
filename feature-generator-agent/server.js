@@ -2335,16 +2335,22 @@ Respond with ONLY this JSON (no other text):
     return { normalized: normalizeCategorySuggestions(parsed, validEmailIds, emailById), rawResponse: response.content };
   }
 
-  const first = await runConsolidation();
-  if (hasSufficientCategorySuggestions(first.normalized)) {
-    return { suggestions: first.normalized, rawResponse: first.rawResponse };
+  let first = null;
+  try {
+    first = await runConsolidation();
+    if (hasSufficientCategorySuggestions(first.normalized)) {
+      return { suggestions: first.normalized, rawResponse: first.rawResponse };
+    }
+  } catch (firstError) {
+    logger?.logError('Category suggestions consolidation', firstError);
   }
 
   // Single retry of the consolidation prompt only (not the batches) if the
   // result was too sparse -- replaces the old repair/simpler/retry tiers,
   // which all re-prompted the same fixed 20-email slice with no new data.
+  let retried = null;
   try {
-    const retried = await runConsolidation('\nThe previous attempt produced too few categories/emails -- merge more aggressively and be less conservative about which candidate emails to include.');
+    retried = await runConsolidation('\nThe previous attempt produced too few categories/emails -- merge more aggressively and be less conservative about which candidate emails to include.');
     if (hasSufficientCategorySuggestions(retried.normalized)) {
       return { suggestions: retried.normalized, rawResponse: retried.rawResponse };
     }
@@ -2352,7 +2358,19 @@ Respond with ONLY this JSON (no other text):
     logger?.logError('Category suggestions consolidation retry', retryError);
   }
 
-  throw new Error('AI response was not valid category-suggestion JSON');
+  // Neither attempt cleared the "sufficient" quality bar (>=2 categories,
+  // >=4 emails, >=2/category) -- rather than discarding everything and
+  // erroring out, show whichever attempt found more. An empty result here
+  // is still handled gracefully client-side ("No Other emails found").
+  const firstCount = first?.normalized?.categories?.length || 0;
+  const retriedCount = retried?.normalized?.categories?.length || 0;
+  if (retriedCount >= firstCount && retried) {
+    return { suggestions: retried.normalized, rawResponse: retried.rawResponse };
+  }
+  if (first) {
+    return { suggestions: first.normalized, rawResponse: first.rawResponse };
+  }
+  return { suggestions: { action: 'createCategories', categories: [] }, rawResponse: '' };
 }
 
 async function generateCategorySuggestionsForUser(userData, logger, options = {}) {
