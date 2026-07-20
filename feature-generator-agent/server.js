@@ -1,7 +1,7 @@
 /**
  * Feature Generator Agent Server
- * Express server for generating Gmail Plugin features using Gemini
- * Also supports Email Chat mode for querying email data
+ * Express server for generating Gmail Plugin features
+ * Also supports Email Chat mode for querying email data (Anthropic-backed)
  */
 
 require('dotenv').config();
