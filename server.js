@@ -1812,25 +1812,11 @@ async function getGmailEmail(messageId, gmailClientOverride) {
     const to = headers.find(h => h.name === 'To')?.value || 'Unknown Recipient';
     const date = headers.find(h => h.name === 'Date')?.value || new Date().toISOString();
     const threadId = message.threadId;
-    // RFC 822 Message-ID (for robust Gmail web link via search)
-    const messageIdHeader =
-      headers.find(h => String(h.name || '').toLowerCase() === 'message-id')?.value ||
-      headers.find(h => String(h.name || '').toLowerCase() === 'messageid')?.value ||
-      '';
 
-    // Best-effort Gmail web URL to this message (prefer Message-ID search)
-    let webUrl = '';
-    try {
-      if (messageIdHeader) {
-        const frag = 'rfc822msgid:' + messageIdHeader;
-        webUrl = `https://mail.google.com/mail/u/0/#search/${encodeURIComponent(frag)}`;
-      } else {
-        const q = `from:${from} subject:"${subject}"`;
-        webUrl = `https://mail.google.com/mail/u/0/#search/${encodeURIComponent(q)}`;
-      }
-    } catch (_) {
-      webUrl = '';
-    }
+    // Direct link to the message itself using Gmail's own internal message id --
+    // #all/<id> opens the message directly (regardless of which label it's
+    // currently under), unlike a #search/... link which lands on a results page.
+    const webUrl = messageId ? `https://mail.google.com/mail/u/0/#all/${encodeURIComponent(messageId)}` : '';
 
     // Extract body using recursive function
     let body = extractEmailBody(message.payload);
@@ -4064,15 +4050,11 @@ function buildAutoSyncMessageEntry(rawMessage, userEmail) {
     : new Date(internalDateMs || Date.now());
   const body = extractEmailBody(rawMessage?.payload) || rawMessage?.snippet || '';
   const snippet = rawMessage?.snippet || (body ? String(body).slice(0, 100) + (String(body).length > 100 ? '...' : '') : 'No content available');
-  const messageIdHeader = getMessageHeader(headers, 'Message-ID') || getMessageHeader(headers, 'MessageId');
-  const webUrl = (() => {
-    try {
-      if (!messageIdHeader) return '';
-      return `https://mail.google.com/mail/u/0/#search/rfc822msgid%3A${encodeURIComponent(messageIdHeader)}`;
-    } catch {
-      return '';
-    }
-  })();
+  // Direct link to the message itself using Gmail's own internal message id --
+  // #all/<id> opens the message directly, unlike a #search/... link which
+  // lands on a results page the user then has to click into again.
+  const rawMessageId = String(rawMessage?.id || '');
+  const webUrl = rawMessageId ? `https://mail.google.com/mail/u/0/#all/${encodeURIComponent(rawMessageId)}` : '';
   const isResponse = isUserAuthoredMessage(from, userEmail);
   const isImportant = Array.isArray(rawMessage?.labelIds) && rawMessage.labelIds.includes('IMPORTANT');
   const isStarred = Array.isArray(rawMessage?.labelIds) && rawMessage.labelIds.includes('STARRED');

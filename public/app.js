@@ -482,9 +482,14 @@ window.__categoryChats = window.__categoryChats || {};
                 if (d.webUrl && /^https?:\/\//i.test(String(d.webUrl))) {
                     return String(d.webUrl);
                 }
+                // Direct link using Gmail's own internal message id -- opens the message
+                // itself rather than landing on a search results page.
+                if (d.id) {
+                    return `https://mail.google.com/mail/u/0/#all/${encodeURIComponent(d.id)}`;
+                }
+                // Last-resort fallback (no id available): search by from/subject.
                 const from = String(d.originalFrom || d.from || '').trim();
                 const subject = String(d.subject || '').trim();
-                // Construct a Gmail search link using from and subject if available
                 if (from || subject) {
                     const qParts = [];
                     if (from) qParts.push(`from:${from}`);
