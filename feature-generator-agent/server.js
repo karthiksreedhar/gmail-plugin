@@ -2183,6 +2183,9 @@ async function generateCandidateCategoryBatches(otherEmails, userData, logger, m
   }
 
   const candidateCategories = [];
+  let batchErrorCount = 0;
+  let lastBatchError = null;
+  let parseFailureCount = 0;
   let cursor = 0;
   async function worker() {
     while (true) {
@@ -2247,12 +2250,24 @@ IMPORTANT:
         );
 
         const parsed = parseSuggestionEnvelope(response.content);
+        if (parsed === null) {
+          // API call succeeded, but we couldn't extract ANY JSON object from
+          // the response -- distinct from "valid JSON that legitimately says
+          // no categories fit," which is not a parse failure.
+          parseFailureCount++;
+          logger?.logError(
+            `Category suggestion batch ${batchIndex + 1}/${batches.length} JSON parse`,
+            new Error(`Unparseable response (first 300 chars): ${String(response.content || '').slice(0, 300)}`)
+          );
+        }
         const categories = Array.isArray(parsed?.categories) ? parsed.categories : [];
         candidateCategories.push(...categories);
       } catch (error) {
         const duration = Date.now() - started;
         logger?.logApiCall(modelName, 0, 0, duration, false, error, null, batchPrompt, null);
         logger?.logError(`Category suggestion batch ${batchIndex + 1}/${batches.length} API call`, error);
+        batchErrorCount++;
+        lastBatchError = error;
         // Skip this batch -- other batches still contribute candidates.
       }
     }
@@ -2260,6 +2275,22 @@ IMPORTANT:
 
   const workerCount = Math.max(1, Math.min(CATEGORY_SUGGESTION_BATCH_CONCURRENCY, batches.length));
   await Promise.all(Array.from({ length: workerCount }, () => worker()));
+
+  // If EVERY batch failed outright (e.g. a missing/invalid ANTHROPIC_API_KEY,
+  // or the API being down), that's a real error -- surface it instead of
+  // silently returning an empty result that looks identical to "genuinely
+  // found nothing," which is impossible to tell apart from the client.
+  if (batches.length > 0 && batchErrorCount === batches.length) {
+    throw new Error(`All ${batches.length} category-suggestion batch call(s) failed: ${lastBatchError?.message || 'unknown error'}`);
+  }
+
+  // Every batch call succeeded, but none of them produced parseable JSON --
+  // almost certainly a prompt/response-format bug, not a legitimate "nothing
+  // fits" result (which would still parse to valid JSON with an empty or
+  // sparse categories array). Surface this distinctly too.
+  if (batches.length > 0 && parseFailureCount === batches.length) {
+    throw new Error(`All ${batches.length} category-suggestion batch response(s) failed to parse as JSON -- check the model's raw output in the operations log.`);
+  }
 
   return candidateCategories;
 }
