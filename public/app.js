@@ -2003,13 +2003,17 @@ async function updateEmailCategory(emailId, newCategory, oldCategory) {
                 `;
             }).join('');
 
+            const latestMessage = sorted[lastIdx] || {};
             threadPane.innerHTML = `
                 <div class="thread-header">
                     <div class="thread-header-left">
                         <button class="back-thread-btn" onclick="goBackFromThread()">← Back</button>
                         <div class="thread-title">${safeSubject}</div>
                     </div>
-                    <button class="reply-thread-btn" onclick="replyToCurrentThread()">Reply</button>
+                    <div style="display:flex; align-items:center; gap:10px;">
+                        ${gmailLinkHtml(latestMessage)}
+                        <button class="reply-thread-btn" onclick="replyToCurrentThread()">Reply</button>
+                    </div>
                 </div>
                 <div class="thread-body">
                     <div id="thread-notes-preview" class="notes-preview" style="display:none;"></div>
