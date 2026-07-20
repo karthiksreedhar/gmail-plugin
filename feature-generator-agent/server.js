@@ -3117,12 +3117,21 @@ app.post('/api/category-suggestions', async (req, res) => {
       requestedCategories
     });
     console.log(`   AI suggested ${suggestions.categories.length} categories`);
-    
+
     res.json({
       success: true,
       suggestions,
       otherEmailsCount,
-      operationsLog: logger.getLog()
+      operationsLog: logger.getLog(),
+      // Same diagnostics as the otherEmails.length===0 branch above, for the
+      // case where Other emails WERE found but the AI legitimately proposed
+      // zero new categories (e.g. everything already fits an existing one).
+      debug: {
+        requestedUserEmail: userEmail || null,
+        resolvedTargetUser: targetUser,
+        otherEmailsFound: otherEmails.length,
+        otherEmailsConsidered: otherEmailsCount
+      }
     });
     
   } catch (error) {

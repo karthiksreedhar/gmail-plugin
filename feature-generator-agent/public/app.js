@@ -2809,10 +2809,16 @@ async function triggerCategorySuggestions() {
       } else {
         console.log('📂 No suggestions -- diagnostic info:', data.debug);
         const d = data.debug;
-        const detail = d
-          ? ` (requested "${d.requestedUserEmail}", resolved to "${d.resolvedTargetUser}", loaded ${d.totalResponseEmailsLoaded} total emails)`
-          : '';
-        showToast(`No "Other" emails found to categorize${detail}`, 'info');
+        if (d && typeof d.otherEmailsFound === 'number') {
+          // Other emails WERE found, but the AI proposed zero new categories
+          // for them (e.g. everything already fits an existing category).
+          showToast(`Found ${d.otherEmailsFound} "Other" emails, but no new categories were suggested for them`, 'info');
+        } else {
+          const detail = d
+            ? ` (requested "${d.requestedUserEmail}", resolved to "${d.resolvedTargetUser}", loaded ${d.totalResponseEmailsLoaded} total emails)`
+            : '';
+          showToast(`No "Other" emails found to categorize${detail}`, 'info');
+        }
       }
     } else {
       showToast(data.error || 'Failed to generate suggestions', 'error');
