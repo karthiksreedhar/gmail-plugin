@@ -1349,8 +1349,13 @@ async function loadUserEmailData(userEmail, logger = null) {
   } catch (error) {
     console.error('Error loading user data:', error);
     if (logger) logger.logError('loadUserEmailData', error);
+    // Re-throw rather than silently returning partial/empty data -- callers
+    // (e.g. /api/category-suggestions) would otherwise treat a real Mongo
+    // failure as "this user genuinely has 0 emails," surfacing a misleading
+    // "No Other emails found" instead of the actual error.
+    throw error;
   }
-  
+
   return data;
 }
 
