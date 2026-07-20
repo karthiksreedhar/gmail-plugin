@@ -2807,7 +2807,12 @@ async function triggerCategorySuggestions() {
         addMessage('assistant', formatCategorySuggestionsForChat(data.suggestions));
         showToast(`Found ${data.suggestions.categories.length} category suggestions`, 'success');
       } else {
-        showToast('No "Other" emails found to categorize', 'info');
+        console.log('📂 No suggestions -- diagnostic info:', data.debug);
+        const d = data.debug;
+        const detail = d
+          ? ` (requested "${d.requestedUserEmail}", resolved to "${d.resolvedTargetUser}", loaded ${d.totalResponseEmailsLoaded} total emails)`
+          : '';
+        showToast(`No "Other" emails found to categorize${detail}`, 'info');
       }
     } else {
       showToast(data.error || 'Failed to generate suggestions', 'error');

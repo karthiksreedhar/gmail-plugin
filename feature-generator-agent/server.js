@@ -3100,7 +3100,16 @@ app.post('/api/category-suggestions', async (req, res) => {
         success: true,
         message: 'No emails in "Other" category to categorize',
         suggestions: { categories: [] },
-        operationsLog: logger.getLog()
+        operationsLog: logger.getLog(),
+        // Temporary diagnostics: shows exactly which user/data this request
+        // actually resolved to, so a mismatch between the intended user and
+        // what the server used is visible without needing server log access.
+        debug: {
+          requestedUserEmail: userEmail || null,
+          resolvedTargetUser: targetUser,
+          availableUsersIncludesTarget: availableUsers.includes(normalizedRequested),
+          totalResponseEmailsLoaded: (userData.responseEmails || []).length
+        }
       });
     }
 
