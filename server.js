@@ -30,12 +30,47 @@ const { invokeGemini, getGeminiApiKey, getGeminiModel } = require('./feature-gen
 const { invokeAnthropic, getAnthropicApiKey, getAnthropicModel } = require('./anthropic');
 
 /**
- * Initialize OpenAI client using environment variable
- * Ensure OPENAI_API_KEY is set in your .env file
+ * LLM client. Chat completions previously went to OpenAI (o3 / gpt-4o-mini);
+ * they now route to Anthropic (see ./anthropic.js) while keeping the OpenAI
+ * response shape ({choices:[{message:{content}}]}) so the existing call sites
+ * and dynamically loaded features keep working unchanged. The per-call
+ * `model` argument is ignored in favor of ANTHROPIC_MODEL.
+ *
+ * Embeddings still use OpenAI (Anthropic has no embeddings API); the real
+ * client is created lazily so the server boots without OPENAI_API_KEY, and
+ * only embeddings-based features require it.
  */
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY
-});
+let realOpenAIClient = null;
+function getOpenAIEmbeddingsClient() {
+  if (!realOpenAIClient) {
+    if (!process.env.OPENAI_API_KEY) {
+      throw new Error('OPENAI_API_KEY is required for embeddings-based features.');
+    }
+    realOpenAIClient = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  }
+  return realOpenAIClient;
+}
+
+const openai = {
+  chat: {
+    completions: {
+      async create({ messages, temperature, max_completion_tokens, max_tokens } = {}) {
+        const result = await invokeAnthropic({
+          messages,
+          model: getAnthropicModel(),
+          temperature: typeof temperature === 'number' ? temperature : 0.2,
+          maxOutputTokens: max_completion_tokens || max_tokens || 2048
+        });
+        return { choices: [{ message: { content: result.content } }] };
+      }
+    }
+  },
+  embeddings: {
+    create(args) {
+      return getOpenAIEmbeddingsClient().embeddings.create(args);
+    }
+  }
+};
 
 const GEMINI_CLASSIFIER_CONTEXT_BUDGET_CHARS = parseInt(process.env.GEMINI_CLASSIFIER_CONTEXT_BUDGET_CHARS || '90000', 10);
 const GEMINI_RESPONSE_CONTEXT_BUDGET_CHARS = parseInt(process.env.GEMINI_RESPONSE_CONTEXT_BUDGET_CHARS || '55000', 10);
@@ -3113,7 +3148,7 @@ function scoreSavedGenerationForPrompt(generation, target) {
   return similarityOverlapScore(`${target.sender || ''} ${target.subject || ''} ${target.emailBody || ''} ${target.context || ''}`, generationText);
 }
 
-// API endpoint to generate response using Gemini
+// API endpoint to generate response using Anthropic
 app.post('/api/generate-response', async (req, res) => {
   try {
     const { sender, subject, emailBody, context } = req.body;
@@ -3249,15 +3284,15 @@ JUSTIFICATION:
     const maxPromptChars = Math.max(4000, GEMINI_RESPONSE_CONTEXT_BUDGET_CHARS - responseFormatInstructions.length);
     prompt = truncateForModel(prompt, maxPromptChars) + responseFormatInstructions;
 
-    const completion = await invokeGemini({
-      model: getGeminiModel(),
+    const completion = await invokeAnthropic({
+      model: getAnthropicModel(),
       messages: [{ role: 'user', content: prompt }],
       temperature: 0.2,
       maxOutputTokens: 2000
     });
 
     const fullResponse = String(completion?.content || '').trim();
-    
+
     // Parse the response to separate the email content from justification
     const responseParts = fullResponse.split('JUSTIFICATION:');
     let emailResponse = responseParts[0].replace('RESPONSE:', '').trim();

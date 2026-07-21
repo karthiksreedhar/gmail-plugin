@@ -2105,80 +2105,100 @@ async function updateEmailCategory(emailId, newCategory, oldCategory) {
                 // Build inline compose once
                 if (!container.hasChildNodes()) {
                     container.innerHTML = `
-                        <div class="generate-form-container">
-                            <form id="generateResponseForm" onsubmit="handleGenerateResponse(event)">
-                                <div class="form-group">
-                                    <label for="senderInput">Sender:</label>
-                                    <input type="text" id="senderInput" placeholder="Enter sender email (optional)">
-                                </div>
-                                <div class="form-group">
-                                    <label for="subjectInput">Subject:</label>
-                                    <input type="text" id="subjectInput" placeholder="Enter email subject (optional)">
-                                </div>
-                                <div class="form-group">
-                                    <label for="emailBodyInput">Email Body: <span class="required">*</span></label>
-                                    <textarea id="emailBodyInput" rows="8" placeholder="Enter the email content you want to respond to..." required></textarea>
-                                </div>
-                                <div class="form-group">
-                                    <label for="contextInput" style="display:flex; align-items:center; justify-content:space-between;">
-                                        <span>Additional Context:</span>
-                                        <div style="display:flex; gap:8px;">
-                                            <button type="button" id="seeEmailNotesBtn" class="select-email-btn" style="display:none;">See Email Notes</button>
-                                            <button type="button" id="seeCategorySummaryBtn" class="select-email-btn" style="display:none;">See Category Summary</button>
-                                            <button type="button" id="seeCategoryNotesBtn" class="select-email-btn" style="display:none;">See Category Notes</button>
-                                        </div>
-                                    </label>
-                                    <textarea id="contextInput" rows="3" placeholder="Any additional context or specific instructions (optional)"></textarea>
-                                </div>
-                                <div class="form-actions">
-                                    <button type="submit" class="generate-submit-btn">
-                                        <span class="btn-text">Generate Response</span>
-                                        <span class="btn-loading" style="display: none;">Generating...</span>
-                                    </button>
-                                </div>
-                            </form>
+                        <form id="generateResponseForm" class="gmail-compose-card" onsubmit="handleGenerateResponse(event)">
+                            <input type="hidden" id="senderInput">
+                            <input type="hidden" id="subjectInput">
+                            <textarea id="emailBodyInput" style="display:none;" required></textarea>
 
-                            <div id="generatedResponseArea" style="display: none;">
-                                <div class="response-header">
-                                    <h3>Generated Response:</h3>
-                                    <div style="display: flex; gap: 8px;">
-                                        <button class="copy-response-btn" onclick="copyResponseToClipboard()">Copy to Clipboard</button>
-                                        <button class="edit-response-btn" onclick="enableResponseEditing()">Edit</button>
-                                    </div>
-                                </div>
-                                <div class="response-content">
-                                    <div id="responseDisplay" class="response-display"></div>
-                                    <textarea id="responseEditor" class="response-editor" style="display: none;"></textarea>
-                                </div>
-                                <div class="response-actions">
-                                    <button class="save-edit-btn" onclick="saveResponseEdit()" style="display: none;">Save Changes</button>
-                                    <button class="cancel-edit-btn" onclick="cancelResponseEdit()" style="display: none;">Cancel</button>
-                                </div>
+                            <div class="gc-row gc-recipient-row">
+                                <button type="button" class="gc-icon-btn gc-reply-kind" title="Reply">
+                                    <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M10 9V5l-7 7 7 7v-4.1c5 0 8.5 1.6 11 5.1-1-5-4-10-11-11z"/></svg>
+                                    <svg viewBox="0 0 24 24" width="10" height="10" fill="currentColor"><path d="M7 10l5 5 5-5z"/></svg>
+                                </button>
+                                <span class="gc-to-label">To</span>
+                                <span class="gc-chip" id="gcToChip">
+                                    <span class="gc-chip-avatar"><svg viewBox="0 0 24 24" width="18" height="18" fill="#fff"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg></span>
+                                    <span class="gc-chip-name" id="gcToName"></span>
+                                    <button type="button" class="gc-chip-x" onclick="gcRemoveToChip()" title="Remove">&times;</button>
+                                </span>
+                                <input type="text" id="gcToInput" class="gc-plain-input" style="display:none;">
+                            </div>
+                            <div class="gc-row gc-cc-row">
+                                <span class="gc-cc-label">Cc</span>
+                                <input type="text" id="gcCcInput" class="gc-plain-input">
+                                <button type="button" class="gc-bcc-toggle" onclick="gcToggleBcc()">Bcc</button>
+                            </div>
+                            <div class="gc-row gc-cc-row" id="gcBccRow" style="display:none;">
+                                <span class="gc-cc-label">Bcc</span>
+                                <input type="text" id="gcBccInput" class="gc-plain-input">
                             </div>
 
-                            <div id="refineSection" style="display: none;">
-                                <div class="refine-header">
-                                    <h3>Refine Response:</h3>
+                            <div class="gc-body" id="gcBody" contenteditable="true"></div>
+
+                            <div class="gc-context-panel" id="gcContextPanel" style="display:none;">
+                                <div class="gc-context-header">
+                                    <span>Extra context for the AI</span>
+                                    <span class="gc-note-buttons">
+                                        <button type="button" id="seeEmailNotesBtn" class="select-email-btn" style="display:none;">See Email Notes</button>
+                                        <button type="button" id="seeCategorySummaryBtn" class="select-email-btn" style="display:none;">See Category Summary</button>
+                                        <button type="button" id="seeCategoryNotesBtn" class="select-email-btn" style="display:none;">See Category Notes</button>
+                                    </span>
                                 </div>
-                                <div class="form-group">
-                                    <textarea id="refinePrompt" rows="3" placeholder="Describe how you'd like to modify the response (e.g., 'make it more formal', 'add availability for next week', 'make it shorter')"></textarea>
-                                </div>
-                                <div class="refine-actions">
-                                    <button class="refine-btn" onclick="refineResponse()">
-                                        <span class="btn-text">Refine Response</span>
-                                        <span class="btn-loading" style="display: none;">Refining...</span>
-                                    </button>
-                                    <button class="save-response-btn" onclick="saveCurrentResponse()">
-                                        <span class="btn-text">Save Response</span>
-                                        <span class="btn-loading" style="display: none;">Saving...</span>
-                                    </button>
-                                </div>
+                                <textarea id="contextInput" rows="2" placeholder="Any additional context or specific instructions (optional)"></textarea>
                             </div>
-                        </div>
+
+                            <div class="gc-toolbar" id="gcToolbar">
+                                <button type="button" class="gc-tool" onclick="gcExec('undo')" title="Undo"><svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M12.5 8c-2.65 0-5.05.99-6.9 2.6L2 7v9h9l-3.62-3.62c1.39-1.16 3.16-1.88 5.12-1.88 3.54 0 6.55 2.31 7.6 5.5l2.37-.78C21.08 11.03 17.15 8 12.5 8z"/></svg></button>
+                                <button type="button" class="gc-tool" onclick="gcExec('redo')" title="Redo"><svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" style="transform:scaleX(-1)"><path d="M12.5 8c-2.65 0-5.05.99-6.9 2.6L2 7v9h9l-3.62-3.62c1.39-1.16 3.16-1.88 5.12-1.88 3.54 0 6.55 2.31 7.6 5.5l2.37-.78C21.08 11.03 17.15 8 12.5 8z"/></svg></button>
+                                <span class="gc-tool-sep"></span>
+                                <span class="gc-tool gc-tool-label" title="Font">Sans Serif <svg viewBox="0 0 24 24" width="10" height="10" fill="currentColor"><path d="M7 10l5 5 5-5z"/></svg></span>
+                                <span class="gc-tool gc-tool-label" title="Size">TT <svg viewBox="0 0 24 24" width="10" height="10" fill="currentColor"><path d="M7 10l5 5 5-5z"/></svg></span>
+                                <span class="gc-tool-sep"></span>
+                                <button type="button" class="gc-tool" onclick="gcExec('bold')" title="Bold"><b>B</b></button>
+                                <button type="button" class="gc-tool" onclick="gcExec('italic')" title="Italic"><i>I</i></button>
+                                <button type="button" class="gc-tool" onclick="gcExec('underline')" title="Underline"><u>U</u></button>
+                                <button type="button" class="gc-tool" title="Text color"><u>A</u> <svg viewBox="0 0 24 24" width="10" height="10" fill="currentColor"><path d="M7 10l5 5 5-5z"/></svg></button>
+                                <span class="gc-tool-sep"></span>
+                                <button type="button" class="gc-tool" onclick="gcExec('justifyLeft')" title="Align"><svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M3 5h18v2H3zm0 4h12v2H3zm0 4h18v2H3zm0 4h12v2H3z"/></svg></button>
+                                <button type="button" class="gc-tool" onclick="gcExec('insertOrderedList')" title="Numbered list"><svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M2 17h2v.5H3v1h1v.5H2v1h3v-4H2v1zm1-9h1V4H2v1h1v3zm-1 3h1.8L2 13.1v.9h3v-1H3.2L5 10.9V10H2v1zm5-6v2h14V5H7zm0 14h14v-2H7v2zm0-6h14v-2H7v2z"/></svg></button>
+                                <button type="button" class="gc-tool" onclick="gcExec('insertUnorderedList')" title="Bulleted list"><svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M4 10.5c-.83 0-1.5.67-1.5 1.5s.67 1.5 1.5 1.5 1.5-.67 1.5-1.5-.67-1.5-1.5-1.5zm0-6c-.83 0-1.5.67-1.5 1.5S3.17 7.5 4 7.5 5.5 6.83 5.5 6 4.83 4.5 4 4.5zm0 12c-.83 0-1.5.68-1.5 1.5s.68 1.5 1.5 1.5 1.5-.68 1.5-1.5-.67-1.5-1.5-1.5zM7 19h14v-2H7v2zm0-6h14v-2H7v2zm0-8v2h14V5H7z"/></svg></button>
+                                <button type="button" class="gc-tool" onclick="gcExec('outdent')" title="Indent less"><svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M11 17h10v-2H11v2zm-8-5l4 4V8l-4 4zm0 9h18v-2H3v2zM3 3v2h18V3H3zm8 6h10V7H11v2zm0 4h10v-2H11v2z"/></svg></button>
+                                <button type="button" class="gc-tool" onclick="gcExec('indent')" title="Indent more"><svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M3 21h18v-2H3v2zM3 8v8l4-4-4-4zm8 9h10v-2H11v2zM3 3v2h18V3H3zm8 6h10V7H11v2zm0 4h10v-2H11v2z"/></svg></button>
+                                <span class="gc-tool-sep"></span>
+                                <button type="button" class="gc-tool" onclick="gcExec('formatBlock','blockquote')" title="Quote"><svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M6 17h3l2-4V7H5v6h3zm8 0h3l2-4V7h-6v6h3z"/></svg></button>
+                                <span class="gc-tool-sep"></span>
+                                <button type="button" class="gc-tool" onclick="gcExec('strikeThrough')" title="Strikethrough"><s>S</s></button>
+                                <button type="button" class="gc-tool" onclick="gcExec('removeFormat')" title="Remove formatting"><svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M3.27 5L2 6.27l6.97 6.97L6.5 19h3l1.57-3.66L16.73 21 18 19.73 3.55 5.27 3.27 5zM6 5v.18L8.82 8h2.4l-.72 1.68 2.1 2.1L14.21 8H20V5H6z"/></svg></button>
+                            </div>
+
+                            <div class="gc-actions">
+                                <div class="gc-send-split">
+                                    <button type="button" class="gc-send-btn" onclick="gcSendReply()">Send</button>
+                                    <button type="button" class="gc-send-caret" title="More send options"><svg viewBox="0 0 24 24" width="14" height="14" fill="#fff"><path d="M7 10l5 5 5-5z"/></svg></button>
+                                </div>
+                                <button type="submit" class="generate-submit-btn gc-generate-btn" title="Generate an AI response draft">
+                                    <span class="btn-text">&#10024; Generate Response</span>
+                                    <span class="btn-loading" style="display:none;">Generating&hellip;</span>
+                                </button>
+                                <div class="gc-action-icons">
+                                    <button type="button" class="gc-icon-btn" onclick="gcToggleToolbar()" title="Formatting options"><span class="gc-aa">Aa</span></button>
+                                    <button type="button" class="gc-icon-btn" title="Attach files"><svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M16.5 6v11.5c0 2.21-1.79 4-4 4s-4-1.79-4-4V5c0-1.38 1.12-2.5 2.5-2.5s2.5 1.12 2.5 2.5v10.5c0 .55-.45 1-1 1s-1-.45-1-1V6H10v9.5c0 1.38 1.12 2.5 2.5 2.5s2.5-1.12 2.5-2.5V5c0-2.21-1.79-4-4-4S7 2.79 7 5v12.5c0 3.04 2.46 5.5 5.5 5.5s5.5-2.46 5.5-5.5V6h-1.5z"/></svg></button>
+                                    <button type="button" class="gc-icon-btn" title="Insert link"><svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M3.9 12c0-1.71 1.39-3.1 3.1-3.1h4V7H7c-2.76 0-5 2.24-5 5s2.24 5 5 5h4v-1.9H7c-1.71 0-3.1-1.39-3.1-3.1zM8 13h8v-2H8v2zm9-6h-4v1.9h4c1.71 0 3.1 1.39 3.1 3.1s-1.39 3.1-3.1 3.1h-4V17h4c2.76 0 5-2.24 5-5s-2.24-5-5-5z"/></svg></button>
+                                    <button type="button" class="gc-icon-btn" title="Insert emoji"><svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm3.5-9c.83 0 1.5-.67 1.5-1.5S16.33 8 15.5 8 14 8.67 14 9.5s.67 1.5 1.5 1.5zm-7 0c.83 0 1.5-.67 1.5-1.5S9.33 8 8.5 8 7 8.67 7 9.5 7.67 11 8.5 11zm3.5 6.5c2.33 0 4.31-1.46 5.11-3.5H6.89c.8 2.04 2.78 3.5 5.11 3.5z"/></svg></button>
+                                    <button type="button" class="gc-icon-btn" title="Insert files using Drive"><svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M7.71 3.5L1.15 15l3.43 5.99L11.13 9.5 7.71 3.5zm2.31 0l6.56 11.5h6.86L16.87 3.5H10.02zm-.62 13L6.28 21.5h13.15l3.12-5h-13.15z"/></svg></button>
+                                    <button type="button" class="gc-icon-btn" title="Insert photo"><svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z"/></svg></button>
+                                    <button type="button" class="gc-icon-btn" title="Toggle confidential mode"><svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm-6 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zM9 8V6c0-1.66 1.34-3 3-3s3 1.34 3 3v2H9z"/></svg></button>
+                                    <button type="button" class="gc-icon-btn" title="Insert signature"><svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34a.9959.9959 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg></button>
+                                    <button type="button" class="gc-icon-btn" onclick="gcToggleContext()" title="AI context &amp; notes"><svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z"/></svg></button>
+                                </div>
+                                <button type="button" class="gc-icon-btn gc-trash" onclick="gcDiscardReply()" title="Discard draft"><svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg></button>
+                            </div>
+                        </form>
                     `;
                 }
 
                 // Make visible and prefill fields
+                const wasHidden = container.style.display === 'none' || !container.style.display;
                 container.style.display = 'block';
                 const from = latestIncoming.from || '';
                 const subj = latestIncoming.subject || (ctx && ctx.subject) || '';
@@ -2190,6 +2210,21 @@ async function updateEmailCategory(emailId, newCategory, oldCategory) {
                 if (senderInput) senderInput.value = from;
                 if (subjectInput) subjectInput.value = subj;
                 if (emailBodyInput) emailBodyInput.value = body;
+
+                // Recipient chip: show the sender's display name, keep the raw
+                // address available for the fallback text input.
+                const addrMatch = from.match(/<?([A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})>?/i);
+                const displayName = from.replace(/<[^>]*>/g, '').replace(/"/g, '').trim() || (addrMatch ? addrMatch[1] : 'Recipient');
+                const toName = document.getElementById('gcToName');
+                const toChip = document.getElementById('gcToChip');
+                const toInput = document.getElementById('gcToInput');
+                if (toName) toName.textContent = displayName;
+                if (toChip) toChip.style.display = 'inline-flex';
+                if (toInput) { toInput.value = from; toInput.style.display = 'none'; }
+
+                // Fresh open starts a clean draft; re-opening keeps it.
+                const gcBody = document.getElementById('gcBody');
+                if (gcBody && wasHidden) gcBody.innerHTML = '';
 
                 // Expose contextual buttons for associated categories and email notes
                 const cats = Array.isArray(ctx.categories) && ctx.categories.length
@@ -2232,13 +2267,67 @@ async function updateEmailCategory(emailId, newCategory, oldCategory) {
                 }
 
                 // Focus and scroll into view
-                try { emailBodyInput && emailBodyInput.focus(); } catch(_) {}
+                try { gcBody && gcBody.focus(); } catch(_) {}
                 try { container.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
                 catch(_) { try { threadPane.scrollTop = threadPane.scrollHeight; } catch(_) {} }
             } catch (e) {
                 console.error('showInlineReplyComposer failed:', e);
                 showErrorPopup('Failed to render inline composer.', 'Reply Failed');
             }
+        }
+
+        // --- Gmail-style composer helpers ---
+        function gcExec(cmd, val) {
+            try {
+                const body = document.getElementById('gcBody');
+                if (body) body.focus();
+                document.execCommand(cmd, false, val || null);
+            } catch (_) {}
+        }
+
+        function gcToggleToolbar() {
+            const toolbar = document.getElementById('gcToolbar');
+            if (toolbar) toolbar.style.display = toolbar.style.display === 'none' ? 'flex' : 'none';
+        }
+
+        function gcToggleBcc() {
+            const row = document.getElementById('gcBccRow');
+            if (row) row.style.display = row.style.display === 'none' ? 'flex' : 'none';
+        }
+
+        function gcToggleContext() {
+            const panel = document.getElementById('gcContextPanel');
+            if (panel) panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
+        }
+
+        function gcRemoveToChip() {
+            const chip = document.getElementById('gcToChip');
+            const input = document.getElementById('gcToInput');
+            if (chip) chip.style.display = 'none';
+            if (input) { input.style.display = 'inline-block'; input.focus(); }
+        }
+
+        function gcDiscardReply() {
+            const container = document.getElementById('inlineReplyCompose');
+            const body = document.getElementById('gcBody');
+            if (body) body.innerHTML = '';
+            if (container) container.style.display = 'none';
+        }
+
+        // No Gmail send integration exists yet, so Send hands the draft to the
+        // clipboard rather than silently doing nothing.
+        function gcSendReply() {
+            const body = document.getElementById('gcBody');
+            const text = body ? body.innerText.trim() : '';
+            if (!text) {
+                showErrorPopup('Write or generate a reply first.', 'Empty Reply');
+                return;
+            }
+            navigator.clipboard.writeText(text).then(() => {
+                showSuccessPopup('Sending from here isn\'t connected to Gmail yet, so the reply was copied to your clipboard instead.', 'Reply Copied');
+            }).catch(() => {
+                showErrorPopup('Could not copy the reply to the clipboard.', 'Copy Failed');
+            });
         }
 
         function closeModal() {
@@ -3091,7 +3180,17 @@ function mapToCurrentCategory(name) {
             } else if (cleanedResponse.toLowerCase().startsWith('refined response')) {
                 cleanedResponse = cleanedResponse.substring(16).trim();
             }
-            
+
+            // Gmail-style inline composer: draft goes straight into the
+            // editable body instead of a separate display area.
+            const gcBody = document.getElementById('gcBody');
+            const inlineContainer = document.getElementById('inlineReplyCompose');
+            if (gcBody && inlineContainer && inlineContainer.style.display !== 'none' && inlineContainer.contains(gcBody)) {
+                gcBody.innerHTML = cleanedResponse.replace(/\n/g, '<br>');
+                try { gcBody.focus(); } catch (_) {}
+                return;
+            }
+
             responseDisplay.innerHTML = cleanedResponse.replace(/\n/g, '<br>');
             responseArea.style.display = 'block';
             refineSection.style.display = 'block';

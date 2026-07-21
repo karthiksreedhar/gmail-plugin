@@ -1152,6 +1152,215 @@
             to { transform: translateY(0); opacity: 1; }
         }
 
+        /* Gmail-style inline reply composer */
+        .gmail-compose-card {
+            background: #fff;
+            border: 1px solid #e0e0e0;
+            border-radius: 16px;
+            box-shadow: 0 1px 2px rgba(60,64,67,.3), 0 2px 6px 2px rgba(60,64,67,.15);
+            padding: 12px 16px 10px;
+            font-family: 'Google Sans', Roboto, Arial, sans-serif;
+            color: #202124;
+        }
+        .gc-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 0;
+            border-bottom: 1px solid #f1f3f4;
+        }
+        .gc-recipient-row { border-bottom: none; padding-bottom: 2px; }
+        .gc-reply-kind {
+            display: inline-flex;
+            align-items: center;
+            gap: 2px;
+            border: none;
+            background: none;
+            color: #444746;
+            cursor: pointer;
+            padding: 6px;
+            border-radius: 50%;
+        }
+        .gc-reply-kind:hover { background: #f1f3f4; }
+        .gc-to-label, .gc-cc-label { color: #5f6368; font-size: 14px; min-width: 20px; }
+        .gc-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            border: 1px solid #dadce0;
+            border-radius: 999px;
+            padding: 2px 4px 2px 2px;
+            font-size: 14px;
+        }
+        .gc-chip-avatar {
+            width: 28px; height: 28px;
+            border-radius: 50%;
+            background: #7baaf7;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .gc-chip-name { font-weight: 500; }
+        .gc-chip-x {
+            border: none; background: none;
+            font-size: 18px; line-height: 1;
+            color: #5f6368; cursor: pointer;
+            padding: 2px 6px; border-radius: 50%;
+        }
+        .gc-chip-x:hover { background: #f1f3f4; }
+        .gc-plain-input {
+            flex: 1;
+            border: none;
+            outline: none;
+            font-size: 14px;
+            padding: 4px 2px;
+            background: transparent;
+            color: #202124;
+        }
+        .gc-bcc-toggle {
+            border: none; background: none;
+            color: #5f6368; font-size: 14px;
+            cursor: pointer; margin-left: auto;
+            padding: 4px 6px; border-radius: 4px;
+        }
+        .gc-bcc-toggle:hover { background: #f1f3f4; }
+        .gc-body {
+            min-height: 180px;
+            padding: 12px 2px;
+            font-size: 14px;
+            line-height: 1.5;
+            outline: none;
+            overflow-y: auto;
+            max-height: 45vh;
+        }
+        .gc-body blockquote {
+            border-left: 2px solid #dadce0;
+            margin: 0 0 0 8px;
+            padding-left: 12px;
+            color: #5f6368;
+        }
+        .gc-context-panel {
+            background: #f8f9fa;
+            border: 1px solid #e8eaed;
+            border-radius: 8px;
+            padding: 8px 10px;
+            margin-bottom: 8px;
+        }
+        .gc-context-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            font-size: 12px;
+            color: #5f6368;
+            margin-bottom: 6px;
+        }
+        .gc-note-buttons { display: inline-flex; gap: 6px; }
+        .gc-context-panel textarea {
+            width: 100%;
+            border: 1px solid #dadce0;
+            border-radius: 6px;
+            padding: 6px 8px;
+            font-size: 13px;
+            resize: vertical;
+            box-sizing: border-box;
+        }
+        .gc-toolbar {
+            display: flex;
+            align-items: center;
+            gap: 2px;
+            background: #f1f3f4;
+            border-radius: 999px;
+            padding: 4px 10px;
+            margin-bottom: 10px;
+            overflow-x: auto;
+            width: fit-content;
+            max-width: 100%;
+        }
+        .gc-tool {
+            display: inline-flex;
+            align-items: center;
+            gap: 2px;
+            border: none;
+            background: none;
+            color: #444746;
+            font-size: 14px;
+            cursor: pointer;
+            padding: 6px 8px;
+            border-radius: 4px;
+            white-space: nowrap;
+        }
+        .gc-tool:hover { background: #e2e5e9; }
+        .gc-tool-label { cursor: default; }
+        .gc-tool-sep {
+            width: 1px; height: 20px;
+            background: #dadce0;
+            margin: 0 4px;
+            flex: none;
+        }
+        .gc-actions {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+        .gc-send-split { display: inline-flex; margin-right: 8px; }
+        .gc-send-btn {
+            background: #0b57d0;
+            color: #fff;
+            border: none;
+            border-radius: 18px 0 0 18px;
+            padding: 0 20px;
+            height: 36px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+        }
+        .gc-send-btn:hover { background: #0a4bb5; box-shadow: 0 1px 2px rgba(60,64,67,.3); }
+        .gc-send-caret {
+            background: #0b57d0;
+            border: none;
+            border-left: 1px solid rgba(255,255,255,.4);
+            border-radius: 0 18px 18px 0;
+            height: 36px;
+            padding: 0 8px;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+        }
+        .gc-send-caret:hover { background: #0a4bb5; }
+        /* Beats the legacy .generate-submit-btn green styling via specificity */
+        .gmail-compose-card .gc-generate-btn,
+        .gmail-compose-card .gc-generate-btn:disabled {
+            border: 1px solid #dadce0;
+            background: #fff;
+            color: #0b57d0;
+            border-radius: 18px;
+            height: 36px;
+            padding: 0 14px;
+            font-size: 13px;
+            font-weight: 500;
+            cursor: pointer;
+            margin-right: 6px;
+            white-space: nowrap;
+            transition: none;
+        }
+        .gmail-compose-card .gc-generate-btn:hover { background: #f0f4fe; }
+        .gmail-compose-card .gc-generate-btn:disabled { opacity: .6; cursor: default; }
+        .gc-action-icons { display: inline-flex; align-items: center; gap: 2px; }
+        .gc-icon-btn {
+            border: none;
+            background: none;
+            color: #444746;
+            cursor: pointer;
+            padding: 8px;
+            border-radius: 50%;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .gc-icon-btn:hover { background: #f1f3f4; }
+        .gc-aa { font-size: 15px; font-weight: 500; }
+        .gc-trash { margin-left: auto; }
+
         /* Generate Response Modal Styles */
         .generate-response-modal {
             max-width: 1200px;
