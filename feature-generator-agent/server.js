@@ -1950,6 +1950,18 @@ function parseSuggestionEnvelope(responseText) {
   return null;
 }
 
+function parseAssignmentEnvelope(responseText) {
+  for (const candidate of parseJsonCandidates(responseText)) {
+    try {
+      const parsed = JSON.parse(candidate);
+      if (Array.isArray(parsed?.assignments)) return parsed;
+    } catch (_) {
+      // Keep trying alternate slices.
+    }
+  }
+  return null;
+}
+
 function parseModificationEnvelope(responseText) {
   for (const candidate of parseJsonCandidates(responseText)) {
     try {
@@ -2141,17 +2153,42 @@ function normalizeCategorySuggestions(input, validEmailIds = new Set(), emailByI
   };
 }
 
-function hasSufficientCategorySuggestions(suggestions) {
-  const categories = Array.isArray(suggestions?.categories) ? suggestions.categories : [];
-  if (categories.length < 2) return false;
-  const totalEmails = categories.reduce((sum, cat) => sum + ((cat?.suggestedEmails || []).length), 0);
-  if (totalEmails < 4) return false;
-  return categories.every(cat => (cat?.suggestedEmails || []).length >= 2);
+const CATEGORY_SUGGESTION_SENDER_BUCKET_MIN = 5;
+const CATEGORY_SUGGESTION_DOMAIN_BUCKET_MIN = 8;
+const CATEGORY_SUGGESTION_DISCOVERY_MAX_EMAILS = 1500;
+const CATEGORY_SUGGESTION_ASSIGN_BATCH_SIZE = 60;
+const CATEGORY_SUGGESTION_ASSIGN_CONCURRENCY = 3;
+const CATEGORY_SUGGESTION_MIN_EMAILS_PER_CATEGORY = 2;
+
+// Personal-mailbox providers must never become a domain-level bucket --
+// "everyone who emailed me from gmail.com" is not a coherent category.
+const CATEGORY_SUGGESTION_FREEMAIL_DOMAINS = new Set([
+  'gmail.com', 'googlemail.com', 'yahoo.com', 'hotmail.com', 'outlook.com',
+  'aol.com', 'icloud.com', 'me.com', 'live.com', 'msn.com', 'protonmail.com',
+  'proton.me', 'comcast.net', 'verizon.net', 'att.net'
+]);
+
+const CATEGORY_SUGGESTION_ADDR_RE = /<?([A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})>?/i;
+
+function senderAddressOf(email) {
+  const src = String(email?.originalFrom || email?.from || '');
+  const m = src.match(CATEGORY_SUGGESTION_ADDR_RE);
+  return m ? m[1].toLowerCase() : '';
 }
 
-const CATEGORY_SUGGESTION_BATCH_SIZE = 25;
-const CATEGORY_SUGGESTION_BATCH_CONCURRENCY = 3;
-const CATEGORY_SUGGESTION_MAX_OTHER_EMAILS = 150;
+function senderDisplayNameOf(email) {
+  const src = String(email?.originalFrom || email?.from || '');
+  return src.replace(/<[^>]*>/g, '').replace(/"/g, '').trim();
+}
+
+// One-line compact representation used by both LLM stages, ~60-80 tokens per
+// email, which is what lets the discovery prompt hold the whole pool at once.
+function compactEmailLine(email) {
+  const from = String(email.originalFrom || email.from || 'Unknown Sender').replace(/\s+/g, ' ').trim().slice(0, 60);
+  const subject = String(email.subject || 'No Subject').replace(/\s+/g, ' ').trim().slice(0, 120);
+  const snippet = String(email.snippet || email.body || '').replace(/\s+/g, ' ').trim().slice(0, 150);
+  return `${email.id} | ${from} | ${email.date || ''} | ${subject} | ${snippet}`;
+}
 
 // Render existing categories + whatever guideline/summary text is on file for
 // each, so batch/consolidation prompts can avoid proposing new categories
@@ -2169,20 +2206,181 @@ function formatExistingCategoriesContext(userData) {
   }).join('\n');
 }
 
-// Map stage: chunk the (already-capped) "Other" pool into batches and ask the
-// model to propose candidate category clusters per batch, run with bounded
-// concurrency. Each batch only sends id+reason for suggested emails (not full
-// metadata) -- normalizeCategorySuggestions backfills real subject/from/date/
-// snippet from emailById afterward, so nothing depends on the model echoing
-// metadata accurately.
-async function generateCandidateCategoryBatches(otherEmails, userData, logger, modelName, requestedCategories) {
-  const existingCategoriesContext = formatExistingCategoriesContext(userData);
-  const batches = [];
-  for (let i = 0; i < otherEmails.length; i += CATEGORY_SUGGESTION_BATCH_SIZE) {
-    batches.push(otherEmails.slice(i, i + CATEGORY_SUGGESTION_BATCH_SIZE));
+// Stage 1: deterministic sender/domain bucketing. Repeated senders
+// (newsletters, notification systems, one chatty correspondent) make up a
+// large share of any "Other" pool and need no model call to identify. Unlike
+// the LLM stages, this pass covers the ENTIRE pool with no cap.
+function bucketOtherEmailsBySender(otherEmails) {
+  const categories = [];
+  const bucketedIds = new Set();
+
+  const byAddress = new Map();
+  for (const email of otherEmails) {
+    const addr = senderAddressOf(email);
+    if (!addr) continue;
+    if (!byAddress.has(addr)) byAddress.set(addr, []);
+    byAddress.get(addr).push(email);
+  }
+  for (const [addr, emails] of byAddress.entries()) {
+    if (emails.length < CATEGORY_SUGGESTION_SENDER_BUCKET_MIN) continue;
+    const displayName = emails.map(senderDisplayNameOf).find(Boolean) || addr;
+    categories.push({
+      name: displayName,
+      description: `Emails from ${displayName} (${addr})`,
+      guideline: `Classify emails whose sender is ${addr} into this category.`,
+      confidence: 0.95,
+      suggestedEmails: emails.map(e => ({
+        id: e.id,
+        reason: `Sent by ${addr}, which has ${emails.length} emails in "Other"`
+      }))
+    });
+    emails.forEach(e => bucketedIds.add(e.id));
   }
 
-  const candidateCategories = [];
+  // Domain-level buckets over what's left, so e.g. notifications@ and noreply@
+  // from the same product still group together. Never for personal-mailbox
+  // providers.
+  const byDomain = new Map();
+  for (const email of otherEmails) {
+    if (bucketedIds.has(email.id)) continue;
+    const addr = senderAddressOf(email);
+    const domain = addr.includes('@') ? addr.split('@')[1] : '';
+    if (!domain || CATEGORY_SUGGESTION_FREEMAIL_DOMAINS.has(domain)) continue;
+    if (!byDomain.has(domain)) byDomain.set(domain, []);
+    byDomain.get(domain).push(email);
+  }
+  for (const [domain, emails] of byDomain.entries()) {
+    if (emails.length < CATEGORY_SUGGESTION_DOMAIN_BUCKET_MIN) continue;
+    const label = domain.split('.')[0];
+    const prettyLabel = label.charAt(0).toUpperCase() + label.slice(1);
+    categories.push({
+      name: `${prettyLabel} (${domain})`,
+      description: `Emails sent from ${domain} addresses`,
+      guideline: `Classify emails whose sender address ends in @${domain} into this category.`,
+      confidence: 0.9,
+      suggestedEmails: emails.map(e => ({
+        id: e.id,
+        reason: `Sent from ${domain}, which has ${emails.length} emails in "Other"`
+      }))
+    });
+    emails.forEach(e => bucketedIds.add(e.id));
+  }
+
+  return { categories, bucketedIds };
+}
+
+// Stage 2: one discovery call over the whole residue (everything sender
+// bucketing didn't claim). Category discovery is a global task -- whether two
+// themes are one category or two depends on seeing both distributions
+// together -- so this sends a compact one-line summary of every residual
+// email in a single prompt instead of slicing into batches. The model outputs
+// only category definitions (plus a few exemplar IDs); membership is decided
+// by the assignment sweep, so the response stays small no matter how many
+// emails went in.
+async function discoverCategoriesFromResidue(residueEmails, userData, logger, modelName, requestedCategories) {
+  // Escape hatch for extreme pools: keep the prompt within a comfortable
+  // context budget by considering only the most recent N residual emails.
+  const considered = residueEmails
+    .slice()
+    .sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0))
+    .slice(0, CATEGORY_SUGGESTION_DISCOVERY_MAX_EMAILS);
+
+  const existingCategoriesContext = formatExistingCategoriesContext(userData);
+  const prompt = `You are analyzing ALL emails currently categorized as "Other" for one user, to propose new categories that would organize them better.
+
+EXISTING CATEGORIES (do not propose duplicates of these):
+${existingCategoriesContext}
+
+${requestedCategories.length ? `USER REQUESTED THESE CATEGORIES: ${requestedCategories.join(', ')} - include them if the emails below support them.` : ''}
+
+EMAILS (${considered.length} total, one per line: id | from | date | subject | snippet):
+${considered.map(compactEmailLine).join('\n')}
+
+TASK:
+- Propose between 0 and 6 new categories that each cover a meaningful group of the emails above
+- Skip themes that clearly belong in an existing category
+- Do NOT list every member email -- a separate pass will assign emails to your categories. Give up to 5 exemplar email IDs per category, using only IDs from the lines above
+- Write a clear name, a one-sentence description, and a classification guideline for each category
+
+Respond with ONLY this JSON (no other text):
+{
+  "categories": [
+    {
+      "name": "Category Name",
+      "description": "What this category is for",
+      "guideline": "How to classify emails into this category",
+      "confidence": 0.8,
+      "exemplarEmailIds": ["id1", "id2"]
+    }
+  ]
+}`;
+
+  const started = Date.now();
+  let response;
+  try {
+    response = await invokeAnthropic({
+      model: modelName,
+      temperature: 0.2,
+      maxOutputTokens: 2000,
+      messages: [{ role: 'user', content: prompt }]
+    });
+  } catch (error) {
+    logger?.logApiCall(modelName, 0, 0, Date.now() - started, false, error, null, prompt, null);
+    logger?.logError('Category discovery API call', error);
+    throw error;
+  }
+  logger?.logApiCall(
+    modelName,
+    Math.ceil(prompt.length / 4),
+    Math.ceil((response.content?.length || 0) / 4),
+    Date.now() - started,
+    true,
+    null,
+    null,
+    prompt,
+    response.content
+  );
+
+  const parsed = parseSuggestionEnvelope(response.content);
+  if (parsed === null) {
+    // The call succeeded but produced no extractable JSON -- a prompt/format
+    // bug, not a legitimate "nothing fits" result (which still parses, with
+    // an empty categories array). Surface it instead of returning empty.
+    throw new Error(`Category discovery response failed to parse as JSON (first 300 chars): ${String(response.content || '').slice(0, 300)}`);
+  }
+
+  const categories = (Array.isArray(parsed?.categories) ? parsed.categories : [])
+    .map(cat => ({
+      name: String(cat?.name || '').trim(),
+      description: String(cat?.description || '').trim(),
+      guideline: String(cat?.guideline || '').trim(),
+      confidence: Number(cat?.confidence || 0) || undefined
+    }))
+    .filter(cat => cat.name);
+
+  return { categories, rawResponse: response.content };
+}
+
+// Stage 3: assignment sweep. Discovery outputs only category definitions, so
+// membership comes from classifying EVERY residual email against those
+// definitions in large batches with bounded concurrency. This is what turns
+// "a few plausible categories with example emails" into categories that
+// actually empty "Other", and it guarantees each email lands in at most one
+// suggestion. Returns Map<emailId, {category, reason}>.
+async function assignResidueEmailsToCategories(residueEmails, discoveredCategories, logger, modelName) {
+  const assignments = new Map();
+  if (!residueEmails.length || !discoveredCategories.length) return assignments;
+
+  const categoriesBlock = discoveredCategories
+    .map(cat => `- ${cat.name}: ${cat.description}${cat.guideline ? ` (Guideline: ${cat.guideline})` : ''}`)
+    .join('\n');
+  const canonicalNames = new Map(discoveredCategories.map(cat => [cat.name.toLowerCase(), cat.name]));
+
+  const batches = [];
+  for (let i = 0; i < residueEmails.length; i += CATEGORY_SUGGESTION_ASSIGN_BATCH_SIZE) {
+    batches.push(residueEmails.slice(i, i + CATEGORY_SUGGESTION_ASSIGN_BATCH_SIZE));
+  }
+
   let batchErrorCount = 0;
   let lastBatchError = null;
   let parseFailureCount = 0;
@@ -2193,220 +2391,82 @@ async function generateCandidateCategoryBatches(otherEmails, userData, logger, m
       if (batchIndex >= batches.length) return;
       const batch = batches[batchIndex];
 
-      const batchPrompt = `You are analyzing a BATCH of emails currently categorized as "Other" (batch ${batchIndex + 1} of ${batches.length}) to propose candidate new categories.
+      const prompt = `Assign each email below to one of these candidate categories, or to null if none fits well.
 
-Other batches from the same "Other" pool are being analyzed separately and will be merged with this batch's proposals afterward, so:
-- Propose whatever candidate categories genuinely fit THIS batch, even if that's just 1-2
-- Don't force every email into a category; skip emails that don't clearly fit anything
-- It's fine if a category you propose looks similar to one another batch proposes -- they'll be merged later
+CATEGORIES:
+${categoriesBlock}
 
-EXISTING CATEGORIES (do not propose new categories that duplicate these -- if an email clearly fits one of these, leave it out of your suggestions):
-${existingCategoriesContext}
+EMAILS (one per line: id | from | date | subject | snippet):
+${batch.map(compactEmailLine).join('\n')}
 
-${requestedCategories.length ? `USER REQUESTED THESE CATEGORIES: ${requestedCategories.join(', ')} - prioritize these if they make sense for emails in this batch.` : ''}
-
-EMAILS IN THIS BATCH (${batch.length} emails):
-${batch.map((email, i) => `${i + 1}. ID: ${email.id}\n   Subject: ${email.subject}\n   From: ${email.from}\n   Date: ${email.date || ''}\n   Snippet: ${(email.snippet || '').substring(0, 200)}`).join('\n')}
+Rules:
+- Use ONLY the category names listed above, exactly as written, or null
+- Do not force a fit -- null is the right answer for emails that don't clearly belong anywhere
+- Include every email id from the lines above exactly once
 
 Respond with ONLY this JSON (no other text):
-{
-  "categories": [
-    {
-      "name": "Category Name",
-      "description": "What this category is for",
-      "guideline": "How to classify emails into this category",
-      "confidence": 0.8,
-      "suggestedEmails": [
-        { "id": "email_id_from_above", "reason": "Why this email fits" }
-      ]
-    }
-  ]
-}
-
-IMPORTANT:
-- Only use email IDs from the batch above
-- Suggest 2+ emails per category when possible
-- Return valid JSON only`;
+{"assignments": [{"id": "email_id", "category": "Category Name or null", "reason": "Why it fits (omit for null)"}]}`;
 
       const started = Date.now();
       try {
         const response = await invokeAnthropic({
           model: modelName,
-          temperature: 0.3,
-          maxOutputTokens: 1800,
-          messages: [{ role: 'user', content: batchPrompt }]
+          temperature: 0,
+          maxOutputTokens: 2500,
+          messages: [{ role: 'user', content: prompt }]
         });
-        const duration = Date.now() - started;
         logger?.logApiCall(
           modelName,
-          Math.ceil(batchPrompt.length / 4),
+          Math.ceil(prompt.length / 4),
           Math.ceil((response.content?.length || 0) / 4),
-          duration,
+          Date.now() - started,
           true,
           null,
           null,
-          batchPrompt,
+          prompt,
           response.content
         );
 
-        const parsed = parseSuggestionEnvelope(response.content);
+        const parsed = parseAssignmentEnvelope(response.content);
         if (parsed === null) {
-          // API call succeeded, but we couldn't extract ANY JSON object from
-          // the response -- distinct from "valid JSON that legitimately says
-          // no categories fit," which is not a parse failure.
           parseFailureCount++;
           logger?.logError(
-            `Category suggestion batch ${batchIndex + 1}/${batches.length} JSON parse`,
+            `Category assignment batch ${batchIndex + 1}/${batches.length} JSON parse`,
             new Error(`Unparseable response (first 300 chars): ${String(response.content || '').slice(0, 300)}`)
           );
+          continue;
         }
-        const categories = Array.isArray(parsed?.categories) ? parsed.categories : [];
-        candidateCategories.push(...categories);
+        for (const item of parsed.assignments) {
+          const id = String(item?.id || '').trim();
+          const rawCategory = item?.category == null ? '' : String(item.category).trim();
+          const canonical = canonicalNames.get(rawCategory.toLowerCase());
+          if (!id || !canonical || assignments.has(id)) continue;
+          assignments.set(id, { category: canonical, reason: String(item?.reason || '').trim() });
+        }
       } catch (error) {
-        const duration = Date.now() - started;
-        logger?.logApiCall(modelName, 0, 0, duration, false, error, null, batchPrompt, null);
-        logger?.logError(`Category suggestion batch ${batchIndex + 1}/${batches.length} API call`, error);
+        logger?.logApiCall(modelName, 0, 0, Date.now() - started, false, error, null, prompt, null);
+        logger?.logError(`Category assignment batch ${batchIndex + 1}/${batches.length} API call`, error);
         batchErrorCount++;
         lastBatchError = error;
-        // Skip this batch -- other batches still contribute candidates.
+        // Skip this batch -- other batches still contribute assignments.
       }
     }
   }
 
-  const workerCount = Math.max(1, Math.min(CATEGORY_SUGGESTION_BATCH_CONCURRENCY, batches.length));
+  const workerCount = Math.max(1, Math.min(CATEGORY_SUGGESTION_ASSIGN_CONCURRENCY, batches.length));
   await Promise.all(Array.from({ length: workerCount }, () => worker()));
 
-  // If EVERY batch failed outright (e.g. a missing/invalid ANTHROPIC_API_KEY,
-  // or the API being down), that's a real error -- surface it instead of
-  // silently returning an empty result that looks identical to "genuinely
-  // found nothing," which is impossible to tell apart from the client.
+  // Every batch failing outright (bad API key, API down) or failing to parse
+  // is a real error -- surface it instead of returning an empty result that
+  // looks identical to "genuinely nothing fits".
   if (batches.length > 0 && batchErrorCount === batches.length) {
-    throw new Error(`All ${batches.length} category-suggestion batch call(s) failed: ${lastBatchError?.message || 'unknown error'}`);
+    throw new Error(`All ${batches.length} category-assignment batch call(s) failed: ${lastBatchError?.message || 'unknown error'}`);
   }
-
-  // Every batch call succeeded, but none of them produced parseable JSON --
-  // almost certainly a prompt/response-format bug, not a legitimate "nothing
-  // fits" result (which would still parse to valid JSON with an empty or
-  // sparse categories array). Surface this distinctly too.
   if (batches.length > 0 && parseFailureCount === batches.length) {
-    throw new Error(`All ${batches.length} category-suggestion batch response(s) failed to parse as JSON -- check the model's raw output in the operations log.`);
+    throw new Error(`All ${batches.length} category-assignment batch response(s) failed to parse as JSON -- check the model's raw output in the operations log.`);
   }
 
-  return candidateCategories;
-}
-
-// Reduce stage: merge near-duplicate/overlapping candidate categories from
-// all batches into a final clean set. Only names/descriptions/counts/email
-// IDs+reasons are sent here, not full email metadata again, keeping this
-// prompt small regardless of how many batches ran.
-async function consolidateCandidateCategories(candidateCategories, userData, logger, modelName, validEmailIds, emailById) {
-  if (!candidateCategories.length) {
-    return { suggestions: { action: 'createCategories', categories: [] }, rawResponse: '' };
-  }
-
-  const existingCategoriesContext = formatExistingCategoriesContext(userData);
-  const compactCandidates = candidateCategories.map(cat => ({
-    name: cat?.name,
-    description: cat?.description,
-    guideline: cat?.guideline,
-    confidence: cat?.confidence,
-    suggestedEmails: (Array.isArray(cat?.suggestedEmails) ? cat.suggestedEmails : [])
-      .map(e => ({ id: e?.id, reason: e?.reason }))
-      .filter(e => e.id)
-  })).filter(cat => cat.name && cat.suggestedEmails.length);
-
-  async function runConsolidation(extraInstruction) {
-    const consolidationPrompt = `You previously analyzed batches of "Other" emails and proposed the CANDIDATE categories below. Different batches were analyzed independently, so some candidates likely overlap or are near-duplicates. Consolidate them into a final, clean set of categories.
-
-EXISTING CATEGORIES (do not recreate these):
-${existingCategoriesContext}
-
-CANDIDATE CATEGORIES (from all batches, may contain duplicates/overlaps):
-${JSON.stringify(compactCandidates, null, 2)}
-
-TASK:
-- Merge near-duplicate or overlapping candidates into a single final category (e.g. "Conference Invites" + "Conference Travel" -> "Conferences")
-- Keep genuinely distinct categories separate
-- Produce 2-6 final categories total
-- For each final category, list every email ID that belongs to it, pulling from the candidates you merged -- use ONLY IDs that appear in the candidates above, never invent new ones
-- Write one clear final name, description, and guideline per category
-${extraInstruction || ''}
-
-Respond with ONLY this JSON (no other text):
-{
-  "categories": [
-    {
-      "name": "Final Category Name",
-      "description": "What this category is for",
-      "guideline": "How to classify emails into this category",
-      "confidence": 0.8,
-      "suggestedEmails": [
-        { "id": "email_id", "reason": "Why this email fits" }
-      ]
-    }
-  ]
-}`;
-
-    const started = Date.now();
-    const response = await invokeAnthropic({
-      model: modelName,
-      temperature: extraInstruction ? 0 : 0.2,
-      maxOutputTokens: 2500,
-      messages: [{ role: 'user', content: consolidationPrompt }]
-    });
-    const duration = Date.now() - started;
-    logger?.logApiCall(
-      modelName,
-      Math.ceil(consolidationPrompt.length / 4),
-      Math.ceil((response.content?.length || 0) / 4),
-      duration,
-      true,
-      null,
-      null,
-      consolidationPrompt,
-      response.content
-    );
-
-    const parsed = parseSuggestionEnvelope(response.content);
-    return { normalized: normalizeCategorySuggestions(parsed, validEmailIds, emailById), rawResponse: response.content };
-  }
-
-  let first = null;
-  try {
-    first = await runConsolidation();
-    if (hasSufficientCategorySuggestions(first.normalized)) {
-      return { suggestions: first.normalized, rawResponse: first.rawResponse };
-    }
-  } catch (firstError) {
-    logger?.logError('Category suggestions consolidation', firstError);
-  }
-
-  // Single retry of the consolidation prompt only (not the batches) if the
-  // result was too sparse -- replaces the old repair/simpler/retry tiers,
-  // which all re-prompted the same fixed 20-email slice with no new data.
-  let retried = null;
-  try {
-    retried = await runConsolidation('\nThe previous attempt produced too few categories/emails -- merge more aggressively and be less conservative about which candidate emails to include.');
-    if (hasSufficientCategorySuggestions(retried.normalized)) {
-      return { suggestions: retried.normalized, rawResponse: retried.rawResponse };
-    }
-  } catch (retryError) {
-    logger?.logError('Category suggestions consolidation retry', retryError);
-  }
-
-  // Neither attempt cleared the "sufficient" quality bar (>=2 categories,
-  // >=4 emails, >=2/category) -- rather than discarding everything and
-  // erroring out, show whichever attempt found more. An empty result here
-  // is still handled gracefully client-side ("No Other emails found").
-  const firstCount = first?.normalized?.categories?.length || 0;
-  const retriedCount = retried?.normalized?.categories?.length || 0;
-  if (retriedCount >= firstCount && retried) {
-    return { suggestions: retried.normalized, rawResponse: retried.rawResponse };
-  }
-  if (first) {
-    return { suggestions: first.normalized, rawResponse: first.rawResponse };
-  }
-  return { suggestions: { action: 'createCategories', categories: [] }, rawResponse: '' };
+  return assignments;
 }
 
 async function generateCategorySuggestionsForUser(userData, logger, options = {}) {
@@ -2414,6 +2474,10 @@ async function generateCategorySuggestionsForUser(userData, logger, options = {}
     ? options.requestedCategories.filter(Boolean)
     : [];
   const modelName = getAnthropicModel();
+  // The sweep is a bulk, easy classification task, so it can run on a cheaper
+  // model than discovery without hurting quality.
+  const sweepModelName = String(process.env.ANTHROPIC_SWEEP_MODEL || '').trim() || modelName;
+
   const allOtherEmails = (userData?.responseEmails || []).filter(email =>
     email.category === 'Other' || email.category === 'Uncategorized' || !email.category
   );
@@ -2425,19 +2489,44 @@ async function generateCategorySuggestionsForUser(userData, logger, options = {}
     };
   }
 
-  // Cap to the most recent N to bound cost/latency; older "Other" emails
-  // beyond that just aren't considered in this run and can be picked up in a
-  // later one as the pool changes.
-  const otherEmails = allOtherEmails
-    .slice()
-    .sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0))
-    .slice(0, CATEGORY_SUGGESTION_MAX_OTHER_EMAILS);
+  const validEmailIds = new Set(allOtherEmails.map(email => String(email?.id || '').trim()).filter(Boolean));
+  const emailById = new Map(allOtherEmails.map(email => [String(email?.id || '').trim(), email]));
 
-  const validEmailIds = new Set(otherEmails.map(email => String(email?.id || '').trim()).filter(Boolean));
-  const emailById = new Map(otherEmails.map(email => [String(email?.id || '').trim(), email]));
+  // Stage 1: deterministic sender/domain buckets over the full pool (no cap).
+  const { categories: bucketCategories, bucketedIds } = bucketOtherEmailsBySender(allOtherEmails);
+  const residueEmails = allOtherEmails.filter(email => !bucketedIds.has(email.id));
 
-  const candidateCategories = await generateCandidateCategoryBatches(otherEmails, userData, logger, modelName, requestedCategories);
-  const { suggestions, rawResponse } = await consolidateCandidateCategories(candidateCategories, userData, logger, modelName, validEmailIds, emailById);
+  // Stage 2: single long-context discovery call over the residue.
+  let discoveredCategories = [];
+  let rawResponse = '';
+  if (residueEmails.length >= CATEGORY_SUGGESTION_MIN_EMAILS_PER_CATEGORY) {
+    const discovery = await discoverCategoriesFromResidue(residueEmails, userData, logger, modelName, requestedCategories);
+    discoveredCategories = discovery.categories;
+    rawResponse = discovery.rawResponse;
+  }
+
+  // Stage 3: classify every residual email against the discovered categories.
+  const assignments = await assignResidueEmailsToCategories(residueEmails, discoveredCategories, logger, sweepModelName);
+
+  const assignedByCategory = new Map(discoveredCategories.map(cat => [cat.name, []]));
+  for (const [id, assignment] of assignments.entries()) {
+    assignedByCategory.get(assignment.category)?.push({
+      id,
+      reason: assignment.reason || 'This email fits this category.'
+    });
+  }
+
+  const discoveredWithEmails = discoveredCategories
+    .map(cat => ({ ...cat, suggestedEmails: assignedByCategory.get(cat.name) || [] }))
+    .filter(cat => cat.suggestedEmails.length >= CATEGORY_SUGGESTION_MIN_EMAILS_PER_CATEGORY);
+
+  // normalizeCategorySuggestions canonicalizes/validates IDs and backfills
+  // real subject/from/date/snippet from emailById, exactly as before.
+  const suggestions = normalizeCategorySuggestions(
+    { action: 'createCategories', categories: [...bucketCategories, ...discoveredWithEmails] },
+    validEmailIds,
+    emailById
+  );
 
   return {
     suggestions,
