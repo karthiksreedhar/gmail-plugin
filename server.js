@@ -397,6 +397,17 @@ async function ensureLoadedFeaturesRegistered() {
   ));
 }
 
+// Users who get a "clean slate": features created by other users are never
+// exposed to them (header buttons, Features panel, frontend scripts). A
+// feature still shows for them if its registry entry marks them as creator.
+// Comma-separated, overridable via FEATURE_CLEAN_SLATE_USERS.
+const FEATURE_CLEAN_SLATE_USERS = new Set(
+  String(process.env.FEATURE_CLEAN_SLATE_USERS || 'lc3251@columbia.edu')
+    .split(',')
+    .map(value => value.trim().toLowerCase())
+    .filter(Boolean)
+);
+
 async function listFeatureRegistryForUser(userEmail) {
   await ensureLoadedFeaturesRegistered();
 
@@ -456,7 +467,10 @@ async function listFeatureRegistryForUser(userEmail) {
       return Number(b.preferences.pinned) - Number(a.preferences.pinned);
     }
     return a.name.localeCompare(b.name);
-  });
+  }).filter(entry =>
+    !FEATURE_CLEAN_SLATE_USERS.has(normalizedUserEmail) ||
+    String(entry.createdBy || '').trim().toLowerCase() === normalizedUserEmail
+  );
 }
 
 async function getFeatureRegistryEntryForUser(featureId, userEmail) {
