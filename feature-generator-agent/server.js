@@ -2130,7 +2130,9 @@ function normalizeCategorySuggestions(input, validEmailIds = new Set(), emailByI
       suggestedEmails.push({
         id,
         subject: String(emailObj?.subject || meta.subject || 'No Subject'),
-        from: String(emailObj?.from || meta.from || 'Unknown Sender'),
+        // Prefer originalFrom: on response-email records `from` is the user's
+        // own address; the actual sender lives in originalFrom.
+        from: String(emailObj?.from || meta.originalFrom || meta.from || 'Unknown Sender'),
         date: String(emailObj?.date || meta.date || ''),
         snippet: String(emailObj?.snippet || meta.snippet || '').trim(),
         reason: String(emailObj?.reason || 'This email appears to fit this category.').trim()
