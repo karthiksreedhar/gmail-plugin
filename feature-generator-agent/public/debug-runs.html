@@ -18,7 +18,19 @@
   .run-item { padding: 10px 14px; border-bottom: 1px solid #eef0f3; cursor: pointer; }
   .run-item:hover { background: #f6f8fb; }
   .run-item.active { background: #eef4ff; border-left: 3px solid #4285f4; padding-left: 11px; }
-  .run-item .line1 { display: flex; justify-content: space-between; align-items: center; margin-bottom: 3px; }
+  .run-item .line1 { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 3px; }
+  .run-item .right-col { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; }
+  .trash-btn { border: none; background: none; cursor: pointer; color: #98a2b3; padding: 2px 3px; border-radius: 4px; line-height: 0; }
+  .trash-btn:hover { color: #d92d20; background: #fef3f2; }
+  .confirm-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.45); z-index: 1000; display: flex; align-items: center; justify-content: center; }
+  .confirm-box { background: #fff; border-radius: 10px; padding: 20px 22px; max-width: 380px; width: 90%; box-shadow: 0 10px 40px rgba(0,0,0,.2); }
+  .confirm-box h3 { font-size: 15px; margin-bottom: 8px; }
+  .confirm-box p { color: #475467; font-size: 13px; margin-bottom: 16px; }
+  .confirm-box .btns { display: flex; justify-content: flex-end; gap: 8px; }
+  .confirm-box button { padding: 7px 14px; border-radius: 6px; font-size: 13px; cursor: pointer; }
+  .confirm-box .cancel { border: 1px solid #d0d5dd; background: #fff; }
+  .confirm-box .delete { border: none; background: #d92d20; color: #fff; }
+  .confirm-box .delete:hover { background: #b42318; }
   .run-item .when { font-weight: 600; font-size: 13px; }
   .run-item .who { color: #667085; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .run-item .nums { color: #667085; font-size: 12px; margin-top: 2px; }
@@ -121,10 +133,15 @@ function renderRunList() {
       <div class="run-item ${r.runId === activeRunId ? 'active' : ''}" onclick="selectRun('${esc(r.runId)}')">
         <div class="line1">
           <span class="when">${fmtWhen(r.startedAt)}</span>
-          <span>
-            ${r.ok === false ? '<span class="badge fail">FAILED</span> ' : ''}
-            ${r.trigger === 'email-chat' ? '<span class="badge chat">chat</span> ' : ''}
-            <span class="badge ${esc(r.variant)}">${esc((r.variant || '?').toUpperCase())}</span>
+          <span class="right-col">
+            <span>
+              ${r.ok === false ? '<span class="badge fail">FAILED</span> ' : ''}
+              ${r.trigger === 'email-chat' ? '<span class="badge chat">chat</span> ' : ''}
+              <span class="badge ${esc(r.variant)}">${esc((r.variant || '?').toUpperCase())}</span>
+            </span>
+            <button class="trash-btn" title="Delete this run" onclick="event.stopPropagation(); confirmDeleteRun('${esc(r.runId)}')">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>
+            </button>
           </span>
         </div>
         <div class="who">${esc(r.userEmail)}</div>
@@ -292,6 +309,47 @@ function filterEmailRows() {
   document.querySelectorAll('#emailTable tr[data-search]').forEach(tr => {
     tr.style.display = !q || tr.dataset.search.includes(q) ? '' : 'none';
   });
+}
+
+function confirmDeleteRun(runId) {
+  const run = allRuns.find(r => r.runId === runId);
+  const existing = document.getElementById('deleteConfirm');
+  if (existing) existing.remove();
+  const overlay = document.createElement('div');
+  overlay.id = 'deleteConfirm';
+  overlay.className = 'confirm-overlay';
+  overlay.innerHTML = `
+    <div class="confirm-box">
+      <h3>Delete this run?</h3>
+      <p>${run ? esc((run.variant || '?').toUpperCase()) + ' run for ' + esc(run.userEmail) + ', ' + fmtWhen(run.startedAt) : 'This run'} will be permanently removed from the debug log.</p>
+      <div class="btns">
+        <button class="cancel" onclick="document.getElementById('deleteConfirm').remove()">Cancel</button>
+        <button class="delete" onclick="deleteRun('${esc(runId)}')">Delete</button>
+      </div>
+    </div>`;
+  overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+  document.body.appendChild(overlay);
+}
+
+async function deleteRun(runId) {
+  const overlay = document.getElementById('deleteConfirm');
+  try {
+    const resp = await fetch('/api/debug/category-suggestion-runs/' + encodeURIComponent(runId), { method: 'DELETE' });
+    const data = await resp.json().catch(() => ({}));
+    if (!data.success) throw new Error(data.error || 'Delete failed');
+    allRuns = allRuns.filter(r => r.runId !== runId);
+    if (activeRunId === runId) {
+      activeRunId = null;
+      document.getElementById('main').innerHTML = '<div class="empty">Select a run on the left.</div>';
+    }
+    const allOption = document.getElementById('userFilter').options[0];
+    if (allOption) allOption.text = 'All users (' + allRuns.length + ' runs)';
+    renderRunList();
+  } catch (e) {
+    alert('Failed to delete run: ' + e.message);
+  } finally {
+    if (overlay) overlay.remove();
+  }
 }
 
 document.getElementById('userFilter').addEventListener('change', renderRunList);

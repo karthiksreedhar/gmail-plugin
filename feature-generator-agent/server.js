@@ -3732,6 +3732,22 @@ app.get('/api/debug/category-suggestion-runs/:runId', async (req, res) => {
   }
 });
 
+// Delete one run from the debug log (the trash button in the viewer).
+app.delete('/api/debug/category-suggestion-runs/:runId', async (req, res) => {
+  try {
+    await ensureMongoReady();
+    const db = getDb();
+    const result = await db.collection(CATEGORY_DEBUG_RUNS_COLLECTION)
+      .deleteOne({ runId: String(req.params.runId || '') });
+    if (result.deletedCount === 0) {
+      return res.status(404).json({ success: false, error: 'Run not found' });
+    }
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error?.message || 'Failed to delete debug run' });
+  }
+});
+
 // GET /api/email-thread-preview/:emailId?userEmail=<email>
 // Returns the full stored thread for a suggested email (from email_threads,
 // the same collection the main app uses), or a synthesized single-message
