@@ -2544,6 +2544,9 @@ function syncCategorySelectionUI(categoryName, enabled) {
   document.querySelectorAll(`.category-enable-checkbox[data-category="${categoryName}"]`).forEach(cb => {
     cb.checked = enabled;
   });
+  document.querySelectorAll(`.rhs-category-enable-checkbox[data-category="${categoryName}"]`).forEach(cb => {
+    cb.checked = enabled;
+  });
   document.querySelectorAll(`.category-confirm-checkbox[data-category="${categoryName}"]`).forEach(cb => {
     cb.checked = enabled;
   });
@@ -2935,6 +2938,14 @@ function generateRHSTabs(categories) {
     tab.addEventListener('click', (e) => {
       if (e.target && e.target.classList.contains('rhs-category-enable-checkbox')) return;
       activateRHSTab(index);
+    });
+    // The tab checkbox is the sole include/exclude control for the category:
+    // update the selection state and grey out the panel's email list.
+    tab.querySelector('.rhs-category-enable-checkbox').addEventListener('change', (e) => {
+      const enabled = e.target.checked;
+      rhsCategorySelections[cat.name] = enabled;
+      syncCategorySelectionUI(cat.name, enabled);
+      updateRHSSelectedCount();
     });
     rhsCategoryTabs.appendChild(tab);
   });

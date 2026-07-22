@@ -1896,6 +1896,12 @@ body.chat-mode .mode-btn.active[data-mode="chat"] {
   opacity: 0.55;
 }
 
+/* A deselected category's panel is greyed out and inert; the tab checkbox
+   (outside the panel) stays clickable to re-enable it. */
+.rhs-category-tab-panel.rhs-category-disabled {
+  pointer-events: none;
+}
+
 /* Category Panels */
 .category-panels {
   flex: 1;
