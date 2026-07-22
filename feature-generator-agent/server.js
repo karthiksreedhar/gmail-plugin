@@ -2480,8 +2480,13 @@ async function generateCategorySuggestionsForUser(userData, logger, options = {}
   // model than discovery without hurting quality.
   const sweepModelName = String(process.env.ANTHROPIC_SWEEP_MODEL || '').trim() || modelName;
 
+  // Only important/starred emails are worth promoting out of "Other" -- the
+  // rest are ignored by every stage (buckets, discovery, assignment sweep).
+  // Records synced before flag capture have no isImportant/isStarred fields
+  // and are treated as neither.
   const allOtherEmails = (userData?.responseEmails || []).filter(email =>
-    email.category === 'Other' || email.category === 'Uncategorized' || !email.category
+    (email.category === 'Other' || email.category === 'Uncategorized' || !email.category) &&
+    (email.isImportant === true || email.isStarred === true)
   );
 
   if (allOtherEmails.length === 0) {
