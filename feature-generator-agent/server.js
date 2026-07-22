@@ -2197,57 +2197,189 @@ function formatExistingCategoriesContext(userData) {
   }).join('\n');
 }
 
-// Discovery: one call over the whole (important/starred) "Other" pool.
-// Category discovery is a global task -- whether two themes are one category
-// or two depends on seeing both distributions together -- so this sends a
-// compact one-line summary of every email in a single prompt. The model
-// outputs only category definitions (plus a few exemplar IDs); membership is
-// decided by the assignment sweep, so the response stays small no matter how
-// many emails went in. Sender repetition is passed as per-line metadata, and
-// the prompt is pinned to a two-kind taxonomy (specific projects, specific
-// task workflows) so it can't drift into sender- or theme-level groupings.
-async function discoverCategoriesFromEmails(poolEmails, userData, logger, modelName, requestedCategories) {
-  // Escape hatch for extreme pools: keep the prompt within a comfortable
-  // context budget by considering only the most recent N emails.
-  const considered = poolEmails
-    .slice()
-    .sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0))
-    .slice(0, CATEGORY_SUGGESTION_DISCOVERY_MAX_EMAILS);
+// Phase-3 discovery: tag-then-consolidate. Asking one model to "propose
+// categories" over raw emails lets it drift toward broad themes; instead,
+// each email is first forced to commit to the SPECIFIC project and/or task
+// workflow it belongs to, and only tags that recur across enough emails
+// become candidate categories. Specificity is structural, not just
+// instructed.
+
+function parseTagEnvelope(responseText) {
+  for (const candidate of parseJsonCandidates(responseText)) {
+    try {
+      const parsed = JSON.parse(candidate);
+      if (Array.isArray(parsed?.tags)) return parsed;
+    } catch (_) {
+      // Keep trying alternate slices.
+    }
+  }
+  return null;
+}
+
+// Tagging pass: batches with bounded concurrency, one committed
+// {project, task_type} pair (either may be null) per email.
+async function tagEmailsWithProjectsAndTasks(poolEmails, userData, logger, modelName) {
+  const tagsByEmailId = new Map();
+  if (!poolEmails.length) return tagsByEmailId;
 
   const senderCounts = new Map();
-  for (const email of considered) {
+  for (const email of poolEmails) {
     const addr = senderAddressOf(email);
     if (addr) senderCounts.set(addr, (senderCounts.get(addr) || 0) + 1);
   }
+  const existingCategoriesContext = formatExistingCategoriesContext(userData);
+
+  const batches = [];
+  for (let i = 0; i < poolEmails.length; i += CATEGORY_SUGGESTION_ASSIGN_BATCH_SIZE) {
+    batches.push(poolEmails.slice(i, i + CATEGORY_SUGGESTION_ASSIGN_BATCH_SIZE));
+  }
+
+  let batchErrorCount = 0;
+  let lastBatchError = null;
+  let parseFailureCount = 0;
+  let cursor = 0;
+  async function worker() {
+    while (true) {
+      const batchIndex = cursor++;
+      if (batchIndex >= batches.length) return;
+      const batch = batches[batchIndex];
+
+      const prompt = `Tag each email below with the SPECIFIC project and/or task workflow it is part of.
+
+For each email output:
+- "project": the specific multi-email endeavor this email advances (e.g. "CVPR 2026 Paper Submission", "Apartment Lease Renewal", "Lab Server Migration"), or null
+- "task_type": the specific recurring administrative workflow it represents (e.g. "Travel Reimbursements", "Course Registration", "IRB Approvals"), or null
+
+RULES:
+- Tags must name what the email is FOR -- never the sender, mailing list, company, or product that sent it
+- Tags must be more specific than the existing categories below; if the email simply fits an existing category, use null for both fields
+- Reuse identical tag names for emails that belong to the same project/workflow
+- null for both fields is correct for emails that are neither part of a specific project nor a recurring workflow
+
+EXISTING CATEGORIES:
+${existingCategoriesContext}
+
+SENDER FREQUENCY: "(sender xN in this pool)" on a line means that sender has N emails in this pool. Repetition may signal a recurring project or workflow, but tags must name the project/task, never the sender.
+
+EMAILS (${batch.length} in this batch, one per line: id | from | date | subject | snippet):
+${batch.map(email => compactEmailLine(email, senderCounts.get(senderAddressOf(email)) || 0)).join('\n')}
+
+Respond with ONLY this JSON (no other text):
+{"tags": [{"id": "email_id", "project": "Specific Project Name or null", "task_type": "Specific Task Workflow or null"}]}`;
+
+      const started = Date.now();
+      try {
+        const response = await invokeAnthropic({
+          model: modelName,
+          temperature: 0,
+          maxOutputTokens: 3000,
+          messages: [{ role: 'user', content: prompt }]
+        });
+        logger?.logApiCall(
+          modelName,
+          Math.ceil(prompt.length / 4),
+          Math.ceil((response.content?.length || 0) / 4),
+          Date.now() - started,
+          true,
+          null,
+          null,
+          prompt,
+          response.content
+        );
+
+        const parsed = parseTagEnvelope(response.content);
+        if (parsed === null) {
+          parseFailureCount++;
+          logger?.logError(
+            `Category tagging batch ${batchIndex + 1}/${batches.length} JSON parse`,
+            new Error(`Unparseable response (first 300 chars): ${String(response.content || '').slice(0, 300)}`)
+          );
+          continue;
+        }
+        for (const item of parsed.tags) {
+          const id = String(item?.id || '').trim();
+          if (!id || tagsByEmailId.has(id)) continue;
+          const cleanTag = (value) => {
+            const text = String(value == null ? '' : value).trim();
+            return text && text.toLowerCase() !== 'null' && text.toLowerCase() !== 'none' ? text : null;
+          };
+          tagsByEmailId.set(id, { project: cleanTag(item?.project), taskType: cleanTag(item?.task_type) });
+        }
+      } catch (error) {
+        logger?.logApiCall(modelName, 0, 0, Date.now() - started, false, error, null, prompt, null);
+        logger?.logError(`Category tagging batch ${batchIndex + 1}/${batches.length} API call`, error);
+        batchErrorCount++;
+        lastBatchError = error;
+        // Skip this batch -- other batches still contribute tags.
+      }
+    }
+  }
+
+  const workerCount = Math.max(1, Math.min(CATEGORY_SUGGESTION_ASSIGN_CONCURRENCY, batches.length));
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+
+  if (batches.length > 0 && batchErrorCount === batches.length) {
+    throw new Error(`All ${batches.length} category-tagging batch call(s) failed: ${lastBatchError?.message || 'unknown error'}`);
+  }
+  if (batches.length > 0 && parseFailureCount === batches.length) {
+    throw new Error(`All ${batches.length} category-tagging batch response(s) failed to parse as JSON -- check the model's raw output in the operations log.`);
+  }
+
+  return tagsByEmailId;
+}
+
+// Deterministic aggregation: tags recurring across enough emails become the
+// candidate categories (case-insensitive key, first-seen casing displayed).
+// Near-duplicate merging is left to consolidation.
+function aggregateEmailTags(tagsByEmailId, emailById) {
+  const stats = new Map(); // "kind|lowername" -> {kind, name, count, sampleSubjects}
+  for (const [emailId, tags] of tagsByEmailId.entries()) {
+    for (const [kind, name] of [['project', tags.project], ['task', tags.taskType]]) {
+      if (!name) continue;
+      const key = `${kind}|${name.toLowerCase()}`;
+      if (!stats.has(key)) stats.set(key, { kind, name, count: 0, sampleSubjects: [] });
+      const entry = stats.get(key);
+      entry.count++;
+      if (entry.sampleSubjects.length < 3) {
+        const subject = String(emailById.get(emailId)?.subject || '').replace(/\s+/g, ' ').trim().slice(0, 80);
+        if (subject) entry.sampleSubjects.push(subject);
+      }
+    }
+  }
+  return Array.from(stats.values())
+    .filter(entry => entry.count >= CATEGORY_SUGGESTION_MIN_EMAILS_PER_CATEGORY)
+    .sort((a, b) => b.count - a.count);
+}
+
+// Consolidation: merge near-duplicate tags into the final category set. Only
+// tag names/counts/sample subjects are sent, so the prompt stays small no
+// matter how many emails were tagged.
+async function consolidateTagsIntoCategories(tagStats, userData, logger, modelName, requestedCategories) {
+  if (!tagStats.length) {
+    return { categories: [], rawResponse: '' };
+  }
 
   const existingCategoriesContext = formatExistingCategoriesContext(userData);
-  const prompt = `You are analyzing the important/starred emails currently categorized as "Other" for one user, to propose NEW, SPECIFIC categories that would organize them better.
+  const prompt = `Each important/starred "Other" email was tagged with the specific project and/or task workflow it belongs to. The aggregated tags are below. Consolidate them into a final, clean set of suggested email categories.
 
-Every category you propose must be one of exactly two kinds:
-1. A SPECIFIC PROJECT or endeavor -- a multi-email arc toward one concrete goal (e.g. "CVPR 2026 Paper Submission", "Apartment Lease Renewal", "Lab Server Migration")
-2. A SPECIFIC TASK WORKFLOW -- a recurring administrative action (e.g. "Travel Reimbursements", "Course Registration", "IRB Approvals")
+Every final category must be one of exactly two kinds:
+1. A SPECIFIC PROJECT or endeavor -- a multi-email arc toward one concrete goal (e.g. "CVPR 2026 Paper Submission", "Apartment Lease Renewal")
+2. A SPECIFIC TASK WORKFLOW -- a recurring administrative action (e.g. "Travel Reimbursements", "Course Registration")
 
-HARD RULES:
-- NEVER name a category after a sender, mailing list, company, or product that sends the emails ("GitHub", "Substack Digest" are wrong -- name what the emails are FOR, not who they are from)
-- Broad themes are wrong ("Newsletters", "University Emails", "Updates", "Finance")
-- Every category must be strictly MORE SPECIFIC than the existing categories listed below. If a proposed category could replace an entry in that list without looking out of place, it is too broad
-- "guideline" must be a membership test: one sentence a classifier could apply mechanically (e.g. "Emails about submitting or tracking expense reports for lab purchases")
-- Skip emails that fit an existing category; do not force emails into categories
+RULES:
+- Merge near-duplicate or overlapping tags into one category (e.g. "NSF Reimbursement" + "NSF Travel Reimbursement" -> one category)
+- NEVER name a category after a sender, mailing list, company, or product; drop tags that are sender names
+- Drop broad themes and anything that fits an existing category below
+- Produce 0-6 final categories
+- "guideline" must be a membership test: one sentence a classifier could apply mechanically
 
 EXISTING CATEGORIES (your categories must be more specific than these):
 ${existingCategoriesContext}
 
-${requestedCategories.length ? `USER REQUESTED THESE CATEGORIES: ${requestedCategories.join(', ')} - include them if the emails below support them.` : ''}
+${requestedCategories.length ? `USER REQUESTED THESE CATEGORIES: ${requestedCategories.join(', ')} - include them if the tags below support them.` : ''}
 
-SENDER FREQUENCY: "(sender xN in this pool)" on a line means that sender has N emails in this pool. Repetition may signal a recurring project or workflow, but the category must name the project/task, never the sender.
-
-EMAILS (${considered.length} total, one per line: id | from | date | subject | snippet):
-${considered.map(email => compactEmailLine(email, senderCounts.get(senderAddressOf(email)) || 0)).join('\n')}
-
-TASK:
-- Propose between 0 and 6 new categories following the rules above
-- Do NOT list every member email -- a separate pass will assign emails to your categories. Give up to 5 exemplar email IDs per category, using only IDs from the lines above
-- Write a clear name, a one-sentence description, and a membership-test guideline for each category
+TAGS (kind, name, email count, sample subjects):
+${tagStats.map(entry => `- [${entry.kind}] "${entry.name}" -- ${entry.count} emails; samples: ${entry.sampleSubjects.map(s => `"${s}"`).join(', ') || '(none)'}`).join('\n')}
 
 Respond with ONLY this JSON (no other text):
 {
@@ -2256,8 +2388,7 @@ Respond with ONLY this JSON (no other text):
       "name": "Category Name",
       "description": "What this category is for",
       "guideline": "Membership test for classifying emails into this category",
-      "confidence": 0.8,
-      "exemplarEmailIds": ["id1", "id2"]
+      "confidence": 0.8
     }
   ]
 }`;
@@ -2273,7 +2404,7 @@ Respond with ONLY this JSON (no other text):
     });
   } catch (error) {
     logger?.logApiCall(modelName, 0, 0, Date.now() - started, false, error, null, prompt, null);
-    logger?.logError('Category discovery API call', error);
+    logger?.logError('Tag consolidation API call', error);
     throw error;
   }
   logger?.logApiCall(
@@ -2293,7 +2424,7 @@ Respond with ONLY this JSON (no other text):
     // The call succeeded but produced no extractable JSON -- a prompt/format
     // bug, not a legitimate "nothing fits" result (which still parses, with
     // an empty categories array). Surface it instead of returning empty.
-    throw new Error(`Category discovery response failed to parse as JSON (first 300 chars): ${String(response.content || '').slice(0, 300)}`);
+    throw new Error(`Tag consolidation response failed to parse as JSON (first 300 chars): ${String(response.content || '').slice(0, 300)}`);
   }
 
   const categories = (Array.isArray(parsed?.categories) ? parsed.categories : [])
@@ -2306,6 +2437,22 @@ Respond with ONLY this JSON (no other text):
     .filter(cat => cat.name);
 
   return { categories, rawResponse: response.content };
+}
+
+// Discovery wrapper, signature-compatible with the orchestrator: tag every
+// email, aggregate recurring tags, consolidate into category definitions.
+async function discoverCategoriesFromEmails(poolEmails, userData, logger, modelName, requestedCategories) {
+  // Escape hatch for extreme pools: keep cost bounded by considering only
+  // the most recent N emails.
+  const considered = poolEmails
+    .slice()
+    .sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0))
+    .slice(0, CATEGORY_SUGGESTION_DISCOVERY_MAX_EMAILS);
+
+  const emailById = new Map(considered.map(email => [String(email?.id || '').trim(), email]));
+  const tagsByEmailId = await tagEmailsWithProjectsAndTasks(considered, userData, logger, modelName);
+  const tagStats = aggregateEmailTags(tagsByEmailId, emailById);
+  return consolidateTagsIntoCategories(tagStats, userData, logger, modelName, requestedCategories);
 }
 
 // Assignment sweep. Discovery outputs only category definitions, so
