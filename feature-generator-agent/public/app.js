@@ -2735,7 +2735,6 @@ let urlUserEmailApplied = false;
 
 async function refreshAvailableUsers() {
   if (!selectedUserDropdown) return;
-  const previous = String(selectedUserDropdown.value || '').trim().toLowerCase();
 
   try {
     const resp = await fetch('/api/users');
@@ -2751,6 +2750,12 @@ async function refreshAvailableUsers() {
   if (!availableUsers.length) {
     availableUsers = Array.from(selectedUserDropdown.options).map(opt => String(opt.value || '').trim().toLowerCase()).filter(Boolean);
   }
+
+  // Read the current selection only now, after the fetch: this function runs
+  // concurrently on page init (DOMContentLoaded + chat-mode init), and a
+  // snapshot taken before the await lets the slower call "restore" the static
+  // HTML default over the ?userEmail= preselection the faster call applied.
+  const previous = String(selectedUserDropdown.value || '').trim().toLowerCase();
 
   selectedUserDropdown.innerHTML = '';
   for (const email of availableUsers) {
@@ -2901,9 +2906,11 @@ function showRHSCategorySuggestionPanel(suggestions) {
   // Update selected count
   updateRHSSelectedCount();
   
-  // Show as a normal inline grid box next to chat (no more slide-in overlay)
+  // Show the panel expanded across the whole workspace (chat column hides
+  // via .suggestions-expanded and comes back when the panel closes)
   rhsPanel.style.display = 'flex';
-  
+  document.querySelector('.main-content')?.classList.add('suggestions-expanded');
+
   // Activate first tab
   if (suggestions.categories.length > 0) {
     activateRHSTab(0);
@@ -3306,9 +3313,10 @@ async function handleRHSApprove() {
   }
 }
 
-// Close RHS panel
+// Close RHS panel (restores the normal chat layout)
 function closeRHSPanel() {
   rhsPanel.style.display = 'none';
+  document.querySelector('.main-content')?.classList.remove('suggestions-expanded');
   rhsCategorySuggestions = null;
   rhsEmailSelections = {};
   rhsCategorySelections = {};
@@ -3318,7 +3326,13 @@ function closeRHSPanel() {
 const originalSetMode = setMode;
 setMode = function(mode) {
   originalSetMode(mode);
-  
+
+  // Leaving chat while the expanded suggestions panel is open would strand a
+  // blank workspace -- close it so the normal layout is restored first.
+  if (mode !== 'chat' && rhsPanel && rhsPanel.style.display !== 'none') {
+    closeRHSPanel();
+  }
+
   // Add category suggestion trigger button in chat mode
   if (mode === 'chat') {
     setTimeout(() => addCategorySuggestionTrigger(), 100);

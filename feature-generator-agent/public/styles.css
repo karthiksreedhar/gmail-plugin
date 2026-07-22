@@ -199,6 +199,16 @@ body.chat-mode .mode-btn.active[data-mode="chat"] {
   min-height: 0;
 }
 
+/* While category suggestions are open, the RHS panel takes over the whole
+   workspace; the chat column comes back when the panel closes. */
+.main-content.suggestions-expanded {
+  grid-template-columns: 1fr;
+}
+.main-content.suggestions-expanded .chat-section,
+.main-content.suggestions-expanded .preview-section {
+  display: none !important;
+}
+
 @media (max-width: 1200px) {
   .main-content {
     grid-template-columns: 1fr;
