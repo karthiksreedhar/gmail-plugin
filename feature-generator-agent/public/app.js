@@ -79,7 +79,9 @@ document.addEventListener('DOMContentLoaded', () => {
   initRHSElements();
   setupRHSEventListeners();
   refreshAvailableUsers();
-  setMode(currentMode);
+  // Opened from the Gmail page (?userEmail=...): land on the chat window
+  // regardless of the mode remembered from a previous visit.
+  setMode(URL_USER_EMAIL ? 'chat' : currentMode);
 });
 
 // Initialize or restore session
@@ -2270,12 +2272,6 @@ function renderCategorySuggestionsHTML(suggestions) {
     const cat = categories[i];
     html += `<div class="category-panel ${i === 0 ? 'active' : ''}" data-category="${escapeHtml(cat.name)}" data-index="${i}">
       <div class="category-info">
-        <div class="category-enable-row">
-          <label class="checkbox-label">
-            <input type="checkbox" class="category-enable-checkbox" data-category="${escapeHtml(cat.name)}" ${categorySelections[cat.name] ? 'checked' : ''}>
-            <span>Include this category</span>
-          </label>
-        </div>
         <div class="category-description">${escapeHtml(cat.description || '')}</div>
         ${cat.guideline ? `<div class="category-guideline"><strong>Guideline:</strong> ${escapeHtml(cat.guideline)}</div>` : ''}
       </div>
@@ -2733,6 +2729,9 @@ function addCategorySuggestionTrigger() {
 }
 
 let availableUsers = [];
+// Apply the ?userEmail= preselection only once, so later refreshes never
+// clobber a user the operator picked manually in the dropdown.
+let urlUserEmailApplied = false;
 
 async function refreshAvailableUsers() {
   if (!selectedUserDropdown) return;
@@ -2761,7 +2760,13 @@ async function refreshAvailableUsers() {
     selectedUserDropdown.appendChild(option);
   }
 
-  if (previous && availableUsers.includes(previous)) {
+  if (!urlUserEmailApplied && URL_USER_EMAIL && availableUsers.includes(URL_USER_EMAIL)) {
+    // Opened from the Gmail page: preselect the user who was logged in there.
+    // This must beat `previous`, which on first load is just the static
+    // HTML's default option (e.g. ks4190@columbia.edu).
+    selectedUserDropdown.value = URL_USER_EMAIL;
+    urlUserEmailApplied = true;
+  } else if (previous && availableUsers.includes(previous)) {
     selectedUserDropdown.value = previous;
   } else if (availableUsers.length > 0) {
     selectedUserDropdown.value = availableUsers[0];
@@ -2940,12 +2945,6 @@ function generateRHSPanels(categories) {
     
     panel.innerHTML = `
       <div class="rhs-category-info">
-        <div class="rhs-category-enable-row">
-          <label class="rhs-checkbox-label">
-            <input type="checkbox" class="rhs-category-enable-checkbox" data-category="${escapeHtml(cat.name)}" ${rhsCategorySelections[cat.name] ? 'checked' : ''}>
-            <span>Include this category</span>
-          </label>
-        </div>
         <div class="rhs-category-description">${escapeHtml(cat.description || '')}</div>
         ${cat.guideline ? `<div class="rhs-category-guideline"><strong>Classification:</strong> ${escapeHtml(cat.guideline)}</div>` : ''}
       </div>
