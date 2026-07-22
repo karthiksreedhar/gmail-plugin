@@ -196,7 +196,7 @@ function renderRun(run) {
     const agg = run.tagAggregation;
     html += `
       <div class="section">
-        <h2>Aggregated tags (V2 tagging pass — ${tagging?.batchCount ?? '?'} batches of ${tagging?.batchSize ?? '?'}, ${tagging?.batchErrors || 0} batch errors, ${tagging?.parseFailures || 0} parse failures)</h2>
+        <h2>Aggregated tags (V2 tagging pass — ${tagging?.batchCount ?? '?'} batches of ${tagging?.batchSize ?? '?'}, ${tagging?.batchErrors || 0} batch errors, ${tagging?.parseFailures || 0} parse failures${tagging?.retries ? `, ${tagging.retriesRecovered || 0}/${tagging.retries} retries recovered` : ''})</h2>
         <div class="table-scroll"><table>
           <tr><th>Tag</th><th>Kind</th><th>Emails</th><th>Kept?</th><th>Sample subjects</th></tr>
           ${(agg.kept || []).map(t => `<tr><td><b>${esc(t.name)}</b></td><td>${esc(t.kind)}</td><td>${t.count}</td><td>✅</td><td class="muted">${(t.sampleSubjects || []).map(esc).join(' • ')}</td></tr>`).join('')}
@@ -220,7 +220,7 @@ function renderRun(run) {
   const perCat = sweep.perCategory || [];
   html += `
     <div class="section">
-      <h2>Assignment sweep (${sweep.batchCount ?? '?'} batches of ${sweep.batchSize ?? '?'}, ${sweep.batchErrors || 0} batch errors, ${sweep.parseFailures || 0} parse failures)</h2>
+      <h2>Assignment sweep (${sweep.batchCount ?? '?'} batches of ${sweep.batchSize ?? '?'}, ${sweep.batchErrors || 0} batch errors, ${sweep.parseFailures || 0} parse failures${sweep.retries ? `, ${sweep.retriesRecovered || 0}/${sweep.retries} retries recovered` : ''})</h2>
       ${perCat.length ? `<div class="table-scroll"><table>
         <tr><th>Category</th><th>Emails assigned</th><th>Outcome</th></tr>
         ${perCat.map(c => {

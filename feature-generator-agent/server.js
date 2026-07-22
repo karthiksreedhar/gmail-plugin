@@ -2397,6 +2397,66 @@ function parseTagEnvelope(responseText) {
   return null;
 }
 
+// One batch model call with a single retry. Without this, one malformed or
+// truncated response silently drops a whole batch of emails, which starves
+// the discovered categories of members downstream and makes runs look
+// inexplicably sparse. Returns the parsed envelope, or null after both
+// attempts fail (with the failure tallied in `counters`).
+async function invokeBatchWithRetry({ label, prompt, modelName, maxOutputTokens, parse, logger, counters }) {
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    const started = Date.now();
+    try {
+      const response = await invokeAnthropic({
+        model: modelName,
+        temperature: 0,
+        maxOutputTokens,
+        messages: [{ role: 'user', content: prompt }]
+      });
+      logger?.logApiCall(
+        modelName,
+        Math.ceil(prompt.length / 4),
+        Math.ceil((response.content?.length || 0) / 4),
+        Date.now() - started,
+        true,
+        null,
+        null,
+        prompt,
+        response.content
+      );
+      if (response.stopReason === 'max_tokens') {
+        logger?.logError(
+          `${label} attempt ${attempt} truncated`,
+          new Error(`Response hit the ${maxOutputTokens}-token output limit; JSON is likely cut off`)
+        );
+      }
+      const parsed = parse(response.content);
+      if (parsed !== null) {
+        if (attempt > 1) counters.retriesRecovered++;
+        return parsed;
+      }
+      logger?.logError(
+        `${label} attempt ${attempt} JSON parse`,
+        new Error(`Unparseable response (first 300 chars): ${String(response.content || '').slice(0, 300)}`)
+      );
+      if (attempt === 2) {
+        counters.parseFailureCount++;
+        return null;
+      }
+      counters.retries++;
+    } catch (error) {
+      logger?.logApiCall(modelName, 0, 0, Date.now() - started, false, error, null, prompt, null);
+      logger?.logError(`${label} attempt ${attempt} API call`, error);
+      if (attempt === 2) {
+        counters.batchErrorCount++;
+        counters.lastBatchError = error;
+        return null;
+      }
+      counters.retries++;
+    }
+  }
+  return null;
+}
+
 // Tagging pass: batches with bounded concurrency, one committed
 // {project, task_type} pair (either may be null) per email.
 async function tagEmailsWithProjectsAndTasks(poolEmails, userData, logger, modelName, runDebug) {
@@ -2415,9 +2475,7 @@ async function tagEmailsWithProjectsAndTasks(poolEmails, userData, logger, model
     batches.push(poolEmails.slice(i, i + CATEGORY_SUGGESTION_ASSIGN_BATCH_SIZE));
   }
 
-  let batchErrorCount = 0;
-  let lastBatchError = null;
-  let parseFailureCount = 0;
+  const counters = { batchErrorCount: 0, parseFailureCount: 0, retries: 0, retriesRecovered: 0, lastBatchError: null };
   let cursor = 0;
   async function worker() {
     while (true) {
@@ -2448,50 +2506,24 @@ ${batch.map(email => compactEmailLine(email, senderCounts.get(senderAddressOf(em
 Respond with ONLY this JSON (no other text):
 {"tags": [{"id": "email_id", "project": "Specific Project Name or null", "task_type": "Specific Task Workflow or null"}]}`;
 
-      const started = Date.now();
-      try {
-        const response = await invokeAnthropic({
-          model: modelName,
-          temperature: 0,
-          maxOutputTokens: 3000,
-          messages: [{ role: 'user', content: prompt }]
-        });
-        logger?.logApiCall(
-          modelName,
-          Math.ceil(prompt.length / 4),
-          Math.ceil((response.content?.length || 0) / 4),
-          Date.now() - started,
-          true,
-          null,
-          null,
-          prompt,
-          response.content
-        );
-
-        const parsed = parseTagEnvelope(response.content);
-        if (parsed === null) {
-          parseFailureCount++;
-          logger?.logError(
-            `Category tagging batch ${batchIndex + 1}/${batches.length} JSON parse`,
-            new Error(`Unparseable response (first 300 chars): ${String(response.content || '').slice(0, 300)}`)
-          );
-          continue;
-        }
-        for (const item of parsed.tags) {
-          const id = String(item?.id || '').trim();
-          if (!id || tagsByEmailId.has(id)) continue;
-          const cleanTag = (value) => {
-            const text = String(value == null ? '' : value).trim();
-            return text && text.toLowerCase() !== 'null' && text.toLowerCase() !== 'none' ? text : null;
-          };
-          tagsByEmailId.set(id, { project: cleanTag(item?.project), taskType: cleanTag(item?.task_type) });
-        }
-      } catch (error) {
-        logger?.logApiCall(modelName, 0, 0, Date.now() - started, false, error, null, prompt, null);
-        logger?.logError(`Category tagging batch ${batchIndex + 1}/${batches.length} API call`, error);
-        batchErrorCount++;
-        lastBatchError = error;
-        // Skip this batch -- other batches still contribute tags.
+      const parsed = await invokeBatchWithRetry({
+        label: `Category tagging batch ${batchIndex + 1}/${batches.length}`,
+        prompt,
+        modelName,
+        maxOutputTokens: 8000,
+        parse: parseTagEnvelope,
+        logger,
+        counters
+      });
+      if (parsed === null) continue; // Other batches still contribute tags.
+      for (const item of parsed.tags) {
+        const id = String(item?.id || '').trim();
+        if (!id || tagsByEmailId.has(id)) continue;
+        const cleanTag = (value) => {
+          const text = String(value == null ? '' : value).trim();
+          return text && text.toLowerCase() !== 'null' && text.toLowerCase() !== 'none' ? text : null;
+        };
+        tagsByEmailId.set(id, { project: cleanTag(item?.project), taskType: cleanTag(item?.task_type) });
       }
     }
   }
@@ -2504,15 +2536,17 @@ Respond with ONLY this JSON (no other text):
       ...(runDebug.tagging || {}),
       batchSize: CATEGORY_SUGGESTION_ASSIGN_BATCH_SIZE,
       batchCount: batches.length,
-      batchErrors: batchErrorCount,
-      parseFailures: parseFailureCount
+      batchErrors: counters.batchErrorCount,
+      parseFailures: counters.parseFailureCount,
+      retries: counters.retries,
+      retriesRecovered: counters.retriesRecovered
     };
   }
 
-  if (batches.length > 0 && batchErrorCount === batches.length) {
-    throw new Error(`All ${batches.length} category-tagging batch call(s) failed: ${lastBatchError?.message || 'unknown error'}`);
+  if (batches.length > 0 && counters.batchErrorCount === batches.length) {
+    throw new Error(`All ${batches.length} category-tagging batch call(s) failed: ${counters.lastBatchError?.message || 'unknown error'}`);
   }
-  if (batches.length > 0 && parseFailureCount === batches.length) {
+  if (batches.length > 0 && counters.parseFailureCount === batches.length) {
     throw new Error(`All ${batches.length} category-tagging batch response(s) failed to parse as JSON -- check the model's raw output in the operations log.`);
   }
 
@@ -2709,9 +2743,7 @@ async function assignEmailsToCategories(poolEmails, discoveredCategories, logger
     batches.push(poolEmails.slice(i, i + CATEGORY_SUGGESTION_ASSIGN_BATCH_SIZE));
   }
 
-  let batchErrorCount = 0;
-  let lastBatchError = null;
-  let parseFailureCount = 0;
+  const counters = { batchErrorCount: 0, parseFailureCount: 0, retries: 0, retriesRecovered: 0, lastBatchError: null };
   let cursor = 0;
   async function worker() {
     while (true) {
@@ -2732,52 +2764,27 @@ Rules:
 - Assign an email to a category ONLY if it clearly passes that category's membership test
 - Be aggressive about null: a category with a few precisely matching emails is better than one with many loose matches. When in doubt, answer null
 - Include every email id from the lines above exactly once
+- Keep each reason under 12 words
 
 Respond with ONLY this JSON (no other text):
 {"assignments": [{"id": "email_id", "category": "Category Name or null", "reason": "Why it passes the membership test (omit for null)"}]}`;
 
-      const started = Date.now();
-      try {
-        const response = await invokeAnthropic({
-          model: modelName,
-          temperature: 0,
-          maxOutputTokens: 2500,
-          messages: [{ role: 'user', content: prompt }]
-        });
-        logger?.logApiCall(
-          modelName,
-          Math.ceil(prompt.length / 4),
-          Math.ceil((response.content?.length || 0) / 4),
-          Date.now() - started,
-          true,
-          null,
-          null,
-          prompt,
-          response.content
-        );
-
-        const parsed = parseAssignmentEnvelope(response.content);
-        if (parsed === null) {
-          parseFailureCount++;
-          logger?.logError(
-            `Category assignment batch ${batchIndex + 1}/${batches.length} JSON parse`,
-            new Error(`Unparseable response (first 300 chars): ${String(response.content || '').slice(0, 300)}`)
-          );
-          continue;
-        }
-        for (const item of parsed.assignments) {
-          const id = String(item?.id || '').trim();
-          const rawCategory = item?.category == null ? '' : String(item.category).trim();
-          const canonical = canonicalNames.get(rawCategory.toLowerCase());
-          if (!id || !canonical || assignments.has(id)) continue;
-          assignments.set(id, { category: canonical, reason: String(item?.reason || '').trim() });
-        }
-      } catch (error) {
-        logger?.logApiCall(modelName, 0, 0, Date.now() - started, false, error, null, prompt, null);
-        logger?.logError(`Category assignment batch ${batchIndex + 1}/${batches.length} API call`, error);
-        batchErrorCount++;
-        lastBatchError = error;
-        // Skip this batch -- other batches still contribute assignments.
+      const parsed = await invokeBatchWithRetry({
+        label: `Category assignment batch ${batchIndex + 1}/${batches.length}`,
+        prompt,
+        modelName,
+        maxOutputTokens: 8000,
+        parse: parseAssignmentEnvelope,
+        logger,
+        counters
+      });
+      if (parsed === null) continue; // Other batches still contribute assignments.
+      for (const item of parsed.assignments) {
+        const id = String(item?.id || '').trim();
+        const rawCategory = item?.category == null ? '' : String(item.category).trim();
+        const canonical = canonicalNames.get(rawCategory.toLowerCase());
+        if (!id || !canonical || assignments.has(id)) continue;
+        assignments.set(id, { category: canonical, reason: String(item?.reason || '').trim() });
       }
     }
   }
@@ -2790,18 +2797,20 @@ Respond with ONLY this JSON (no other text):
       ...(runDebug.sweep || {}),
       batchSize: CATEGORY_SUGGESTION_ASSIGN_BATCH_SIZE,
       batchCount: batches.length,
-      batchErrors: batchErrorCount,
-      parseFailures: parseFailureCount
+      batchErrors: counters.batchErrorCount,
+      parseFailures: counters.parseFailureCount,
+      retries: counters.retries,
+      retriesRecovered: counters.retriesRecovered
     };
   }
 
   // Every batch failing outright (bad API key, API down) or failing to parse
   // is a real error -- surface it instead of returning an empty result that
   // looks identical to "genuinely nothing fits".
-  if (batches.length > 0 && batchErrorCount === batches.length) {
-    throw new Error(`All ${batches.length} category-assignment batch call(s) failed: ${lastBatchError?.message || 'unknown error'}`);
+  if (batches.length > 0 && counters.batchErrorCount === batches.length) {
+    throw new Error(`All ${batches.length} category-assignment batch call(s) failed: ${counters.lastBatchError?.message || 'unknown error'}`);
   }
-  if (batches.length > 0 && parseFailureCount === batches.length) {
+  if (batches.length > 0 && counters.parseFailureCount === batches.length) {
     throw new Error(`All ${batches.length} category-assignment batch response(s) failed to parse as JSON -- check the model's raw output in the operations log.`);
   }
 
