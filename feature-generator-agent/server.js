@@ -247,6 +247,11 @@ const FEATURE_GENERATOR_CREATED_BY = String(
 const FEATURE_CHAT_LOG_COLLECTION = String(
   process.env.FEATURE_CHAT_LOG_COLLECTION || 'feature_generator_chat_logs'
 ).trim();
+const CATEGORY_DEBUG_RUNS_COLLECTION = String(
+  process.env.CATEGORY_DEBUG_RUNS_COLLECTION || 'category_suggestion_debug_runs'
+).trim();
+// Newest runs kept in the debug collection; older ones are pruned on insert.
+const CATEGORY_DEBUG_RUNS_KEEP = 100;
 
 // Initialize MongoDB connection
 let mongoInitialized = false;
@@ -342,6 +347,69 @@ async function persistChatLog(entry = {}) {
     return true;
   } catch (error) {
     console.warn('Failed to persist feature chat log:', error?.message || error);
+    return false;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Category-suggestion debug runs: one structured record per "Suggest
+// Categories" run (either V1 or V2), capturing the whole funnel -- pool
+// counts, per-email tags, sweep assignments, drop-offs, errors, timing.
+// Persisted best-effort to Mongo and browsable at /debug-runs.html.
+// ---------------------------------------------------------------------------
+
+function createCategoryRunDebug({ userEmail, variant, trigger, requestedCategories, model, sweepModel }) {
+  return {
+    runId: uuidv4(),
+    userEmail: normalizeEmail(userEmail) || 'unknown',
+    variant,
+    trigger: trigger || 'unknown',
+    requestedCategories: Array.isArray(requestedCategories) ? requestedCategories : [],
+    model,
+    sweepModel,
+    startedAt: new Date().toISOString(),
+    finishedAt: null,
+    durationMs: null,
+    ok: null,
+    failure: null,
+    pool: null,
+    tagging: null,        // v2 only
+    tagAggregation: null, // v2 only
+    discovery: null,
+    sweep: null,
+    final: null,
+    errors: [],
+    apiCalls: null
+  };
+}
+
+async function persistCategoryRunDebug(runDebug, logger) {
+  runDebug.finishedAt = new Date().toISOString();
+  runDebug.durationMs = Date.now() - new Date(runDebug.startedAt).getTime();
+  if (logger) {
+    runDebug.errors = (logger.errors || []).slice();
+    runDebug.apiCalls = {
+      count: (logger.apiCalls || []).length,
+      failed: (logger.apiCalls || []).filter(c => !c.success).length,
+      totalDurationMs: (logger.apiCalls || []).reduce((sum, c) => sum + (c.duration || 0), 0)
+    };
+  }
+  try {
+    await ensureMongoReady();
+    const db = getDb();
+    const coll = db.collection(CATEGORY_DEBUG_RUNS_COLLECTION);
+    await coll.insertOne({ ...runDebug, createdAt: new Date() });
+    const excess = await coll
+      .find({}, { projection: { _id: 1 } })
+      .sort({ createdAt: -1 })
+      .skip(CATEGORY_DEBUG_RUNS_KEEP)
+      .toArray();
+    if (excess.length) {
+      await coll.deleteMany({ _id: { $in: excess.map(doc => doc._id) } });
+    }
+    return true;
+  } catch (error) {
+    console.warn('Failed to persist category debug run:', error?.message || error);
     return false;
   }
 }
@@ -2206,13 +2274,14 @@ function formatExistingCategoriesContext(userData) {
 // many emails went in. Sender repetition is passed as per-line metadata, and
 // the prompt is pinned to a two-kind taxonomy (specific projects, specific
 // task workflows) so it can't drift into sender- or theme-level groupings.
-async function discoverCategoriesSinglePass(poolEmails, userData, logger, modelName, requestedCategories) {
+async function discoverCategoriesSinglePass(poolEmails, userData, logger, modelName, requestedCategories, runDebug) {
   // Escape hatch for extreme pools: keep the prompt within a comfortable
   // context budget by considering only the most recent N emails.
   const considered = poolEmails
     .slice()
     .sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0))
     .slice(0, CATEGORY_SUGGESTION_DISCOVERY_MAX_EMAILS);
+  if (runDebug?.pool) runDebug.pool.considered = considered.length;
 
   const senderCounts = new Map();
   for (const email of considered) {
@@ -2330,7 +2399,7 @@ function parseTagEnvelope(responseText) {
 
 // Tagging pass: batches with bounded concurrency, one committed
 // {project, task_type} pair (either may be null) per email.
-async function tagEmailsWithProjectsAndTasks(poolEmails, userData, logger, modelName) {
+async function tagEmailsWithProjectsAndTasks(poolEmails, userData, logger, modelName, runDebug) {
   const tagsByEmailId = new Map();
   if (!poolEmails.length) return tagsByEmailId;
 
@@ -2430,6 +2499,16 @@ Respond with ONLY this JSON (no other text):
   const workerCount = Math.max(1, Math.min(CATEGORY_SUGGESTION_ASSIGN_CONCURRENCY, batches.length));
   await Promise.all(Array.from({ length: workerCount }, () => worker()));
 
+  if (runDebug) {
+    runDebug.tagging = {
+      ...(runDebug.tagging || {}),
+      batchSize: CATEGORY_SUGGESTION_ASSIGN_BATCH_SIZE,
+      batchCount: batches.length,
+      batchErrors: batchErrorCount,
+      parseFailures: parseFailureCount
+    };
+  }
+
   if (batches.length > 0 && batchErrorCount === batches.length) {
     throw new Error(`All ${batches.length} category-tagging batch call(s) failed: ${lastBatchError?.message || 'unknown error'}`);
   }
@@ -2443,7 +2522,7 @@ Respond with ONLY this JSON (no other text):
 // Deterministic aggregation: tags recurring across enough emails become the
 // candidate categories (case-insensitive key, first-seen casing displayed).
 // Near-duplicate merging is left to consolidation.
-function aggregateEmailTags(tagsByEmailId, emailById) {
+function aggregateEmailTags(tagsByEmailId, emailById, runDebug) {
   const stats = new Map(); // "kind|lowername" -> {kind, name, count, sampleSubjects}
   for (const [emailId, tags] of tagsByEmailId.entries()) {
     for (const [kind, name] of [['project', tags.project], ['task', tags.taskType]]) {
@@ -2458,9 +2537,16 @@ function aggregateEmailTags(tagsByEmailId, emailById) {
       }
     }
   }
-  return Array.from(stats.values())
-    .filter(entry => entry.count >= CATEGORY_SUGGESTION_MIN_EMAILS_PER_CATEGORY)
-    .sort((a, b) => b.count - a.count);
+  const all = Array.from(stats.values()).sort((a, b) => b.count - a.count);
+  const kept = all.filter(entry => entry.count >= CATEGORY_SUGGESTION_MIN_EMAILS_PER_CATEGORY);
+  if (runDebug) {
+    runDebug.tagAggregation = {
+      minCount: CATEGORY_SUGGESTION_MIN_EMAILS_PER_CATEGORY,
+      kept,
+      droppedBelowMin: all.filter(entry => entry.count < CATEGORY_SUGGESTION_MIN_EMAILS_PER_CATEGORY)
+    };
+  }
+  return kept;
 }
 
 // Consolidation: merge near-duplicate tags into the final category set. Only
@@ -2553,7 +2639,7 @@ Respond with ONLY this JSON (no other text):
 
 // V2 discovery: tag every email, aggregate recurring tags, consolidate into
 // category definitions.
-async function discoverCategoriesTagged(poolEmails, userData, logger, modelName, requestedCategories) {
+async function discoverCategoriesTagged(poolEmails, userData, logger, modelName, requestedCategories, runDebug) {
   // Escape hatch for extreme pools: keep cost bounded by considering only
   // the most recent N emails.
   const considered = poolEmails
@@ -2562,18 +2648,45 @@ async function discoverCategoriesTagged(poolEmails, userData, logger, modelName,
     .slice(0, CATEGORY_SUGGESTION_DISCOVERY_MAX_EMAILS);
 
   const emailById = new Map(considered.map(email => [String(email?.id || '').trim(), email]));
-  const tagsByEmailId = await tagEmailsWithProjectsAndTasks(considered, userData, logger, modelName);
-  const tagStats = aggregateEmailTags(tagsByEmailId, emailById);
+  const tagsByEmailId = await tagEmailsWithProjectsAndTasks(considered, userData, logger, modelName, runDebug);
+
+  if (runDebug) {
+    if (runDebug.pool) runDebug.pool.considered = considered.length;
+    const emails = considered.map(email => {
+      const id = String(email?.id || '').trim();
+      const tags = tagsByEmailId.get(id);
+      return {
+        id,
+        subject: String(email?.subject || '').replace(/\s+/g, ' ').trim().slice(0, 120),
+        from: String(email?.from || email?.originalFrom || '').slice(0, 120),
+        date: email?.date || null,
+        returnedByModel: tagsByEmailId.has(id),
+        project: tags?.project || null,
+        taskType: tags?.taskType || null
+      };
+    });
+    runDebug.tagging = {
+      ...(runDebug.tagging || {}),
+      emailsConsidered: considered.length,
+      emailsReturnedByModel: emails.filter(e => e.returnedByModel).length,
+      emailsWithTag: emails.filter(e => e.project || e.taskType).length,
+      emailsNullTagged: emails.filter(e => e.returnedByModel && !e.project && !e.taskType).length,
+      emailsMissingFromResponses: emails.filter(e => !e.returnedByModel).length,
+      emails
+    };
+  }
+
+  const tagStats = aggregateEmailTags(tagsByEmailId, emailById, runDebug);
   return consolidateTagsIntoCategories(tagStats, userData, logger, modelName, requestedCategories);
 }
 
 // Variant dispatcher, signature-compatible with the orchestrator.
 // 'v1' = single-pass discovery; 'v2' (default) = tag-then-consolidate.
-async function discoverCategoriesFromEmails(poolEmails, userData, logger, modelName, requestedCategories, variant) {
+async function discoverCategoriesFromEmails(poolEmails, userData, logger, modelName, requestedCategories, variant, runDebug) {
   if (variant === 'v1') {
-    return discoverCategoriesSinglePass(poolEmails, userData, logger, modelName, requestedCategories);
+    return discoverCategoriesSinglePass(poolEmails, userData, logger, modelName, requestedCategories, runDebug);
   }
-  return discoverCategoriesTagged(poolEmails, userData, logger, modelName, requestedCategories);
+  return discoverCategoriesTagged(poolEmails, userData, logger, modelName, requestedCategories, runDebug);
 }
 
 // Assignment sweep. Discovery outputs only category definitions, so
@@ -2582,7 +2695,7 @@ async function discoverCategoriesFromEmails(poolEmails, userData, logger, modelN
 // "a few plausible categories with example emails" into categories that
 // actually empty "Other", and it guarantees each email lands in at most one
 // suggestion. Returns Map<emailId, {category, reason}>.
-async function assignEmailsToCategories(poolEmails, discoveredCategories, logger, modelName) {
+async function assignEmailsToCategories(poolEmails, discoveredCategories, logger, modelName, runDebug) {
   const assignments = new Map();
   if (!poolEmails.length || !discoveredCategories.length) return assignments;
 
@@ -2672,6 +2785,16 @@ Respond with ONLY this JSON (no other text):
   const workerCount = Math.max(1, Math.min(CATEGORY_SUGGESTION_ASSIGN_CONCURRENCY, batches.length));
   await Promise.all(Array.from({ length: workerCount }, () => worker()));
 
+  if (runDebug) {
+    runDebug.sweep = {
+      ...(runDebug.sweep || {}),
+      batchSize: CATEGORY_SUGGESTION_ASSIGN_BATCH_SIZE,
+      batchCount: batches.length,
+      batchErrors: batchErrorCount,
+      parseFailures: parseFailureCount
+    };
+  }
+
   // Every batch failing outright (bad API key, API down) or failing to parse
   // is a real error -- surface it instead of returning an empty result that
   // looks identical to "genuinely nothing fits".
@@ -2696,64 +2819,141 @@ async function generateCategorySuggestionsForUser(userData, logger, options = {}
   // model than discovery without hurting quality.
   const sweepModelName = String(process.env.ANTHROPIC_SWEEP_MODEL || '').trim() || modelName;
 
+  const runDebug = createCategoryRunDebug({
+    userEmail: options.userEmail,
+    variant,
+    trigger: options.trigger,
+    requestedCategories,
+    model: modelName,
+    sweepModel: sweepModelName
+  });
+
   // Only important/starred emails are worth promoting out of "Other" -- the
   // rest are ignored by every stage (buckets, discovery, assignment sweep).
   // Records synced before flag capture have no isImportant/isStarred fields
   // and are treated as neither.
-  const allOtherEmails = (userData?.responseEmails || []).filter(email =>
-    (email.category === 'Other' || email.category === 'Uncategorized' || !email.category) &&
-    (email.isImportant === true || email.isStarred === true)
+  const allEmails = userData?.responseEmails || [];
+  const otherEmails = allEmails.filter(email =>
+    email.category === 'Other' || email.category === 'Uncategorized' || !email.category
+  );
+  const allOtherEmails = otherEmails.filter(email =>
+    email.isImportant === true || email.isStarred === true
   );
 
+  runDebug.pool = {
+    totalEmailsLoaded: allEmails.length,
+    otherEmails: otherEmails.length,
+    flaggedOtherEmails: allOtherEmails.length,
+    considered: 0,
+    discoveryCap: CATEGORY_SUGGESTION_DISCOVERY_MAX_EMAILS,
+    minEmailsPerCategory: CATEGORY_SUGGESTION_MIN_EMAILS_PER_CATEGORY
+  };
+
   if (allOtherEmails.length === 0) {
+    runDebug.ok = true;
+    runDebug.final = { suggested: [], droppedBelowMin: [], note: 'No important/starred "Other" emails -- pipeline skipped.' };
+    await persistCategoryRunDebug(runDebug, logger);
     return {
       suggestions: { action: 'createCategories', categories: [] },
-      otherEmailsCount: 0
+      otherEmailsCount: 0,
+      debugRunId: runDebug.runId
     };
   }
 
-  const validEmailIds = new Set(allOtherEmails.map(email => String(email?.id || '').trim()).filter(Boolean));
-  const emailById = new Map(allOtherEmails.map(email => [String(email?.id || '').trim(), email]));
+  try {
+    const validEmailIds = new Set(allOtherEmails.map(email => String(email?.id || '').trim()).filter(Boolean));
+    const emailById = new Map(allOtherEmails.map(email => [String(email?.id || '').trim(), email]));
 
-  // Discovery: single long-context call over the whole flagged pool,
-  // constrained to specific projects / task workflows (sender repetition is
-  // passed as metadata, never turned into a category of its own).
-  let discoveredCategories = [];
-  let rawResponse = '';
-  if (allOtherEmails.length >= CATEGORY_SUGGESTION_MIN_EMAILS_PER_CATEGORY) {
-    const discovery = await discoverCategoriesFromEmails(allOtherEmails, userData, logger, modelName, requestedCategories, variant);
-    discoveredCategories = discovery.categories;
-    rawResponse = discovery.rawResponse;
+    // Discovery: single long-context call over the whole flagged pool,
+    // constrained to specific projects / task workflows (sender repetition is
+    // passed as metadata, never turned into a category of its own).
+    let discoveredCategories = [];
+    let rawResponse = '';
+    if (allOtherEmails.length >= CATEGORY_SUGGESTION_MIN_EMAILS_PER_CATEGORY) {
+      const discovery = await discoverCategoriesFromEmails(allOtherEmails, userData, logger, modelName, requestedCategories, variant, runDebug);
+      discoveredCategories = discovery.categories;
+      rawResponse = discovery.rawResponse;
+    }
+
+    runDebug.discovery = {
+      mode: variant === 'v1' ? 'single-pass' : 'tag-then-consolidate',
+      categories: discoveredCategories.map(cat => ({
+        name: cat.name,
+        description: cat.description,
+        guideline: cat.guideline,
+        confidence: cat.confidence ?? null
+      })),
+      rawResponse: truncateForLog(rawResponse, 20000)
+    };
+
+    // Sweep: classify every pool email against the discovered categories.
+    const assignments = await assignEmailsToCategories(allOtherEmails, discoveredCategories, logger, sweepModelName, runDebug);
+
+    const assignedByCategory = new Map(discoveredCategories.map(cat => [cat.name, []]));
+    for (const [id, assignment] of assignments.entries()) {
+      assignedByCategory.get(assignment.category)?.push({
+        id,
+        reason: assignment.reason || 'This email fits this category.'
+      });
+    }
+
+    runDebug.sweep = {
+      ...(runDebug.sweep || {}),
+      emailsSwept: allOtherEmails.length,
+      assigned: assignments.size,
+      unassigned: allOtherEmails.length - assignments.size,
+      perCategory: discoveredCategories.map(cat => ({
+        name: cat.name,
+        count: (assignedByCategory.get(cat.name) || []).length
+      })),
+      assignments: allOtherEmails.map(email => {
+        const id = String(email?.id || '').trim();
+        const assignment = assignments.get(id);
+        return {
+          id,
+          subject: String(email?.subject || '').replace(/\s+/g, ' ').trim().slice(0, 120),
+          from: String(email?.from || email?.originalFrom || '').slice(0, 120),
+          date: email?.date || null,
+          category: assignment?.category || null,
+          reason: assignment ? String(assignment.reason || '').slice(0, 300) : null
+        };
+      })
+    };
+
+    const discoveredWithEmails = discoveredCategories
+      .map(cat => ({ ...cat, suggestedEmails: assignedByCategory.get(cat.name) || [] }))
+      .filter(cat => cat.suggestedEmails.length >= CATEGORY_SUGGESTION_MIN_EMAILS_PER_CATEGORY);
+
+    runDebug.final = {
+      suggested: discoveredWithEmails.map(cat => ({ name: cat.name, emailCount: cat.suggestedEmails.length })),
+      droppedBelowMin: discoveredCategories
+        .filter(cat => (assignedByCategory.get(cat.name) || []).length < CATEGORY_SUGGESTION_MIN_EMAILS_PER_CATEGORY)
+        .map(cat => ({ name: cat.name, emailCount: (assignedByCategory.get(cat.name) || []).length }))
+    };
+
+    // normalizeCategorySuggestions canonicalizes/validates IDs and backfills
+    // real subject/from/date/snippet from emailById, exactly as before.
+    const suggestions = normalizeCategorySuggestions(
+      { action: 'createCategories', categories: discoveredWithEmails },
+      validEmailIds,
+      emailById
+    );
+
+    runDebug.ok = true;
+    await persistCategoryRunDebug(runDebug, logger);
+
+    return {
+      suggestions,
+      otherEmailsCount: allOtherEmails.length,
+      rawResponse,
+      debugRunId: runDebug.runId
+    };
+  } catch (error) {
+    runDebug.ok = false;
+    runDebug.failure = error?.message || String(error);
+    await persistCategoryRunDebug(runDebug, logger);
+    throw error;
   }
-
-  // Sweep: classify every pool email against the discovered categories.
-  const assignments = await assignEmailsToCategories(allOtherEmails, discoveredCategories, logger, sweepModelName);
-
-  const assignedByCategory = new Map(discoveredCategories.map(cat => [cat.name, []]));
-  for (const [id, assignment] of assignments.entries()) {
-    assignedByCategory.get(assignment.category)?.push({
-      id,
-      reason: assignment.reason || 'This email fits this category.'
-    });
-  }
-
-  const discoveredWithEmails = discoveredCategories
-    .map(cat => ({ ...cat, suggestedEmails: assignedByCategory.get(cat.name) || [] }))
-    .filter(cat => cat.suggestedEmails.length >= CATEGORY_SUGGESTION_MIN_EMAILS_PER_CATEGORY);
-
-  // normalizeCategorySuggestions canonicalizes/validates IDs and backfills
-  // real subject/from/date/snippet from emailById, exactly as before.
-  const suggestions = normalizeCategorySuggestions(
-    { action: 'createCategories', categories: discoveredWithEmails },
-    validEmailIds,
-    emailById
-  );
-
-  return {
-    suggestions,
-    otherEmailsCount: allOtherEmails.length,
-    rawResponse
-  };
 }
 
 // Email Chat endpoint
@@ -2814,7 +3014,10 @@ app.post('/api/email-chat', async (req, res) => {
     if (isOtherCategorySuggestionPrompt(message)) {
       const targetUser = usersToQuery[0] || availableUsers[0] || DEFAULT_AVAILABLE_USERS[0];
       const targetData = await loadUserEmailData(targetUser, logger);
-      const { suggestions: categorySuggestions } = await generateCategorySuggestionsForUser(targetData, logger);
+      const { suggestions: categorySuggestions, debugRunId } = await generateCategorySuggestionsForUser(targetData, logger, {
+        trigger: 'email-chat',
+        userEmail: targetUser
+      });
       const categoryCount = Array.isArray(categorySuggestions?.categories) ? categorySuggestions.categories.length : 0;
       const emailCount = (categorySuggestions?.categories || []).reduce((sum, c) => sum + ((c?.suggestedEmails || []).length), 0);
       const assistantResponse = categoryCount
@@ -2842,6 +3045,7 @@ app.post('/api/email-chat', async (req, res) => {
           isEmailQuery: false,
           categorySuggestionCount: categoryCount,
           suggestedEmails: emailCount,
+          debugRunId,
           operationsLog
         }
       });
@@ -2853,6 +3057,7 @@ app.post('/api/email-chat', async (req, res) => {
         operationsLog,
         categorySuggestions,
         isEmailQuery: false,
+        debugRunId,
         summary: {
           categories: categoryCount,
           suggestedEmails: emailCount,
@@ -3406,10 +3611,19 @@ app.post('/api/category-suggestions', async (req, res) => {
     console.log(`   Sample "Other" emails:`, otherEmails.slice(0, 3).map(e => `${e.id} (${e.category || 'NO_CATEGORY'}) - ${e.subject}`));
 
     if (otherEmails.length === 0) {
+      // Still route through the orchestrator so even a no-op click leaves a
+      // debug-run record (pool counts, user resolution) in the run log.
+      const { debugRunId: emptyRunId } = await generateCategorySuggestionsForUser(userData, logger, {
+        requestedCategories,
+        variant,
+        trigger: 'suggest-button',
+        userEmail: targetUser
+      });
       return res.json({
         success: true,
         message: 'No emails in "Other" category to categorize',
         suggestions: { categories: [] },
+        debugRunId: emptyRunId,
         operationsLog: logger.getLog(),
         // Temporary diagnostics: shows exactly which user/data this request
         // actually resolved to, so a mismatch between the intended user and
@@ -3423,16 +3637,19 @@ app.post('/api/category-suggestions', async (req, res) => {
       });
     }
 
-    const { suggestions, otherEmailsCount } = await generateCategorySuggestionsForUser(userData, logger, {
+    const { suggestions, otherEmailsCount, debugRunId } = await generateCategorySuggestionsForUser(userData, logger, {
       requestedCategories,
-      variant
+      variant,
+      trigger: 'suggest-button',
+      userEmail: targetUser
     });
-    console.log(`   AI suggested ${suggestions.categories.length} categories`);
+    console.log(`   AI suggested ${suggestions.categories.length} categories (debug run ${debugRunId})`);
 
     res.json({
       success: true,
       suggestions,
       otherEmailsCount,
+      debugRunId,
       operationsLog: logger.getLog(),
       // Same diagnostics as the otherEmails.length===0 branch above, for the
       // case where Other emails WERE found but the AI legitimately proposed
@@ -3454,6 +3671,55 @@ app.post('/api/category-suggestions', async (req, res) => {
       error: error.message || 'Failed to generate category suggestions',
       operationsLog: logger.getLog()
     });
+  }
+});
+
+// Debug-run browsing endpoints. Backing data is written by
+// persistCategoryRunDebug on every category-suggestion run; the viewer at
+// /debug-runs.html (intentionally unlinked from the app UI) reads these.
+
+// List run summaries, newest first. Heavy per-email arrays and raw model
+// output are excluded; fetch a single run for full detail.
+app.get('/api/debug/category-suggestion-runs', async (req, res) => {
+  try {
+    await ensureMongoReady();
+    const db = getDb();
+    const filter = {};
+    const userEmail = normalizeEmail(req.query.userEmail);
+    if (userEmail) filter.userEmail = userEmail;
+    const limit = clampLogLimit(req.query.limit, 50);
+    const runs = await db.collection(CATEGORY_DEBUG_RUNS_COLLECTION)
+      .find(filter, {
+        projection: {
+          _id: 0,
+          'tagging.emails': 0,
+          'sweep.assignments': 0,
+          'discovery.rawResponse': 0,
+          'tagAggregation.kept.sampleSubjects': 0
+        }
+      })
+      .sort({ createdAt: -1 })
+      .limit(limit)
+      .toArray();
+    res.json({ success: true, runs });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error?.message || 'Failed to list debug runs' });
+  }
+});
+
+// Full record for one run, including per-email tags and assignments.
+app.get('/api/debug/category-suggestion-runs/:runId', async (req, res) => {
+  try {
+    await ensureMongoReady();
+    const db = getDb();
+    const run = await db.collection(CATEGORY_DEBUG_RUNS_COLLECTION)
+      .findOne({ runId: String(req.params.runId || '') }, { projection: { _id: 0 } });
+    if (!run) {
+      return res.status(404).json({ success: false, error: 'Run not found' });
+    }
+    res.json({ success: true, run });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error?.message || 'Failed to load debug run' });
   }
 });
 

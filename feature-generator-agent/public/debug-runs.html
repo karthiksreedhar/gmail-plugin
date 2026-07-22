@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Category Suggestion Debug Runs</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f4f5f7; color: #1f2430; font-size: 14px; }
+  .layout { display: flex; height: 100vh; }
+
+  /* Sidebar */
+  .sidebar { width: 320px; min-width: 320px; background: #fff; border-right: 1px solid #e3e6ea; display: flex; flex-direction: column; }
+  .sidebar-head { padding: 14px 16px; border-bottom: 1px solid #e3e6ea; }
+  .sidebar-head h1 { font-size: 15px; margin-bottom: 8px; }
+  .sidebar-head select { width: 100%; padding: 6px 8px; border: 1px solid #d0d5dd; border-radius: 6px; font-size: 13px; }
+  .run-list { overflow-y: auto; flex: 1; }
+  .run-item { padding: 10px 14px; border-bottom: 1px solid #eef0f3; cursor: pointer; }
+  .run-item:hover { background: #f6f8fb; }
+  .run-item.active { background: #eef4ff; border-left: 3px solid #4285f4; padding-left: 11px; }
+  .run-item .line1 { display: flex; justify-content: space-between; align-items: center; margin-bottom: 3px; }
+  .run-item .when { font-weight: 600; font-size: 13px; }
+  .run-item .who { color: #667085; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .run-item .nums { color: #667085; font-size: 12px; margin-top: 2px; }
+  .badge { display: inline-block; padding: 1px 7px; border-radius: 9px; font-size: 11px; font-weight: 600; color: #fff; }
+  .badge.v1 { background: #7f56d9; }
+  .badge.v2 { background: #17a2b8; }
+  .badge.fail { background: #d92d20; }
+  .badge.chat { background: #98a2b3; }
+
+  /* Main pane */
+  .main { flex: 1; overflow-y: auto; padding: 20px 26px; }
+  .empty { color: #667085; padding: 60px; text-align: center; }
+  .section { background: #fff; border: 1px solid #e3e6ea; border-radius: 10px; padding: 16px 18px; margin-bottom: 16px; }
+  .section h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .04em; color: #667085; margin-bottom: 12px; }
+  .meta-grid { display: flex; flex-wrap: wrap; gap: 8px 26px; font-size: 13px; }
+  .meta-grid .kv b { display: block; color: #667085; font-weight: 500; font-size: 11px; text-transform: uppercase; }
+
+  .fail-banner { background: #fef3f2; border: 1px solid #fda29b; color: #b42318; border-radius: 10px; padding: 12px 16px; margin-bottom: 16px; font-size: 13px; }
+
+  /* Funnel */
+  .funnel { display: flex; flex-wrap: wrap; gap: 6px; align-items: stretch; }
+  .stage { background: #f8fafc; border: 1px solid #e3e6ea; border-radius: 8px; padding: 10px 14px; min-width: 108px; }
+  .stage .n { font-size: 22px; font-weight: 700; }
+  .stage .l { font-size: 11px; color: #667085; margin-top: 2px; }
+  .stage .d { font-size: 11px; color: #b42318; margin-top: 2px; }
+  .arrow { align-self: center; color: #98a2b3; font-size: 16px; padding: 0 2px; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { text-align: left; color: #667085; font-weight: 600; font-size: 12px; padding: 6px 8px; border-bottom: 2px solid #e3e6ea; white-space: nowrap; }
+  td { padding: 6px 8px; border-bottom: 1px solid #eef0f3; vertical-align: top; }
+  tr:hover td { background: #f9fafb; }
+  .tag-pill { display: inline-block; background: #eef4ff; color: #175cd3; border-radius: 9px; padding: 1px 8px; font-size: 12px; margin: 1px 2px 1px 0; }
+  .tag-pill.task { background: #ecfdf3; color: #027a48; }
+  .tag-pill.none { background: #f2f4f7; color: #98a2b3; }
+  .cat-pill { display: inline-block; background: #fff6e8; color: #b54708; border-radius: 9px; padding: 1px 8px; font-size: 12px; }
+  .muted { color: #98a2b3; }
+  .search { width: 100%; padding: 7px 10px; border: 1px solid #d0d5dd; border-radius: 6px; font-size: 13px; margin-bottom: 10px; }
+  details { margin-top: 10px; }
+  summary { cursor: pointer; color: #4285f4; font-size: 13px; }
+  pre { background: #f8fafc; border: 1px solid #e3e6ea; border-radius: 8px; padding: 12px; font-size: 12px; white-space: pre-wrap; word-break: break-word; max-height: 420px; overflow-y: auto; margin-top: 8px; }
+  .cat-card { border: 1px solid #e3e6ea; border-left: 4px solid #c19a6b; border-radius: 8px; padding: 10px 12px; margin-bottom: 8px; }
+  .cat-card .name { font-weight: 600; }
+  .cat-card .desc { color: #475467; font-size: 13px; margin-top: 2px; }
+  .cat-card .guide { color: #667085; font-size: 12px; margin-top: 4px; font-style: italic; }
+  .err-item { background: #fef3f2; border-radius: 6px; padding: 8px 10px; margin-bottom: 6px; font-size: 12.5px; color: #b42318; }
+  .table-scroll { overflow-x: auto; }
+</style>
+</head>
+<body>
+<div class="layout">
+  <div class="sidebar">
+    <div class="sidebar-head">
+      <h1>Category Suggestion Runs</h1>
+      <select id="userFilter"><option value="">All users</option></select>
+    </div>
+    <div class="run-list" id="runList"><div class="empty">Loading…</div></div>
+  </div>
+  <div class="main" id="main"><div class="empty">Select a run on the left.</div></div>
+</div>
+
+<script>
+let allRuns = [];
+let activeRunId = null;
+
+const esc = s => String(s == null ? '' : s)
+  .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+function fmtWhen(iso) {
+  if (!iso) return '?';
+  const d = new Date(iso);
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) + ' ' +
+         d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+}
+function fmtDur(ms) {
+  if (ms == null) return '?';
+  return ms < 1000 ? ms + 'ms' : (ms / 1000).toFixed(1) + 's';
+}
+
+async function loadRuns() {
+  const resp = await fetch('/api/debug/category-suggestion-runs?limit=100');
+  const data = await resp.json();
+  allRuns = data.runs || [];
+  const users = [...new Set(allRuns.map(r => r.userEmail).filter(Boolean))].sort();
+  const sel = document.getElementById('userFilter');
+  const current = sel.value;
+  sel.innerHTML = '<option value="">All users (' + allRuns.length + ' runs)</option>' +
+    users.map(u => `<option value="${esc(u)}" ${u === current ? 'selected' : ''}>${esc(u)}</option>`).join('');
+  renderRunList();
+}
+
+function renderRunList() {
+  const filter = document.getElementById('userFilter').value;
+  const runs = filter ? allRuns.filter(r => r.userEmail === filter) : allRuns;
+  const el = document.getElementById('runList');
+  if (!runs.length) { el.innerHTML = '<div class="empty">No runs recorded yet.<br><br>Runs appear here after someone clicks "Suggest Categories" (V1 or V2).</div>'; return; }
+  el.innerHTML = runs.map(r => {
+    const suggested = (r.final && r.final.suggested) ? r.final.suggested.length : 0;
+    const pool = r.pool || {};
+    return `
+      <div class="run-item ${r.runId === activeRunId ? 'active' : ''}" onclick="selectRun('${esc(r.runId)}')">
+        <div class="line1">
+          <span class="when">${fmtWhen(r.startedAt)}</span>
+          <span>
+            ${r.ok === false ? '<span class="badge fail">FAILED</span> ' : ''}
+            ${r.trigger === 'email-chat' ? '<span class="badge chat">chat</span> ' : ''}
+            <span class="badge ${esc(r.variant)}">${esc((r.variant || '?').toUpperCase())}</span>
+          </span>
+        </div>
+        <div class="who">${esc(r.userEmail)}</div>
+        <div class="nums">${pool.flaggedOtherEmails ?? '?'} in pool → ${suggested} categor${suggested === 1 ? 'y' : 'ies'} • ${fmtDur(r.durationMs)}</div>
+      </div>`;
+  }).join('');
+}
+
+async function selectRun(runId) {
+  activeRunId = runId;
+  renderRunList();
+  const main = document.getElementById('main');
+  main.innerHTML = '<div class="empty">Loading run…</div>';
+  const resp = await fetch('/api/debug/category-suggestion-runs/' + encodeURIComponent(runId));
+  const data = await resp.json();
+  if (!data.success) { main.innerHTML = '<div class="empty">Failed to load run: ' + esc(data.error) + '</div>'; return; }
+  renderRun(data.run);
+}
+
+function stage(n, label, dropNote) {
+  return `<div class="stage"><div class="n">${n ?? '?'}</div><div class="l">${label}</div>${dropNote ? `<div class="d">${dropNote}</div>` : ''}</div>`;
+}
+
+function renderRun(run) {
+  const pool = run.pool || {};
+  const tagging = run.tagging;
+  const sweep = run.sweep || {};
+  const finalS = run.final || {};
+  const suggestedTotal = (finalS.suggested || []).reduce((s, c) => s + (c.emailCount || 0), 0);
+
+  let funnel = stage(pool.totalEmailsLoaded, 'emails loaded') + '<div class="arrow">→</div>' +
+               stage(pool.otherEmails, 'in "Other"') + '<div class="arrow">→</div>' +
+               stage(pool.flaggedOtherEmails, 'important/starred<br>(the pool)') + '<div class="arrow">→</div>' +
+               stage(pool.considered, `considered<br>(cap ${pool.discoveryCap ?? '?'})`);
+  if (run.variant === 'v2' && tagging) {
+    funnel += '<div class="arrow">→</div>' + stage(tagging.emailsWithTag, 'got a tag',
+      tagging.emailsNullTagged ? tagging.emailsNullTagged + ' null-tagged' : null);
+  }
+  funnel += '<div class="arrow">→</div>' + stage((run.discovery?.categories || []).length, 'categories discovered') +
+            '<div class="arrow">→</div>' + stage(sweep.assigned, 'emails assigned',
+              sweep.unassigned ? sweep.unassigned + ' unassigned' : null) +
+            '<div class="arrow">→</div>' + stage((finalS.suggested || []).length, 'categories suggested',
+              (finalS.droppedBelowMin || []).length ? (finalS.droppedBelowMin || []).length + ' dropped (too few emails)' : null);
+
+  let html = '';
+  if (run.ok === false) {
+    html += `<div class="fail-banner"><b>Run failed:</b> ${esc(run.failure)}</div>`;
+  }
+
+  html += `
+    <div class="section">
+      <h2>Run</h2>
+      <div class="meta-grid">
+        <div class="kv"><b>User</b>${esc(run.userEmail)}</div>
+        <div class="kv"><b>Variant</b>${esc((run.variant || '?').toUpperCase())} — ${esc(run.discovery?.mode || (run.variant === 'v1' ? 'single-pass' : 'tag-then-consolidate'))}</div>
+        <div class="kv"><b>Trigger</b>${esc(run.trigger)}</div>
+        <div class="kv"><b>Started</b>${fmtWhen(run.startedAt)}</div>
+        <div class="kv"><b>Duration</b>${fmtDur(run.durationMs)}</div>
+        <div class="kv"><b>Model</b>${esc(run.model)}${run.sweepModel && run.sweepModel !== run.model ? ' (sweep: ' + esc(run.sweepModel) + ')' : ''}</div>
+        <div class="kv"><b>Model calls</b>${run.apiCalls ? run.apiCalls.count + (run.apiCalls.failed ? ' (' + run.apiCalls.failed + ' failed)' : '') : '?'}</div>
+        <div class="kv"><b>Run ID</b>${esc(run.runId)}</div>
+      </div>
+      ${(run.requestedCategories || []).length ? `<div style="margin-top:8px;font-size:13px;"><b>User-requested categories:</b> ${run.requestedCategories.map(esc).join(', ')}</div>` : ''}
+    </div>
+
+    <div class="section"><h2>Funnel</h2><div class="funnel">${funnel}</div></div>`;
+
+  if (run.variant === 'v2' && run.tagAggregation) {
+    const agg = run.tagAggregation;
+    html += `
+      <div class="section">
+        <h2>Aggregated tags (V2 tagging pass — ${tagging?.batchCount ?? '?'} batches of ${tagging?.batchSize ?? '?'}, ${tagging?.batchErrors || 0} batch errors, ${tagging?.parseFailures || 0} parse failures)</h2>
+        <div class="table-scroll"><table>
+          <tr><th>Tag</th><th>Kind</th><th>Emails</th><th>Kept?</th><th>Sample subjects</th></tr>
+          ${(agg.kept || []).map(t => `<tr><td><b>${esc(t.name)}</b></td><td>${esc(t.kind)}</td><td>${t.count}</td><td>✅</td><td class="muted">${(t.sampleSubjects || []).map(esc).join(' • ')}</td></tr>`).join('')}
+          ${(agg.droppedBelowMin || []).map(t => `<tr><td class="muted">${esc(t.name)}</td><td class="muted">${esc(t.kind)}</td><td class="muted">${t.count}</td><td>❌ below min (${agg.minCount})</td><td class="muted">${(t.sampleSubjects || []).map(esc).join(' • ')}</td></tr>`).join('')}
+        </table></div>
+      </div>`;
+  }
+
+  html += `
+    <div class="section">
+      <h2>Discovered categories (before sweep)</h2>
+      ${(run.discovery?.categories || []).length ? run.discovery.categories.map(c => `
+        <div class="cat-card">
+          <div class="name">${esc(c.name)}${c.confidence != null ? ` <span class="muted">(confidence ${c.confidence})</span>` : ''}</div>
+          <div class="desc">${esc(c.description)}</div>
+          <div class="guide">Membership test: ${esc(c.guideline)}</div>
+        </div>`).join('') : '<div class="muted">No categories discovered.</div>'}
+      ${run.discovery?.rawResponse ? `<details><summary>Raw model response</summary><pre>${esc(run.discovery.rawResponse)}</pre></details>` : ''}
+    </div>`;
+
+  const perCat = sweep.perCategory || [];
+  html += `
+    <div class="section">
+      <h2>Assignment sweep (${sweep.batchCount ?? '?'} batches of ${sweep.batchSize ?? '?'}, ${sweep.batchErrors || 0} batch errors, ${sweep.parseFailures || 0} parse failures)</h2>
+      ${perCat.length ? `<div class="table-scroll"><table>
+        <tr><th>Category</th><th>Emails assigned</th><th>Outcome</th></tr>
+        ${perCat.map(c => {
+          const kept = (finalS.suggested || []).some(s => s.name === c.name);
+          return `<tr><td>${esc(c.name)}</td><td>${c.count}</td><td>${kept ? '✅ suggested' : '❌ dropped (below min ' + (pool.minEmailsPerCategory ?? '?') + ')'}</td></tr>`;
+        }).join('')}
+        <tr><td class="muted">— unassigned (no category fit)</td><td class="muted">${sweep.unassigned ?? '?'}</td><td class="muted">stays in "Other"</td></tr>
+      </table></div>` : '<div class="muted">No sweep ran (no categories discovered).</div>'}
+    </div>`;
+
+  const emailRows = buildEmailRows(run);
+  if (emailRows.length) {
+    html += `
+      <div class="section">
+        <h2>Per-email detail (${emailRows.length} emails)</h2>
+        <input type="text" class="search" id="emailSearch" placeholder="Filter by subject, sender, tag, or category…" oninput="filterEmailRows()">
+        <div class="table-scroll"><table id="emailTable">
+          <tr><th>Subject</th><th>From</th>${run.variant === 'v2' ? '<th>Project tag</th><th>Task tag</th>' : ''}<th>Final category</th><th>Sweep reason</th></tr>
+          ${emailRows.map(r => `
+            <tr data-search="${esc((r.subject + ' ' + r.from + ' ' + (r.project || '') + ' ' + (r.taskType || '') + ' ' + (r.category || '')).toLowerCase())}">
+              <td>${esc(r.subject) || '<span class="muted">(no subject)</span>'}</td>
+              <td class="muted">${esc(r.from)}</td>
+              ${run.variant === 'v2' ? `
+                <td>${r.project ? `<span class="tag-pill">${esc(r.project)}</span>` : (r.returnedByModel === false ? '<span class="tag-pill none">not returned</span>' : '<span class="tag-pill none">—</span>')}</td>
+                <td>${r.taskType ? `<span class="tag-pill task">${esc(r.taskType)}</span>` : '<span class="tag-pill none">—</span>'}</td>` : ''}
+              <td>${r.category ? `<span class="cat-pill">${esc(r.category)}</span>` : '<span class="muted">unassigned</span>'}</td>
+              <td class="muted">${esc(r.reason || '')}</td>
+            </tr>`).join('')}
+        </table></div>
+      </div>`;
+  }
+
+  if ((run.errors || []).length) {
+    html += `
+      <div class="section">
+        <h2>Errors during run (${run.errors.length})</h2>
+        ${run.errors.map(e => `<div class="err-item"><b>${esc(e.operation)}</b> — ${esc(e.message)} <span class="muted">(${fmtWhen(e.timestamp)})</span></div>`).join('')}
+      </div>`;
+  }
+
+  document.getElementById('main').innerHTML = html;
+}
+
+// Join tagging info (v2) and sweep assignments into one row per email.
+function buildEmailRows(run) {
+  const byId = new Map();
+  for (const t of (run.tagging?.emails || [])) {
+    byId.set(t.id, { ...t });
+  }
+  for (const a of (run.sweep?.assignments || [])) {
+    const existing = byId.get(a.id);
+    if (existing) {
+      existing.category = a.category;
+      existing.reason = a.reason;
+      if (!existing.subject) existing.subject = a.subject;
+      if (!existing.from) existing.from = a.from;
+    } else {
+      byId.set(a.id, { ...a });
+    }
+  }
+  return [...byId.values()].sort((a, b) => {
+    if (!!a.category !== !!b.category) return a.category ? -1 : 1;
+    return String(a.category || '').localeCompare(String(b.category || ''));
+  });
+}
+
+function filterEmailRows() {
+  const q = document.getElementById('emailSearch').value.trim().toLowerCase();
+  document.querySelectorAll('#emailTable tr[data-search]').forEach(tr => {
+    tr.style.display = !q || tr.dataset.search.includes(q) ? '' : 'none';
+  });
+}
+
+document.getElementById('userFilter').addEventListener('change', renderRunList);
+loadRuns();
+</script>
+</body>
+</html>
