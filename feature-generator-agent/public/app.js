@@ -2780,21 +2780,56 @@ function formatCategorySuggestionsForChat(suggestions) {
   return `📂 **Found ${categories.length} category suggestion${categories.length === 1 ? '' : 's'} for "Other" emails**\n\n${lines.join('\n')}\n\nReview and approve in the panel on the right →`;
 }
 
-// Trigger category suggestions
-async function triggerCategorySuggestions() {
+// Trigger category suggestions: ask which pipeline variant to run first
+function triggerCategorySuggestions() {
   if (isGenerating) return;
-  
+  showCategoryVariantChooser();
+}
+
+function showCategoryVariantChooser() {
+  const existing = document.getElementById('categoryVariantChooser');
+  if (existing) existing.remove();
+
+  const overlay = document.createElement('div');
+  overlay.id = 'categoryVariantChooser';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:10000;display:flex;align-items:center;justify-content:center;';
+  overlay.innerHTML = `
+    <div style="background:#fff;border-radius:12px;padding:24px;max-width:440px;width:90%;box-shadow:0 10px 40px rgba(0,0,0,.2);">
+      <h3 style="margin:0 0 8px;">Suggest Categories for "Other"</h3>
+      <p style="margin:0 0 16px;color:#555;font-size:14px;">Choose how categories should be discovered:</p>
+      <button type="button" id="categoryVariantV1" style="display:block;width:100%;text-align:left;margin-bottom:10px;padding:12px 14px;border:1px solid #d0d5dd;border-radius:8px;background:#fff;cursor:pointer;">
+        <strong>V1</strong> &mdash; single analysis pass<br>
+        <span style="color:#667085;font-size:13px;">Faster: one model call proposes categories directly.</span>
+      </button>
+      <button type="button" id="categoryVariantV2" style="display:block;width:100%;text-align:left;margin-bottom:14px;padding:12px 14px;border:1px solid #d0d5dd;border-radius:8px;background:#fff;cursor:pointer;">
+        <strong>V2</strong> &mdash; tag then consolidate<br>
+        <span style="color:#667085;font-size:13px;">Slower: tags each email with its project/task first, for more specific categories.</span>
+      </button>
+      <button type="button" id="categoryVariantCancel" style="border:none;background:none;color:#667085;cursor:pointer;font-size:14px;padding:0;">Cancel</button>
+    </div>`;
+  document.body.appendChild(overlay);
+
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+  document.getElementById('categoryVariantCancel').onclick = () => overlay.remove();
+  document.getElementById('categoryVariantV1').onclick = () => { overlay.remove(); runCategorySuggestions('v1'); };
+  document.getElementById('categoryVariantV2').onclick = () => { overlay.remove(); runCategorySuggestions('v2'); };
+}
+
+async function runCategorySuggestions(variant) {
+  if (isGenerating) return;
+
   const selectedUser = selectedUserDropdown ? selectedUserDropdown.value : (availableUsers[0] || '');
-  
+
   setGenerating(true);
   showToast('Analyzing "Other" emails...', 'info');
-  
+
   try {
     const response = await fetch('/api/category-suggestions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        userEmail: selectedUser
+        userEmail: selectedUser,
+        variant
       })
     });
     

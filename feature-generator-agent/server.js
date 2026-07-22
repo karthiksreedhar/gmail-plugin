@@ -2197,6 +2197,118 @@ function formatExistingCategoriesContext(userData) {
   }).join('\n');
 }
 
+// V1 discovery: one call over the whole (important/starred) "Other" pool.
+// Category discovery is a global task -- whether two themes are one category
+// or two depends on seeing both distributions together -- so this sends a
+// compact one-line summary of every email in a single prompt. The model
+// outputs only category definitions (plus a few exemplar IDs); membership is
+// decided by the assignment sweep, so the response stays small no matter how
+// many emails went in. Sender repetition is passed as per-line metadata, and
+// the prompt is pinned to a two-kind taxonomy (specific projects, specific
+// task workflows) so it can't drift into sender- or theme-level groupings.
+async function discoverCategoriesSinglePass(poolEmails, userData, logger, modelName, requestedCategories) {
+  // Escape hatch for extreme pools: keep the prompt within a comfortable
+  // context budget by considering only the most recent N emails.
+  const considered = poolEmails
+    .slice()
+    .sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0))
+    .slice(0, CATEGORY_SUGGESTION_DISCOVERY_MAX_EMAILS);
+
+  const senderCounts = new Map();
+  for (const email of considered) {
+    const addr = senderAddressOf(email);
+    if (addr) senderCounts.set(addr, (senderCounts.get(addr) || 0) + 1);
+  }
+
+  const existingCategoriesContext = formatExistingCategoriesContext(userData);
+  const prompt = `You are analyzing the important/starred emails currently categorized as "Other" for one user, to propose NEW, SPECIFIC categories that would organize them better.
+
+Every category you propose must be one of exactly two kinds:
+1. A SPECIFIC PROJECT or endeavor -- a multi-email arc toward one concrete goal (e.g. "CVPR 2026 Paper Submission", "Apartment Lease Renewal", "Lab Server Migration")
+2. A SPECIFIC TASK WORKFLOW -- a recurring administrative action (e.g. "Travel Reimbursements", "Course Registration", "IRB Approvals")
+
+HARD RULES:
+- NEVER name a category after a sender, mailing list, company, or product that sends the emails ("GitHub", "Substack Digest" are wrong -- name what the emails are FOR, not who they are from)
+- Broad themes are wrong ("Newsletters", "University Emails", "Updates", "Finance")
+- Every category must be strictly MORE SPECIFIC than the existing categories listed below. If a proposed category could replace an entry in that list without looking out of place, it is too broad
+- "guideline" must be a membership test: one sentence a classifier could apply mechanically (e.g. "Emails about submitting or tracking expense reports for lab purchases")
+- Skip emails that fit an existing category; do not force emails into categories
+
+EXISTING CATEGORIES (your categories must be more specific than these):
+${existingCategoriesContext}
+
+${requestedCategories.length ? `USER REQUESTED THESE CATEGORIES: ${requestedCategories.join(', ')} - include them if the emails below support them.` : ''}
+
+SENDER FREQUENCY: "(sender xN in this pool)" on a line means that sender has N emails in this pool. Repetition may signal a recurring project or workflow, but the category must name the project/task, never the sender.
+
+EMAILS (${considered.length} total, one per line: id | from | date | subject | snippet):
+${considered.map(email => compactEmailLine(email, senderCounts.get(senderAddressOf(email)) || 0)).join('\n')}
+
+TASK:
+- Propose between 0 and 6 new categories following the rules above
+- Do NOT list every member email -- a separate pass will assign emails to your categories. Give up to 5 exemplar email IDs per category, using only IDs from the lines above
+- Write a clear name, a one-sentence description, and a membership-test guideline for each category
+
+Respond with ONLY this JSON (no other text):
+{
+  "categories": [
+    {
+      "name": "Category Name",
+      "description": "What this category is for",
+      "guideline": "Membership test for classifying emails into this category",
+      "confidence": 0.8,
+      "exemplarEmailIds": ["id1", "id2"]
+    }
+  ]
+}`;
+
+  const started = Date.now();
+  let response;
+  try {
+    response = await invokeAnthropic({
+      model: modelName,
+      temperature: 0.2,
+      maxOutputTokens: 2000,
+      messages: [{ role: 'user', content: prompt }]
+    });
+  } catch (error) {
+    logger?.logApiCall(modelName, 0, 0, Date.now() - started, false, error, null, prompt, null);
+    logger?.logError('Category discovery API call', error);
+    throw error;
+  }
+  logger?.logApiCall(
+    modelName,
+    Math.ceil(prompt.length / 4),
+    Math.ceil((response.content?.length || 0) / 4),
+    Date.now() - started,
+    true,
+    null,
+    null,
+    prompt,
+    response.content
+  );
+
+  const parsed = parseSuggestionEnvelope(response.content);
+  if (parsed === null) {
+    // The call succeeded but produced no extractable JSON -- a prompt/format
+    // bug, not a legitimate "nothing fits" result (which still parses, with
+    // an empty categories array). Surface it instead of returning empty.
+    throw new Error(`Category discovery response failed to parse as JSON (first 300 chars): ${String(response.content || '').slice(0, 300)}`);
+  }
+
+  const categories = (Array.isArray(parsed?.categories) ? parsed.categories : [])
+    .map(cat => ({
+      name: String(cat?.name || '').trim(),
+      description: String(cat?.description || '').trim(),
+      guideline: String(cat?.guideline || '').trim(),
+      confidence: Number(cat?.confidence || 0) || undefined
+    }))
+    .filter(cat => cat.name);
+
+  return { categories, rawResponse: response.content };
+}
+
+
 // Phase-3 discovery: tag-then-consolidate. Asking one model to "propose
 // categories" over raw emails lets it drift toward broad themes; instead,
 // each email is first forced to commit to the SPECIFIC project and/or task
@@ -2439,9 +2551,9 @@ Respond with ONLY this JSON (no other text):
   return { categories, rawResponse: response.content };
 }
 
-// Discovery wrapper, signature-compatible with the orchestrator: tag every
-// email, aggregate recurring tags, consolidate into category definitions.
-async function discoverCategoriesFromEmails(poolEmails, userData, logger, modelName, requestedCategories) {
+// V2 discovery: tag every email, aggregate recurring tags, consolidate into
+// category definitions.
+async function discoverCategoriesTagged(poolEmails, userData, logger, modelName, requestedCategories) {
   // Escape hatch for extreme pools: keep cost bounded by considering only
   // the most recent N emails.
   const considered = poolEmails
@@ -2453,6 +2565,15 @@ async function discoverCategoriesFromEmails(poolEmails, userData, logger, modelN
   const tagsByEmailId = await tagEmailsWithProjectsAndTasks(considered, userData, logger, modelName);
   const tagStats = aggregateEmailTags(tagsByEmailId, emailById);
   return consolidateTagsIntoCategories(tagStats, userData, logger, modelName, requestedCategories);
+}
+
+// Variant dispatcher, signature-compatible with the orchestrator.
+// 'v1' = single-pass discovery; 'v2' (default) = tag-then-consolidate.
+async function discoverCategoriesFromEmails(poolEmails, userData, logger, modelName, requestedCategories, variant) {
+  if (variant === 'v1') {
+    return discoverCategoriesSinglePass(poolEmails, userData, logger, modelName, requestedCategories);
+  }
+  return discoverCategoriesTagged(poolEmails, userData, logger, modelName, requestedCategories);
 }
 
 // Assignment sweep. Discovery outputs only category definitions, so
@@ -2568,6 +2689,8 @@ async function generateCategorySuggestionsForUser(userData, logger, options = {}
   const requestedCategories = Array.isArray(options.requestedCategories)
     ? options.requestedCategories.filter(Boolean)
     : [];
+  // 'v1' = single-pass discovery, 'v2' (default) = tag-then-consolidate.
+  const variant = String(options.variant || '').trim().toLowerCase() === 'v1' ? 'v1' : 'v2';
   const modelName = getAnthropicModel();
   // The sweep is a bulk, easy classification task, so it can run on a cheaper
   // model than discovery without hurting quality.
@@ -2598,7 +2721,7 @@ async function generateCategorySuggestionsForUser(userData, logger, options = {}
   let discoveredCategories = [];
   let rawResponse = '';
   if (allOtherEmails.length >= CATEGORY_SUGGESTION_MIN_EMAILS_PER_CATEGORY) {
-    const discovery = await discoverCategoriesFromEmails(allOtherEmails, userData, logger, modelName, requestedCategories);
+    const discovery = await discoverCategoriesFromEmails(allOtherEmails, userData, logger, modelName, requestedCategories, variant);
     discoveredCategories = discovery.categories;
     rawResponse = discovery.rawResponse;
   }
@@ -3245,8 +3368,8 @@ app.post('/api/email-chat-confirm', async (req, res) => {
 
 // Get "Other" emails and suggest better category assignments
 app.post('/api/category-suggestions', async (req, res) => {
-  const { userEmail, requestedCategories } = req.body;
-  
+  const { userEmail, requestedCategories, variant } = req.body;
+
   // Initialize operations logger
   const logger = new OperationsLogger();
   
@@ -3301,7 +3424,8 @@ app.post('/api/category-suggestions', async (req, res) => {
     }
 
     const { suggestions, otherEmailsCount } = await generateCategorySuggestionsForUser(userData, logger, {
-      requestedCategories
+      requestedCategories,
+      variant
     });
     console.log(`   AI suggested ${suggestions.categories.length} categories`);
 
