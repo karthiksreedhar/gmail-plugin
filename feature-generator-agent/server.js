@@ -2155,20 +2155,10 @@ function normalizeCategorySuggestions(input, validEmailIds = new Set(), emailByI
   };
 }
 
-const CATEGORY_SUGGESTION_SENDER_BUCKET_MIN = 5;
-const CATEGORY_SUGGESTION_DOMAIN_BUCKET_MIN = 8;
 const CATEGORY_SUGGESTION_DISCOVERY_MAX_EMAILS = 1500;
 const CATEGORY_SUGGESTION_ASSIGN_BATCH_SIZE = 60;
 const CATEGORY_SUGGESTION_ASSIGN_CONCURRENCY = 3;
 const CATEGORY_SUGGESTION_MIN_EMAILS_PER_CATEGORY = 2;
-
-// Personal-mailbox providers must never become a domain-level bucket --
-// "everyone who emailed me from gmail.com" is not a coherent category.
-const CATEGORY_SUGGESTION_FREEMAIL_DOMAINS = new Set([
-  'gmail.com', 'googlemail.com', 'yahoo.com', 'hotmail.com', 'outlook.com',
-  'aol.com', 'icloud.com', 'me.com', 'live.com', 'msn.com', 'protonmail.com',
-  'proton.me', 'comcast.net', 'verizon.net', 'att.net'
-]);
 
 const CATEGORY_SUGGESTION_ADDR_RE = /<?([A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})>?/i;
 
@@ -2178,18 +2168,17 @@ function senderAddressOf(email) {
   return m ? m[1].toLowerCase() : '';
 }
 
-function senderDisplayNameOf(email) {
-  const src = String(email?.originalFrom || email?.from || '');
-  return src.replace(/<[^>]*>/g, '').replace(/"/g, '').trim();
-}
-
 // One-line compact representation used by both LLM stages, ~60-80 tokens per
 // email, which is what lets the discovery prompt hold the whole pool at once.
-function compactEmailLine(email) {
+// senderCount (optional) annotates how often this email's sender appears in
+// the pool -- evidence of a recurring workflow, surfaced to the model as
+// metadata rather than being turned into a sender-named category.
+function compactEmailLine(email, senderCount) {
   const from = String(email.originalFrom || email.from || 'Unknown Sender').replace(/\s+/g, ' ').trim().slice(0, 60);
   const subject = String(email.subject || 'No Subject').replace(/\s+/g, ' ').trim().slice(0, 120);
   const snippet = String(email.snippet || email.body || '').replace(/\s+/g, ' ').trim().slice(0, 150);
-  return `${email.id} | ${from} | ${email.date || ''} | ${subject} | ${snippet}`;
+  const senderNote = senderCount > 1 ? ` (sender x${senderCount} in this pool)` : '';
+  return `${email.id} | ${from}${senderNote} | ${email.date || ''} | ${subject} | ${snippet}`;
 }
 
 // Render existing categories + whatever guideline/summary text is on file for
@@ -2208,101 +2197,57 @@ function formatExistingCategoriesContext(userData) {
   }).join('\n');
 }
 
-// Stage 1: deterministic sender/domain bucketing. Repeated senders
-// (newsletters, notification systems, one chatty correspondent) make up a
-// large share of any "Other" pool and need no model call to identify. Unlike
-// the LLM stages, this pass covers the ENTIRE pool with no cap.
-function bucketOtherEmailsBySender(otherEmails) {
-  const categories = [];
-  const bucketedIds = new Set();
-
-  const byAddress = new Map();
-  for (const email of otherEmails) {
-    const addr = senderAddressOf(email);
-    if (!addr) continue;
-    if (!byAddress.has(addr)) byAddress.set(addr, []);
-    byAddress.get(addr).push(email);
-  }
-  for (const [addr, emails] of byAddress.entries()) {
-    if (emails.length < CATEGORY_SUGGESTION_SENDER_BUCKET_MIN) continue;
-    const displayName = emails.map(senderDisplayNameOf).find(Boolean) || addr;
-    categories.push({
-      name: displayName,
-      description: `Emails from ${displayName} (${addr})`,
-      guideline: `Classify emails whose sender is ${addr} into this category.`,
-      confidence: 0.95,
-      suggestedEmails: emails.map(e => ({
-        id: e.id,
-        reason: `Sent by ${addr}, which has ${emails.length} emails in "Other"`
-      }))
-    });
-    emails.forEach(e => bucketedIds.add(e.id));
-  }
-
-  // Domain-level buckets over what's left, so e.g. notifications@ and noreply@
-  // from the same product still group together. Never for personal-mailbox
-  // providers.
-  const byDomain = new Map();
-  for (const email of otherEmails) {
-    if (bucketedIds.has(email.id)) continue;
-    const addr = senderAddressOf(email);
-    const domain = addr.includes('@') ? addr.split('@')[1] : '';
-    if (!domain || CATEGORY_SUGGESTION_FREEMAIL_DOMAINS.has(domain)) continue;
-    if (!byDomain.has(domain)) byDomain.set(domain, []);
-    byDomain.get(domain).push(email);
-  }
-  for (const [domain, emails] of byDomain.entries()) {
-    if (emails.length < CATEGORY_SUGGESTION_DOMAIN_BUCKET_MIN) continue;
-    const label = domain.split('.')[0];
-    const prettyLabel = label.charAt(0).toUpperCase() + label.slice(1);
-    categories.push({
-      name: `${prettyLabel} (${domain})`,
-      description: `Emails sent from ${domain} addresses`,
-      guideline: `Classify emails whose sender address ends in @${domain} into this category.`,
-      confidence: 0.9,
-      suggestedEmails: emails.map(e => ({
-        id: e.id,
-        reason: `Sent from ${domain}, which has ${emails.length} emails in "Other"`
-      }))
-    });
-    emails.forEach(e => bucketedIds.add(e.id));
-  }
-
-  return { categories, bucketedIds };
-}
-
-// Stage 2: one discovery call over the whole residue (everything sender
-// bucketing didn't claim). Category discovery is a global task -- whether two
-// themes are one category or two depends on seeing both distributions
-// together -- so this sends a compact one-line summary of every residual
-// email in a single prompt instead of slicing into batches. The model outputs
-// only category definitions (plus a few exemplar IDs); membership is decided
-// by the assignment sweep, so the response stays small no matter how many
-// emails went in.
-async function discoverCategoriesFromResidue(residueEmails, userData, logger, modelName, requestedCategories) {
+// Discovery: one call over the whole (important/starred) "Other" pool.
+// Category discovery is a global task -- whether two themes are one category
+// or two depends on seeing both distributions together -- so this sends a
+// compact one-line summary of every email in a single prompt. The model
+// outputs only category definitions (plus a few exemplar IDs); membership is
+// decided by the assignment sweep, so the response stays small no matter how
+// many emails went in. Sender repetition is passed as per-line metadata, and
+// the prompt is pinned to a two-kind taxonomy (specific projects, specific
+// task workflows) so it can't drift into sender- or theme-level groupings.
+async function discoverCategoriesFromEmails(poolEmails, userData, logger, modelName, requestedCategories) {
   // Escape hatch for extreme pools: keep the prompt within a comfortable
-  // context budget by considering only the most recent N residual emails.
-  const considered = residueEmails
+  // context budget by considering only the most recent N emails.
+  const considered = poolEmails
     .slice()
     .sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0))
     .slice(0, CATEGORY_SUGGESTION_DISCOVERY_MAX_EMAILS);
 
-  const existingCategoriesContext = formatExistingCategoriesContext(userData);
-  const prompt = `You are analyzing ALL emails currently categorized as "Other" for one user, to propose new categories that would organize them better.
+  const senderCounts = new Map();
+  for (const email of considered) {
+    const addr = senderAddressOf(email);
+    if (addr) senderCounts.set(addr, (senderCounts.get(addr) || 0) + 1);
+  }
 
-EXISTING CATEGORIES (do not propose duplicates of these):
+  const existingCategoriesContext = formatExistingCategoriesContext(userData);
+  const prompt = `You are analyzing the important/starred emails currently categorized as "Other" for one user, to propose NEW, SPECIFIC categories that would organize them better.
+
+Every category you propose must be one of exactly two kinds:
+1. A SPECIFIC PROJECT or endeavor -- a multi-email arc toward one concrete goal (e.g. "CVPR 2026 Paper Submission", "Apartment Lease Renewal", "Lab Server Migration")
+2. A SPECIFIC TASK WORKFLOW -- a recurring administrative action (e.g. "Travel Reimbursements", "Course Registration", "IRB Approvals")
+
+HARD RULES:
+- NEVER name a category after a sender, mailing list, company, or product that sends the emails ("GitHub", "Substack Digest" are wrong -- name what the emails are FOR, not who they are from)
+- Broad themes are wrong ("Newsletters", "University Emails", "Updates", "Finance")
+- Every category must be strictly MORE SPECIFIC than the existing categories listed below. If a proposed category could replace an entry in that list without looking out of place, it is too broad
+- "guideline" must be a membership test: one sentence a classifier could apply mechanically (e.g. "Emails about submitting or tracking expense reports for lab purchases")
+- Skip emails that fit an existing category; do not force emails into categories
+
+EXISTING CATEGORIES (your categories must be more specific than these):
 ${existingCategoriesContext}
 
 ${requestedCategories.length ? `USER REQUESTED THESE CATEGORIES: ${requestedCategories.join(', ')} - include them if the emails below support them.` : ''}
 
+SENDER FREQUENCY: "(sender xN in this pool)" on a line means that sender has N emails in this pool. Repetition may signal a recurring project or workflow, but the category must name the project/task, never the sender.
+
 EMAILS (${considered.length} total, one per line: id | from | date | subject | snippet):
-${considered.map(compactEmailLine).join('\n')}
+${considered.map(email => compactEmailLine(email, senderCounts.get(senderAddressOf(email)) || 0)).join('\n')}
 
 TASK:
-- Propose between 0 and 6 new categories that each cover a meaningful group of the emails above
-- Skip themes that clearly belong in an existing category
+- Propose between 0 and 6 new categories following the rules above
 - Do NOT list every member email -- a separate pass will assign emails to your categories. Give up to 5 exemplar email IDs per category, using only IDs from the lines above
-- Write a clear name, a one-sentence description, and a classification guideline for each category
+- Write a clear name, a one-sentence description, and a membership-test guideline for each category
 
 Respond with ONLY this JSON (no other text):
 {
@@ -2310,7 +2255,7 @@ Respond with ONLY this JSON (no other text):
     {
       "name": "Category Name",
       "description": "What this category is for",
-      "guideline": "How to classify emails into this category",
+      "guideline": "Membership test for classifying emails into this category",
       "confidence": 0.8,
       "exemplarEmailIds": ["id1", "id2"]
     }
@@ -2363,24 +2308,24 @@ Respond with ONLY this JSON (no other text):
   return { categories, rawResponse: response.content };
 }
 
-// Stage 3: assignment sweep. Discovery outputs only category definitions, so
-// membership comes from classifying EVERY residual email against those
+// Assignment sweep. Discovery outputs only category definitions, so
+// membership comes from classifying EVERY pool email against those
 // definitions in large batches with bounded concurrency. This is what turns
 // "a few plausible categories with example emails" into categories that
 // actually empty "Other", and it guarantees each email lands in at most one
 // suggestion. Returns Map<emailId, {category, reason}>.
-async function assignResidueEmailsToCategories(residueEmails, discoveredCategories, logger, modelName) {
+async function assignEmailsToCategories(poolEmails, discoveredCategories, logger, modelName) {
   const assignments = new Map();
-  if (!residueEmails.length || !discoveredCategories.length) return assignments;
+  if (!poolEmails.length || !discoveredCategories.length) return assignments;
 
   const categoriesBlock = discoveredCategories
-    .map(cat => `- ${cat.name}: ${cat.description}${cat.guideline ? ` (Guideline: ${cat.guideline})` : ''}`)
+    .map(cat => `- ${cat.name}: ${cat.description}${cat.guideline ? ` (Membership test: ${cat.guideline})` : ''}`)
     .join('\n');
   const canonicalNames = new Map(discoveredCategories.map(cat => [cat.name.toLowerCase(), cat.name]));
 
   const batches = [];
-  for (let i = 0; i < residueEmails.length; i += CATEGORY_SUGGESTION_ASSIGN_BATCH_SIZE) {
-    batches.push(residueEmails.slice(i, i + CATEGORY_SUGGESTION_ASSIGN_BATCH_SIZE));
+  for (let i = 0; i < poolEmails.length; i += CATEGORY_SUGGESTION_ASSIGN_BATCH_SIZE) {
+    batches.push(poolEmails.slice(i, i + CATEGORY_SUGGESTION_ASSIGN_BATCH_SIZE));
   }
 
   let batchErrorCount = 0;
@@ -2393,21 +2338,22 @@ async function assignResidueEmailsToCategories(residueEmails, discoveredCategori
       if (batchIndex >= batches.length) return;
       const batch = batches[batchIndex];
 
-      const prompt = `Assign each email below to one of these candidate categories, or to null if none fits well.
+      const prompt = `Assign each email below to one of these candidate categories, or to null if none fits.
 
-CATEGORIES:
+CATEGORIES (each has a membership test):
 ${categoriesBlock}
 
 EMAILS (one per line: id | from | date | subject | snippet):
-${batch.map(compactEmailLine).join('\n')}
+${batch.map(email => compactEmailLine(email)).join('\n')}
 
 Rules:
 - Use ONLY the category names listed above, exactly as written, or null
-- Do not force a fit -- null is the right answer for emails that don't clearly belong anywhere
+- Assign an email to a category ONLY if it clearly passes that category's membership test
+- Be aggressive about null: a category with a few precisely matching emails is better than one with many loose matches. When in doubt, answer null
 - Include every email id from the lines above exactly once
 
 Respond with ONLY this JSON (no other text):
-{"assignments": [{"id": "email_id", "category": "Category Name or null", "reason": "Why it fits (omit for null)"}]}`;
+{"assignments": [{"id": "email_id", "category": "Category Name or null", "reason": "Why it passes the membership test (omit for null)"}]}`;
 
       const started = Date.now();
       try {
@@ -2499,21 +2445,19 @@ async function generateCategorySuggestionsForUser(userData, logger, options = {}
   const validEmailIds = new Set(allOtherEmails.map(email => String(email?.id || '').trim()).filter(Boolean));
   const emailById = new Map(allOtherEmails.map(email => [String(email?.id || '').trim(), email]));
 
-  // Stage 1: deterministic sender/domain buckets over the full pool (no cap).
-  const { categories: bucketCategories, bucketedIds } = bucketOtherEmailsBySender(allOtherEmails);
-  const residueEmails = allOtherEmails.filter(email => !bucketedIds.has(email.id));
-
-  // Stage 2: single long-context discovery call over the residue.
+  // Discovery: single long-context call over the whole flagged pool,
+  // constrained to specific projects / task workflows (sender repetition is
+  // passed as metadata, never turned into a category of its own).
   let discoveredCategories = [];
   let rawResponse = '';
-  if (residueEmails.length >= CATEGORY_SUGGESTION_MIN_EMAILS_PER_CATEGORY) {
-    const discovery = await discoverCategoriesFromResidue(residueEmails, userData, logger, modelName, requestedCategories);
+  if (allOtherEmails.length >= CATEGORY_SUGGESTION_MIN_EMAILS_PER_CATEGORY) {
+    const discovery = await discoverCategoriesFromEmails(allOtherEmails, userData, logger, modelName, requestedCategories);
     discoveredCategories = discovery.categories;
     rawResponse = discovery.rawResponse;
   }
 
-  // Stage 3: classify every residual email against the discovered categories.
-  const assignments = await assignResidueEmailsToCategories(residueEmails, discoveredCategories, logger, sweepModelName);
+  // Sweep: classify every pool email against the discovered categories.
+  const assignments = await assignEmailsToCategories(allOtherEmails, discoveredCategories, logger, sweepModelName);
 
   const assignedByCategory = new Map(discoveredCategories.map(cat => [cat.name, []]));
   for (const [id, assignment] of assignments.entries()) {
@@ -2530,7 +2474,7 @@ async function generateCategorySuggestionsForUser(userData, logger, options = {}
   // normalizeCategorySuggestions canonicalizes/validates IDs and backfills
   // real subject/from/date/snippet from emailById, exactly as before.
   const suggestions = normalizeCategorySuggestions(
-    { action: 'createCategories', categories: [...bucketCategories, ...discoveredWithEmails] },
+    { action: 'createCategories', categories: discoveredWithEmails },
     validEmailIds,
     emailById
   );
