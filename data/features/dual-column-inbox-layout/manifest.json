@@ -1,0 +1,11 @@
+{
+  "id": "dual-column-inbox-layout",
+  "name": "Dual Column Inbox Layout",
+  "version": "1.0.0",
+  "description": "Reorganize inbox to display important emails on the left and starred emails on the right in a two-column layout at the top, with remaining emails below",
+  "author": "Feature Generator Agent",
+  "frontend": "frontend.js",
+  "permissions": [
+    "emails:read"
+  ]
+}
