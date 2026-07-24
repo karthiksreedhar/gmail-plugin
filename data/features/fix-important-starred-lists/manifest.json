@@ -1,0 +1,12 @@
+{
+  "id": "fix-important-starred-lists",
+  "name": "Fix Important and Starred Lists Formatting",
+  "version": "1.0.0",
+  "description": "Restore proper formatting and display of Important and Starred email lists to match original inbox layout and ensure lists populate correctly",
+  "author": "Feature Generator Agent",
+  "backend": "backend.js",
+  "frontend": "frontend.js",
+  "permissions": [
+    "emails:read"
+  ]
+}
