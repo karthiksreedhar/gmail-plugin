@@ -2213,6 +2213,9 @@ function normalizeCategorySuggestions(input, validEmailIds = new Set(), emailByI
       description,
       guideline,
       confidence: Number(rawCategory?.confidence || 0) || undefined,
+      // 'existing' = suggested additions to a category the user already has
+      // (apply must NOT create it again); anything else is a new category.
+      kind: rawCategory?.kind === 'existing' ? 'existing' : 'new',
       suggestedEmails
     });
   }
@@ -2929,21 +2932,112 @@ async function generateCategorySuggestionsForUser(userData, logger, options = {}
       })
     };
 
-    const discoveredWithEmails = discoveredCategories
-      .map(cat => ({ ...cat, suggestedEmails: assignedByCategory.get(cat.name) || [] }))
-      .filter(cat => cat.suggestedEmails.length >= CATEGORY_SUGGESTION_MIN_EMAILS_PER_CATEGORY);
+    // Partition discovery output. A discovered category whose name collides
+    // with an existing category (case/whitespace-insensitive) must never be
+    // proposed as "new" -- its swept emails are rerouted into that existing
+    // category as suggested additions instead, so approval can't create a
+    // duplicate.
+    const canonicalExistingByKey = new Map();
+    for (const rawName of (userData?.categories || [])) {
+      const canonical = String(rawName || '').trim();
+      const key = canonical.toLowerCase();
+      if (key && !canonicalExistingByKey.has(key)) canonicalExistingByKey.set(key, canonical);
+    }
+    const isOtherLike = (name) => ['other', 'uncategorized', ''].includes(String(name || '').trim().toLowerCase());
+
+    const trulyNew = [];
+    const additionsByExisting = new Map(); // canonical existing name -> [{id, reason}]
+    const addAdditions = (canonicalName, emails) => {
+      if (!emails || !emails.length) return;
+      if (!additionsByExisting.has(canonicalName)) additionsByExisting.set(canonicalName, []);
+      const bucket = additionsByExisting.get(canonicalName);
+      const seen = new Set(bucket.map(e => e.id));
+      for (const email of emails) {
+        if (!seen.has(email.id)) { bucket.push(email); seen.add(email.id); }
+      }
+    };
+
+    const droppedBelowMin = [];
+    for (const cat of discoveredCategories) {
+      const assigned = assignedByCategory.get(cat.name) || [];
+      const canonical = canonicalExistingByKey.get(cat.name.trim().toLowerCase());
+      if (canonical) {
+        if (!isOtherLike(canonical)) addAdditions(canonical, assigned);
+      } else if (assigned.length >= CATEGORY_SUGGESTION_MIN_EMAILS_PER_CATEGORY) {
+        trulyNew.push({ ...cat, kind: 'new', suggestedEmails: assigned });
+      } else {
+        droppedBelowMin.push({ name: cat.name, emailCount: assigned.length });
+      }
+    }
+
+    // Second sweep: pool emails not claimed by a kept new category are
+    // classified against the user's EXISTING categories with the same
+    // membership-test prompt (and its "aggressive null" rule), so untagged
+    // emails that actually fit an existing category surface as suggested
+    // additions instead of silently staying in "Other". No minimum count:
+    // adding even one email to a category that already exists is useful.
+    const claimedIds = new Set();
+    for (const cat of trulyNew) for (const email of cat.suggestedEmails) claimedIds.add(email.id);
+    for (const bucket of additionsByExisting.values()) for (const email of bucket) claimedIds.add(email.id);
+    const leftoverEmails = allOtherEmails.filter(email => !claimedIds.has(String(email?.id || '').trim()));
+
+    const existingCandidates = Array.from(canonicalExistingByKey.values())
+      .filter(name => !isOtherLike(name))
+      .map(name => ({
+        name,
+        description: String(userData?.categorySummaries?.[name] || '').trim() || 'Existing user category',
+        guideline: String(userData?.categoryGuidelines?.[name] || '').trim()
+      }));
+
+    if (leftoverEmails.length && existingCandidates.length) {
+      const existingSweepDebug = {};
+      const existingAssignments = await assignEmailsToCategories(
+        leftoverEmails, existingCandidates, logger, sweepModelName, existingSweepDebug
+      );
+      for (const [id, assignment] of existingAssignments.entries()) {
+        addAdditions(assignment.category, [{ id, reason: assignment.reason || 'This email fits this existing category.' }]);
+      }
+      runDebug.existingSweep = {
+        ...(existingSweepDebug.sweep || {}),
+        candidateCategories: existingCandidates.map(cat => cat.name),
+        emailsSwept: leftoverEmails.length,
+        assigned: existingAssignments.size,
+        unassigned: leftoverEmails.length - existingAssignments.size,
+        assignments: leftoverEmails.map(email => {
+          const id = String(email?.id || '').trim();
+          const assignment = existingAssignments.get(id);
+          return {
+            id,
+            subject: String(email?.subject || '').replace(/\s+/g, ' ').trim().slice(0, 120),
+            from: String(email?.from || email?.originalFrom || '').slice(0, 120),
+            date: email?.date || null,
+            category: assignment?.category || null,
+            reason: assignment ? String(assignment.reason || '').slice(0, 300) : null
+          };
+        })
+      };
+    }
+
+    const additionCategories = Array.from(additionsByExisting.entries())
+      .filter(([, emails]) => emails.length > 0)
+      .map(([name, emails]) => ({
+        name,
+        description: String(userData?.categorySummaries?.[name] || '').trim(),
+        guideline: String(userData?.categoryGuidelines?.[name] || '').trim(),
+        kind: 'existing',
+        suggestedEmails: emails
+      }));
 
     runDebug.final = {
-      suggested: discoveredWithEmails.map(cat => ({ name: cat.name, emailCount: cat.suggestedEmails.length })),
-      droppedBelowMin: discoveredCategories
-        .filter(cat => (assignedByCategory.get(cat.name) || []).length < CATEGORY_SUGGESTION_MIN_EMAILS_PER_CATEGORY)
-        .map(cat => ({ name: cat.name, emailCount: (assignedByCategory.get(cat.name) || []).length }))
+      suggested: trulyNew.map(cat => ({ name: cat.name, emailCount: cat.suggestedEmails.length })),
+      additionsToExisting: additionCategories.map(cat => ({ name: cat.name, emailCount: cat.suggestedEmails.length })),
+      droppedBelowMin
     };
 
     // normalizeCategorySuggestions canonicalizes/validates IDs and backfills
     // real subject/from/date/snippet from emailById, exactly as before.
     const suggestions = normalizeCategorySuggestions(
-      { action: 'createCategories', categories: discoveredWithEmails },
+      { action: 'createCategories', categories: [...trulyNew, ...additionCategories] },
       validEmailIds,
       emailById
     );
@@ -3309,58 +3403,88 @@ app.post('/api/email-chat-category-suggestions', async (req, res) => {
     : (availableUsers[0] || DEFAULT_AVAILABLE_USERS[0]);
   const results = {
     categoriesCreated: [],
+    categoriesUpdated: [],
     emailsMoved: [],
     errors: []
   };
-  
+
   try {
     console.log(`\n📂 EXECUTING CATEGORY SUGGESTIONS for ${targetUser}`);
-    console.log(`   Categories to create: ${categorySuggestions.categories.map(c => c.name).join(', ')}`);
-    console.log(`   Input data structure:`, JSON.stringify(categorySuggestions, null, 2));
-    
-    // Step 1: Create the new categories
+    console.log(`   Categories in request: ${categorySuggestions.categories.map(c => c.name).join(', ')}`);
+
+    // Step 1: Resolve every requested category against the user's existing
+    // list ONCE, case/whitespace-insensitively. A suggestion that matches an
+    // existing category (whether or not it was flagged kind:'existing')
+    // resolves to the existing name's exact stored casing and is never
+    // re-added -- this is the guard against duplicate categories like
+    // "work" vs "Work". Names are also deduped within the request itself.
     const categoriesDoc = await getUserDoc('categories', targetUser) || { categories: [] };
-    const existingCategories = categoriesDoc.categories || [];
-    const newCategories = [...existingCategories];
-    
-    for (const cat of categorySuggestions.categories) {
-      if (!existingCategories.includes(cat.name)) {
-        newCategories.push(cat.name);
-        results.categoriesCreated.push(cat.name);
-        console.log(`   ✅ Adding category: ${cat.name}`);
-      } else {
-        console.log(`   ⏭️ Category already exists: ${cat.name}`);
-        results.categoriesCreated.push(cat.name); // Still count as "created" for user feedback
-      }
+    const existingCategories = (categoriesDoc.categories || []).filter(name => String(name || '').trim());
+    const canonicalByKey = new Map();
+    for (const name of existingCategories) {
+      const key = String(name).trim().toLowerCase();
+      if (!canonicalByKey.has(key)) canonicalByKey.set(key, String(name).trim());
     }
-    
-    // Save updated categories
+
+    const resolvedCategories = []; // [{ requested, resolvedName, isExisting, description, guideline, selectedEmails }]
+    const updatedCategoriesList = [...existingCategories];
+    for (const cat of categorySuggestions.categories) {
+      const requestedName = String(cat?.name || '').trim();
+      if (!requestedName) continue;
+      const key = requestedName.toLowerCase();
+
+      let resolvedName = canonicalByKey.get(key);
+      let isExisting = true;
+      if (!resolvedName) {
+        // Genuinely new: register it in the canonical map immediately so a
+        // second suggestion with the same name (any casing) in this request
+        // merges into it instead of creating a duplicate list entry.
+        resolvedName = requestedName;
+        isExisting = false;
+        canonicalByKey.set(key, resolvedName);
+        updatedCategoriesList.push(resolvedName);
+        results.categoriesCreated.push(resolvedName);
+        console.log(`   ✅ Adding new category: ${resolvedName}`);
+      } else {
+        console.log(`   ⏭️ Using existing category: ${resolvedName}${resolvedName !== requestedName ? ` (requested as "${requestedName}")` : ''}`);
+      }
+      resolvedCategories.push({
+        requested: requestedName,
+        resolvedName,
+        isExisting,
+        description: String(cat?.description || '').trim(),
+        guideline: String(cat?.guideline || '').trim(),
+        selectedEmails: Array.isArray(cat?.selectedEmails) ? cat.selectedEmails : []
+      });
+    }
+
     if (results.categoriesCreated.length > 0) {
-      await setUserDoc('categories', targetUser, { categories: newCategories });
+      await setUserDoc('categories', targetUser, { categories: updatedCategoriesList });
       console.log(`   💾 Saved categories to database`);
     }
-    
-    // Step 2: Add guidelines for new categories
-    const guidelineUpdates = categorySuggestions.categories
+
+    // Step 2 + 3: Guidelines and summaries are written ONLY for newly created
+    // categories. Existing categories keep whatever guideline/summary the
+    // user already has -- an addition suggestion must never overwrite them.
+    const newlyCreated = resolvedCategories.filter(cat => !cat.isExisting);
+    const guidelineUpdates = newlyCreated
       .filter(cat => cat.guideline)
-      .map(cat => ({ name: cat.name, notes: cat.guideline }));
+      .map(cat => ({ name: cat.resolvedName, notes: cat.guideline }));
     if (guidelineUpdates.length > 0) {
       await mergeCategoryGuidelines(targetUser, guidelineUpdates);
       guidelineUpdates.forEach(u => console.log(`   📝 Added guideline for: ${u.name}`));
     }
-    
-    // Step 3: Add summaries for new categories
-    const summariesDoc = await getUserDoc('category_summaries', targetUser) || { summaries: {} };
-    const updatedSummaries = { ...(summariesDoc.summaries || {}) };
-    
-    for (const cat of categorySuggestions.categories) {
-      if (cat.description) {
-        updatedSummaries[cat.name] = cat.description;
-        console.log(`   📄 Added summary for: ${cat.name}`);
+
+    const newSummaries = newlyCreated.filter(cat => cat.description);
+    if (newSummaries.length > 0) {
+      const summariesDoc = await getUserDoc('category_summaries', targetUser) || { summaries: {} };
+      const updatedSummaries = { ...(summariesDoc.summaries || {}) };
+      for (const cat of newSummaries) {
+        updatedSummaries[cat.resolvedName] = cat.description;
+        console.log(`   📄 Added summary for: ${cat.resolvedName}`);
       }
+      await setUserDoc('category_summaries', targetUser, { summaries: updatedSummaries });
     }
-    
-    await setUserDoc('category_summaries', targetUser, { summaries: updatedSummaries });
     
     // Step 4: Move selected emails to new categories
     console.log(`\n📧 MOVING EMAILS:`);
@@ -3381,48 +3505,64 @@ app.post('/api/email-chat-category-suggestions', async (req, res) => {
       // Debug: Log all email IDs in database
       console.log(`   Sample email IDs in DB: ${updatedEmails.slice(0, 5).map(e => e.id).join(', ')}`);
       
-      for (const cat of categorySuggestions.categories) {
-        console.log(`\n   Processing category: ${cat.name}`);
-        console.log(`   Selected emails: ${cat.selectedEmails || 'NONE'}`);
-        
-        if (cat.selectedEmails && cat.selectedEmails.length > 0) {
+      // An email id may legitimately only be moved once per request; if two
+      // selected categories claim the same email, the first claim wins and
+      // the duplicate is reported instead of silently double-moving.
+      const movedIds = new Set();
+      for (const cat of resolvedCategories) {
+        console.log(`\n   Processing category: ${cat.resolvedName} (${cat.isExisting ? 'existing' : 'new'})`);
+        console.log(`   Selected emails: ${cat.selectedEmails.length ? cat.selectedEmails : 'NONE'}`);
+
+        if (cat.selectedEmails.length > 0) {
+          let movedIntoThisCategory = 0;
           for (const selected of cat.selectedEmails) {
             const emailId = selected && typeof selected === 'object'
               ? String(selected.id || '').trim()
               : String(selected || '').trim();
             if (!emailId) continue;
 
-            console.log(`     Looking for email ID: ${emailId}`);
-
             const emailIndex = byId.has(emailId) ? byId.get(emailId) : -1;
             const originalEmailId = (emailIndex !== -1 && updatedEmails[emailIndex] && updatedEmails[emailIndex].id != null)
               ? String(updatedEmails[emailIndex].id)
               : emailId;
 
-            if (emailIndex !== -1) {
-              const oldCategory = updatedEmails[emailIndex].category;
-              const emailSubject = updatedEmails[emailIndex].subject;
-              
-              // Move emails from any category to new categories (allow reorganization)
-              updatedEmails[emailIndex] = {
-                ...updatedEmails[emailIndex],
-                category: cat.name,
-                categories: [cat.name]
-              };
-              results.emailsMoved.push({
-                emailId: originalEmailId,
-                subject: emailSubject,
-                from: oldCategory || 'Uncategorized',
-                to: cat.name
-              });
-              console.log(`     ✅ Moved email "${emailSubject}" from "${oldCategory || 'Uncategorized'}" to "${cat.name}"`);
-            } else {
+            if (emailIndex === -1) {
               console.log(`     ❌ Email ${emailId} not found in database`);
               results.errors.push(`Email ${emailId} not found in database`);
+              continue;
             }
+            if (movedIds.has(originalEmailId)) {
+              console.log(`     ⏭️ Email ${originalEmailId} already moved by an earlier category in this request`);
+              results.errors.push(`Email ${originalEmailId} was selected in more than one category; kept the first`);
+              continue;
+            }
+
+            const oldCategory = updatedEmails[emailIndex].category;
+            const emailSubject = updatedEmails[emailIndex].subject;
+
+            // Move emails from any category (allow reorganization); the
+            // resolved name preserves the existing category's exact casing.
+            updatedEmails[emailIndex] = {
+              ...updatedEmails[emailIndex],
+              category: cat.resolvedName,
+              categories: [cat.resolvedName]
+            };
+            movedIds.add(originalEmailId);
+            movedIntoThisCategory++;
+            results.emailsMoved.push({
+              emailId: originalEmailId,
+              subject: emailSubject,
+              from: oldCategory || 'Uncategorized',
+              to: cat.resolvedName,
+              toExisting: cat.isExisting
+            });
+            console.log(`     ✅ Moved email "${emailSubject}" from "${oldCategory || 'Uncategorized'}" to "${cat.resolvedName}"`);
+          }
+          if (cat.isExisting && movedIntoThisCategory > 0 && !results.categoriesUpdated.includes(cat.resolvedName)) {
+            results.categoriesUpdated.push(cat.resolvedName);
           }
         } else {
-          console.log(`   No emails selected for category: ${cat.name}`);
+          console.log(`   No emails selected for category: ${cat.resolvedName}`);
         }
       }
       
@@ -3441,20 +3581,29 @@ app.post('/api/email-chat-category-suggestions', async (req, res) => {
     
     console.log(`\n📊 CATEGORY SUGGESTION RESULTS:`);
     console.log(`   Categories created: ${results.categoriesCreated.length}`);
+    console.log(`   Existing categories that received emails: ${results.categoriesUpdated.length}`);
     console.log(`   Emails moved: ${results.emailsMoved.length}`);
     console.log(`   Errors: ${results.errors.length}`);
-    
+
     if (results.errors.length > 0) {
       console.log(`   Error details:`, results.errors);
     }
-    
+
+    const emailsAddedToExisting = results.emailsMoved.filter(move => move.toExisting).length;
+    const messageParts = [];
+    if (results.categoriesCreated.length) messageParts.push(`created ${results.categoriesCreated.length} categor${results.categoriesCreated.length === 1 ? 'y' : 'ies'}`);
+    if (results.categoriesUpdated.length) messageParts.push(`added emails to ${results.categoriesUpdated.length} existing categor${results.categoriesUpdated.length === 1 ? 'y' : 'ies'}`);
+    messageParts.push(`moved ${results.emailsMoved.length} email${results.emailsMoved.length === 1 ? '' : 's'}`);
+
     res.json({
       success: true,
-      message: `Created ${results.categoriesCreated.length} categories and moved ${results.emailsMoved.length} emails`,
+      message: messageParts.join(', '),
       results,
       summary: {
         categoriesCreated: results.categoriesCreated.length,
+        categoriesUpdated: results.categoriesUpdated.length,
         emailsMoved: results.emailsMoved.length,
+        emailsAddedToExisting,
         errors: results.errors.length
       },
       debug: {

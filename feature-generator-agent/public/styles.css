@@ -2308,6 +2308,40 @@ body.chat-mode .mode-btn.active[data-mode="chat"] {
   flex-shrink: 0;
 }
 
+/* Badge distinguishing brand-new categories from additions to existing ones */
+.tab-kind-badge {
+  display: inline-block;
+  padding: 1px 7px;
+  border-radius: 10px;
+  font-size: 0.65rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  vertical-align: middle;
+}
+
+.tab-kind-badge.new {
+  background: rgba(66, 133, 244, 0.15);
+  color: #4285f4;
+}
+
+.tab-kind-badge.existing {
+  background: rgba(16, 185, 129, 0.15);
+  color: #0f9d76;
+}
+
+/* Note shown atop panels whose emails join an existing category */
+.rhs-category-existing-note {
+  font-size: 0.8rem;
+  color: #0f766e;
+  background: rgba(16, 185, 129, 0.08);
+  border: 1px solid rgba(16, 185, 129, 0.25);
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+  margin-bottom: 8px;
+  line-height: 1.4;
+}
+
 .rhs-category-description {
   font-size: 0.9rem;
   color: var(--text-primary);

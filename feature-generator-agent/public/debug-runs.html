@@ -185,6 +185,10 @@ function renderRun(run) {
               sweep.unassigned ? sweep.unassigned + ' unassigned' : null) +
             '<div class="arrow">→</div>' + stage((finalS.suggested || []).length, 'categories suggested',
               (finalS.droppedBelowMin || []).length ? (finalS.droppedBelowMin || []).length + ' dropped (too few emails)' : null);
+  if (run.existingSweep) {
+    funnel += '<div class="arrow">→</div>' + stage(run.existingSweep.assigned, 'added to existing<br>categories',
+      run.existingSweep.unassigned ? run.existingSweep.unassigned + ' stay in "Other"' : null);
+  }
 
   let html = '';
   if (run.ok === false) {
@@ -247,6 +251,24 @@ function renderRun(run) {
         <tr><td class="muted">— unassigned (no category fit)</td><td class="muted">${sweep.unassigned ?? '?'}</td><td class="muted">stays in "Other"</td></tr>
       </table></div>` : '<div class="muted">No sweep ran (no categories discovered).</div>'}
     </div>`;
+
+  if (run.existingSweep) {
+    const ex = run.existingSweep;
+    const additions = finalS.additionsToExisting || [];
+    html += `
+      <div class="section">
+        <h2>Existing-category sweep (${ex.emailsSwept ?? '?'} leftover emails vs ${(ex.candidateCategories || []).length} existing categories — ${ex.batchErrors || 0} batch errors, ${ex.parseFailures || 0} parse failures)</h2>
+        ${additions.length ? `<div class="table-scroll"><table>
+          <tr><th>Existing category</th><th>Emails suggested to add</th></tr>
+          ${additions.map(c => `<tr><td><b>${esc(c.name)}</b></td><td>${c.emailCount}</td></tr>`).join('')}
+          <tr><td class="muted">— no existing category fit</td><td class="muted">${ex.unassigned ?? '?'}</td></tr>
+        </table></div>` : `<div class="muted">No leftover emails fit an existing category (${ex.unassigned ?? '?'} checked, all stayed in "Other").</div>`}
+        ${(ex.assignments || []).filter(a => a.category).length ? `<details><summary>Per-email additions</summary><div class="table-scroll"><table>
+          <tr><th>Subject</th><th>From</th><th>Existing category</th><th>Reason</th></tr>
+          ${ex.assignments.filter(a => a.category).map(a => `<tr><td>${esc(a.subject)}</td><td class="muted">${esc(a.from)}</td><td><span class="cat-pill">${esc(a.category)}</span></td><td class="muted">${esc(a.reason || '')}</td></tr>`).join('')}
+        </table></div></details>` : ''}
+      </div>`;
+  }
 
   const emailRows = buildEmailRows(run);
   if (emailRows.length) {

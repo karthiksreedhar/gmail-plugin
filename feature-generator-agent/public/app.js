@@ -2261,7 +2261,7 @@ function renderCategorySuggestionsHTML(suggestions) {
     const emailCount = cat.suggestedEmails?.length || 0;
     html += `<button class="category-tab ${i === 0 ? 'active' : ''}" data-category="${escapeHtml(cat.name)}" data-index="${i}">
       <input type="checkbox" class="category-enable-checkbox" data-category="${escapeHtml(cat.name)}" ${categorySelections[cat.name] ? 'checked' : ''}>
-      ${escapeHtml(cat.name)} <span class="tab-count">${emailCount}</span>
+      ${escapeHtml(cat.name)}${cat.kind === 'existing' ? ' <span class="tab-kind-badge existing">existing</span>' : ''} <span class="tab-count">${emailCount}</span>
     </button>`;
   }
   html += '</div>';
@@ -2272,6 +2272,7 @@ function renderCategorySuggestionsHTML(suggestions) {
     const cat = categories[i];
     html += `<div class="category-panel ${i === 0 ? 'active' : ''}" data-category="${escapeHtml(cat.name)}" data-index="${i}">
       <div class="category-info">
+        ${cat.kind === 'existing' ? '<div class="rhs-category-existing-note">➕ Adds emails to this <strong>existing category</strong> — nothing new is created.</div>' : ''}
         <div class="category-description">${escapeHtml(cat.description || '')}</div>
         ${cat.guideline ? `<div class="category-guideline"><strong>Guideline:</strong> ${escapeHtml(cat.guideline)}</div>` : ''}
       </div>
@@ -2608,16 +2609,17 @@ async function handleApproveCategorySuggestions() {
       // Update confirmation to show success
       if (confirmationMsg) {
         const contentDiv = confirmationMsg.querySelector('.confirmation-content');
+        const summaryText = describeCategoryApplyResults(data.summary);
         contentDiv.innerHTML = `
           <div class="confirmation-result success">
-            ✅ <strong>Categories Created!</strong><br>
-            Created ${data.summary.categoriesCreated} categories, moved ${data.summary.emailsMoved} emails.
+            ✅ <strong>Suggestions applied!</strong><br>
+            ${escapeHtml(summaryText.charAt(0).toUpperCase() + summaryText.slice(1))}.
           </div>
         `;
         confirmationMsg.querySelector('.message-avatar').textContent = '✅';
       }
-      
-      showToast(`Created ${data.summary.categoriesCreated} categories!`, 'success');
+
+      showToast(`Done: ${describeCategoryApplyResults(data.summary)}`, 'success');
       closeCategorySuggestions();
     } else {
       throw new Error(data.error || 'Failed to create categories');
@@ -2788,9 +2790,26 @@ function formatCategorySuggestionsForChat(suggestions) {
   const lines = categories.map(cat => {
     const count = Array.isArray(cat.suggestedEmails) ? cat.suggestedEmails.length : 0;
     const desc = cat.description ? ` — ${cat.description}` : '';
-    return `- **${cat.name}** (${count} email${count === 1 ? '' : 's'})${desc}`;
+    const kindNote = cat.kind === 'existing' ? ' _(add to existing category)_' : '';
+    return `- **${cat.name}**${kindNote} (${count} email${count === 1 ? '' : 's'})${desc}`;
   });
-  return `📂 **Found ${categories.length} category suggestion${categories.length === 1 ? '' : 's'} for "Other" emails**\n\n${lines.join('\n')}\n\nReview and approve in the panel on the right →`;
+  const newCount = categories.filter(cat => cat.kind !== 'existing').length;
+  const existingCount = categories.length - newCount;
+  const headParts = [];
+  if (newCount) headParts.push(`${newCount} new categor${newCount === 1 ? 'y' : 'ies'}`);
+  if (existingCount) headParts.push(`${existingCount} addition${existingCount === 1 ? '' : 's'} to existing categories`);
+  return `📂 **Suggestions for "Other" emails: ${headParts.join(' and ')}**\n\n${lines.join('\n')}\n\nReview and approve in the panel on the right →`;
+}
+
+// One-line human summary of an apply response's summary block, shared by the
+// RHS panel and the chat-confirmation approve paths.
+function describeCategoryApplyResults(summary) {
+  const s = summary || {};
+  const parts = [];
+  if (s.categoriesCreated) parts.push(`created ${s.categoriesCreated} new categor${s.categoriesCreated === 1 ? 'y' : 'ies'}`);
+  if (s.categoriesUpdated) parts.push(`added ${s.emailsAddedToExisting || 0} email${(s.emailsAddedToExisting || 0) === 1 ? '' : 's'} to ${s.categoriesUpdated} existing categor${s.categoriesUpdated === 1 ? 'y' : 'ies'}`);
+  parts.push(`moved ${s.emailsMoved || 0} email${(s.emailsMoved || 0) === 1 ? '' : 's'} in total`);
+  return parts.join(', ');
 }
 
 // Trigger category suggestions: ask which pipeline variant to run first
@@ -2898,7 +2917,12 @@ function showRHSCategorySuggestionPanel(suggestions) {
   
   // Update panel info
   const totalEmails = suggestions.categories.reduce((sum, cat) => sum + (cat.suggestedEmails?.length || 0), 0);
-  rhsPanelInfo.textContent = `${suggestions.categories.length} categories, ${totalEmails} emails from "Other"`;
+  const newCount = suggestions.categories.filter(cat => cat.kind !== 'existing').length;
+  const existingCount = suggestions.categories.length - newCount;
+  const parts = [];
+  if (newCount) parts.push(`${newCount} new categor${newCount === 1 ? 'y' : 'ies'}`);
+  if (existingCount) parts.push(`${existingCount} existing categor${existingCount === 1 ? 'y' : 'ies'} to add to`);
+  rhsPanelInfo.textContent = `${parts.join(', ')} — ${totalEmails} emails from "Other"`;
   
   // Generate tabs
   generateRHSTabs(suggestions.categories);
@@ -2932,6 +2956,7 @@ function generateRHSTabs(categories) {
     tab.innerHTML = `
       <input type="checkbox" class="rhs-category-enable-checkbox" data-category="${escapeHtml(cat.name)}" ${rhsCategorySelections[cat.name] ? 'checked' : ''}>
       <span class="tab-name">${escapeHtml(cat.name)}</span>
+      ${cat.kind === 'existing' ? '<span class="tab-kind-badge existing" title="Adds emails to a category you already have">existing</span>' : '<span class="tab-kind-badge new" title="Creates a new category">new</span>'}
       <span class="tab-count">${cat.suggestedEmails?.length || 0}</span>
     `;
     
@@ -2963,10 +2988,11 @@ function generateRHSPanels(categories) {
     
     panel.innerHTML = `
       <div class="rhs-category-info">
+        ${cat.kind === 'existing' ? '<div class="rhs-category-existing-note">➕ These emails would be <strong>added to your existing category</strong> — no new category will be created, and its guideline/summary stay unchanged.</div>' : ''}
         <div class="rhs-category-description">${escapeHtml(cat.description || '')}</div>
         ${cat.guideline ? `<div class="rhs-category-guideline"><strong>Classification:</strong> ${escapeHtml(cat.guideline)}</div>` : ''}
       </div>
-      
+
       <div class="rhs-select-all-row">
         <label class="rhs-checkbox-label">
           <input type="checkbox" class="rhs-select-all-checkbox" data-category="${escapeHtml(cat.name)}" checked>
@@ -3306,10 +3332,11 @@ async function handleRHSApprove() {
     
     if (data.success) {
       closeRHSPanel();
-      showToast(`Created ${data.summary.categoriesCreated} categories, moved ${data.summary.emailsMoved} emails!`, 'success');
-      
+      const summaryText = describeCategoryApplyResults(data.summary);
+      showToast(`Done: ${summaryText}`, 'success');
+
       // Add success message to chat
-      addMessage('assistant', `✅ **Categories created successfully!**\n\nCreated ${data.summary.categoriesCreated} new categories and moved ${data.summary.emailsMoved} emails from "Other".`);
+      addMessage('assistant', `✅ **Category suggestions applied!**\n\n${summaryText.charAt(0).toUpperCase()}${summaryText.slice(1)}.`);
     } else {
       throw new Error(data.error || 'Failed to create categories');
     }
