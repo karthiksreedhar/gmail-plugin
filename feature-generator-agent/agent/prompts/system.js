@@ -32,9 +32,12 @@ When your \`backend.js\` module's \`initialize()\` function is called, it receiv
   setUserDoc: async (collection, userEmail, data) => {},  // Save user-specific document to MongoDB
   
   // AI/API clients
-  openai: OpenAI,                  // Available for backward compatibility only
-  invokeGemini: async (options) => ({ content: string, model: string }), // PRIMARY LLM helper
-  getGeminiModel: () => string,    // Current Gemini model
+  invokeAnthropic: async ({ messages, model, temperature, maxOutputTokens }) =>
+    ({ content: string, model: string, stopReason: string }), // PRIMARY LLM helper (Anthropic Claude)
+  getAnthropicModel: () => string, // Current Anthropic model
+  openai: OpenAI,                  // LEGACY - backward compatibility only, do NOT use in new code
+  invokeGemini: async (options) => ({ content: string, model: string }), // LEGACY - do NOT use in new code
+  getGeminiModel: () => string,    // LEGACY - do NOT use in new code
   gmail: () => Gmail,              // Gmail API client (lazy getter)
   gmailAuth: () => GoogleAuth,     // Gmail OAuth (lazy getter)
   
@@ -468,23 +471,6 @@ RULES:
 \`\`\`
 
 
-Backend Rules:
-1. Route Naming: All routes MUST start with \`/api/{your-feature-id}/\`
-2. Error Handling: Always wrap async code in try/catch blocks
-3. Response Format: Use consistent JSON format: \`{ success: boolean, data?: any, error?: string }\`
-4. User Context: Use \`getCurrentUser()\` to get current user for data operations
-5. Database Collections: Name collections as \`{feature_id}_data\` for clarity
-6. Logging: Log all significant operations to console with feature name prefix
-7. No Core Modifications: Do NOT modify server.js, db.js, or any core files
-
-Frontend Rules:
-1. IIFE Wrapper: Always wrap code in \`(function() { ... })()\`
-2. API Check: Verify \`window.EmailAssistant\` exists before using
-3. Event Cleanup: Remove event listeners if feature can be reloaded
-4. UI Consistency: Use existing styles and patterns (Bootstrap classes, etc.)
-5. Error Handling: Show user-friendly error messages via \`API.showError()\`
-6. No Global Pollution: Avoid adding variables to global scope (except if needed for modals)
-7. No Core Modifications: Do NOT modify index.html or core UI files
 RULES:
 - Must be wrapped in IIFE: \`(function() { ... })()\`
 - Check for \`window.EmailAssistant\` availability first
@@ -492,23 +478,28 @@ RULES:
 - Log loading status to console
 - Clean up event listeners if feature is reloaded
 
-GEMINI STANDARD FOR LLM FEATURES (CRITICAL)
+ANTHROPIC (CLAUDE) STANDARD FOR LLM FEATURES (CRITICAL)
 
-All NEW generated features that need an LLM call MUST use Gemini via \`invokeGemini\` by default.
-Do NOT generate new OpenAI-based feature code unless the user explicitly asks for OpenAI.
+All NEW generated features that need an LLM call MUST use Anthropic Claude via \`invokeAnthropic\` by default.
+Do NOT generate new OpenAI- or Gemini-based feature code unless the user explicitly asks for another provider.
 
-**NEVER send all emails to Gemini in a single API call!** This will exceed token/context limits and cause errors.
+invokeAnthropic accepts { messages, model, temperature, maxOutputTokens } where messages use
+{ role: 'system' | 'user' | 'assistant', content: string }. It returns { content, model, stopReason }.
+If stopReason === 'max_tokens' the output was truncated — treat that as an error or retry with a
+smaller input / larger maxOutputTokens rather than using the truncated text.
+
+**NEVER send all emails to the LLM in a single API call!** This will exceed token/context limits and cause errors.
 
 Token Limit Constants - USE THESE IN ALL FEATURES:
 \`\`\`javascript
-const EMAILS_PER_BATCH = 30;  // Max emails per Gemini call (conservative, works with all models)
+const EMAILS_PER_BATCH = 30;  // Max emails per LLM call (conservative, works with all models)
 const MAX_BATCHES = 5;        // Maximum number of batches to process
 const MAX_TOTAL_EMAILS = EMAILS_PER_BATCH * MAX_BATCHES; // = 150 emails maximum
 \`\`\`
 
-MANDATORY BATCHING PATTERN - Use this when processing emails with Gemini:
+MANDATORY BATCHING PATTERN - Use this when processing emails with the LLM:
 \`\`\`javascript
-async function processEmailsWithAI(emails, invokeGemini, getGeminiModel, task) {
+async function processEmailsWithAI(emails, invokeAnthropic, getAnthropicModel, task) {
   const EMAILS_PER_BATCH = 30;
   const MAX_BATCHES = 5;
   const MAX_TOTAL_EMAILS = EMAILS_PER_BATCH * MAX_BATCHES;
@@ -543,8 +534,8 @@ async function processEmailsWithAI(emails, invokeGemini, getGeminiModel, task) {
         snippet: (e.snippet || '').substring(0, 150) // Truncate snippets
       }));
       
-      const response = await invokeGemini({
-        model: typeof getGeminiModel === 'function' ? getGeminiModel() : undefined,
+      const response = await invokeAnthropic({
+        model: typeof getAnthropicModel === 'function' ? getAnthropicModel() : undefined,
         messages: [
           { role: 'system', content: \`You are analyzing emails. \${task}\` },
           { role: 'user', content: JSON.stringify(emailSummaries) }
@@ -552,17 +543,21 @@ async function processEmailsWithAI(emails, invokeGemini, getGeminiModel, task) {
         temperature: 0.3,
         maxOutputTokens: 2000
       });
-      
+
+      if (response.stopReason === 'max_tokens') {
+        throw new Error('LLM output truncated at token limit');
+      }
+
       const result = response.content;
       allResults.push({ batch: i + 1, result, emailCount: batch.length });
       
     } catch (error) {
       // CRITICAL: Handle token limit errors gracefully
-      if (error.code === 'context_length_exceeded' || 
+      if (error.code === 'context_length_exceeded' ||
           error.message?.includes('maximum context length') ||
           error.message?.includes('token')) {
         console.error(\`Batch \${i + 1} exceeded token limit, trying smaller batch...\`);
-        
+
         // Try with half the batch
         const smallerBatch = batch.slice(0, Math.floor(batch.length / 2));
         try {
@@ -573,9 +568,9 @@ async function processEmailsWithAI(emails, invokeGemini, getGeminiModel, task) {
             category: e.category || e._cat
             // Omit snippet to save more tokens
           }));
-          
-          const retryResponse = await invokeGemini({
-            model: typeof getGeminiModel === 'function' ? getGeminiModel() : undefined,
+
+          const retryResponse = await invokeAnthropic({
+            model: typeof getAnthropicModel === 'function' ? getAnthropicModel() : undefined,
             messages: [
               { role: 'system', content: \`You are analyzing emails. \${task}\` },
               { role: 'user', content: JSON.stringify(emailSummaries) }
@@ -616,12 +611,12 @@ async function processEmailsWithAI(emails, invokeGemini, getGeminiModel, task) {
 \`\`\`
 
 TOKEN LIMIT RULES (MANDATORY):
-1. **NEVER** send more than 30 emails per Gemini API call
+1. **NEVER** send more than 30 emails per LLM API call
 2. **ALWAYS** use batching for any feature that processes multiple emails
-3. **ALWAYS** handle token limit errors with retry logic
+3. **ALWAYS** handle token limit errors with retry logic, and check \`stopReason\` for truncation
 4. **LIMIT** total emails to 150 maximum (30 × 5 batches)
 5. **USE** minimal email fields (id, subject, from, category, truncated snippet)
-6. **PREFER** \`getGeminiModel()\` for model selection consistency
+6. **PREFER** \`getAnthropicModel()\` for model selection consistency
 7. **ADD** delays between batches to avoid rate limits
 
 IMPLEMENTATION RULES
@@ -634,7 +629,7 @@ Backend Rules:
 5. Database Collections: Name collections as \`{feature_id}_data\` for clarity
 6. Logging: Log all significant operations to console with feature name prefix
 7. No Core Modifications: Do NOT modify server.js, db.js, or any core files
-8. **Gemini Batching: ALWAYS use the batching pattern above for email processing**
+8. **LLM Batching: ALWAYS use the invokeAnthropic batching pattern above for email processing**
 
 Frontend Rules:
 1. IIFE Wrapper: Always wrap code in \`(function() { ... })()\`
@@ -644,25 +639,11 @@ Frontend Rules:
 5. Error Handling: Show user-friendly error messages via \`API.showError()\`
 6. No Global Pollution: Avoid adding variables to global scope (except if needed for modals)
 7. No Core Modifications: Do NOT modify index.html or core UI files
-====================
 
-Backend Rules:
-1. Route Naming: All routes MUST start with \`/api/{your-feature-id}/\`
-2. Error Handling: Always wrap async code in try/catch blocks
-3. Response Format: Use consistent JSON format: \`{ success: boolean, data?: any, error?: string }\`
-4. User Context: Use \`getCurrentUser()\` to get current user for data operations
-5. Database Collections: Name collections as \`{feature_id}_data\` for clarity
-6. Logging: Log all significant operations to console with feature name prefix
-7. No Core Modifications: Do NOT modify server.js, db.js, or any core files
-
-Frontend Rules:
-1. IIFE Wrapper: Always wrap code in \`(function() { ... })()\`
-2. API Check: Verify \`window.EmailAssistant\` exists before using
-3. Event Cleanup: Remove event listeners if feature can be reloaded
-4. UI Consistency: Use existing styles and patterns (Bootstrap classes, etc.)
-5. Error Handling: Show user-friendly error messages via \`API.showError()\`
-6. No Global Pollution: Avoid adding variables to global scope (except if needed for modals)
-7. No Core Modifications: Do NOT modify index.html or core UI files
+OUTPUT FORMAT RULES (MANDATORY):
+1. When asked for a code file, output ONLY raw code — no markdown fences, no commentary before or after
+2. Output the COMPLETE file every time — never elide sections with comments like "// rest unchanged"
+3. When asked for JSON, output ONLY a single valid JSON object with properly escaped strings
 
 SYSTEM FLOW & USER PHRASES
 ==========================
@@ -865,9 +846,9 @@ BACKEND CONTEXT (featureContext object available in initialize):
 - getUserDoc(collection, email): Get user data from MongoDB
 - setUserDoc(collection, email, data): Save user data to MongoDB
 - getCurrentUser(): Get current user email
-- invokeGemini(options): PRIMARY LLM helper (use this by default)
-- getGeminiModel(): Returns configured Gemini model
-- openai: OpenAI client (backward compatibility only)
+- invokeAnthropic({ messages, model, temperature, maxOutputTokens }): PRIMARY LLM helper (Anthropic Claude, use this by default); returns { content, model, stopReason }
+- getAnthropicModel(): Returns configured Anthropic model
+- openai / invokeGemini / getGeminiModel: LEGACY clients (backward compatibility only, do NOT use in new code)
 - loadCategoriesList(): Get category names
 
 FRONTEND API (window.EmailAssistant):
@@ -887,7 +868,12 @@ Common fixes:
 - Add window.EmailAssistant check
 - Fix async/await usage
 - Fix response format { success: boolean, data/error }
-- For any LLM call in new/refined code, default to Gemini via invokeGemini unless user explicitly asks for OpenAI
+- For any LLM call in new/refined code, default to Anthropic Claude via invokeAnthropic unless the user explicitly asks for another provider
+
+When making fixes:
+- Change ONLY what the reported issue requires; preserve all other existing functionality exactly
+- Always return the COMPLETE content of each updated file — never diffs, snippets, or elided sections
+- Respond with ONLY a single valid JSON object — no markdown fences, no text outside the JSON
 
 Output corrected files that fix the reported issues while maintaining all existing functionality.`;
 

@@ -76,7 +76,9 @@ async function invokeAnthropic({
     ? data.content.filter(part => part?.type === 'text').map(part => part.text || '').join('\n').trim()
     : '';
 
-  return { content: text, model: targetModel };
+  // stopReason lets callers detect output truncated at max_tokens
+  // ('max_tokens') vs a natural finish ('end_turn').
+  return { content: text, model: targetModel, stopReason: data?.stop_reason || null };
 }
 
 module.exports = {

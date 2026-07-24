@@ -1,23 +1,42 @@
 /**
  * Feature Generator Agent
- * Gemini-based agent for generating Gmail Plugin features
+ * Anthropic-based agent for generating Gmail Plugin features
  */
 
 const { systemPrompt, refinementPrompt } = require('./prompts/system');
-const { invokeGemini, getGeminiModel } = require('../gemini');
+const { invokeAnthropic, getAnthropicModel } = require('../anthropic');
+
+const MAX_RETRY_OUTPUT_TOKENS = 32000;
 
 class FeatureGeneratorAgent {
   constructor() {
-    this.modelName = getGeminiModel();
+    this.modelName = getAnthropicModel();
   }
 
   async invoke(messages, temperature = 0.2, maxOutputTokens = 8192) {
-    return invokeGemini({
+    let result = await invokeAnthropic({
       messages,
       model: this.modelName,
       temperature,
       maxOutputTokens
     });
+
+    // A response cut off at max_tokens would silently produce broken code —
+    // retry once with a larger budget, and fail loudly if it still truncates.
+    if (result.stopReason === 'max_tokens' && maxOutputTokens < MAX_RETRY_OUTPUT_TOKENS) {
+      console.warn(`⚠️ Output truncated at ${maxOutputTokens} tokens, retrying with a larger budget...`);
+      result = await invokeAnthropic({
+        messages,
+        model: this.modelName,
+        temperature,
+        maxOutputTokens: MAX_RETRY_OUTPUT_TOKENS
+      });
+    }
+    if (result.stopReason === 'max_tokens') {
+      throw new Error('Model output was truncated at the maximum token limit. Try a simpler or more focused feature request.');
+    }
+
+    return result;
   }
 
   /**
@@ -53,7 +72,7 @@ class FeatureGeneratorAgent {
     if (analysis.needsFrontend) {
       console.log('📄 Generating frontend.js...');
       response += '✅ Generating frontend.js...\n';
-      files['frontend.js'] = await this.generateFrontend(analysis, featureRequest);
+      files['frontend.js'] = await this.generateFrontend(analysis, featureRequest, files['backend.js']);
     }
 
     // Step 5: Generate README.md
@@ -101,7 +120,7 @@ User Feedback/Issue:
 ${feedback}
 
 Based on the feedback, analyze what needs to be fixed and provide the corrected file(s).
-Respond in this JSON format:
+Respond with ONLY a single JSON object (no markdown fences, no text before or after) in this format:
 {
   "analysis": "Brief analysis of the issue",
   "filesToUpdate": ["list of files that need updating"],
@@ -111,6 +130,7 @@ Respond in this JSON format:
     ...only include files that need changes
   }
 }
+File contents must be complete files (never diffs or snippets), with all newlines and quotes properly escaped as JSON string values.
 `}
     ];
 
@@ -119,7 +139,7 @@ Respond in this JSON format:
     // Parse the response
     let parsed;
     try {
-      const content = result.content;
+      const content = this.cleanCodeResponse(result.content);
       const jsonMatch = content.match(/\{[\s\S]*\}/);
       if (jsonMatch) {
         parsed = JSON.parse(jsonMatch[0]);
@@ -253,11 +273,13 @@ Requirements:
 1. Export a module with an initialize(context) function
 2. All routes must start with /api/${analysis.featureId}/
 3. Use proper error handling with try/catch
-4. Use the featureContext methods appropriately (getUserDoc, setUserDoc, openai, etc.)
-5. Include proper console logging with the feature name prefix
-6. Return consistent JSON response format: { success: boolean, data?: any, error?: string }
+4. Use the featureContext methods appropriately (getUserDoc, setUserDoc, getCurrentUser, etc.)
+5. If the feature needs an LLM call, use invokeAnthropic with the mandatory batching pattern from the architecture docs
+6. Include proper console logging with the feature name prefix
+7. Return consistent JSON response format: { success: boolean, data?: any, error?: string }
+8. Destructure ONLY the context properties you actually use, and never assume undocumented properties exist
 
-Output ONLY the JavaScript code, no markdown code blocks, no explanation.` }
+Output ONLY the JavaScript code. Start with the first line of code — no markdown code blocks, no explanation before or after.` }
     ];
 
     const result = await this.invoke(messages);
@@ -267,7 +289,7 @@ Output ONLY the JavaScript code, no markdown code blocks, no explanation.` }
   /**
    * Generate frontend.js
    */
-  async generateFrontend(analysis, featureRequest) {
+  async generateFrontend(analysis, featureRequest, backendCode) {
     const messages = [
       { role: 'system', content: systemPrompt },
       { role: 'user', content: `Generate ONLY the frontend.js file for this feature:
@@ -278,7 +300,13 @@ Description: ${analysis.description}
 
 Full Feature Request:
 ${featureRequest}
+${backendCode ? `
+The backend.js for this feature has already been generated. Your frontend MUST call the exact routes it registers, with matching methods and request/response shapes:
 
+--- backend.js ---
+${backendCode}
+--- end backend.js ---
+` : ''}
 Requirements:
 1. Wrap all code in an IIFE: (function() { ... })();
 2. Check for window.EmailAssistant availability first
@@ -290,7 +318,7 @@ Requirements:
 8. Include proper console logging with feature name prefix
 9. Listen to events as needed: API.on('emailsLoaded', callback)
 
-Output ONLY the JavaScript code, no markdown code blocks, no explanation.` }
+Output ONLY the JavaScript code. Start with the first line of code — no markdown code blocks, no explanation before or after.` }
     ];
 
     const result = await this.invoke(messages);
@@ -344,7 +372,7 @@ Output ONLY the markdown content, no code blocks wrapping it.` }
   cleanCodeResponse(content) {
     // Remove markdown code blocks
     let cleaned = content
-      .replace(/^```(?:javascript|js)?\n?/gm, '')
+      .replace(/^```[a-zA-Z]*\n?/gm, '')
       .replace(/```$/gm, '')
       .trim();
 
