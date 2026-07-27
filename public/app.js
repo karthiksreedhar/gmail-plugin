@@ -2172,6 +2172,10 @@ async function updateEmailCategory(emailId, newCategory, oldCategory) {
                 if (subjectInput) subjectInput.value = subj;
                 if (emailBodyInput) emailBodyInput.value = body;
 
+                // Remember which Gmail message this reply targets so Send can
+                // thread it into the same conversation server-side.
+                window.gcReplyTarget = { messageId: latestIncoming.id || '', subject: subj };
+
                 // Recipient chip: show the sender's display name, keep the raw
                 // address available for the fallback text input.
                 const addrMatch = from.match(/<?([A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})>?/i);
@@ -2250,20 +2254,94 @@ async function updateEmailCategory(emailId, newCategory, oldCategory) {
             if (input) { input.style.display = 'inline-block'; input.focus(); }
         }
 
-        // No Gmail send integration exists yet, so Send hands the draft to the
-        // clipboard rather than silently doing nothing.
+        // Send the drafted reply through the server's Gmail integration.
+        // Always confirms with the user first and guards against double-sends.
+        let gcSendInFlight = false;
         function gcSendReply() {
-            const body = document.getElementById('gcBody');
-            const text = body ? body.innerText.trim() : '';
+            const bodyEl = document.getElementById('gcBody');
+            const text = bodyEl ? bodyEl.innerText.trim() : '';
             if (!text) {
                 showErrorPopup('Write or generate a reply first.', 'Empty Reply');
                 return;
             }
-            navigator.clipboard.writeText(text).then(() => {
-                showSuccessPopup('Sending from here isn\'t connected to Gmail yet, so the reply was copied to your clipboard instead.', 'Reply Copied');
-            }).catch(() => {
-                showErrorPopup('Could not copy the reply to the clipboard.', 'Copy Failed');
-            });
+
+            const to = (document.getElementById('gcToInput')?.value || '').trim();
+            if (!to) {
+                showErrorPopup('Add at least one recipient before sending.', 'No Recipient');
+                return;
+            }
+            const cc = (document.getElementById('gcCcInput')?.value || '').trim();
+            const bcc = (document.getElementById('gcBccInput')?.value || '').trim();
+            const subject = (document.getElementById('subjectInput')?.value || '').trim();
+
+            const preview = text.length > 200 ? text.slice(0, 200) + '…' : text;
+            const recipientSummary = to + (cc ? ` (cc: ${cc})` : '') + (bcc ? ` (bcc: ${bcc})` : '');
+            showConfirmPopup(
+                `Send this reply to ${escapeHtml(recipientSummary)}?<br><br><em>"${escapeHtml(preview)}"</em>`,
+                () => gcPerformSend({ to, cc, bcc, subject, body: text }),
+                () => {},
+                'Send Email?'
+            );
+        }
+
+        async function gcPerformSend(payload) {
+            if (gcSendInFlight) return;
+            gcSendInFlight = true;
+            const sendBtn = document.querySelector('.gc-send-btn');
+            const prevLabel = sendBtn ? sendBtn.textContent : '';
+            if (sendBtn) { sendBtn.disabled = true; sendBtn.textContent = 'Sending…'; }
+            try {
+                const replyTarget = window.gcReplyTarget || {};
+                const resp = await fetch('/api/send-email', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ ...payload, replyToMessageId: replyTarget.messageId || '' })
+                });
+                const data = await resp.json().catch(() => ({}));
+
+                if (resp.status === 401 && data && data.needsAuth) {
+                    showErrorPopup('Gmail authorization is missing or expired. Sign in again, then retry sending — your draft is still in the composer.', 'Sign In Required');
+                    return;
+                }
+                if (!resp.ok || !data.success) {
+                    showErrorPopup(escapeHtml(data.error || 'The email could not be sent.'), 'Send Failed');
+                    return;
+                }
+
+                // Reflect the sent reply in the open thread and reset the composer
+                try {
+                    const ctx = window.currentThreadContext;
+                    if (ctx && Array.isArray(ctx.messages)) {
+                        ctx.messages.push({
+                            id: data.messageId || ('sent-' + Date.now()),
+                            from: getActualCurrentUserEmail() || 'Me',
+                            to: [payload.to],
+                            date: new Date().toISOString(),
+                            subject: data.subject || payload.subject,
+                            body: escapeHtml(payload.body).replace(/\n/g, '<br>'),
+                            isResponse: true
+                        });
+                        renderThreadInPane(ctx.subject, ctx.messages, (ctx.categories || [])[0] || '');
+                    }
+                } catch (_) {}
+                const gcBody = document.getElementById('gcBody');
+                if (gcBody) gcBody.innerHTML = '';
+                const composer = document.getElementById('inlineReplyCompose');
+                if (composer) composer.style.display = 'none';
+
+                showSuccessPopup(
+                    data.threaded
+                        ? 'Your reply was sent and added to the conversation.'
+                        : 'Your email was sent. (It could not be attached to the original conversation, so it went out as a new email.)',
+                    'Email Sent'
+                );
+            } catch (e) {
+                console.error('gcPerformSend failed:', e);
+                showErrorPopup('Network error while sending the email. The draft is still in the composer.', 'Send Failed');
+            } finally {
+                gcSendInFlight = false;
+                if (sendBtn) { sendBtn.disabled = false; sendBtn.textContent = prevLabel || 'Send'; }
+            }
         }
 
         function closeModal() {

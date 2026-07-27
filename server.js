@@ -5623,6 +5623,160 @@ app.get('/api/gmail-thread-by-message/:id', async (req, res) => {
   }
 });
 
+// ---------------------------------------------------------------------------
+// Sending email via the Gmail API
+// ---------------------------------------------------------------------------
+
+// Parse a comma-separated recipient string ("Name <a@b.c>, d@e.f") into
+// header-safe entries. Every entry must contain a valid address; anything
+// that doesn't parse is reported back instead of being silently dropped.
+function parseRecipientList(raw) {
+  const text = String(raw || '').trim();
+  if (!text) return { entries: [], invalid: [] };
+  const entries = [];
+  const invalid = [];
+  const addressPattern = /<?([A-Z0-9._%+\-']+@[A-Z0-9.-]+\.[A-Z]{2,})>?\s*$/i;
+  for (const part of text.split(',').map(p => p.trim()).filter(Boolean)) {
+    const match = part.match(addressPattern);
+    if (!match) { invalid.push(part); continue; }
+    const address = match[1];
+    // Optional display name, stripped of characters that could break or inject headers
+    let name = part.slice(0, match.index).replace(/^"|"$/g, '').replace(/[\r\n"<>]/g, '').trim();
+    entries.push(name ? `"${encodeMimeHeaderText(name)}" <${address}>` : address);
+  }
+  return { entries, invalid };
+}
+
+// RFC 2047 encoding for non-ASCII header text; also strips CR/LF so user
+// input can never smuggle extra headers into the message.
+function encodeMimeHeaderText(value) {
+  const clean = String(value || '').replace(/[\r\n]+/g, ' ').trim();
+  if (/^[\x20-\x7e]*$/.test(clean)) return clean;
+  return `=?UTF-8?B?${Buffer.from(clean, 'utf8').toString('base64')}?=`;
+}
+
+function base64UrlEncode(str) {
+  return Buffer.from(str, 'utf8').toString('base64')
+    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+/**
+ * Send an email as the authenticated user. When replyToMessageId resolves to
+ * a real Gmail message, the send is threaded into that conversation
+ * (threadId + In-Reply-To/References); otherwise it goes out as a new email.
+ */
+app.post('/api/send-email', async (req, res) => {
+  try {
+    const { to, cc, bcc, subject, body, replyToMessageId } = req.body || {};
+
+    const bodyText = String(body || '').replace(/\r\n/g, '\n').trim();
+    if (!bodyText) {
+      return res.status(400).json({ success: false, error: 'Message body is empty' });
+    }
+    if (bodyText.length > 200000) {
+      return res.status(400).json({ success: false, error: 'Message body is too long' });
+    }
+
+    const toParsed = parseRecipientList(to);
+    const ccParsed = parseRecipientList(cc);
+    const bccParsed = parseRecipientList(bcc);
+    const badEntries = [...toParsed.invalid, ...ccParsed.invalid, ...bccParsed.invalid];
+    if (badEntries.length) {
+      return res.status(400).json({ success: false, error: `Invalid recipient address: ${badEntries.join(', ')}` });
+    }
+    if (!toParsed.entries.length) {
+      return res.status(400).json({ success: false, error: 'At least one valid To recipient is required' });
+    }
+
+    // Per-request Gmail client for the session's own user (same reasoning as
+    // /api/gmail-thread-by-message: the shared singleton may belong to someone else).
+    const userEmail = getEffectiveUserEmailForRequest(req);
+    const { gmailClient, reason } = await buildGmailClientForUser(userEmail);
+    if (!gmailClient) {
+      return gmailAuthRedirectOrJson(req, res, 401, reason || 'Gmail authentication required');
+    }
+
+    // Resolve the message being replied to so Gmail threads the reply into the
+    // same conversation. Stored threads use real Gmail message ids, but legacy
+    // records prefix them with "original-" and seeded demo data uses ids Gmail
+    // has never seen -- try candidates in order and fall back to an
+    // un-threaded send instead of failing.
+    let threadId = null;
+    let inReplyTo = '';
+    let references = '';
+    let originalSubject = '';
+    const rawReplyId = String(replyToMessageId || '').trim();
+    const candidateIds = rawReplyId ? [rawReplyId] : [];
+    if (rawReplyId.startsWith('original-')) candidateIds.push(rawReplyId.slice('original-'.length));
+    for (const candidate of candidateIds) {
+      try {
+        const orig = await gmailClient.users.messages.get({
+          userId: 'me',
+          id: candidate,
+          format: 'metadata',
+          metadataHeaders: ['Message-ID', 'References', 'Subject']
+        });
+        const headers = orig?.data?.payload?.headers || [];
+        const header = (name) => headers.find(h => h.name && h.name.toLowerCase() === name.toLowerCase())?.value || '';
+        threadId = orig?.data?.threadId || null;
+        inReplyTo = header('Message-ID');
+        references = [header('References'), inReplyTo].filter(Boolean).join(' ');
+        originalSubject = header('Subject');
+        break;
+      } catch (_) {
+        // Candidate id unknown to Gmail; try the next one (or send un-threaded)
+      }
+    }
+
+    let finalSubject = String(subject || '').replace(/[\r\n]+/g, ' ').trim() || originalSubject;
+    if (threadId && finalSubject && !/^re:/i.test(finalSubject)) {
+      finalSubject = `Re: ${finalSubject}`;
+    }
+
+    const headerLines = [`To: ${toParsed.entries.join(', ')}`];
+    if (ccParsed.entries.length) headerLines.push(`Cc: ${ccParsed.entries.join(', ')}`);
+    if (bccParsed.entries.length) headerLines.push(`Bcc: ${bccParsed.entries.join(', ')}`);
+    headerLines.push(`Subject: ${encodeMimeHeaderText(finalSubject || '(no subject)')}`);
+    if (inReplyTo) headerLines.push(`In-Reply-To: ${inReplyTo}`);
+    if (references) headerLines.push(`References: ${references}`);
+    headerLines.push('MIME-Version: 1.0');
+    headerLines.push('Content-Type: text/plain; charset="UTF-8"');
+    headerLines.push('Content-Transfer-Encoding: base64');
+
+    // Body is base64 (wrapped at 76 chars) so UTF-8 content and long lines are
+    // always MIME-safe. Gmail sets the From header to the authenticated user.
+    const encodedBody = Buffer.from(bodyText.replace(/\n/g, '\r\n'), 'utf8')
+      .toString('base64').replace(/(.{76})/g, '$1\r\n');
+    const mimeMessage = headerLines.join('\r\n') + '\r\n\r\n' + encodedBody;
+
+    const sendResp = await gmailClient.users.messages.send({
+      userId: 'me',
+      requestBody: threadId
+        ? { raw: base64UrlEncode(mimeMessage), threadId }
+        : { raw: base64UrlEncode(mimeMessage) }
+    });
+
+    console.log(`Sent email for ${userEmail}: message ${sendResp?.data?.id}${threadId ? ` in thread ${threadId}` : ' (new thread)'}`);
+    return res.json({
+      success: true,
+      messageId: sendResp?.data?.id || null,
+      threadId: sendResp?.data?.threadId || threadId || null,
+      threaded: !!threadId,
+      subject: finalSubject || '(no subject)'
+    });
+  } catch (e) {
+    console.error('Error sending email:', e);
+    const status = Number(e?.response?.status || e?.code || 0);
+    const apiMessage = e?.response?.data?.error?.message || e?.message || '';
+    // Tokens granted before the gmail.send scope was added can't send -- ask
+    // the user to re-authenticate rather than surfacing an opaque 403.
+    if (status === 403 && /insufficient|scope/i.test(apiMessage)) {
+      return gmailAuthRedirectOrJson(req, res, 401, 'Gmail authorization does not include sending. Please sign in again to grant it.');
+    }
+    return res.status(500).json({ success: false, error: apiMessage ? `Failed to send email: ${apiMessage}` : 'Failed to send email' });
+  }
+});
+
 // API endpoint to load email threads using Gmail API
 app.post('/api/load-email-threads', async (req, res) => {
   try {
