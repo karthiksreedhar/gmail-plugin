@@ -1301,6 +1301,63 @@
         }
         .gmail-compose-card .gc-generate-btn:hover { background: #f0f4fe; }
         .gmail-compose-card .gc-generate-btn:disabled { opacity: .6; cursor: default; }
+
+        /* Sidebar Send button + fresh-compose popup (mirrors the reply composer) */
+        .compose-send-btn {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            background: #c2e7ff;
+            color: #001d35;
+            border: none;
+            border-radius: 16px;
+            padding: 12px 20px;
+            font-size: 14px;
+            font-weight: 500;
+            font-family: inherit;
+            cursor: pointer;
+            box-shadow: 0 1px 2px rgba(60,64,67,.3);
+            margin: 4px 0 14px 0;
+        }
+        .compose-send-btn:hover { box-shadow: 0 1px 3px 1px rgba(60,64,67,.35); background: #b3ddf9; }
+        .compose-popup {
+            position: fixed;
+            bottom: 0;
+            right: 24px;
+            width: 510px;
+            max-width: calc(100vw - 48px);
+            z-index: 2000;
+            border-radius: 16px 16px 0 0;
+            box-shadow: 0 8px 24px rgba(60,64,67,.35);
+            background: #fff;
+            overflow: hidden;
+        }
+        .compose-popup-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            background: #f2f6fc;
+            color: #041e49;
+            font-size: 14px;
+            font-weight: 500;
+            padding: 10px 16px;
+        }
+        .compose-popup-close {
+            border: none;
+            background: none;
+            color: #444746;
+            font-size: 20px;
+            line-height: 1;
+            cursor: pointer;
+            padding: 0 4px;
+        }
+        .compose-popup-close:hover { color: #000; }
+        .compose-popup .gmail-compose-card {
+            border: none;
+            border-radius: 0;
+            box-shadow: none;
+        }
+        .compose-popup .gc-body { min-height: 180px; }
         .gc-icon-btn {
             border: none;
             background: none;
@@ -3235,6 +3292,10 @@
         <div class="main-content">
             <!-- Left Sidebar -->
             <div class="sidebar">
+                <button id="composeSendBtn" class="compose-send-btn" type="button" onclick="openComposeEmail()" title="Send a new email">
+                    <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M3 5.5v13c0 .83.67 1.5 1.5 1.5h15c.83 0 1.5-.67 1.5-1.5v-13c0-.83-.67-1.5-1.5-1.5h-15C3.67 4 3 4.67 3 5.5zm16.06.5L12 10.56 4.94 6h14.12zM5 18V7.83l7 4.52 7-4.52V18H5z"/></svg>
+                    Send
+                </button>
                 <div class="sidebar-section">
                     <div class="sidebar-title-row">
                         <h3>User Specified Categories</h3>

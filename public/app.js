@@ -2363,6 +2363,131 @@ async function updateEmailCategory(emailId, newCategory, oldCategory) {
             }
         }
 
+        // --- Fresh compose (sidebar Send button) ---
+        // Mirrors the reply composer's look but starts blank and sends without
+        // reply threading. Uses its own element ids so it can coexist with the
+        // inline reply composer.
+        function openComposeEmail() {
+            let container = document.getElementById('composeEmailContainer');
+            if (!container) {
+                container = document.createElement('div');
+                container.id = 'composeEmailContainer';
+                container.className = 'compose-popup';
+                container.innerHTML = `
+                    <div class="compose-popup-header">
+                        <span>New Message</span>
+                        <button type="button" class="compose-popup-close" onclick="closeComposeEmail()" title="Close (draft is kept)">&times;</button>
+                    </div>
+                    <div class="gmail-compose-card">
+                        <div class="gc-row gc-cc-row">
+                            <span class="gc-cc-label">To</span>
+                            <input type="text" id="composeToInput" class="gc-plain-input" placeholder="Recipients">
+                            <button type="button" class="gc-bcc-toggle" onclick="composeToggleBcc()">Bcc</button>
+                        </div>
+                        <div class="gc-row gc-cc-row">
+                            <span class="gc-cc-label">Cc</span>
+                            <input type="text" id="composeCcInput" class="gc-plain-input">
+                        </div>
+                        <div class="gc-row gc-cc-row" id="composeBccRow" style="display:none;">
+                            <span class="gc-cc-label">Bcc</span>
+                            <input type="text" id="composeBccInput" class="gc-plain-input">
+                        </div>
+                        <div class="gc-row gc-cc-row">
+                            <span class="gc-cc-label">Subject</span>
+                            <input type="text" id="composeSubjectInput" class="gc-plain-input" placeholder="Subject">
+                        </div>
+                        <div class="gc-body" id="composeBody" contenteditable="true"></div>
+                        <div class="gc-actions">
+                            <button type="button" class="gc-send-btn" onclick="composeSendEmail()">Send</button>
+                        </div>
+                    </div>
+                `;
+                document.body.appendChild(container);
+            }
+            container.style.display = 'block';
+            try { document.getElementById('composeToInput').focus(); } catch(_) {}
+        }
+
+        // Closing keeps the draft; it is only cleared after a successful send.
+        function closeComposeEmail() {
+            const container = document.getElementById('composeEmailContainer');
+            if (container) container.style.display = 'none';
+        }
+
+        function composeToggleBcc() {
+            const row = document.getElementById('composeBccRow');
+            if (row) row.style.display = row.style.display === 'none' ? 'flex' : 'none';
+        }
+
+        let composeSendInFlight = false;
+        function composeSendEmail() {
+            const bodyEl = document.getElementById('composeBody');
+            const text = bodyEl ? bodyEl.innerText.trim() : '';
+            if (!text) {
+                showErrorPopup('Write a message first.', 'Empty Email');
+                return;
+            }
+            const to = (document.getElementById('composeToInput')?.value || '').trim();
+            if (!to) {
+                showErrorPopup('Add at least one recipient before sending.', 'No Recipient');
+                return;
+            }
+            const cc = (document.getElementById('composeCcInput')?.value || '').trim();
+            const bcc = (document.getElementById('composeBccInput')?.value || '').trim();
+            const subject = (document.getElementById('composeSubjectInput')?.value || '').trim();
+
+            const preview = text.length > 200 ? text.slice(0, 200) + '…' : text;
+            const recipientSummary = to + (cc ? ` (cc: ${cc})` : '') + (bcc ? ` (bcc: ${bcc})` : '');
+            const subjectPart = subject ? `<strong>${escapeHtml(subject)}</strong><br>` : '';
+            showConfirmPopup(
+                `Send this email to ${escapeHtml(recipientSummary)}?<br><br>${subjectPart}<em>"${escapeHtml(preview)}"</em>`,
+                () => composePerformSend({ to, cc, bcc, subject, body: text }),
+                () => {},
+                'Send Email?'
+            );
+        }
+
+        async function composePerformSend(payload) {
+            if (composeSendInFlight) return;
+            composeSendInFlight = true;
+            const sendBtn = document.querySelector('#composeEmailContainer .gc-send-btn');
+            const prevLabel = sendBtn ? sendBtn.textContent : '';
+            if (sendBtn) { sendBtn.disabled = true; sendBtn.textContent = 'Sending…'; }
+            try {
+                const resp = await fetch('/api/send-email', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const data = await resp.json().catch(() => ({}));
+
+                if (resp.status === 401 && data && data.needsAuth) {
+                    showErrorPopup('Gmail authorization is missing or expired. Sign in again, then retry sending — your draft is still in the composer.', 'Sign In Required');
+                    return;
+                }
+                if (!resp.ok || !data.success) {
+                    showErrorPopup(escapeHtml(data.error || 'The email could not be sent.'), 'Send Failed');
+                    return;
+                }
+
+                // Clear the draft and close only after a confirmed send
+                const bodyEl = document.getElementById('composeBody');
+                if (bodyEl) bodyEl.innerHTML = '';
+                ['composeToInput', 'composeCcInput', 'composeBccInput', 'composeSubjectInput'].forEach(id => {
+                    const el = document.getElementById(id);
+                    if (el) el.value = '';
+                });
+                closeComposeEmail();
+                showSuccessPopup('Your email was sent.', 'Email Sent');
+            } catch (e) {
+                console.error('composePerformSend failed:', e);
+                showErrorPopup('Network error while sending the email. The draft is still in the composer.', 'Send Failed');
+            } finally {
+                composeSendInFlight = false;
+                if (sendBtn) { sendBtn.disabled = false; sendBtn.textContent = prevLabel || 'Send'; }
+            }
+        }
+
         function closeModal() {
             const modal = document.getElementById('threadModal');
             modal.style.display = 'none';
