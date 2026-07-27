@@ -5728,9 +5728,14 @@ app.post('/api/send-email', async (req, res) => {
       }
     }
 
-    let finalSubject = String(subject || '').replace(/[\r\n]+/g, ' ').trim() || originalSubject;
-    if (threadId && finalSubject && !/^re:/i.test(finalSubject)) {
-      finalSubject = `Re: ${finalSubject}`;
+    // A subject supplied by the client is user-editable and used verbatim; the
+    // "Re:" prefix is only added to the fallback taken from the original message.
+    let finalSubject = String(subject || '').replace(/[\r\n]+/g, ' ').trim();
+    if (!finalSubject) {
+      finalSubject = originalSubject;
+      if (threadId && finalSubject && !/^re:/i.test(finalSubject)) {
+        finalSubject = `Re: ${finalSubject}`;
+      }
     }
 
     const headerLines = [`To: ${toParsed.entries.join(', ')}`];

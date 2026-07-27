@@ -2132,6 +2132,10 @@ async function updateEmailCategory(emailId, newCategory, oldCategory) {
                                 <span class="gc-cc-label">Bcc</span>
                                 <input type="text" id="gcBccInput" class="gc-plain-input">
                             </div>
+                            <div class="gc-row gc-cc-row">
+                                <span class="gc-cc-label">Subject</span>
+                                <input type="text" id="gcSubjectInput" class="gc-plain-input" placeholder="Subject">
+                            </div>
 
                             <div class="gc-body" id="gcBody" contenteditable="true"></div>
 
@@ -2190,6 +2194,18 @@ async function updateEmailCategory(emailId, newCategory, oldCategory) {
                 // Fresh open starts a clean draft; re-opening keeps it.
                 const gcBody = document.getElementById('gcBody');
                 if (gcBody && wasHidden) gcBody.innerHTML = '';
+
+                // Subject defaults to "Re: <first email in the thread>" but stays
+                // editable; like the body, it only resets on a fresh open.
+                const gcSubjectInput = document.getElementById('gcSubjectInput');
+                if (gcSubjectInput && wasHidden) {
+                    const threadMsgs = Array.isArray(ctx.messages) ? ctx.messages.slice() : [];
+                    threadMsgs.sort((a, b) => new Date(a.date) - new Date(b.date));
+                    const baseSubject = String(threadMsgs[0]?.subject || subj || '')
+                        .replace(/^\s*((re|fwd?):\s*)+/i, '')
+                        .trim();
+                    gcSubjectInput.value = baseSubject ? `Re: ${baseSubject}` : '';
+                }
 
                 // Expose contextual buttons for associated categories and email notes
                 const cats = Array.isArray(ctx.categories) && ctx.categories.length
@@ -2272,7 +2288,10 @@ async function updateEmailCategory(emailId, newCategory, oldCategory) {
             }
             const cc = (document.getElementById('gcCcInput')?.value || '').trim();
             const bcc = (document.getElementById('gcBccInput')?.value || '').trim();
-            const subject = (document.getElementById('subjectInput')?.value || '').trim();
+            // The visible, editable subject field; falls back to the hidden
+            // per-thread subject if the composer predates it.
+            const subject = (document.getElementById('gcSubjectInput')?.value
+                || document.getElementById('subjectInput')?.value || '').trim();
 
             const preview = text.length > 200 ? text.slice(0, 200) + '…' : text;
             const recipientSummary = to + (cc ? ` (cc: ${cc})` : '') + (bcc ? ` (bcc: ${bcc})` : '');
@@ -12298,10 +12317,10 @@ function normalizeChatContent(text) {
 /* HTML-escape utility (correctly encodes special chars) */
 function escapeHtml(s) {
     return String(s)
-        .replace(/&/g, '&')
-        .replace(/</g, '<')
-        .replace(/>/g, '>')
-        .replace(/"/g, '"')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
         .replace(/'/g, '&#39;');
 }
 function escapeRegExp(s) {
