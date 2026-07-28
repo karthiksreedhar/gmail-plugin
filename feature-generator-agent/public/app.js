@@ -526,8 +526,15 @@ async function handleSend() {
       body: JSON.stringify(requestBody)
     });
     
-    const data = await response.json();
-    
+    let data = await response.json();
+
+    // Managed-agent generations return { pending: true } immediately and
+    // finish asynchronously on the server. Keep polling until the final
+    // result arrives (it has the same shape as the synchronous response).
+    if (data.success && data.pending) {
+      data = await pollForChatResult();
+    }
+
     // Remove loading message
     loadingMsg.remove();
     
@@ -606,6 +613,35 @@ async function handleSend() {
   } finally {
     setGenerating(false);
   }
+}
+
+// Poll the server for the result of an in-flight managed-agent generation.
+// Resolves with a payload shaped like the synchronous /api/chat response.
+// Polls sequentially (each request completes before the next is scheduled)
+// so the server never finalizes the same turn twice concurrently.
+async function pollForChatResult() {
+  const POLL_INTERVAL_MS = 3000;
+  const TIMEOUT_MS = 20 * 60 * 1000;
+  const startedAt = Date.now();
+  let consecutiveFailures = 0;
+
+  while (Date.now() - startedAt < TIMEOUT_MS) {
+    await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL_MS));
+    try {
+      const response = await fetch(`/api/chat/poll/${encodeURIComponent(sessionId)}`);
+      const data = await response.json();
+      consecutiveFailures = 0;
+      if (data && data.pending) continue;
+      return data;
+    } catch (error) {
+      console.warn('Poll failed (will retry):', error);
+      consecutiveFailures += 1;
+      if (consecutiveFailures >= 10) {
+        return { success: false, error: 'Lost connection to the server while waiting for the agent to finish.' };
+      }
+    }
+  }
+  return { success: false, error: 'Timed out waiting for the agent to finish. The generation may still complete server-side — reload the page in a minute to check.' };
 }
 
 // Handle new session

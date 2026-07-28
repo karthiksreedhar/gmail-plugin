@@ -3,14 +3,34 @@
  * Anthropic-based agent for generating Gmail Plugin features
  */
 
+const vm = require('vm');
 const { systemPrompt, refinementPrompt } = require('./prompts/system');
 const { invokeAnthropic, getAnthropicModel } = require('../anthropic');
 
 const MAX_RETRY_OUTPUT_TOKENS = 32000;
 
+// Returns a syntax-error description for a generated file, or null if it
+// parses cleanly. Catching this before the file is saved/deployed beats
+// finding out when the feature loader crashes on it.
+function validateGeneratedFile(filename, content) {
+  try {
+    if (/\.json$/i.test(filename)) {
+      JSON.parse(content);
+    } else if (/\.js$/i.test(filename)) {
+      new vm.Script(content, { filename });
+    }
+    return null;
+  } catch (error) {
+    return error.message || String(error);
+  }
+}
+
 class FeatureGeneratorAgent {
   constructor() {
-    this.modelName = getAnthropicModel();
+    // Code generation benefits from a stronger model than the bulk
+    // classification work elsewhere in the app; ANTHROPIC_GENERATION_MODEL
+    // overrides just this agent.
+    this.modelName = String(process.env.ANTHROPIC_GENERATION_MODEL || '').trim() || getAnthropicModel();
   }
 
   async invoke(messages, temperature = 0.2, maxOutputTokens = 8192) {
@@ -40,6 +60,38 @@ class FeatureGeneratorAgent {
   }
 
   /**
+   * Validate a generated file's syntax; on failure, ask the model to repair
+   * it once. Returns the (possibly repaired) content, or throws if the file
+   * still doesn't parse -- a syntactically broken file must never be saved.
+   */
+  async validateOrRepair(filename, content) {
+    let error = validateGeneratedFile(filename, content);
+    if (!error) return content;
+
+    console.warn(`⚠️ Generated ${filename} has a syntax error (${error}), attempting repair...`);
+    const messages = [
+      { role: 'system', content: 'You fix syntax errors in generated code without changing its behavior.' },
+      { role: 'user', content: `This ${filename} fails to parse with the error:
+${error}
+
+--- ${filename} ---
+${content}
+--- end ---
+
+Output the COMPLETE corrected file. Start with the first line of the file — no markdown fences, no explanation.` }
+    ];
+    const result = await this.invoke(messages, 0, 16384);
+    const repaired = this.cleanCodeResponse(result.content);
+
+    error = validateGeneratedFile(filename, repaired);
+    if (error) {
+      throw new Error(`Generated ${filename} still has a syntax error after a repair attempt: ${error}`);
+    }
+    console.log(`✅ ${filename} repaired successfully`);
+    return repaired;
+  }
+
+  /**
    * Generate a new feature from a description
    * @param {string} featureRequest - The feature description from the user
    * @returns {Object} - Generated files and metadata
@@ -65,14 +117,14 @@ class FeatureGeneratorAgent {
     if (analysis.needsBackend) {
       console.log('📄 Generating backend.js...');
       response += '✅ Generating backend.js...\n';
-      files['backend.js'] = await this.generateBackend(analysis, featureRequest);
+      files['backend.js'] = await this.validateOrRepair('backend.js', await this.generateBackend(analysis, featureRequest));
     }
 
     // Step 4: Generate frontend.js if needed
     if (analysis.needsFrontend) {
       console.log('📄 Generating frontend.js...');
       response += '✅ Generating frontend.js...\n';
-      files['frontend.js'] = await this.generateFrontend(analysis, featureRequest, files['backend.js']);
+      files['frontend.js'] = await this.validateOrRepair('frontend.js', await this.generateFrontend(analysis, featureRequest, files['backend.js']));
     }
 
     // Step 5: Generate README.md
@@ -105,11 +157,24 @@ class FeatureGeneratorAgent {
   async refineFeature(feedback, currentFiles, featureId, chatHistory) {
     console.log('\n🔧 Starting feature refinement...');
 
+    // Recent conversation gives the model context for follow-ups like "no,
+    // the other button" or "same fix for the modal". Skip the current message
+    // (it is passed separately as the feedback) and error entries.
+    const recentHistory = (Array.isArray(chatHistory) ? chatHistory : [])
+      .filter(entry => entry && !entry.isError && typeof entry.content === 'string')
+      .slice(0, -1)
+      .slice(-6)
+      .map(entry => `${entry.role === 'user' ? 'User' : 'Assistant'}: ${entry.content.replace(/\s+/g, ' ').slice(0, 400)}`)
+      .join('\n');
+
     const messages = [
       { role: 'system', content: refinementPrompt },
       { role: 'user', content: `
 Current Feature ID: ${featureId}
-
+${recentHistory ? `
+Recent conversation (for context):
+${recentHistory}
+` : ''}
 Current Files:
 ${Object.entries(currentFiles).map(([name, content]) => `
 --- ${name} ---
@@ -156,14 +221,21 @@ File contents must be complete files (never diffs or snippets), with all newline
       };
     }
 
-    // Merge updated files with current files
+    // Merge updated files with current files. Files that fail to parse are
+    // repaired once; if still broken they are skipped so a refinement can
+    // never replace a working file with a syntactically invalid one.
     const updatedFiles = { ...currentFiles };
     const changedFiles = [];
-    
+    const skippedFiles = [];
+
     for (const [filename, content] of Object.entries(parsed.files || {})) {
-      if (content && content.trim()) {
-        updatedFiles[filename] = content;
+      if (!content || !content.trim()) continue;
+      try {
+        updatedFiles[filename] = await this.validateOrRepair(filename, content);
         changedFiles.push(filename);
+      } catch (error) {
+        console.error(`Skipping ${filename} update:`, error.message);
+        skippedFiles.push(filename);
       }
     }
 
@@ -175,6 +247,9 @@ File contents must be complete files (never diffs or snippets), with all newline
       response += `The updated files are ready for download. Test them and let me know if you need further adjustments.`;
     } else {
       response += `No file changes were needed based on your feedback.`;
+    }
+    if (skippedFiles.length > 0) {
+      response += `\n\n⚠️ **Skipped:** ${skippedFiles.map(f => `\`${f}\``).join(', ')} — the generated replacement had a syntax error that couldn't be auto-repaired, so the previous version was kept. Try describing the change again.`;
     }
 
     console.log(`✅ Refinement complete. Updated: ${changedFiles.join(', ') || 'none'}`);

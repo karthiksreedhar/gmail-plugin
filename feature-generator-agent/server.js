@@ -11,6 +11,7 @@ const path = require('path');
 const archiver = require('archiver');
 const { v4: uuidv4 } = require('uuid');
 const { FeatureGeneratorAgent } = require('./agent');
+const managedAgent = require('./agent/managed');
 const { invokeAnthropic, getAnthropicModel } = require('./anthropic');
 
 // Import database module from parent directory (graceful fallback in serverless if unavailable)
@@ -433,24 +434,105 @@ setInterval(() => {
   }
 }, 30 * 60 * 1000); // Check every 30 minutes
 
-// Get or create session
-function getSession(sessionId) {
-  if (!sessionId || !sessions.has(sessionId)) {
-    const newSessionId = sessionId || uuidv4();
-    sessions.set(newSessionId, {
-      id: newSessionId,
-      agent: new FeatureGeneratorAgent(),
-      generatedFiles: null,
-      featureId: null,
-      actorEmail: null,
-      chatHistory: [],
-      lastAccess: Date.now()
-    });
-    return { session: sessions.get(newSessionId), isNew: true };
+// Sessions are held in memory for speed but mirrored to Mongo so they
+// survive server restarts and the idle-cleanup sweep. Losing a session used
+// to silently turn the next "modify my feature" message into a brand-new
+// feature (fresh files, fresh featureId, fresh PR) -- restoring from Mongo is
+// what keeps refinement mode sticky across restarts.
+const SESSIONS_COLLECTION = 'feature_generator_sessions';
+
+async function persistSessionToMongo(session) {
+  if (!session?.id) return;
+  try {
+    await ensureMongoReady();
+    if (!mongoInitialized) return;
+    await getDb().collection(SESSIONS_COLLECTION).updateOne(
+      { _id: session.id },
+      {
+        $set: {
+          featureId: session.featureId || null,
+          actorEmail: session.actorEmail || null,
+          generatedFiles: session.generatedFiles || null,
+          chatHistory: (session.chatHistory || []).slice(-60),
+          lastAccess: session.lastAccess || Date.now(),
+          // Managed Agents state: remote session id, in-flight turn marker,
+          // and whether local files still need to be synced to the remote
+          // agent on the next message.
+          anthropicSessionId: session.anthropicSessionId || null,
+          managedTurn: session.managedTurn || null,
+          managedNeedsFileSync: !!session.managedNeedsFileSync,
+          lastManagedResult: session.lastManagedResult || null
+        }
+      },
+      { upsert: true }
+    );
+  } catch (error) {
+    console.warn(`Session ${session.id} persist to Mongo failed (continuing in-memory):`, error.message);
   }
-  const session = sessions.get(sessionId);
-  session.lastAccess = Date.now();
-  return { session, isNew: false };
+}
+
+async function restoreSessionFromMongo(sessionId) {
+  try {
+    await ensureMongoReady();
+    if (!mongoInitialized) return null;
+    const doc = await getDb().collection(SESSIONS_COLLECTION).findOne({ _id: sessionId });
+    if (!doc) return null;
+    return {
+      id: sessionId,
+      agent: new FeatureGeneratorAgent(),
+      generatedFiles: doc.generatedFiles || null,
+      featureId: doc.featureId || null,
+      actorEmail: doc.actorEmail || null,
+      chatHistory: Array.isArray(doc.chatHistory) ? doc.chatHistory : [],
+      anthropicSessionId: doc.anthropicSessionId || null,
+      managedTurn: doc.managedTurn || null,
+      managedNeedsFileSync: !!doc.managedNeedsFileSync,
+      lastManagedResult: doc.lastManagedResult || null,
+      lastAccess: Date.now()
+    };
+  } catch (error) {
+    console.warn(`Session ${sessionId} restore from Mongo failed:`, error.message);
+    return null;
+  }
+}
+
+// Restore-only variant for endpoints that must 404 on unknown sessions
+// rather than create one.
+async function restoreSessionIfMissing(sessionId) {
+  if (!sessionId || sessions.has(sessionId)) return;
+  const restored = await restoreSessionFromMongo(sessionId);
+  if (restored) {
+    sessions.set(sessionId, restored);
+    console.log(`Session ${sessionId} restored from Mongo (featureId: ${restored.featureId || 'none'})`);
+  }
+}
+
+// Get or create session (restoring from Mongo before creating fresh)
+async function getSession(sessionId) {
+  if (sessionId && sessions.has(sessionId)) {
+    const session = sessions.get(sessionId);
+    session.lastAccess = Date.now();
+    return { session, isNew: false };
+  }
+  if (sessionId) {
+    const restored = await restoreSessionFromMongo(sessionId);
+    if (restored) {
+      sessions.set(sessionId, restored);
+      console.log(`Session ${sessionId} restored from Mongo (featureId: ${restored.featureId || 'none'})`);
+      return { session: restored, isNew: false };
+    }
+  }
+  const newSessionId = sessionId || uuidv4();
+  sessions.set(newSessionId, {
+    id: newSessionId,
+    agent: new FeatureGeneratorAgent(),
+    generatedFiles: null,
+    featureId: null,
+    actorEmail: null,
+    chatHistory: [],
+    lastAccess: Date.now()
+  });
+  return { session: sessions.get(newSessionId), isNew: true };
 }
 
 function parseManifestFromFiles(files) {
@@ -696,24 +778,82 @@ async function exportFeatureFromMainSystem(featureId) {
   return data.feature;
 }
 
+// Decide whether a message in a file-less session is really a modification
+// request for an already-saved feature. Conservative by design: any failure
+// (registry unreachable, model error, ambiguous answer) returns null and the
+// message is treated as a new-feature request, exactly as before.
+async function matchMessageToExistingFeature(message) {
+  let features = [];
+  try {
+    features = await listFeaturesFromMainSystem();
+  } catch (_) {
+    return null;
+  }
+  if (!features.length) return null;
+
+  const featureList = features
+    .map(f => `- ${f.featureId}: ${f.name}${f.status ? ` (status: ${f.status})` : ''}`)
+    .join('\n');
+  const prompt = `A user typed a message into a feature-generator chat. Decide whether they are asking to CREATE a brand-new feature, or MODIFY one of their existing features listed below.
+
+EXISTING FEATURES:
+${featureList}
+
+USER MESSAGE:
+${message}
+
+Rules:
+- Answer "modify" ONLY when the message clearly refers to one of the existing features above -- by name, or by describing behavior/UI that unmistakably belongs to it (e.g. complaints that something "isn't working", requests to change/fix/adjust it)
+- Messages that describe new functionality, or that you cannot confidently tie to one specific feature, are "create"
+- When torn between two features, answer "create"
+
+Respond with ONLY this JSON (no other text):
+{"action": "create" | "modify", "featureId": "the matching feature id, only when action is modify"}`;
+
+  try {
+    const response = await invokeAnthropic({
+      model: getAnthropicModel(),
+      temperature: 0,
+      maxOutputTokens: 200,
+      messages: [{ role: 'user', content: prompt }]
+    });
+    for (const candidate of parseJsonCandidates(response.content)) {
+      try {
+        const parsed = JSON.parse(candidate);
+        if (parsed?.action === 'modify') {
+          const requested = String(parsed.featureId || '').trim();
+          const match = features.find(f => f.featureId === requested);
+          return match ? match.featureId : null;
+        }
+        if (parsed?.action === 'create') return null;
+      } catch (_) {
+        // Keep trying alternate slices.
+      }
+    }
+  } catch (error) {
+    console.warn('Feature intent classification failed (treating as new feature):', error.message);
+  }
+  return null;
+}
+
 // API Routes
 
 // Create new session
-app.post('/api/session/new', (req, res) => {
+app.post('/api/session/new', async (req, res) => {
   const sessionId = uuidv4();
-  const { session } = getSession(sessionId);
-  res.json({ 
-    success: true, 
+  const { session } = await getSession(sessionId);
+  res.json({
+    success: true,
     sessionId: session.id,
     message: 'New session created'
   });
 });
 
 // Get session status
-app.get('/api/session/:sessionId', (req, res) => {
+app.get('/api/session/:sessionId', async (req, res) => {
   const { sessionId } = req.params;
-  const { session, isNew } = getSession(sessionId);
-  
+  const { session, isNew } = await getSession(sessionId);
+
   res.json({
     success: true,
     sessionId: session.id,
@@ -753,6 +893,7 @@ app.post('/api/session/:sessionId/load-feature', async (req, res) => {
     if (!featureId) {
       return res.status(400).json({ success: false, error: 'featureId is required' });
     }
+    await restoreSessionIfMissing(sessionId);
     if (!sessions.has(sessionId)) {
       return res.status(404).json({ success: false, error: 'Session not found' });
     }
@@ -768,12 +909,15 @@ app.post('/api/session/:sessionId/load-feature', async (req, res) => {
     session.featureId = featureId;
     session.actorEmail = actorEmail;
     session.generatedFiles = files;
+    // The remote managed agent (if any) hasn't seen these files yet.
+    session.managedNeedsFileSync = true;
     session.chatHistory.push({
       role: 'assistant',
       content: `Loaded existing feature ${featureId} for refinement.`,
       timestamp: Date.now(),
       loadedFeature: true
     });
+    await persistSessionToMongo(session);
 
     await persistChatLog({
       userEmail: actorEmail,
@@ -819,10 +963,10 @@ app.post('/api/chat', async (req, res) => {
   }
 
   try {
-    const { session } = getSession(sessionId);
+    const { session } = await getSession(sessionId);
     const actorEmail = resolveActorEmail(userEmail || session.actorEmail);
     session.actorEmail = actorEmail;
-    
+
     // Add user message to history
     session.chatHistory.push({
       role: 'user',
@@ -830,17 +974,60 @@ app.post('/api/chat', async (req, res) => {
       timestamp: Date.now()
     });
 
+    // If the session has no files, the message may still be a modification
+    // request for an already-saved feature (typical after a deploy: the user
+    // comes back and types "make the button blue"). Match it against the
+    // feature registry and load that feature for refinement instead of
+    // generating a brand-new feature from the modification text.
+    let autoLoadedFeatureId = null;
+    if (session.generatedFiles === null) {
+      const matchedFeatureId = await matchMessageToExistingFeature(message);
+      if (matchedFeatureId) {
+        try {
+          const exported = await exportFeatureFromMainSystem(matchedFeatureId);
+          if (exported?.files && typeof exported.files === 'object' && Object.keys(exported.files).length > 0) {
+            session.generatedFiles = exported.files;
+            session.featureId = matchedFeatureId;
+            autoLoadedFeatureId = matchedFeatureId;
+            // The remote managed agent (if any) hasn't seen these files yet.
+            session.managedNeedsFileSync = true;
+            console.log(`🔁 Auto-loaded existing feature "${matchedFeatureId}" for refinement`);
+          }
+        } catch (loadError) {
+          console.warn(`Could not auto-load feature "${matchedFeatureId}" (falling back to new generation):`, loadError.message);
+        }
+      }
+    }
+
     // Determine if this is initial generation or refinement
     const isRefinement = session.generatedFiles !== null;
-    
+
     console.log(`\n${'='.repeat(50)}`);
     console.log(`Session: ${session.id}`);
     console.log(`Mode: ${isRefinement ? 'REFINEMENT' : 'INITIAL GENERATION'}`);
     console.log(`Message: ${message.substring(0, 100)}...`);
     console.log('='.repeat(50));
 
+    // Managed Agents path: kick off a turn on the Anthropic-hosted agent and
+    // return immediately -- the agent keeps working server-side, and the
+    // frontend polls /api/chat/poll/:sessionId until the turn finishes. The
+    // legacy pipeline below stays as the fallback whenever FEATURE_AGENT_ID /
+    // FEATURE_AGENT_ENV_ID are not configured.
+    if (managedAgent.isManagedAgentEnabled()) {
+      await managedAgent.startTurn(session, message);
+      session.managedTurn.autoLoadedFeatureId = autoLoadedFeatureId;
+      session.lastManagedResult = null;
+      await persistSessionToMongo(session);
+      return res.json({
+        success: true,
+        pending: true,
+        sessionId: session.id,
+        autoLoadedFeatureId
+      });
+    }
+
     let result;
-    
+
     if (isRefinement) {
       // Refinement mode - fix/modify existing files
       result = await session.agent.refineFeature(
@@ -857,7 +1044,11 @@ app.post('/api/chat', async (req, res) => {
 
     // Update session with generated files
     session.generatedFiles = result.files;
-    
+
+    if (autoLoadedFeatureId) {
+      result.response = `🔁 I recognized this as a change to your existing feature \`${autoLoadedFeatureId}\`, so I loaded its current files and modified them in place (no new feature was created).\n\n${result.response}`;
+    }
+
     const draftSaveResult = await saveDraftFeatureToMainSystem(session.featureId, session.generatedFiles, message);
 
     // Add assistant response to history
@@ -869,6 +1060,7 @@ app.post('/api/chat', async (req, res) => {
       filesUpdated: result.updatedFiles || [],
       draftSave: draftSaveResult
     });
+    await persistSessionToMongo(session);
 
     await persistChatLog({
       userEmail: actorEmail,
@@ -882,6 +1074,7 @@ app.post('/api/chat', async (req, res) => {
       updatedFiles: Array.isArray(result.updatedFiles) ? result.updatedFiles : [],
       filesGenerated: Object.keys(result.files || {}),
       draftSave: draftSaveResult || null,
+      autoLoadedFeatureId: autoLoadedFeatureId || null,
       success: true
     });
 
@@ -893,14 +1086,15 @@ app.post('/api/chat', async (req, res) => {
       files: result.files,
       updatedFiles: result.updatedFiles || [],
       isRefinement,
+      autoLoadedFeatureId,
       draftSave: draftSaveResult
     });
 
   } catch (error) {
     console.error('Chat error:', error);
-    
+
     // Add error to chat history
-    const { session } = getSession(sessionId);
+    const { session } = await getSession(sessionId);
     const actorEmail = resolveActorEmail(userEmail || session.actorEmail);
     session.actorEmail = actorEmail;
     session.chatHistory.push({
@@ -909,6 +1103,7 @@ app.post('/api/chat', async (req, res) => {
       timestamp: Date.now(),
       isError: true
     });
+    await persistSessionToMongo(session);
 
     await persistChatLog({
       userEmail: actorEmail,
@@ -933,10 +1128,151 @@ app.post('/api/chat', async (req, res) => {
   }
 });
 
-// Get generated files for a session
-app.get('/api/files/:sessionId', (req, res) => {
+// Poll the in-flight Managed Agents turn for a session. Returns
+// { pending: true } while the hosted agent is still working; once the turn
+// completes it finalizes (downloads output files, saves the draft, writes the
+// chat log) and returns a payload with the same shape as the legacy
+// /api/chat response. Late or repeated polls return the cached final result.
+app.get('/api/chat/poll/:sessionId', async (req, res) => {
   const { sessionId } = req.params;
-  
+
+  await restoreSessionIfMissing(sessionId);
+  if (!sessions.has(sessionId)) {
+    return res.status(404).json({ success: false, error: 'Session not found' });
+  }
+  const session = sessions.get(sessionId);
+  session.lastAccess = Date.now();
+
+  if (!session.managedTurn) {
+    if (session.lastManagedResult) {
+      return res.json(session.lastManagedResult);
+    }
+    return res.json({ success: false, error: 'No generation in progress for this session' });
+  }
+
+  const turn = session.managedTurn;
+  try {
+    const poll = await managedAgent.pollTurn(session);
+
+    if (!poll.done) {
+      return res.json({ success: true, pending: true, status: poll.status || 'running' });
+    }
+
+    if (poll.error) {
+      session.chatHistory.push({
+        role: 'assistant',
+        content: `Error: ${poll.error}`,
+        timestamp: Date.now(),
+        isError: true
+      });
+      session.managedTurn = null;
+      session.lastManagedResult = { success: false, error: poll.error };
+      await persistSessionToMongo(session);
+      await persistChatLog({
+        userEmail: session.actorEmail,
+        mode: 'generate',
+        route: '/api/chat/poll',
+        sessionId: session.id,
+        featureId: session.featureId || null,
+        isRefinement: !!turn.isRefinement,
+        requestMessage: truncateForLog(turn.message),
+        responseMessage: '',
+        updatedFiles: [],
+        filesGenerated: [],
+        draftSave: null,
+        success: false,
+        error: poll.error
+      });
+      return res.json(session.lastManagedResult);
+    }
+
+    // Turn finished successfully -- merge the sandbox output files into the
+    // session, resolve the feature id from manifest.json, and save the draft.
+    const isRefinement = !!turn.isRefinement;
+    const hasNewFiles = poll.files && Object.keys(poll.files).length > 0;
+    if (hasNewFiles) {
+      session.generatedFiles = { ...(session.generatedFiles || {}), ...poll.files };
+    }
+    const manifest = parseManifestFromFiles(session.generatedFiles);
+    if (manifest?.id) {
+      session.featureId = manifest.id;
+    }
+
+    let responseText = (poll.responseText || '').trim();
+    if (!responseText) {
+      responseText = hasNewFiles
+        ? `Generated files: ${Object.keys(poll.files).map(f => `\`${f}\``).join(', ')}`
+        : 'Done.';
+    }
+    if (turn.autoLoadedFeatureId) {
+      responseText = `🔁 I recognized this as a change to your existing feature \`${turn.autoLoadedFeatureId}\`, so I loaded its current files and modified them in place (no new feature was created).\n\n${responseText}`;
+    }
+
+    let draftSaveResult = null;
+    if (hasNewFiles && session.featureId && session.generatedFiles) {
+      draftSaveResult = await saveDraftFeatureToMainSystem(session.featureId, session.generatedFiles, turn.message);
+    }
+
+    // Mirror the legacy contract: initial generations report no per-file
+    // updates (the UI opens manifest.json), refinements report what changed.
+    const updatedFiles = isRefinement ? (poll.updatedFiles || []) : [];
+
+    session.chatHistory.push({
+      role: 'assistant',
+      content: responseText,
+      timestamp: Date.now(),
+      filesGenerated: Object.keys(poll.files || {}),
+      filesUpdated: updatedFiles,
+      draftSave: draftSaveResult
+    });
+
+    const hasAnyFiles = session.generatedFiles && Object.keys(session.generatedFiles).length > 0;
+    const payload = {
+      success: true,
+      sessionId: session.id,
+      response: responseText,
+      featureId: session.featureId,
+      files: hasAnyFiles ? session.generatedFiles : null,
+      updatedFiles,
+      isRefinement,
+      autoLoadedFeatureId: turn.autoLoadedFeatureId || null,
+      draftSave: draftSaveResult,
+      done: true
+    };
+    session.managedTurn = null;
+    session.lastManagedResult = payload;
+    await persistSessionToMongo(session);
+
+    await persistChatLog({
+      userEmail: session.actorEmail,
+      mode: 'generate',
+      route: '/api/chat/poll',
+      sessionId: session.id,
+      featureId: session.featureId || null,
+      isRefinement,
+      requestMessage: truncateForLog(turn.message),
+      responseMessage: truncateForLog(responseText),
+      updatedFiles,
+      filesGenerated: Object.keys(poll.files || {}),
+      draftSave: draftSaveResult || null,
+      autoLoadedFeatureId: turn.autoLoadedFeatureId || null,
+      success: true
+    });
+
+    return res.json(payload);
+  } catch (error) {
+    // Transient failure (network/API hiccup while polling): keep the turn
+    // alive so the next poll retries instead of losing the generation.
+    console.error('Chat poll error (will retry on next poll):', error);
+    return res.json({ success: true, pending: true, transientError: error.message });
+  }
+});
+
+// Get generated files for a session
+app.get('/api/files/:sessionId', async (req, res) => {
+  const { sessionId } = req.params;
+
+  await restoreSessionIfMissing(sessionId);
   if (!sessions.has(sessionId)) {
     return res.status(404).json({
       success: false,
@@ -1017,7 +1353,8 @@ app.post('/api/features/:featureId/approve-and-deploy', async (req, res) => {
 // Download files as ZIP
 app.get('/api/download/:sessionId', async (req, res) => {
   const { sessionId } = req.params;
-  
+
+  await restoreSessionIfMissing(sessionId);
   if (!sessions.has(sessionId)) {
     return res.status(404).json({
       success: false,
@@ -1072,9 +1409,10 @@ app.get('/api/download/:sessionId', async (req, res) => {
 });
 
 // Get chat history
-app.get('/api/history/:sessionId', (req, res) => {
+app.get('/api/history/:sessionId', async (req, res) => {
   const { sessionId } = req.params;
-  
+
+  await restoreSessionIfMissing(sessionId);
   if (!sessions.has(sessionId)) {
     return res.status(404).json({
       success: false,
@@ -1125,11 +1463,26 @@ app.get('/api/chat-logs', async (req, res) => {
 });
 
 // Clear session (start fresh)
-app.delete('/api/session/:sessionId', (req, res) => {
+app.delete('/api/session/:sessionId', async (req, res) => {
   const { sessionId } = req.params;
-  
+
+  // Best-effort cleanup of the remote Managed Agents session, if one exists.
+  await restoreSessionIfMissing(sessionId);
+  const anthropicSessionId = sessions.get(sessionId)?.anthropicSessionId;
+  if (anthropicSessionId) {
+    await managedAgent.deleteRemoteSession(anthropicSessionId);
+  }
+
   if (sessions.has(sessionId)) {
     sessions.delete(sessionId);
+  }
+  try {
+    await ensureMongoReady();
+    if (mongoInitialized) {
+      await getDb().collection(SESSIONS_COLLECTION).deleteOne({ _id: sessionId });
+    }
+  } catch (error) {
+    console.warn(`Failed to delete persisted session ${sessionId}:`, error.message);
   }
   
   res.json({
@@ -3087,7 +3440,7 @@ app.post('/api/email-chat', async (req, res) => {
   }
   
   const availableUsers = await getAvailableUsers();
-  const { session } = getSession(sessionId);
+  const { session } = await getSession(sessionId);
   // Validate userEmail if provided
   const normalizedRequested = String(userEmail || '').trim().toLowerCase();
   const selectedUser = normalizedRequested && availableUsers.includes(normalizedRequested) ? normalizedRequested : null;
