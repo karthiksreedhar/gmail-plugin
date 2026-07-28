@@ -1,0 +1,11 @@
+{
+  "id": "two-column-view",
+  "name": "Two-Column Email View",
+  "version": "1.0.0",
+  "description": "Re-arranges the approved email list into a two-column layout: Important emails on the left, Starred emails on the right, and everything else stacked in a single full-width column below.",
+  "author": "Gmail Plugin Feature Generator",
+  "frontend": "frontend.js",
+  "permissions": [
+    "emails:read"
+  ]
+}
