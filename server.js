@@ -203,6 +203,8 @@ function initializeFeatures(options = {}) {
 
   if (shouldReload) {
     unloadAllFeatures();
+    // The reloaded feature set must be re-registered in Mongo.
+    loadedFeaturesRegistrationPromise = null;
   }
 
   if (!fs.existsSync(featuresDir)) {
@@ -384,20 +386,34 @@ function getDefaultFeaturePreference() {
   };
 }
 
-async function ensureLoadedFeaturesRegistered() {
-  await Promise.all(loadedFeatures.map(feature =>
-    createOrUpdateGeneratedFeature(feature.id, {
-      name: feature.name,
-      description: feature.manifest.description || '',
-      manifest: feature.manifest,
-      source: 'filesystem',
-      status: 'deployed',
-      deploymentStatus: 'deployed'
-    }).catch(error => {
-      console.error(`Failed to register loaded feature ${feature.id}:`, error.message);
-      return null;
-    })
-  ));
+// Registering the on-disk features in Mongo only needs to happen once per
+// boot (or after a runtime reload) — not on every registry request, where the
+// ~20 parallel upserts contend with the rest of the app for the small
+// connection pool. If any upsert fails the memo is cleared so a later
+// request retries; the upserts are idempotent.
+let loadedFeaturesRegistrationPromise = null;
+
+function ensureLoadedFeaturesRegistered() {
+  if (!loadedFeaturesRegistrationPromise) {
+    loadedFeaturesRegistrationPromise = Promise.all(loadedFeatures.map(feature =>
+      createOrUpdateGeneratedFeature(feature.id, {
+        name: feature.name,
+        description: feature.manifest.description || '',
+        manifest: feature.manifest,
+        source: 'filesystem',
+        status: 'deployed',
+        deploymentStatus: 'deployed'
+      }).then(() => true).catch(error => {
+        console.error(`Failed to register loaded feature ${feature.id}:`, error.message);
+        return false;
+      })
+    )).then(results => {
+      if (results.includes(false)) {
+        loadedFeaturesRegistrationPromise = null;
+      }
+    });
+  }
+  return loadedFeaturesRegistrationPromise;
 }
 
 // Users who get a "clean slate": features created by other users are never
@@ -412,6 +428,9 @@ const FEATURE_CLEAN_SLATE_USERS = new Set(
 );
 
 async function listFeatureRegistryForUser(userEmail) {
+  // The registry routes are registered before the cache-warm middleware, so
+  // they must not assume the startup initMongo() has finished (or succeeded).
+  await initMongo();
   await ensureLoadedFeaturesRegistered();
 
   const normalizedUserEmail = String(userEmail || '').trim().toLowerCase();
