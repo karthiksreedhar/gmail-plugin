@@ -1,0 +1,9 @@
+{
+  "id": "test-button",
+  "name": "Test Button",
+  "version": "1.0.0",
+  "description": "Adds a 'test' button to the top of the UI that shows a popup with the message 'Feature test'.",
+  "author": "Gmail Plugin Feature Generator",
+  "frontend": "frontend.js",
+  "permissions": []
+}
