@@ -56,16 +56,28 @@ async function invokeAnthropic({
     body.system = systemParts.join('\n\n');
   }
 
-  const response = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': apiKey,
-      'anthropic-version': '2023-06-01'
-    },
-    body: JSON.stringify(body)
-  });
-  const data = await response.json().catch(() => ({}));
+  async function postMessages(requestBody) {
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01'
+      },
+      body: JSON.stringify(requestBody)
+    });
+    const data = await response.json().catch(() => ({}));
+    return { response, data };
+  }
+
+  let { response, data } = await postMessages(body);
+
+  // Newer models (e.g. the Claude 5 family) reject the temperature parameter
+  // outright -- retry once without it rather than failing the call.
+  if (!response.ok && /temperature/i.test(String(data?.error?.message || ''))) {
+    const { temperature: _omitted, ...bodyWithoutTemperature } = body;
+    ({ response, data } = await postMessages(bodyWithoutTemperature));
+  }
 
   if (!response.ok) {
     const apiMessage = data?.error?.message || `Anthropic request failed with status ${response.status}`;

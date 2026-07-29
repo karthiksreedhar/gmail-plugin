@@ -9,6 +9,7 @@ const { google } = require('googleapis');
 const cookieParser = require('cookie-parser');
 const session = require('express-session');
 const crypto = require('crypto');
+const { AsyncLocalStorage } = require('async_hooks');
 require('dotenv').config({ path: ['.env.local', '.env'] });
 
 // MongoDB (Atlas) connection helper
@@ -257,7 +258,7 @@ function initializeFeatures(options = {}) {
           cleanResponseBody,
           categorizeEmail,
           writeClassifierLog,
-          getCurrentUser: () => CURRENT_USER_EMAIL,
+          getCurrentUser: () => getRequestUserEmail(),
           getCurrentUserPaths,
           getDisplayNameForUser,
           normalizeUserEmailForData
@@ -511,6 +512,46 @@ app.use(session({
   cookie: { secure: process.env.NODE_ENV === 'production', httpOnly: true, maxAge: 24 * 60 * 60 * 1000 } // 1 day
 }));
 
+// Collapse duplicate slashes so exact-path checks (login gate, API gate)
+// can't be bypassed with URLs like //index.html.
+function normalizedRequestPath(req) {
+  return String(req.path || '').replace(/\/{2,}/g, '/');
+}
+
+// API routes that must work WITHOUT a logged-in browser session:
+// auth flows themselves, cron triggers, callbacks from the hosted
+// feature-generator agent, client config, and pre-login OAuth-keys upload.
+const PUBLIC_API_PREFIXES = ['/api/auth/', '/api/cron/', '/api/internal/', '/api/config/'];
+const PUBLIC_API_PATHS = new Set(['/api/upload-oauth-keys']);
+
+function isPublicApiPath(pathName) {
+  return PUBLIC_API_PREFIXES.some(prefix => pathName.startsWith(prefix)) || PUBLIC_API_PATHS.has(pathName);
+}
+
+// Runs every request inside an AsyncLocalStorage context carrying the
+// request's OWN session identity, and rejects unauthenticated requests to
+// user-data API routes instead of silently serving them as the last
+// logged-in user (which is how one user briefly saw another's emails).
+app.use((req, res, next) => {
+  let userEmail = null;
+  try {
+    const authUser = getAuthenticatedUserEmail(req);
+    if (authUser) {
+      userEmail = normalizeUserEmailForData(authUser);
+      // Background jobs (auto-sync, cron) keep following the latest login.
+      FALLBACK_USER_EMAIL = userEmail;
+      FALLBACK_SENDING_EMAIL = userEmail;
+    }
+  } catch (_) {}
+
+  const pathName = normalizedRequestPath(req);
+  if (!userEmail && pathName.startsWith('/api/') && !isPublicApiPath(pathName) && req.method !== 'OPTIONS') {
+    return gmailAuthRedirectOrJson(req, res, 401, 'Authentication required');
+  }
+
+  return requestUserContext.run({ userEmail }, next);
+});
+
 app.get('/api/features', async (req, res) => {
   try {
     const registryEntries = await listFeatureRegistryForUser(getEffectiveUserEmailForRequest(req));
@@ -593,7 +634,10 @@ app.post('/api/internal/generated-features/save-draft', async (req, res) => {
       return res.status(400).json({ success: false, error: 'files must be a non-empty object of filepath -> content' });
     }
 
-    const createdBy = String(req.body?.createdBy || '').trim().toLowerCase() || getEffectiveUserEmailForRequest(req);
+    // Internal endpoint called by the hosted agent without a browser session:
+    // fall back to the process-level user for attribution when the payload
+    // doesn't name one.
+    const createdBy = String(req.body?.createdBy || '').trim().toLowerCase() || getEffectiveUserEmailForRequest(req) || getRequestUserEmail();
     const name = String(req.body?.name || featureId).trim();
     const description = String(req.body?.description || '').trim();
     const requestPrompt = String(req.body?.requestPrompt || '').trim();
@@ -850,10 +894,13 @@ function getAuthenticatedUserEmail(req) {
   return userEmail;
 }
 
+// Identity of the request's own session. Returns null when unauthenticated --
+// callers behind the API gate never see null; public endpoints that need a
+// best-effort attribution should use getRequestUserEmail() explicitly.
 function getEffectiveUserEmailForRequest(req) {
   const authUser = getAuthenticatedUserEmail(req);
   if (authUser) return normalizeUserEmailForData(authUser);
-  return normalizeUserEmailForData(CURRENT_USER_EMAIL);
+  return null;
 }
 
 // Helper to check if user is logged in
@@ -863,7 +910,8 @@ function isLoggedIn(req) {
 
 // Force Gmail auth for app entry points
 app.use((req, res, next) => {
-  if ((req.path === '/' || req.path === '/index.html' || req.path === '/login') && !isLoggedIn(req)) {
+  const pathName = normalizedRequestPath(req);
+  if ((pathName === '/' || pathName === '/index.html' || pathName === '/login') && !isLoggedIn(req)) {
     return res.redirect('/api/auth/login');
   }
   return next();
@@ -872,10 +920,36 @@ app.use((req, res, next) => {
 app.use(express.static('public', { index: false }));
 app.use('/data', express.static('data')); // Serve feature scripts and data files
 
-// Current user - can be changed via API (loaded from .env if present)
-let CURRENT_USER_EMAIL = process.env.CURRENT_USER_EMAIL || 'ks4190@columbia.edu';
-// Sending email for Gmail API queries (alias support) - defaults to CURRENT_USER_EMAIL
-let SENDING_EMAIL = process.env.SENDING_EMAIL || process.env.CURRENT_USER_EMAIL || CURRENT_USER_EMAIL;
+// ---------------------------------------------------------------------------
+// Request-scoped user identity.
+//
+// Every incoming request runs inside an AsyncLocalStorage context carrying the
+// identity from ITS OWN session cookie, so concurrent requests from different
+// users can never observe each other's identity mid-flight (previously a
+// single shared CURRENT_USER_EMAIL global was overwritten by whoever's request
+// arrived last, and unauthenticated requests were served as that user).
+//
+// The FALLBACK_* variables exist only for work that runs outside any request:
+// startup, the auto-sync scheduler, and cron jobs. They follow the most
+// recent login so background refresh keeps working as before.
+// ---------------------------------------------------------------------------
+const requestUserContext = new AsyncLocalStorage();
+
+let FALLBACK_USER_EMAIL = process.env.CURRENT_USER_EMAIL || 'ks4190@columbia.edu';
+// Sending email for Gmail API queries (alias support); request-scoped identity
+// wins for logged-in requests, this fallback applies to background jobs only.
+let FALLBACK_SENDING_EMAIL = process.env.SENDING_EMAIL || process.env.CURRENT_USER_EMAIL || FALLBACK_USER_EMAIL;
+
+function getRequestUserEmail() {
+  const store = requestUserContext.getStore();
+  return (store && store.userEmail) || FALLBACK_USER_EMAIL;
+}
+
+function getRequestSendingEmail() {
+  const store = requestUserContext.getStore();
+  if (store && store.userEmail) return store.userEmail;
+  return FALLBACK_SENDING_EMAIL;
+}
 
 /**
  * Map an email to a friendly display name.
@@ -920,7 +994,7 @@ const USER_CATEGORY_RENAME_RULES = {
   }
 };
 
-function getUserCategoryRenameMap(userEmail = CURRENT_USER_EMAIL) {
+function getUserCategoryRenameMap(userEmail = getRequestUserEmail()) {
   const normalizedEmail = normalizeUserEmailForData(userEmail);
   const rule = USER_CATEGORY_RENAME_RULES[normalizedEmail] || {};
   const map = new Map();
@@ -933,14 +1007,14 @@ function getUserCategoryRenameMap(userEmail = CURRENT_USER_EMAIL) {
   return map;
 }
 
-function mapCategoryNameForUser(name, userEmail = CURRENT_USER_EMAIL) {
+function mapCategoryNameForUser(name, userEmail = getRequestUserEmail()) {
   const raw = String(name || '').trim();
   if (!raw) return '';
   const renameMap = getUserCategoryRenameMap(userEmail);
   return renameMap.get(raw.toLowerCase()) || raw;
 }
 
-function mapCategoryListForUser(categories, userEmail = CURRENT_USER_EMAIL) {
+function mapCategoryListForUser(categories, userEmail = getRequestUserEmail()) {
   const seen = new Set();
   const out = [];
   (Array.isArray(categories) ? categories : []).forEach((name) => {
@@ -953,7 +1027,7 @@ function mapCategoryListForUser(categories, userEmail = CURRENT_USER_EMAIL) {
   return out;
 }
 
-function mapEmailCategoriesForUser(email, userEmail = CURRENT_USER_EMAIL) {
+function mapEmailCategoriesForUser(email, userEmail = getRequestUserEmail()) {
   const rec = email && typeof email === 'object' ? { ...email } : {};
   const primary = mapCategoryNameForUser(rec.category || '', userEmail);
   const extras = Array.isArray(rec.categories) ? rec.categories : [];
@@ -963,7 +1037,7 @@ function mapEmailCategoriesForUser(email, userEmail = CURRENT_USER_EMAIL) {
   return rec;
 }
 
-function mapCategoryGuidelinesForUser(categories, userEmail = CURRENT_USER_EMAIL) {
+function mapCategoryGuidelinesForUser(categories, userEmail = getRequestUserEmail()) {
   const byKey = new Map();
   (Array.isArray(categories) ? categories : []).forEach((item) => {
     const mappedName = mapCategoryNameForUser(item?.name || '', userEmail);
@@ -984,7 +1058,7 @@ function mapCategoryGuidelinesForUser(categories, userEmail = CURRENT_USER_EMAIL
   return Array.from(byKey.values());
 }
 
-function mapCategorySummariesForUser(summaries, userEmail = CURRENT_USER_EMAIL) {
+function mapCategorySummariesForUser(summaries, userEmail = getRequestUserEmail()) {
   const source = (summaries && typeof summaries === 'object') ? summaries : {};
   const out = {};
   Object.entries(source).forEach(([name, text]) => {
@@ -998,11 +1072,11 @@ function mapCategorySummariesForUser(summaries, userEmail = CURRENT_USER_EMAIL) 
 }
 
 // Function to get user-specific paths
-function getUserPaths(userEmail = CURRENT_USER_EMAIL) {
+function getUserPaths(userEmail = getRequestUserEmail()) {
   return getUserPathsWithRoot(userEmail, USER_DATA_ROOT);
 }
 
-function getUserPathsWithRoot(userEmail = CURRENT_USER_EMAIL, rootDir = USER_DATA_ROOT) {
+function getUserPathsWithRoot(userEmail = getRequestUserEmail(), rootDir = USER_DATA_ROOT) {
   const effectiveEmail = normalizeUserEmailForData(userEmail);
   const USER_DATA_DIR = path.join(rootDir, effectiveEmail);
   return {
@@ -1025,23 +1099,12 @@ function getUserPathsWithRoot(userEmail = CURRENT_USER_EMAIL, rootDir = USER_DAT
 
 // Get current user paths
 function getCurrentUserPaths() {
-  return getUserPaths(CURRENT_USER_EMAIL);
+  return getUserPaths(getRequestUserEmail());
 }
 
-// Align global user context from authenticated request identity.
-// This is required for serverless invocations where process globals may
-// reset between the OAuth callback request and subsequent API requests.
-app.use((req, res, next) => {
-  try {
-    const authUser = getAuthenticatedUserEmail(req);
-    if (authUser) {
-      const normalizedEmail = normalizeUserEmailForData(authUser);
-      CURRENT_USER_EMAIL = normalizedEmail;
-      SENDING_EMAIL = normalizedEmail;
-    }
-  } catch (_) {}
-  return next();
-});
+// Per-request identity context and the API auth gate are registered right
+// after the session middleware (see requestIdentityMiddleware above the first
+// routes) so that EVERY route runs inside them.
 
 // In serverless environments, module-level caches are cold on many requests.
 // Most legacy readers are synchronous and rely on getCachedDoc(), so we warm
@@ -1092,6 +1155,10 @@ app.use(async (req, res, next) => {
     }
 
     const userEmail = getEffectiveUserEmailForRequest(req);
+    if (!userEmail) {
+      // Unauthenticated request (public endpoint): nothing to warm.
+      return next();
+    }
     const now = Date.now();
     const needsWarm =
       !cacheWarmUserEmail ||
@@ -1244,7 +1311,7 @@ async function writeClassifierLog(emailId, subject, from, suggestedCategory, rat
   try {
     // Try MongoDB first
     try {
-      const doc = await getUserDoc('classifier_log', CURRENT_USER_EMAIL);
+      const doc = await getUserDoc('classifier_log', getRequestUserEmail());
       const entries = Array.isArray(doc?.entries) ? doc.entries : [];
       
       const entry = {
@@ -1262,8 +1329,8 @@ async function writeClassifierLog(emailId, subject, from, suggestedCategory, rat
         entries.shift();
       }
       
-      await setUserDoc('classifier_log', CURRENT_USER_EMAIL, { entries });
-      console.log(`[ClassifierLog] Wrote to MongoDB for ${CURRENT_USER_EMAIL}`);
+      await setUserDoc('classifier_log', getRequestUserEmail(), { entries });
+      console.log(`[ClassifierLog] Wrote to MongoDB for ${getRequestUserEmail()}`);
       return;
     } catch (mongoErr) {
       console.warn('MongoDB classifier log write failed, falling back to file:', mongoErr);
@@ -1303,9 +1370,9 @@ app.get('/api/classifier-log', async (req, res) => {
   try {
     // Try MongoDB first
     try {
-      const doc = await getUserDoc('classifier_log', CURRENT_USER_EMAIL);
+      const doc = await getUserDoc('classifier_log', getRequestUserEmail());
       if (doc && Array.isArray(doc.entries)) {
-        console.log(`[ClassifierLog] Read ${doc.entries.length} entries from MongoDB for ${CURRENT_USER_EMAIL}`);
+        console.log(`[ClassifierLog] Read ${doc.entries.length} entries from MongoDB for ${getRequestUserEmail()}`);
         return res.json({ success: true, entries: doc.entries });
       }
     } catch (mongoErr) {
@@ -1359,8 +1426,8 @@ app.delete('/api/classifier-log', async (req, res) => {
   try {
     // Clear from MongoDB first
     try {
-      await setUserDoc('classifier_log', CURRENT_USER_EMAIL, { entries: [] });
-      console.log(`[ClassifierLog] Cleared from MongoDB for ${CURRENT_USER_EMAIL}`);
+      await setUserDoc('classifier_log', getRequestUserEmail(), { entries: [] });
+      console.log(`[ClassifierLog] Cleared from MongoDB for ${getRequestUserEmail()}`);
     } catch (mongoErr) {
       console.warn('MongoDB classifier log clear failed, clearing file:', mongoErr);
     }
@@ -1390,7 +1457,7 @@ let oauthConfiguredRedirectUri = null;
 // Seed Categories progress tracking (per user)
 const seedProgressByUser = {};
 function getSeedProgressForUser(email) {
-  const key = String(email || CURRENT_USER_EMAIL || '').toLowerCase();
+  const key = String(email || getRequestUserEmail() || '').toLowerCase();
   if (!seedProgressByUser[key]) {
     seedProgressByUser[key] = { active: false, total: 400, processed: 0, startedAt: 0, finishedAt: 0 };
   }
@@ -1439,7 +1506,7 @@ async function initializeGmailAPI(req = null) {
       oauthClientSecret = envClientSecret;
       oauthConfiguredRedirectUri = envRedirectUri;
       buildOAuthClientForRequest(req);
-      console.log(`Using GOOGLE_* environment variables for OAuth (${CURRENT_USER_EMAIL})`);
+      console.log(`Using GOOGLE_* environment variables for OAuth (${getRequestUserEmail()})`);
     } else {
       // Load OAuth credentials - check user-specific path first, then fallback to root
       let credentialsPath = paths.OAUTH_KEYS_PATH;
@@ -1448,13 +1515,13 @@ async function initializeGmailAPI(req = null) {
         const rootCredentialsPath = path.join(__dirname, 'gcp-oauth.keys.json');
         if (fs.existsSync(rootCredentialsPath)) {
           credentialsPath = rootCredentialsPath;
-          console.log(`Using OAuth keys from root directory for user ${CURRENT_USER_EMAIL}`);
+          console.log(`Using OAuth keys from root directory for user ${getRequestUserEmail()}`);
         } else {
-          console.warn(`OAuth credentials missing for ${CURRENT_USER_EMAIL}. Set GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET/GOOGLE_REDIRECT_URI or upload gcp-oauth.keys.json.`);
+          console.warn(`OAuth credentials missing for ${getRequestUserEmail()}. Set GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET/GOOGLE_REDIRECT_URI or upload gcp-oauth.keys.json.`);
           return false;
         }
       } else {
-        console.log(`Using user-specific OAuth keys for ${CURRENT_USER_EMAIL}`);
+        console.log(`Using user-specific OAuth keys for ${getRequestUserEmail()}`);
       }
 
       const credentials = JSON.parse(fs.readFileSync(credentialsPath, 'utf8'));
@@ -1466,7 +1533,7 @@ async function initializeGmailAPI(req = null) {
     }
 
     // Load existing tokens if available (Mongo first, then file)
-    const tokens = await loadStoredTokensForUser(CURRENT_USER_EMAIL);
+    const tokens = await loadStoredTokensForUser(getRequestUserEmail());
     if (tokens) {
       gmailAuth.setCredentials(tokens);
       
@@ -1474,18 +1541,18 @@ async function initializeGmailAPI(req = null) {
       try {
         await gmailAuth.getAccessToken();
         gmail = google.gmail({ version: 'v1', auth: gmailAuth });
-        console.log(`Gmail API initialized successfully with existing tokens for ${CURRENT_USER_EMAIL}`);
+        console.log(`Gmail API initialized successfully with existing tokens for ${getRequestUserEmail()}`);
         return true;
       } catch (error) {
-        console.log(`Existing tokens are invalid for ${CURRENT_USER_EMAIL}, need to re-authenticate`);
+        console.log(`Existing tokens are invalid for ${getRequestUserEmail()}, need to re-authenticate`);
       }
     }
 
     gmail = google.gmail({ version: 'v1', auth: gmailAuth });
-    console.log(`Gmail API initialized for ${CURRENT_USER_EMAIL}, but authentication required`);
+    console.log(`Gmail API initialized for ${getRequestUserEmail()}, but authentication required`);
     return false;
   } catch (error) {
-    console.error(`Error initializing Gmail API for ${CURRENT_USER_EMAIL}:`, error);
+    console.error(`Error initializing Gmail API for ${getRequestUserEmail()}:`, error);
     return false;
   }
 }
@@ -1556,14 +1623,14 @@ async function finalizeLoginForUser(userEmail, tokens) {
     throw new Error(`Failed to persist OAuth tokens for ${normalizedEmail}${detail}`);
   }
 
-  CURRENT_USER_EMAIL = normalizedEmail;
-  SENDING_EMAIL = normalizedEmail;
+  FALLBACK_USER_EMAIL = normalizedEmail;
+  FALLBACK_SENDING_EMAIL = normalizedEmail;
 
   // Ensure first-time users get their per-user storage shape; do not block login indefinitely.
-  await ensureUserBootstrapSafely(CURRENT_USER_EMAIL, 1500);
+  await ensureUserBootstrapSafely(normalizedEmail, 1500);
 
   // Warm Mongo cache for new/current user without blocking login indefinitely.
-  await warmUserCacheSafely(CURRENT_USER_EMAIL, 1200);
+  await warmUserCacheSafely(getRequestUserEmail(), 1200);
 
   // Reinitialize Gmail API for this user
   gmailAuth = null;
@@ -1595,7 +1662,8 @@ async function finalizeLoginForUser(userEmail, tokens) {
 // Search Gmail for emails with pagination support
 async function searchGmailEmails(query, maxResults = 10) {
   try {
-    if (!gmail) {
+    const gmailClient = await getContextGmailClient();
+    if (!gmailClient) {
       throw new Error('Gmail API not initialized');
     }
 
@@ -1605,7 +1673,7 @@ async function searchGmailEmails(query, maxResults = 10) {
 
     // Keep fetching pages until we have enough results or run out of pages
     do {
-      const response = await gmail.users.messages.list({
+      const response = await gmailClient.users.messages.list({
         userId: 'me',
         q: query,
         maxResults: Math.min(remainingToFetch, 500), // Gmail API max per page is 500
@@ -1843,7 +1911,7 @@ function extractEmailBody(payload) {
 // Get Gmail email content
 async function getGmailEmail(messageId, gmailClientOverride) {
   try {
-    const client = gmailClientOverride || gmail;
+    const client = gmailClientOverride || await getContextGmailClient();
     if (!client) {
       throw new Error('Gmail API not initialized');
     }
@@ -1903,7 +1971,7 @@ async function loadDataFromFile() {
   try {
     // Prefer MongoDB
     try {
-      const doc = await getUserDoc('user_state', CURRENT_USER_EMAIL);
+      const doc = await getUserDoc('user_state', getRequestUserEmail());
       if (doc) {
         return {
           scenarios: Array.isArray(doc.scenarios) ? doc.scenarios : [],
@@ -1934,7 +2002,7 @@ async function loadDataFromFile() {
 async function saveDataToFile(data) {
   try {
     // Primary: MongoDB
-    await setUserDoc('user_state', CURRENT_USER_EMAIL, {
+    await setUserDoc('user_state', getRequestUserEmail(), {
       scenarios: Array.isArray(data.scenarios) ? data.scenarios : [],
       refinements: Array.isArray(data.refinements) ? data.refinements : [],
       savedGenerations: Array.isArray(data.savedGenerations) ? data.savedGenerations : []
@@ -1970,22 +2038,22 @@ function loadEmailData(filePath) {
 // Function to load response emails (cache/Mongo first, fallback to JSON) - synchronous for legacy callers
 function loadResponseEmails() {
   try {
-    const doc = getCachedDoc('response_emails', CURRENT_USER_EMAIL);
-    if (doc && Array.isArray(doc.emails)) return doc.emails.map(e => mapEmailCategoriesForUser(e, CURRENT_USER_EMAIL));
-    if (doc && Array.isArray(doc.responses)) return doc.responses.map(e => mapEmailCategoriesForUser(e, CURRENT_USER_EMAIL));
+    const doc = getCachedDoc('response_emails', getRequestUserEmail());
+    if (doc && Array.isArray(doc.emails)) return doc.emails.map(e => mapEmailCategoriesForUser(e, getRequestUserEmail()));
+    if (doc && Array.isArray(doc.responses)) return doc.responses.map(e => mapEmailCategoriesForUser(e, getRequestUserEmail()));
   } catch (_) {}
   const paths = getCurrentUserPaths();
   const data = loadEmailData(paths.RESPONSE_EMAILS_PATH);
   if (!data) return [];
-  if (Array.isArray(data.emails)) return data.emails.map(e => mapEmailCategoriesForUser(e, CURRENT_USER_EMAIL));
-  if (Array.isArray(data.responses)) return data.responses.map(e => mapEmailCategoriesForUser(e, CURRENT_USER_EMAIL));
+  if (Array.isArray(data.emails)) return data.emails.map(e => mapEmailCategoriesForUser(e, getRequestUserEmail()));
+  if (Array.isArray(data.responses)) return data.responses.map(e => mapEmailCategoriesForUser(e, getRequestUserEmail()));
   return [];
 }
 
 // Function to load email threads (cache/Mongo first, fallback to JSON) - synchronous for legacy callers
 function loadEmailThreads() {
   try {
-    const doc = getCachedDoc('email_threads', CURRENT_USER_EMAIL);
+    const doc = getCachedDoc('email_threads', getRequestUserEmail());
     if (doc && Array.isArray(doc.threads)) return doc.threads;
   } catch (_) {}
   const paths = getCurrentUserPaths();
@@ -1996,7 +2064,7 @@ function loadEmailThreads() {
 // Function to load test emails (cache/Mongo first, fallback JSON) - synchronous
 function loadTestEmails() {
   try {
-    const doc = getCachedDoc('test_emails', CURRENT_USER_EMAIL);
+    const doc = getCachedDoc('test_emails', getRequestUserEmail());
     if (doc && Array.isArray(doc.emails)) return doc.emails;
   } catch (_) {}
   const paths = getCurrentUserPaths();
@@ -2007,18 +2075,18 @@ function loadTestEmails() {
 // Function to load unreplied emails (cache/Mongo first, fallback JSON) - synchronous
 function loadUnrepliedEmails() {
   try {
-    const doc = getCachedDoc('unreplied_emails', CURRENT_USER_EMAIL);
-    if (doc && Array.isArray(doc.emails)) return doc.emails.map(e => mapEmailCategoriesForUser(e, CURRENT_USER_EMAIL));
+    const doc = getCachedDoc('unreplied_emails', getRequestUserEmail());
+    if (doc && Array.isArray(doc.emails)) return doc.emails.map(e => mapEmailCategoriesForUser(e, getRequestUserEmail()));
   } catch (_) {}
   const paths = getCurrentUserPaths();
   const data = loadEmailData(paths.UNREPLIED_EMAILS_PATH);
-  return data ? (Array.isArray(data.emails) ? data.emails.map(e => mapEmailCategoriesForUser(e, CURRENT_USER_EMAIL)) : []) : [];
+  return data ? (Array.isArray(data.emails) ? data.emails.map(e => mapEmailCategoriesForUser(e, getRequestUserEmail())) : []) : [];
 }
 
 // Notes persistence helpers
 function loadNotes() {
   try {
-    const doc = getCachedDoc('notes', CURRENT_USER_EMAIL);
+    const doc = getCachedDoc('notes', getRequestUserEmail());
     if (doc && Array.isArray(doc.notes)) return doc.notes;
   } catch (_) {}
   const paths = getCurrentUserPaths();
@@ -2028,7 +2096,7 @@ function loadNotes() {
 
 async function saveNotes(notes) {
   try {
-    await setUserDoc('notes', CURRENT_USER_EMAIL, { notes: notes || [] });
+    await setUserDoc('notes', getRequestUserEmail(), { notes: notes || [] });
   } catch (e) {
     const paths = getCurrentUserPaths();
     if (!fs.existsSync(paths.USER_DATA_DIR)) fs.mkdirSync(paths.USER_DATA_DIR, { recursive: true });
@@ -2039,7 +2107,7 @@ async function saveNotes(notes) {
 // Hidden threads persistence helpers
 function loadHiddenThreads() {
   try {
-    const doc = getCachedDoc('hidden_threads', CURRENT_USER_EMAIL);
+    const doc = getCachedDoc('hidden_threads', getRequestUserEmail());
     if (doc && Array.isArray(doc.hidden)) return doc.hidden;
   } catch (_) {}
   const paths = getCurrentUserPaths();
@@ -2049,7 +2117,7 @@ function loadHiddenThreads() {
 
 async function saveHiddenThreads(hidden) {
   try {
-    await setUserDoc('hidden_threads', CURRENT_USER_EMAIL, { hidden: hidden || [] });
+    await setUserDoc('hidden_threads', getRequestUserEmail(), { hidden: hidden || [] });
   } catch (e) {
     const paths = getCurrentUserPaths();
     if (!fs.existsSync(paths.USER_DATA_DIR)) fs.mkdirSync(paths.USER_DATA_DIR, { recursive: true });
@@ -2059,9 +2127,9 @@ async function saveHiddenThreads(hidden) {
 
 // Store helpers for primary collections
 async function saveResponseEmailsStore(emails) {
-  const mappedEmails = (emails || []).map(e => mapEmailCategoriesForUser(e, CURRENT_USER_EMAIL));
+  const mappedEmails = (emails || []).map(e => mapEmailCategoriesForUser(e, getRequestUserEmail()));
   try {
-    await setUserDoc('response_emails', CURRENT_USER_EMAIL, { emails: mappedEmails });
+    await setUserDoc('response_emails', getRequestUserEmail(), { emails: mappedEmails });
   } catch (e) {
     try {
       const paths = getCurrentUserPaths();
@@ -2072,7 +2140,7 @@ async function saveResponseEmailsStore(emails) {
 }
 async function saveEmailThreadsStore(threads) {
   try {
-    await setUserDoc('email_threads', CURRENT_USER_EMAIL, { threads: threads || [] });
+    await setUserDoc('email_threads', getRequestUserEmail(), { threads: threads || [] });
   } catch (e) {
     try {
       const paths = getCurrentUserPaths();
@@ -2082,9 +2150,9 @@ async function saveEmailThreadsStore(threads) {
   }
 }
 async function saveUnrepliedEmailsStore(emails) {
-  const mappedEmails = (emails || []).map(e => mapEmailCategoriesForUser(e, CURRENT_USER_EMAIL));
+  const mappedEmails = (emails || []).map(e => mapEmailCategoriesForUser(e, getRequestUserEmail()));
   try {
-    await setUserDoc('unreplied_emails', CURRENT_USER_EMAIL, { emails: mappedEmails });
+    await setUserDoc('unreplied_emails', getRequestUserEmail(), { emails: mappedEmails });
   } catch (e) {
     try {
       const paths = getCurrentUserPaths();
@@ -2101,7 +2169,7 @@ async function saveUnrepliedEmailsStore(emails) {
  */
 function loadHiddenInbox() {
   try {
-    const doc = getCachedDoc('hidden_inbox', CURRENT_USER_EMAIL);
+    const doc = getCachedDoc('hidden_inbox', getRequestUserEmail());
     if (doc && Array.isArray(doc.hiddenMessages)) return doc.hiddenMessages;
   } catch (e) {
     console.warn('Failed to read hidden-inbox from cache:', e?.message || e);
@@ -2121,7 +2189,7 @@ function loadHiddenInbox() {
 
 async function saveHiddenInbox(hiddenMessages) {
   try {
-    await setUserDoc('hidden_inbox', CURRENT_USER_EMAIL, { hiddenMessages: hiddenMessages || [] });
+    await setUserDoc('hidden_inbox', getRequestUserEmail(), { hiddenMessages: hiddenMessages || [] });
   } catch (e) {
     try {
       const paths = getCurrentUserPaths();
@@ -2145,12 +2213,12 @@ async function saveHiddenInbox(hiddenMessages) {
  */
 function loadCategoryGuidelines() {
   try {
-    const doc = getCachedDoc('category_guidelines', CURRENT_USER_EMAIL);
-    if (doc && Array.isArray(doc.categories)) return mapCategoryGuidelinesForUser(doc.categories, CURRENT_USER_EMAIL);
+    const doc = getCachedDoc('category_guidelines', getRequestUserEmail());
+    if (doc && Array.isArray(doc.categories)) return mapCategoryGuidelinesForUser(doc.categories, getRequestUserEmail());
   } catch (_) {}
   const paths = getCurrentUserPaths();
   const data = loadEmailData(paths.CATEGORY_GUIDELINES_PATH);
-  if (data && Array.isArray(data.categories)) return mapCategoryGuidelinesForUser(data.categories, CURRENT_USER_EMAIL);
+  if (data && Array.isArray(data.categories)) return mapCategoryGuidelinesForUser(data.categories, getRequestUserEmail());
   return [];
 }
 
@@ -2159,11 +2227,11 @@ async function saveCategoryGuidelines(categories) {
     categories: mapCategoryGuidelinesForUser((categories || []).map(c => ({
       name: String(c?.name || '').trim(),
       notes: String(c?.notes || '')
-    })).filter(c => c.name), CURRENT_USER_EMAIL),
+    })).filter(c => c.name), getRequestUserEmail()),
     updatedAt: new Date().toISOString()
   };
   try {
-    await setUserDoc('category_guidelines', CURRENT_USER_EMAIL, payload);
+    await setUserDoc('category_guidelines', getRequestUserEmail(), payload);
   } catch (_) {
     const paths = getCurrentUserPaths();
     if (!fs.existsSync(paths.USER_DATA_DIR)) fs.mkdirSync(paths.USER_DATA_DIR, { recursive: true });
@@ -2174,20 +2242,20 @@ async function saveCategoryGuidelines(categories) {
 // Category summaries persistence helpers
 function loadCategorySummaries() {
   try {
-    const doc = getCachedDoc('category_summaries', CURRENT_USER_EMAIL);
-    if (doc && doc.summaries && typeof doc.summaries === 'object') return mapCategorySummariesForUser(doc.summaries, CURRENT_USER_EMAIL);
+    const doc = getCachedDoc('category_summaries', getRequestUserEmail());
+    if (doc && doc.summaries && typeof doc.summaries === 'object') return mapCategorySummariesForUser(doc.summaries, getRequestUserEmail());
   } catch (_) {}
   const paths = getCurrentUserPaths();
   const data = loadEmailData(paths.CATEGORY_SUMMARIES_PATH);
   if (!data) return {};
-  if (data.summaries && typeof data.summaries === 'object') return mapCategorySummariesForUser(data.summaries, CURRENT_USER_EMAIL);
-  return mapCategorySummariesForUser((typeof data === 'object' && data) ? data : {}, CURRENT_USER_EMAIL);
+  if (data.summaries && typeof data.summaries === 'object') return mapCategorySummariesForUser(data.summaries, getRequestUserEmail());
+  return mapCategorySummariesForUser((typeof data === 'object' && data) ? data : {}, getRequestUserEmail());
 }
 
 async function saveCategorySummaries(summaries) {
-  const payload = { summaries: mapCategorySummariesForUser(summaries || {}, CURRENT_USER_EMAIL), updatedAt: new Date().toISOString() };
+  const payload = { summaries: mapCategorySummariesForUser(summaries || {}, getRequestUserEmail()), updatedAt: new Date().toISOString() };
   try {
-    await setUserDoc('category_summaries', CURRENT_USER_EMAIL, payload);
+    await setUserDoc('category_summaries', getRequestUserEmail(), payload);
   } catch (_) {
     const paths = getCurrentUserPaths();
     if (!fs.existsSync(paths.USER_DATA_DIR)) fs.mkdirSync(paths.USER_DATA_DIR, { recursive: true });
@@ -2209,7 +2277,7 @@ async function saveCategorySummaries(summaries) {
  */
 function loadEmailNotesStore() {
   try {
-    const doc = getCachedDoc('email_notes', CURRENT_USER_EMAIL);
+    const doc = getCachedDoc('email_notes', getRequestUserEmail());
     if (doc && typeof doc === 'object') {
       const notesByEmail = (doc.notesByEmail && typeof doc.notesByEmail === 'object') ? doc.notesByEmail : {};
       return { notesByEmail, updatedAt: doc.updatedAt || '' };
@@ -2239,7 +2307,7 @@ async function saveEmailNotesStore(store) {
       notesByEmail: (store && typeof store.notesByEmail === 'object') ? store.notesByEmail : {},
       updatedAt: new Date().toISOString()
     };
-    await setUserDoc('email_notes', CURRENT_USER_EMAIL, payload);
+    await setUserDoc('email_notes', getRequestUserEmail(), payload);
     return true;
   } catch (e) {
     console.error('Failed to save email-notes to Mongo:', e?.message || e);
@@ -2258,19 +2326,19 @@ async function saveEmailNotesStore(store) {
 // Categories list persistence (authoritative category names/order across the app)
 function loadCategoriesList() {
   try {
-    const doc = getCachedDoc('categories', CURRENT_USER_EMAIL);
-    if (doc && Array.isArray(doc.categories)) return mapCategoryListForUser(doc.categories, CURRENT_USER_EMAIL);
+    const doc = getCachedDoc('categories', getRequestUserEmail());
+    if (doc && Array.isArray(doc.categories)) return mapCategoryListForUser(doc.categories, getRequestUserEmail());
   } catch (_) {}
   const paths = getCurrentUserPaths();
   const data = loadEmailData(paths.CATEGORIES_PATH);
-  if (data && Array.isArray(data.categories)) return mapCategoryListForUser(data.categories, CURRENT_USER_EMAIL);
+  if (data && Array.isArray(data.categories)) return mapCategoryListForUser(data.categories, getRequestUserEmail());
   return [];
 }
 
 async function saveCategoriesList(categories) {
   const uniq = [];
   const seen = new Set();
-  mapCategoryListForUser(categories || [], CURRENT_USER_EMAIL).forEach(n => {
+  mapCategoryListForUser(categories || [], getRequestUserEmail()).forEach(n => {
     const s = String(n || '').trim();
     if (!s) return;
     const k = s.toLowerCase();
@@ -2279,7 +2347,7 @@ async function saveCategoriesList(categories) {
     uniq.push(s);
   });
   try {
-    await setUserDoc('categories', CURRENT_USER_EMAIL, { categories: uniq });
+    await setUserDoc('categories', getRequestUserEmail(), { categories: uniq });
   } catch (_) {
     const paths = getCurrentUserPaths();
     if (!fs.existsSync(paths.USER_DATA_DIR)) fs.mkdirSync(paths.USER_DATA_DIR, { recursive: true });
@@ -2289,7 +2357,7 @@ async function saveCategoriesList(categories) {
 
 // Initialize MongoDB on server start and warm cache for current user
 initMongo()
-  .then(() => warmUserCacheSafely(CURRENT_USER_EMAIL, 1200))
+  .then(() => warmUserCacheSafely(getRequestUserEmail(), 1200))
   .catch(err => console.error('Mongo init error:', err));
 
 // Load initial data (async-aware)
@@ -3034,7 +3102,7 @@ app.get('/api/email-thread/:emailId', async (req, res) => {
     console.log(`Fetching thread for email ID: ${emailId}`);
 
     // Resolve the user from this request's own session/cookie, not the shared
-    // CURRENT_USER_EMAIL global (loadEmailThreads/loadResponseEmails read that
+    // shared user global (loadEmailThreads/loadResponseEmails read that
     // global, which can be reassigned by a concurrent request from another user).
     const userEmail = getEffectiveUserEmailForRequest(req);
     const paths = getUserPaths(userEmail);
@@ -3908,6 +3976,26 @@ async function buildGmailClientForUser(userEmail) {
   };
 }
 
+/**
+ * Gmail client for the current execution context. Inside a request this is a
+ * client for the SESSION'S OWN user (built once per request and cached on the
+ * request's identity store); outside a request (startup, auto-sync, cron) it
+ * falls back to the process-level singleton, preserving background behavior.
+ * Returns null when the context user has no valid tokens.
+ */
+async function getContextGmailClient() {
+  const store = requestUserContext.getStore();
+  if (store && store.userEmail) {
+    if (!store.gmailClientPromise) {
+      store.gmailClientPromise = buildGmailClientForUser(store.userEmail)
+        .then(result => result.gmailClient)
+        .catch(() => null);
+    }
+    return store.gmailClientPromise;
+  }
+  return gmail;
+}
+
 async function readUserArrayDoc(collection, userEmail, field, filePath) {
   const normalizedEmail = normalizeUserEmailForData(userEmail);
   const fallbackFields = [];
@@ -3951,7 +4039,7 @@ async function writeUserArrayDoc(collection, userEmail, field, value, filePath) 
   return false;
 }
 
-function pickCurrentCategoriesForUser(rawCategories, userEmail = CURRENT_USER_EMAIL) {
+function pickCurrentCategoriesForUser(rawCategories, userEmail = getRequestUserEmail()) {
   const categories = mapCategoryListForUser(Array.isArray(rawCategories) ? rawCategories.filter(Boolean) : [], userEmail);
   if (categories.length) return categories;
   return DEFAULT_NEW_USER_CATEGORIES.slice();
@@ -4918,9 +5006,9 @@ app.delete('/api/scenarios', async (req, res) => {
 // User management endpoints
 app.get('/api/current-user', (req, res) => {
   res.json({
-    currentUser: CURRENT_USER_EMAIL,
-    sendingEmail: SENDING_EMAIL,
-    displayName: getDisplayNameForUser(CURRENT_USER_EMAIL)
+    currentUser: getRequestUserEmail(),
+    sendingEmail: getRequestSendingEmail(),
+    displayName: getDisplayNameForUser(getRequestUserEmail())
   });
 });
 
@@ -4933,14 +5021,14 @@ app.post('/api/set-sending-email', (req, res) => {
       return res.status(400).json({ error: 'Invalid sending email address' });
     }
 
-    SENDING_EMAIL = sendingEmail;
+    FALLBACK_SENDING_EMAIL = sendingEmail;
 
-    console.log(`Updated sending email to: ${sendingEmail} for user: ${CURRENT_USER_EMAIL}`);
+    console.log(`Updated sending email to: ${sendingEmail} for user: ${getRequestUserEmail()}`);
 
     res.json({
       success: true,
-      currentUser: CURRENT_USER_EMAIL,
-      sendingEmail: SENDING_EMAIL,
+      currentUser: getRequestUserEmail(),
+      sendingEmail: getRequestSendingEmail(),
       message: `Sending email updated to ${sendingEmail}`
     });
   } catch (error) {
@@ -5006,14 +5094,14 @@ app.post('/api/switch-user', async (req, res) => {
     }
     
     // Switch current user (normalize aliases/typos to backing data dir)
-    CURRENT_USER_EMAIL = effective;
+    FALLBACK_USER_EMAIL = effective;
     // Reset sending email to match current (effective) user (can be changed later if needed)
-    SENDING_EMAIL = effective;
+    FALLBACK_SENDING_EMAIL = effective;
 
-    await ensureUserBootstrapSafely(CURRENT_USER_EMAIL, 1500);
+    await ensureUserBootstrapSafely(effective, 1500);
 
     // Warm Mongo cache for new user without blocking request indefinitely.
-    await warmUserCacheSafely(CURRENT_USER_EMAIL, 1200);
+    await warmUserCacheSafely(effective, 1200);
     
     // Reinitialize Gmail API for new user
     gmailAuth = null;
@@ -5049,8 +5137,8 @@ app.post('/api/switch-user', async (req, res) => {
 
     res.json({ 
       success: true, 
-      currentUser: CURRENT_USER_EMAIL,
-      displayName: getDisplayNameForUser(CURRENT_USER_EMAIL),
+      currentUser: getRequestUserEmail(),
+      displayName: getDisplayNameForUser(getRequestUserEmail()),
       gmailInitialized: gmailInitialized,
       message: `Switched to user ${userEmail}`,
       priorityEmails
@@ -5096,7 +5184,7 @@ app.post('/api/upload-oauth-keys', async (req, res) => {
     console.log(`OAuth keys uploaded successfully for user: ${userEmail}`);
     
     // If this is the current user, reinitialize Gmail API
-    if (userEmail === CURRENT_USER_EMAIL) {
+    if (userEmail === getRequestUserEmail()) {
       gmailAuth = null;
       gmail = null;
       const gmailInitialized = await initializeGmailAPI();
@@ -5290,7 +5378,7 @@ app.get('/api/debug/mongo-user-snapshot', async (req, res) => {
     return res.json({
       success: true,
       userEmail,
-      currentUserGlobal: CURRENT_USER_EMAIL,
+      currentUserGlobal: getRequestUserEmail(),
       cacheWarmUserEmail,
       cacheWarmAt: cacheWarmAtMs ? new Date(cacheWarmAtMs).toISOString() : null,
       snapshot
@@ -5528,12 +5616,13 @@ app.post('/api/auth/callback', async (req, res) => {
  */
 app.get('/api/gmail-message/:id', async (req, res) => {
   try {
-    if (!gmail) {
+    const gmailClient = await getContextGmailClient();
+    if (!gmailClient) {
       return gmailAuthRedirectOrJson(req, res, 401, 'Gmail authentication required');
     }
     const id = req.params.id;
     if (!id) return res.status(400).json({ success: false, error: 'Message ID is required' });
-    const email = await getGmailEmail(id);
+    const email = await getGmailEmail(id, gmailClient);
     return res.json({ success: true, email });
   } catch (e) {
     console.error('Error fetching Gmail message:', e);
@@ -5549,7 +5638,7 @@ app.get('/api/gmail-thread-by-message/:id', async (req, res) => {
     // Build a Gmail client scoped to THIS request's authenticated user, rather
     // than using the shared `gmail` singleton (which is only rebuilt on an
     // explicit user-switch and does not track per-request session identity --
-    // if another user's request had switched CURRENT_USER_EMAIL, or the
+    // if another user's request had switched the shared user global, or the
     // singleton was simply never authenticated as this session's user, calls
     // through it would fail or operate on the wrong mailbox entirely).
     const userEmail = getEffectiveUserEmailForRequest(req);
@@ -5796,8 +5885,9 @@ app.post('/api/load-email-threads', async (req, res) => {
 
     console.log(`Loading ${threadCount} unique email threads using Gmail API...`);
 
-    // Check if Gmail API is available and authenticated
-    if (!gmail) {
+    // Check if Gmail API is available and authenticated for THIS request's user
+    const gmailClient = await getContextGmailClient();
+    if (!gmailClient) {
       return gmailAuthRedirectOrJson(req, res, 401, 'Gmail authentication required');
     }
 
@@ -5844,9 +5934,9 @@ app.post('/api/load-email-threads', async (req, res) => {
 
         // 3) For each thread, load full thread and include it if:
         //    - The thread contains at least one message dated today (inclusive of [start, before))
-        //    - You have participated in the thread (at least one message sent by CURRENT_USER_EMAIL or SENDING_EMAIL)
-        const me1 = (SENDING_EMAIL || CURRENT_USER_EMAIL || '').toLowerCase();
-        const me2 = (CURRENT_USER_EMAIL || '').toLowerCase();
+        //    - You have participated in the thread (at least one message sent by the request user or their sending alias)
+        const me1 = (getRequestSendingEmail() || getRequestUserEmail() || '').toLowerCase();
+        const me2 = (getRequestUserEmail() || '').toLowerCase();
 
         const isInTodayWindow = (iso) => {
           try {
@@ -5865,7 +5955,7 @@ app.post('/api/load-email-threads', async (req, res) => {
               continue;
             }
 
-            const threadResponse = await gmail.users.threads.get({
+            const threadResponse = await gmailClient.users.threads.get({
               userId: 'me',
               id: threadId
             });
@@ -5986,7 +6076,7 @@ app.post('/api/load-email-threads', async (req, res) => {
         console.log(`Thread fetch attempt ${fetchAttempts}: searching for ${currentSearchLimit} sent emails`);
 
         // Search for sent emails (your responses)
-        const sentEmails = await searchGmailEmails(`from:${SENDING_EMAIL} in:sent`, currentSearchLimit);
+        const sentEmails = await searchGmailEmails(`from:${getRequestSendingEmail()} in:sent`, currentSearchLimit);
         
         if (sentEmails.length === 0) {
           console.log('No more sent emails found in Gmail');
@@ -6047,7 +6137,7 @@ app.post('/api/load-email-threads', async (req, res) => {
             }
 
             // Use Gmail threads API to get all messages in the thread
-            const threadResponse = await gmail.users.threads.get({
+            const threadResponse = await gmailClient.users.threads.get({
               userId: 'me',
               id: sentEmail.threadId
             });
@@ -6058,7 +6148,7 @@ app.post('/api/load-email-threads', async (req, res) => {
             const originalMessage = threadMessages.find(msg => {
               const msgHeaders = msg.payload.headers;
               const msgFrom = msgHeaders.find(h => h.name === 'From')?.value || '';
-              return !msgFrom.includes(CURRENT_USER_EMAIL);
+              return !msgFrom.includes(getRequestUserEmail());
             });
 
             if (!originalMessage) {
@@ -6076,8 +6166,8 @@ app.post('/api/load-email-threads', async (req, res) => {
                 const data = await getGmailEmail(msg.id);
                 const toArr = (data.to || '').split(',').map(email => email.trim()).filter(Boolean);
                 const lowerFrom = (data.from || '').toLowerCase();
-                const me1 = (SENDING_EMAIL || CURRENT_USER_EMAIL || '').toLowerCase();
-                const me2 = (CURRENT_USER_EMAIL || '').toLowerCase();
+                const me1 = (getRequestSendingEmail() || getRequestUserEmail() || '').toLowerCase();
+                const me2 = (getRequestUserEmail() || '').toLowerCase();
                 const isResp = lowerFrom.includes(me1) || lowerFrom.includes(me2);
                 const cleanedBody = isResp ? await cleanResponseBody(data.body) : data.body;
                 allMsgs.push({
@@ -6155,7 +6245,7 @@ app.post('/api/load-email-threads', async (req, res) => {
             {
               id: `original-${Date.now()}-${i}`,
               from: `sender${i}@example.com`,
-              to: [CURRENT_USER_EMAIL],
+              to: [getRequestUserEmail()],
               date: new Date(Date.now() - (i * 86400000)).toISOString(),
               subject: `Simulated Email Thread ${i}`,
               body: `This is a simulated original email ${i}. Gmail API failed, so this is sample data.`,
@@ -6163,7 +6253,7 @@ app.post('/api/load-email-threads', async (req, res) => {
             },
             {
               id: `response-${Date.now()}-${i}`,
-              from: CURRENT_USER_EMAIL,
+              from: getRequestUserEmail(),
               to: [`sender${i}@example.com`],
               date: new Date(Date.now() - (i * 86400000) + 3600000).toISOString(),
               subject: `Re: Simulated Email Thread ${i}`,
@@ -6208,8 +6298,9 @@ app.post('/api/fetch-more-emails', async (req, res) => {
 
     console.log(`Fetching ${emailCount} unique emails from Gmail inbox${query ? ` with query: ${query}` : ''}...`);
 
-    // Check if Gmail API is available and authenticated
-    if (!gmail || !gmailAuth) {
+    // Check if Gmail API is available and authenticated for THIS request's user
+    const gmailClient = await getContextGmailClient();
+    if (!gmailClient) {
       const authUrl = getGmailAuthUrl();
       return res.status(401).json({
         success: false,
@@ -6221,7 +6312,7 @@ app.post('/api/fetch-more-emails', async (req, res) => {
     }
 
     // Check if we have valid credentials
-    if (!(await hasStoredTokensForUser(CURRENT_USER_EMAIL))) {
+    if (!(await hasStoredTokensForUser(getRequestUserEmail()))) {
       const authUrl = getGmailAuthUrl();
       return res.status(401).json({
         success: false,
@@ -6232,25 +6323,8 @@ app.post('/api/fetch-more-emails', async (req, res) => {
       });
     }
 
-    // Verify credentials are valid by checking if we have access token
-    try {
-      const credentials = gmailAuth.credentials;
-      if (!credentials || !credentials.access_token) {
-        return res.status(401).json({
-          success: false,
-          needsAuth: true,
-          error: 'Gmail authentication required',
-          message: 'Please authenticate with Gmail to access your emails'
-        });
-      }
-    } catch (credError) {
-      return res.status(401).json({
-        success: false,
-        needsAuth: true,
-        error: 'Gmail authentication required',
-        message: 'Please authenticate with Gmail to access your emails'
-      });
-    }
+    // Token validity for the request's user was already verified while
+    // building the per-request client (getContextGmailClient).
 
     if (dateFilter === 'today' || dateFilter === 'priority3d') {
       try {
@@ -6652,7 +6726,7 @@ app.get('/api/seed-categories/list', async (req, res) => {
   try {
     console.log('[SeedCategories] Starting Gmail fetch for important inbox...');
 // Initialize progress for current user
-const __seedUserKey = String(CURRENT_USER_EMAIL || '').toLowerCase();
+const __seedUserKey = String(getRequestUserEmail() || '').toLowerCase();
 const __seedProgress = getSeedProgressForUser(__seedUserKey);
 __seedProgress.active = true;
 __seedProgress.total = 400;
@@ -6663,17 +6737,19 @@ __seedProgress.finishedAt = 0;
 const TARGET = 50;
 const LIMIT = 400;
 
-    // Ensure Gmail API is ready
-    if (!gmail) {
+    // Ensure Gmail API is ready for THIS request's user
+    let seedGmailClient = await getContextGmailClient();
+    if (!seedGmailClient) {
       console.warn('[SeedCategories] Gmail API not initialized; attempting initialize...');
       try {
         await initializeGmailAPI();
+        seedGmailClient = await getContextGmailClient();
       } catch (e) {
-        // continue; we will check gmail below
+        // continue; we will check below
       }
     }
 
-    if (!gmail) {
+    if (!seedGmailClient) {
       console.error('[SeedCategories] Gmail API unavailable');
       try {
         const p = getSeedProgressForUser(__seedUserKey);
@@ -6726,8 +6802,8 @@ const LIMIT = 400;
     const threadBySubj = new Set((threads || []).map(t => String(t.subject || '').toLowerCase().replace(/^re:\s*/i, '').trim()));
     const unrepliedBySubj = new Set((unreplied || []).map(e => String(e.subject || '').toLowerCase().replace(/^re:\s*/i, '').trim()));
 
-    const meA = (SENDING_EMAIL || CURRENT_USER_EMAIL || '').toLowerCase();
-    const meB = (CURRENT_USER_EMAIL || '').toLowerCase();
+    const meA = (getRequestSendingEmail() || getRequestUserEmail() || '').toLowerCase();
+    const meB = (getRequestUserEmail() || '').toLowerCase();
     const norm = (s) => String(s || '').toLowerCase().replace(/^re:\s*/i, '').trim();
 
     // Hidden inbox filters
@@ -6822,7 +6898,7 @@ const LIMIT = 400;
  // Seed Categories: progress polling
 app.get('/api/seed-categories/progress', (req, res) => {
   try {
-    const key = String(CURRENT_USER_EMAIL || '').toLowerCase();
+    const key = String(getRequestUserEmail() || '').toLowerCase();
     const p = getSeedProgressForUser(key);
     return res.json({ success: true, active: !!p.active, processed: Number(p.processed) || 0, total: Number(p.total) || 400, startedAt: p.startedAt || 0, finishedAt: p.finishedAt || 0 });
   } catch (e) {
@@ -7089,7 +7165,7 @@ app.post('/api/seed-categories/add-all', async (req, res) => {
     let addedThreads = 0;
 
     // Current user identity for thread direction and pseudo response author
-    const meEmail = SENDING_EMAIL || CURRENT_USER_EMAIL || '';
+    const meEmail = getRequestSendingEmail() || getRequestUserEmail() || '';
     const meName = getDisplayNameForUser(meEmail);
 
     filteredItems.forEach(it => {
@@ -7456,7 +7532,7 @@ app.post('/api/add-approved-email', async (req, res) => {
 
     console.log(`Adding approved email to database: ${email.subject}`);
 
-    const meEmail = SENDING_EMAIL || CURRENT_USER_EMAIL || '';
+    const meEmail = getRequestSendingEmail() || getRequestUserEmail() || '';
     const meName = getDisplayNameForUser(meEmail);
 
     // Process categories (primary + additional, case-insensitive de-dup)
@@ -9992,8 +10068,8 @@ app.post('/api/keyword-group-facets', async (req, res) => {
 
     const isSelfAddress = (addr) => {
       const a = lower(addr || '');
-      const u1 = lower(CURRENT_USER_EMAIL || '');
-      const u2 = lower(SENDING_EMAIL || '');
+      const u1 = lower(getRequestUserEmail() || '');
+      const u2 = lower(getRequestSendingEmail() || '');
       return a.includes(u1) || a.includes(u2);
     };
 
@@ -11358,7 +11434,7 @@ Return ONLY JSON matching {"category":"<name>"} with the category chosen from th
           // Ensure model exists
           let model = __ensureClassifierForUserSync();
           if (!model) {
-            const trained = await __trainClassifierForUser(CURRENT_USER_EMAIL);
+            const trained = await __trainClassifierForUser(getRequestUserEmail());
             model = trained.model;
           }
           if (!model || !model.centroids || model.centroids.size === 0) {
@@ -12818,7 +12894,7 @@ function __vectorizeWithIdf(text, idf) {
 
 async function __trainClassifierForUser(userEmail) {
   try {
-    const userKey = String(userEmail || CURRENT_USER_EMAIL || '').toLowerCase();
+    const userKey = String(userEmail || getRequestUserEmail() || '').toLowerCase();
     const responses = loadResponseEmails() || [];
 
     // Group training docs by category; text = subject + snippet + body
@@ -12895,7 +12971,7 @@ async function __trainClassifierForUser(userEmail) {
 
 function __ensureClassifierForUserSync() {
   // Synchronous accessor; caller should have ensured training already, but fall back if missing
-  const key = String(CURRENT_USER_EMAIL || '').toLowerCase();
+  const key = String(getRequestUserEmail() || '').toLowerCase();
   return (__clfCacheByUser[key] && __clfCacheByUser[key].model) || null;
 }
 
@@ -12910,7 +12986,7 @@ function __ensureClassifierForUserSync() {
 app.post('/api/classifier/suggest', async (req, res) => {
   try {
     const emails = Array.isArray(req.body?.emails) ? req.body.emails : [];
-    const userKey = String(CURRENT_USER_EMAIL || '').toLowerCase();
+    const userKey = String(getRequestUserEmail() || '').toLowerCase();
 
     // Train or reuse cached model
     let model = __ensureClassifierForUserSync();
@@ -13299,7 +13375,7 @@ app.post('/api/test-classifier/run', async (req, res) => {
     const test = shuffled.slice(trainSize);
     // Status logs matching scripts/evaluate-classifier-limited.js
     console.log('\n=== Evaluate Limited Classifier (multi-signal with constraints) ===');
-    console.log(`User: ${CURRENT_USER_EMAIL}`);
+    console.log(`User: ${getRequestUserEmail()}`);
     console.log(`Split: 80% train / 20% test | Seed: 42`);
     console.log('');
     console.log(`Train size: ${train.length} | Test size: ${test.length}`);
@@ -14418,7 +14494,7 @@ app.post('/api/test-classifier/run-v4', async (req, res) => {
     const totalBatches = Math.ceil(test.length / BATCH);
     
     console.log('\n=== Evaluate Classifier V4 (batched) — UI request ===');
-    console.log(`User: ${CURRENT_USER_EMAIL}`);
+    console.log(`User: ${getRequestUserEmail()}`);
     console.log('Split: 80% train / 20% test | Seed: 42');
     console.log(`Per-category example cap: 30 | Batch size: ${BATCH} (${totalBatches} batches total)`);
     console.log(`Loaded ${labeled.length} labeled emails; using ${categoriesX.length} categories.`);
@@ -14658,7 +14734,7 @@ app.post('/api/test-classifier/run-v3', async (req, res) => {
     const totalBatches = Math.ceil(test.length / BATCH);
     
     console.log('\n=== Evaluate Classifier V3 (batched) — UI request ===');
-    console.log(`User: ${CURRENT_USER_EMAIL}`);
+    console.log(`User: ${getRequestUserEmail()}`);
     console.log('Split: 80% train / 20% test | Seed: 42');
     console.log(`Per-category example cap: 30 | Batch size: ${BATCH} (${totalBatches} batches total)`);
     console.log(`Loaded ${labeled.length} labeled emails; using ${categoriesX.length} categories.`);
@@ -14968,7 +15044,7 @@ app.get('/api/priority-today', async (req, res) => {
     
     try {
       // Try MongoDB first
-      const doc = await getUserDoc('priority_emails', CURRENT_USER_EMAIL);
+      const doc = await getUserDoc('priority_emails', getRequestUserEmail());
       if (doc && Array.isArray(doc.emails)) {
         pool = doc.emails.slice();
         console.log(`Loaded ${pool.length} priority emails from MongoDB`);
@@ -15021,20 +15097,20 @@ app.get('/api/priority-today', async (req, res) => {
         // Check for pre-categorized emails (cached classification results from precategorize script)
         let precategorizedMap = {};
         try {
-          console.log(`[priority-today] Looking up precategorized cache for user: ${CURRENT_USER_EMAIL}`);
-          const precatDoc = await getUserDoc('precategorized_emails', CURRENT_USER_EMAIL);
+          console.log(`[priority-today] Looking up precategorized cache for user: ${getRequestUserEmail()}`);
+          const precatDoc = await getUserDoc('precategorized_emails', getRequestUserEmail());
           if (precatDoc && Array.isArray(precatDoc.emails)) {
             precatDoc.emails.forEach(e => {
               if (e && e.id && e.suggestedCategories) {
                 precategorizedMap[e.id] = e;
               }
             });
-            console.log(`[priority-today] Loaded ${Object.keys(precategorizedMap).length} pre-categorized emails from cache for user ${CURRENT_USER_EMAIL}`);
+            console.log(`[priority-today] Loaded ${Object.keys(precategorizedMap).length} pre-categorized emails from cache for user ${getRequestUserEmail()}`);
             // Log a sample of cached IDs
             const sampleIds = Object.keys(precategorizedMap).slice(0, 5);
             console.log(`[priority-today] Sample cached IDs: ${sampleIds.join(', ')}`);
           } else {
-            console.log(`[priority-today] No precategorized cache found for user ${CURRENT_USER_EMAIL} (doc exists: ${!!precatDoc}, has emails: ${!!(precatDoc && precatDoc.emails)})`);
+            console.log(`[priority-today] No precategorized cache found for user ${getRequestUserEmail()} (doc exists: ${!!precatDoc}, has emails: ${!!(precatDoc && precatDoc.emails)})`);
           }
         } catch (precatErr) {
           console.warn('Failed to load pre-categorized emails:', precatErr?.message || precatErr);
@@ -15197,8 +15273,8 @@ app.get('/api/priority-today', async (req, res) => {
     }
     
     // If no data from MongoDB or local file, continue to Gmail API
-    // Ensure Gmail API is available and authenticated
-    if (!gmail || !gmailAuth) {
+    // Ensure Gmail API is available and authenticated for THIS request's user
+    if (!(await getContextGmailClient())) {
       const authUrl = getGmailAuthUrl();
       return res.status(401).json({
         success: false,
@@ -15207,7 +15283,7 @@ app.get('/api/priority-today', async (req, res) => {
         error: 'Gmail authentication required'
       });
     }
-    if (!(await hasStoredTokensForUser(CURRENT_USER_EMAIL))) {
+    if (!(await hasStoredTokensForUser(getRequestUserEmail()))) {
       const authUrl = getGmailAuthUrl();
       return res.status(401).json({
         success: false,
@@ -15455,7 +15531,7 @@ app.get('/', async (req, res) => {
 
 async function bootServer() {
   console.log(`Server running on ${BASE_URL}`);
-  console.log(`Current user: ${CURRENT_USER_EMAIL}`);
+  console.log(`Current user: ${getRequestUserEmail()}`);
   console.log(`Data directory: ${getCurrentUserPaths().USER_DATA_DIR}`);
   console.log(`Loaded ${emailMemory.scenarios.length} scenarios, ${emailMemory.refinements.length} refinements, ${emailMemory.savedGenerations.length} saved generations`);
 
