@@ -46,6 +46,28 @@ function isManagedAgentEnabled() {
 }
 
 /**
+ * Read-only reference mount of the main codebase, so the agent can inspect
+ * the real DOM structure / featureContext instead of guessing or asking the
+ * user. Reuses the PR-workflow token conventions; FEATURE_AGENT_REPO_TOKEN
+ * overrides if a dedicated read-only token is preferred. Returns null when no
+ * token is configured (sessions then run without the mount, as before).
+ */
+function buildRepoResource() {
+  const token = String(process.env.FEATURE_AGENT_REPO_TOKEN || process.env.GH_FINE_GRAINED_TOKEN || '').trim();
+  if (!token) return null;
+  const owner = String(process.env.GITHUB_REPO_OWNER || 'karthiksreedhar').trim();
+  const name = String(process.env.GITHUB_REPO_NAME || 'gmail-plugin').trim();
+  const branch = String(process.env.GITHUB_BASE_BRANCH || 'main').trim();
+  return {
+    type: 'github_repository',
+    url: `https://github.com/${owner}/${name}`,
+    authorization_token: token,
+    mount_path: '/workspace/gmail-plugin',
+    checkout: { type: 'branch', name: branch }
+  };
+}
+
+/**
  * Render the session's current files into a text block the agent can treat
  * as the authoritative current state (used when a feature is loaded into a
  * session whose remote agent hasn't seen those files yet).
@@ -85,11 +107,31 @@ async function ensureRemoteSession(session) {
     session.anthropicSessionId = null;
   }
 
-  const remote = await client.beta.sessions.create({
+  const baseParams = {
     agent: agentId,
     environment_id: environmentId,
     title: `feature-generator ${session.id}`
-  });
+  };
+
+  let remote;
+  const repoResource = buildRepoResource();
+  if (repoResource) {
+    // Session creation blocks until resources mount, so a bad/expired token
+    // or missing Contents:Read permission surfaces here. Never let the
+    // reference mount break generation -- fall back to a mount-less session.
+    try {
+      remote = await client.beta.sessions.create({ ...baseParams, resources: [repoResource] });
+      // Note: a clone that fails later (bad repo/token) degrades gracefully --
+      // the session runs without the mount rather than erroring.
+      console.log(`📚 Attached repo resource ${repoResource.url} (${repoResource.checkout.name}) at ${repoResource.mount_path}`);
+    } catch (error) {
+      console.warn(`Repo mount failed (${error.message}); creating session without the reference codebase`);
+    }
+  }
+  if (!remote) {
+    remote = await client.beta.sessions.create(baseParams);
+  }
+
   session.anthropicSessionId = remote.id;
   console.log(`🧠 Created Managed Agents session ${remote.id} for local session ${session.id}`);
   return { anthropicSessionId: remote.id, isNewRemote: true };
