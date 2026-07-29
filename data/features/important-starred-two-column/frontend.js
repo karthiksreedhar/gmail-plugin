@@ -100,10 +100,42 @@
       .tcv-col-important { border-top: 3px solid #f4b400; }
       .tcv-col-starred   { border-top: 3px solid #4285f4; }
 
-      /* Cards inside the columns fill the column width. */
+      /* Cards inside the columns fill the column width and never spill out.
+         The app's default card styles are tuned for a full-width list where
+         .email-from is set to "flex-shrink: 0; overflow: visible", so in a
+         narrow column long sender names / category pills / subjects can push
+         the row wider than the column and bleed into the gap and the other
+         column. These overrides let each part shrink and clip (with an
+         ellipsis) so everything stays inside the column. */
       .tcv-col .email-item {
         width: 100%;
+        max-width: 100%;
         box-sizing: border-box;
+        overflow: hidden;
+      }
+      .tcv-col .email-content { min-width: 0; overflow: hidden; }
+      .tcv-col .email-header { min-width: 0; overflow: hidden; }
+      .tcv-col .email-from {
+        min-width: 0;
+        flex-shrink: 1;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .tcv-col .email-from .email-categories {
+        min-width: 0;
+        overflow: hidden;
+        flex-wrap: nowrap;
+      }
+      .tcv-col .email-subject {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .tcv-col .email-date {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
       }
 
       /* Placeholder header shown when a column's section has no emails,
