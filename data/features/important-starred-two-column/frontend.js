@@ -1,66 +1,67 @@
 /**
- * Important / Starred Two-Column Layout - Frontend
+ * Important + Unread / Starred Two-Column Layout - Frontend
  *
- * Re-arranges the approved email list into a two-column layout:
- *   - LEFT  column : the "Important" section
- *   - RIGHT column : the "Starred" section
- *   - BELOW (single full-width column): the "Everything else" section
+ * Replaces the single stacked email list on the main page with a two-column
+ * layout:
  *
- * This is a pure client-side / layout feature. It does NOT fetch, change,
- * delete or re-classify any data. The app already splits the approved list
- * into native "Important", "Starred" and "Everything else" sections (based on
- * each email's isImportant / isStarred flags) and renders them stacked in
- * #emailContainer as:
+ *   - LEFT  column : "Important & Unread"  -> emails that are important OR unread
+ *   - RIGHT column : "Starred"             -> all starred emails
+ *   - BELOW (full width) : "Everything else" -> the remaining read /
+ *                          non-important / non-starred emails, so nothing is
+ *                          ever hidden.
  *
- *     <header>                                (Important header + collapse toggle)
- *     <div id="inbox-section-rows-important"> (the Important email cards)
- *     <header>                                (Starred header + collapse toggle)
- *     <div id="inbox-section-rows-starred">   (the Starred email cards)
- *     <header>                                (Everything else header + toggle)
- *     <div id="inbox-section-rows-other">     (the remaining email cards)
+ * How the grouping is decided (per email, mutually exclusive so no card is
+ * duplicated):
+ *   1. If the email is Starred            -> RIGHT column ("all the starred stuff").
+ *   2. Else if it is Important OR Unread  -> LEFT column.
+ *   3. Else                               -> "Everything else" section below.
  *
- * This feature MOVES those exact nodes (never clones them) into a two-column
- * wrapper, so the collapse toggles, delete buttons and "open thread" click
- * handlers all keep working untouched.
+ * This is a pure client-side layout feature. It does NOT fetch, change, delete
+ * or re-classify any data. It reads each email's isImportant / isStarred /
+ * isUnread flags from window.EmailAssistant.getEmails() and MOVES the exact row
+ * nodes the app already rendered (never clones them), so the open-thread click
+ * handler, delete buttons, notes previews and the recently-added highlight all
+ * keep working untouched.
+ *
+ * Because only the currently rendered rows are re-arranged, the layout always
+ * respects the active category filter / search results.
  *
  * A header toggle button turns the layout on/off; the choice is remembered in
- * localStorage. Because the app re-renders the list on approvals, filter
- * changes and refreshes (and does NOT emit an "emailsLoaded" event), the
- * feature stays in sync by wrapping displayEmails() and running a lightweight
- * periodic check.
+ * localStorage. The app re-renders the list on approvals, filter changes and
+ * refreshes (and does NOT emit an "emailsLoaded" event), so the feature stays
+ * in sync by wrapping displayEmails() and running a lightweight periodic check.
  */
 
 (function () {
   'use strict';
 
-  console.log('Important / Starred Two-Column Layout: Frontend loading...');
+  console.log('Important+Unread / Starred Two-Column Layout: Frontend loading...');
 
   if (!window.EmailAssistant) {
-    console.error('Important / Starred Two-Column Layout: EmailAssistant API not available');
+    console.error('Important+Unread / Starred Two-Column Layout: EmailAssistant API not available');
     return;
   }
 
   // Guard against the feature script being loaded more than once.
-  if (window.__importantStarredTwoColInitialized) {
-    console.log('Important / Starred Two-Column Layout: already initialized, skipping');
+  if (window.__importantUnreadStarredTwoColInitialized) {
+    console.log('Important+Unread / Starred Two-Column Layout: already initialized, skipping');
     return;
   }
-  window.__importantStarredTwoColInitialized = true;
+  window.__importantUnreadStarredTwoColInitialized = true;
 
   const API = window.EmailAssistant;
 
   /* ============================================================
    * CONFIGURATION / CONSTANTS
    * ============================================================ */
-  const CONTAINER_ID = 'emailContainer';           // the approved-list container
-  const SECTION_KEYS = ['important', 'starred', 'other']; // native section keys
-  const ROWS_ID = key => 'inbox-section-rows-' + key;     // native rows wrapper ids
+  const CONTAINER_ID = 'emailContainer';   // the approved-list container
+  const WRAPPER_CLASS = 'iust-wrapper';     // our injected layout wrapper
+  const STORAGE_KEY = 'importantUnreadStarredTwoColEnabled';
+  const REFRESH_MS = 800;                   // background re-check interval
 
-  const STORAGE_KEY = 'importantStarredTwoColEnabled';
-  const REFRESH_MS = 800;   // background re-check interval
-
-  const LEFT_LABEL = '\u2757 Important';   // ❗ Important
-  const RIGHT_LABEL = '\u2B50 Starred';    // ⭐ Starred
+  const LEFT_LABEL = '\u2757 Important & Unread'; // ❗ Important & Unread
+  const RIGHT_LABEL = '\u2B50 Starred';           // ⭐ Starred
+  const OTHER_LABEL = 'Everything else';
 
   /* ============================================================
    * STATE
@@ -71,25 +72,25 @@
     if (saved !== null) enabled = saved === 'true';
   } catch (e) { /* localStorage may be unavailable */ }
 
-  let isBusy = false;  // reentrancy guard while manipulating the DOM
+  let isBusy = false; // reentrancy guard while manipulating the DOM
 
   /* ============================================================
    * STYLES
    * ============================================================ */
   function injectStyles() {
-    if (document.getElementById('important-starred-two-col-styles')) return;
+    if (document.getElementById('important-unread-starred-two-col-styles')) return;
     const style = document.createElement('style');
-    style.id = 'important-starred-two-col-styles';
+    style.id = 'important-unread-starred-two-col-styles';
     style.textContent = `
-      .tcv-wrapper { width: 100%; box-sizing: border-box; }
+      .iust-wrapper { width: 100%; box-sizing: border-box; }
 
-      .tcv-top {
+      .iust-top {
         display: flex;
         gap: 16px;
         align-items: flex-start;
       }
 
-      .tcv-col {
+      .iust-col {
         flex: 1 1 0;
         min-width: 0;               /* allow flex items to shrink */
         display: flex;
@@ -97,50 +98,11 @@
       }
 
       /* Subtle accent so the two columns read as distinct at a glance. */
-      .tcv-col-important { border-top: 3px solid #f4b400; }
-      .tcv-col-starred   { border-top: 3px solid #4285f4; }
+      .iust-col-primary { border-top: 3px solid #f4b400; }
+      .iust-col-starred { border-top: 3px solid #4285f4; }
 
-      /* Cards inside the columns fill the column width and never spill out.
-         The app's default card styles are tuned for a full-width list where
-         .email-from is set to "flex-shrink: 0; overflow: visible", so in a
-         narrow column long sender names / category pills / subjects can push
-         the row wider than the column and bleed into the gap and the other
-         column. These overrides let each part shrink and clip (with an
-         ellipsis) so everything stays inside the column. */
-      .tcv-col .email-item {
-        width: 100%;
-        max-width: 100%;
-        box-sizing: border-box;
-        overflow: hidden;
-      }
-      .tcv-col .email-content { min-width: 0; overflow: hidden; }
-      .tcv-col .email-header { min-width: 0; overflow: hidden; }
-      .tcv-col .email-from {
-        min-width: 0;
-        flex-shrink: 1;
-        overflow: hidden;
-        text-overflow: ellipsis;
-      }
-      .tcv-col .email-from .email-categories {
-        min-width: 0;
-        overflow: hidden;
-        flex-wrap: nowrap;
-      }
-      .tcv-col .email-subject {
-        min-width: 0;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-      }
-      .tcv-col .email-date {
-        min-width: 0;
-        overflow: hidden;
-        text-overflow: ellipsis;
-      }
-
-      /* Placeholder header shown when a column's section has no emails,
-         styled to match the app's native section headers. */
-      .tcv-placeholder-header {
+      /* Section headers, styled to match the app's native inbox section headers. */
+      .iust-header {
         display: flex;
         align-items: center;
         gap: 10px;
@@ -154,22 +116,60 @@
         text-transform: uppercase;
         letter-spacing: 0.3px;
       }
-      .tcv-placeholder-header .tcv-count {
+      .iust-header .iust-count {
         font-weight: 400;
         text-transform: none;
         color: #9aa0a6;
       }
 
-      .tcv-empty {
+      .iust-empty {
         color: #9aa0a6;
         font-size: 13px;
         font-style: italic;
         padding: 12px 16px;
       }
 
+      /* Cards inside the columns fill the column width and never spill out.
+         The app's default card styles are tuned for a full-width list where
+         .email-from is set to not shrink, so in a narrow column long sender
+         names / category pills / subjects can push the row wider than the
+         column and bleed into the gap and the other column. These overrides let
+         each part shrink and clip (with an ellipsis) so everything stays inside
+         the column. */
+      .iust-col .email-item {
+        width: 100%;
+        max-width: 100%;
+        box-sizing: border-box;
+        overflow: hidden;
+      }
+      .iust-col .email-content { min-width: 0; overflow: hidden; }
+      .iust-col .email-header { min-width: 0; overflow: hidden; }
+      .iust-col .email-from {
+        min-width: 0;
+        flex-shrink: 1;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .iust-col .email-from .email-categories {
+        min-width: 0;
+        overflow: hidden;
+        flex-wrap: nowrap;
+      }
+      .iust-col .email-subject {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .iust-col .email-date {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
       /* Stack the two top columns on narrow screens. */
       @media (max-width: 768px) {
-        .tcv-top { flex-direction: column; }
+        .iust-top { flex-direction: column; }
       }
     `;
     (document.head || document.documentElement).appendChild(style);
@@ -183,139 +183,154 @@
     return document.getElementById(CONTAINER_ID);
   }
 
-  // Locate a native section (its rows wrapper + the header that precedes it).
-  // Returns null if that section wasn't rendered (i.e. it had no emails).
-  function getSection(container, key) {
-    const rows = container.querySelector('#' + ROWS_ID(key));
-    if (!rows) return null;
-    const prev = rows.previousElementSibling;
-    const header = (prev && prev !== rows) ? prev : null;
-    return { header, rows };
-  }
-
-  // Build a placeholder header + empty note for a missing column section.
-  function fillPlaceholder(col, label) {
-    const ph = document.createElement('div');
-    ph.className = 'tcv-placeholder-header';
-    ph.innerHTML = '<span>' + label + ' <span class="tcv-count">(0)</span></span>';
-    const note = document.createElement('div');
-    note.className = 'tcv-empty';
-    note.textContent = 'No emails here';
-    col.appendChild(ph);
-    col.appendChild(note);
-  }
-
-  // Move a real section (header + rows) into a column, or fall back to a
-  // placeholder so the two-column shape stays stable.
-  function fillColumn(col, section, label) {
-    if (section) {
-      if (section.header) col.appendChild(section.header);
-      col.appendChild(section.rows);
-    } else {
-      fillPlaceholder(col, label);
+  // Build an id -> email lookup from the app's full email list. Each email
+  // carries the isImportant / isStarred / isUnread flags we need.
+  function buildEmailIndex() {
+    const index = new Map();
+    try {
+      const emails = typeof API.getEmails === 'function' ? (API.getEmails() || []) : [];
+      emails.forEach(e => {
+        if (e && e.id != null) index.set(String(e.id), e);
+      });
+    } catch (err) {
+      console.error('Important+Unread / Starred Two-Column Layout: getEmails() failed', err);
     }
+    return index;
+  }
+
+  // Decide which group a rendered row belongs to.
+  // Returns 'starred' | 'primary' | 'other'.
+  function classifyRow(row, index) {
+    const id = row.dataset ? row.dataset.emailId : null;
+    const email = id != null ? index.get(String(id)) : null;
+
+    if (email) {
+      if (email.isStarred) return 'starred';
+      if (email.isImportant || email.isUnread) return 'primary';
+      return 'other';
+    }
+
+    // Fallback when the row isn't in the current email list (e.g. search
+    // results): we can still read unread state from the row's own class.
+    if (row.classList.contains('email-unread')) return 'primary';
+    return 'other';
+  }
+
+  // All rendered email rows in the container that are NOT already inside our
+  // wrapper (i.e. freshly rendered by the app and awaiting placement).
+  function collectLooseRows(container) {
+    return Array.from(container.querySelectorAll('.email-item'))
+      .filter(row => !row.closest('.' + WRAPPER_CLASS));
+  }
+
+  function buildHeader(label, count) {
+    const header = document.createElement('div');
+    header.className = 'iust-header';
+    header.innerHTML = '<span>' + label + ' <span class="iust-count">(' + count + ')</span></span>';
+    return header;
+  }
+
+  // Build a column: header + rows (or an empty note when there are none).
+  function buildColumn(colClass, label, rows) {
+    const col = document.createElement('div');
+    col.className = 'iust-col ' + colClass;
+    col.appendChild(buildHeader(label, rows.length));
+
+    const rowsWrap = document.createElement('div');
+    rowsWrap.className = 'iust-col-rows';
+    if (rows.length) {
+      rows.forEach(row => rowsWrap.appendChild(row)); // MOVE (not clone)
+    } else {
+      const note = document.createElement('div');
+      note.className = 'iust-empty';
+      note.textContent = 'No emails here';
+      rowsWrap.appendChild(note);
+    }
+    col.appendChild(rowsWrap);
+    return col;
   }
 
   /* ============================================================
    * CORE: build / refresh the two-column layout
    * ============================================================ */
-  function rebuild(container) {
-    const imp = getSection(container, 'important');
-    const star = getSection(container, 'starred');
-    const other = getSection(container, 'other');
-
-    // If neither Important nor Starred exists, the app rendered a flat single
-    // list (only "everything else", or nothing). Leave it as-is.
-    if (!imp && !star) return;
-
-    isBusy = true;
-    try {
-      const wrapper = document.createElement('div');
-      wrapper.className = 'tcv-wrapper';
-
-      const top = document.createElement('div');
-      top.className = 'tcv-top';
-
-      const leftCol = document.createElement('div');
-      leftCol.className = 'tcv-col tcv-col-important';
-      const rightCol = document.createElement('div');
-      rightCol.className = 'tcv-col tcv-col-starred';
-
-      fillColumn(leftCol, imp, LEFT_LABEL);
-      fillColumn(rightCol, star, RIGHT_LABEL);
-
-      top.appendChild(leftCol);
-      top.appendChild(rightCol);
-      wrapper.appendChild(top);
-
-      // "Everything else" spans full width below the two columns.
-      if (other) {
-        if (other.header) wrapper.appendChild(other.header);
-        wrapper.appendChild(other.rows);
-      }
-
-      container.appendChild(wrapper);
-
-      console.log(
-        'Important / Starred Two-Column Layout: laid out columns ' +
-        '(Important: ' + (imp ? 'yes' : 'empty') +
-        ', Starred: ' + (star ? 'yes' : 'empty') +
-        ', Everything else: ' + (other ? 'yes' : 'none') + ')'
-      );
-    } catch (err) {
-      console.error('Important / Starred Two-Column Layout: rebuild error', err);
-    } finally {
-      isBusy = false;
-    }
-  }
-
-  // Entry point: arrange freshly rendered native sections into two columns.
   function reorganize() {
     if (!enabled || isBusy) return;
 
     const container = getContainer();
     if (!container) return;
 
-    // Native section rows that are NOT already inside our wrapper are "loose"
-    // (i.e. freshly rendered by the app and awaiting placement).
-    const loose = SECTION_KEYS
-      .map(k => container.querySelector('#' + ROWS_ID(k)))
-      .some(el => el && !el.closest('.tcv-wrapper'));
+    const looseRows = collectLooseRows(container);
+    if (looseRows.length === 0) return; // already arranged, or nothing to arrange
 
-    if (!loose) return; // already arranged, or nothing to arrange
+    const index = buildEmailIndex();
 
-    // Defensive: drop any stale wrapper before rebuilding from loose sections.
-    const stale = container.querySelector('.tcv-wrapper');
-    if (stale && stale.querySelector('.email-item') === null) stale.remove();
+    // Split the freshly rendered rows into the three groups (order preserved,
+    // so the app's date sort is kept inside each group).
+    const primaryRows = [];
+    const starredRows = [];
+    const otherRows = [];
+    looseRows.forEach(row => {
+      const group = classifyRow(row, index);
+      if (group === 'starred') starredRows.push(row);
+      else if (group === 'primary') primaryRows.push(row);
+      else otherRows.push(row);
+    });
 
-    rebuild(container);
-  }
-
-  // Undo the layout: return the real section nodes to the container in the
-  // app's original order (Important, Starred, Everything else), then remove
-  // the wrapper (which also discards any placeholder columns).
-  function restore() {
-    const container = getContainer();
-    if (!container) return;
-    const wrapper = container.querySelector('.tcv-wrapper');
-    if (!wrapper) return;
+    // If nothing qualifies for either column, leave the native flat list as-is
+    // (a two-column shell over only "everything else" would look odd).
+    if (primaryRows.length === 0 && starredRows.length === 0) return;
 
     isBusy = true;
     try {
-      SECTION_KEYS.forEach(key => {
-        const rows = wrapper.querySelector('#' + ROWS_ID(key));
-        if (!rows) return;
-        const prev = rows.previousElementSibling;
-        if (prev && prev !== rows && !prev.classList.contains('tcv-placeholder-header')) {
-          container.appendChild(prev);
-        }
-        container.appendChild(rows);
-      });
-      wrapper.remove();
+      const wrapper = document.createElement('div');
+      wrapper.className = WRAPPER_CLASS;
+
+      const top = document.createElement('div');
+      top.className = 'iust-top';
+      top.appendChild(buildColumn('iust-col-primary', LEFT_LABEL, primaryRows));
+      top.appendChild(buildColumn('iust-col-starred', RIGHT_LABEL, starredRows));
+      wrapper.appendChild(top);
+
+      // "Everything else" spans full width below the two columns.
+      if (otherRows.length) {
+        wrapper.appendChild(buildHeader(OTHER_LABEL, otherRows.length));
+        const otherWrap = document.createElement('div');
+        otherWrap.className = 'iust-other-rows';
+        otherRows.forEach(row => otherWrap.appendChild(row)); // MOVE (not clone)
+        wrapper.appendChild(otherWrap);
+      }
+
+      // The row nodes have already been moved into the (still detached)
+      // wrapper, so clearing the container only discards the now-empty native
+      // section shells/headers. Then drop our freshly built wrapper in.
+      container.innerHTML = '';
+      container.appendChild(wrapper);
+
+      console.log(
+        'Important+Unread / Starred Two-Column Layout: laid out columns ' +
+        '(Important & Unread: ' + primaryRows.length +
+        ', Starred: ' + starredRows.length +
+        ', Everything else: ' + otherRows.length + ')'
+      );
     } catch (err) {
-      console.error('Important / Starred Two-Column Layout: restore error', err);
+      console.error('Important+Unread / Starred Two-Column Layout: reorganize error', err);
     } finally {
       isBusy = false;
+    }
+  }
+
+  // Undo the layout by asking the app to re-render the current view natively.
+  // filterByCategory() rebuilds #emailContainer from scratch; because the
+  // feature is disabled, our reorganize() becomes a no-op and the native
+  // stacked layout stays.
+  function restore() {
+    try {
+      if (typeof API.filterByCategory === 'function') {
+        const filter = typeof API.getCurrentFilter === 'function' ? API.getCurrentFilter() : 'all';
+        API.filterByCategory(filter || 'all');
+      }
+    } catch (err) {
+      console.error('Important+Unread / Starred Two-Column Layout: restore error', err);
     }
   }
 
@@ -327,14 +342,14 @@
   }
 
   function updateButtonLabel() {
-    const btn = document.querySelector('.tcv-toggle-btn');
+    const btn = document.querySelector('.iust-toggle-btn');
     if (btn) btn.textContent = buttonLabel();
   }
 
   function addToggleButton() {
     if (typeof API.addHeaderButton !== 'function') return;
     API.addHeaderButton(buttonLabel(), () => setEnabled(!enabled), {
-      className: 'btn btn-primary tcv-toggle-btn',
+      className: 'btn btn-primary iust-toggle-btn',
       style: { marginRight: '12px' }
     });
   }
@@ -364,7 +379,7 @@
   // Wrap the app's displayEmails() so we re-flow immediately after each render.
   function hookDisplayEmails() {
     if (typeof window.displayEmails !== 'function') return;
-    if (window.displayEmails.__tcvHooked) return;
+    if (window.displayEmails.__iustHooked) return;
 
     const original = window.displayEmails;
     window.displayEmails = function (...args) {
@@ -376,8 +391,8 @@
       }
       return result;
     };
-    window.displayEmails.__tcvHooked = true;
-    console.log('Important / Starred Two-Column Layout: hooked displayEmails()');
+    window.displayEmails.__iustHooked = true;
+    console.log('Important+Unread / Starred Two-Column Layout: hooked displayEmails()');
   }
 
   /* ============================================================
@@ -404,10 +419,10 @@
     scheduleReorganize(200);
 
     updateButtonLabel();
-    console.log('Important / Starred Two-Column Layout: Frontend initialized (enabled=' + enabled + ')');
+    console.log('Important+Unread / Starred Two-Column Layout: Frontend initialized (enabled=' + enabled + ')');
   }
 
   initialize();
 
-  console.log('Important / Starred Two-Column Layout: Frontend loaded successfully');
+  console.log('Important+Unread / Starred Two-Column Layout: Frontend loaded successfully');
 })();

@@ -1,79 +1,62 @@
-# Important / Starred Two-Column Layout
+# Important + Unread / Starred Two-Column Layout
 
 **Feature ID:** `important-starred-two-column`
-**Type:** Frontend-only (no backend, no LLM calls)
+**Type:** Frontend only (pure layout — no backend, no data changes)
 
-Re-arranges your approved email list into a two-column layout instead of one long
-stacked list:
+## What it does
 
-```
-┌───────────────────────┬───────────────────────┐
-│   ❗ Important (n)     │     ⭐ Starred (n)     │   <- two columns, side by side
-│   [ email card ]      │     [ email card ]     │
-│   [ email card ]      │     [ email card ]     │
-├───────────────────────┴───────────────────────┤
-│              Everything else (n)               │   <- single full-width column
-│              [ email card ]                    │
-│              [ email card ]                    │
-└────────────────────────────────────────────────┘
-```
+Replaces the single stacked email list on the main page with a **two-column
+layout**:
 
-- **Left column** — the **Important** section
-- **Right column** — the **Starred** section
-- **Below (single full-width column)** — **Everything else**
+| Left column | Right column |
+| --- | --- |
+| **❗ Important & Unread** — emails that are *important* **or** *unread* | **⭐ Starred** — all *starred* emails |
 
-## How it works
+Any remaining emails (read, not important, not starred) are shown in a
+full-width **"Everything else"** section **below** the two columns, so nothing
+is ever hidden.
 
-The app already groups the approved list into three native sections —
-**Important**, **Starred** and **Everything else** — based on each email's Gmail
-`isImportant` / `isStarred` flags, and renders them stacked vertically inside
-`#emailContainer`. This feature does **not** re-fetch, re-classify, reorder or
-change any data. It simply **moves the existing section nodes** into a
-two-column wrapper:
+## How an email is placed
 
-- The `Important` section moves into the left column.
-- The `Starred` section moves into the right column.
-- The `Everything else` section stays full width, below the two columns.
+Each email lands in exactly one place (no card is duplicated). The rules are
+applied in this order:
 
-Because the actual DOM nodes are moved (never cloned), everything keeps working
-exactly as before: clicking a card still opens the thread, the delete buttons
-still work, and each section's collapse/expand toggle still works.
+1. If the email is **Starred** → right column (this honors "all the starred
+   stuff" — starred emails always go here, even if they're also important or
+   unread).
+2. Else if the email is **Important** *or* **Unread** → left column.
+3. Otherwise → "Everything else" (full-width, below).
 
-If a section has no emails (e.g. you have no starred mail), that column shows a
-small "No emails here" placeholder so the two-column shape stays stable. If
-neither Important nor Starred has any emails, the app renders a single flat list
-and the feature leaves it untouched.
+Emails keep the app's normal newest-first ordering inside each group.
 
-## Toggling the layout
+## Behavior notes
 
-A **"▩ 2-Column: On / ☰ 2-Column: Off"** button is added to the header bar.
-Click it to switch between the two-column layout and the normal stacked list.
-Your choice is remembered (via `localStorage`) across page reloads.
+- **Pure layout.** The feature never fetches, edits, deletes or re-classifies
+  any email. It reads each email's `isImportant` / `isStarred` / `isUnread`
+  flags and physically **moves the row nodes the app already rendered** (it
+  never clones them), so opening a thread, the delete button, notes previews
+  and the "recently added" highlight all keep working exactly as before.
+- **Respects filters & search.** Only the rows currently on screen are
+  re-arranged, so the active category filter or search results are preserved.
+- **Stays in sync.** The app re-renders the list on approvals, filter changes
+  and refreshes (and does not emit an `emailsLoaded` event), so the feature
+  wraps `displayEmails()` and runs a lightweight periodic check to re-flow the
+  columns after every render.
+- **Empty columns.** If one column has no emails it shows a small
+  "No emails here" placeholder so the two-column shape stays stable. If *both*
+  columns would be empty (only "everything else" emails exist), the feature
+  leaves the app's native single list untouched.
+- **Responsive.** On narrow screens (≤ 768px) the two columns stack vertically.
 
-## How it stays in sync
+## Toggle
 
-The list is re-rendered by the app whenever you approve a new email, change the
-category filter, or refresh. This app does **not** emit an `emailsLoaded` event,
-so the feature keeps itself in sync by:
-
-1. Wrapping the app's `displayEmails()` function so it re-flows right after each render.
-2. Reacting to the `featureLoaded` event.
-3. Running a lightweight background check (~every 0.8s) that only does work when
-   newly rendered sections are detected — it is a no-op the rest of the time.
-
-## Notes & caveats
-
-- Placement uses the app's own Important / Starred / Everything else sections
-  (driven by Gmail's `isImportant` / `isStarred` flags), so it matches exactly
-  what the app already considers important and starred.
-- Responsive: on narrow screens (≤768px) the Important and Starred columns stack
-  vertically so cards stay readable.
-- No server-side code and no LLM usage, so there are no token/batching concerns.
+A **"2-Column: On/Off"** button is added to the header bar. Turning it off
+restores the app's native stacked list; the choice is remembered in
+`localStorage` (key `importantUnreadStarredTwoColEnabled`) across reloads.
+The layout is **on** by default.
 
 ## Files
 
-| File            | Purpose                                             |
-| --------------- | --------------------------------------------------- |
-| `manifest.json` | Feature metadata (frontend-only).                   |
-| `frontend.js`   | Layout logic, header toggle, and styling.           |
-| `README.md`     | This document.                                      |
+- `manifest.json` — feature metadata (frontend-only).
+- `frontend.js` — the entire layout implementation (IIFE, no globals leaked
+  besides a one-time init guard).
