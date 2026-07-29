@@ -1,0 +1,11 @@
+{
+  "id": "important-starred-two-column",
+  "name": "Important / Starred Two-Column Layout",
+  "version": "1.0.0",
+  "description": "Re-arranges the approved email list into a two-column layout: the Important section on the left, the Starred section on the right, and Everything else stacked in a single full-width column below. Pure layout only - no data changes.",
+  "author": "Gmail Plugin Feature Generator",
+  "frontend": "frontend.js",
+  "permissions": [
+    "emails:read"
+  ]
+}
