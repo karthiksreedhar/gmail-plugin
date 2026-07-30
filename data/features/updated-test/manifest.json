@@ -1,0 +1,9 @@
+{
+  "id": "updated-test",
+  "name": "Updated Test",
+  "version": "1.1.0",
+  "description": "Adds an 'updated-test' button to the top of the UI that shows a popup with the message 'claude-test'.",
+  "author": "Gmail Plugin Feature Generator",
+  "frontend": "frontend.js",
+  "permissions": []
+}
