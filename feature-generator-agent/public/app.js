@@ -532,7 +532,7 @@ async function handleSend() {
     // finish asynchronously on the server. Keep polling until the final
     // result arrives (it has the same shape as the synchronous response).
     if (data.success && data.pending) {
-      data = await pollForChatResult();
+      data = await pollForChatResult(loadingMsg);
     }
 
     // Remove loading message
@@ -619,7 +619,8 @@ async function handleSend() {
 // Resolves with a payload shaped like the synchronous /api/chat response.
 // Polls sequentially (each request completes before the next is scheduled)
 // so the server never finalizes the same turn twice concurrently.
-async function pollForChatResult() {
+// While pending, streams the agent's live activity into the loading bubble.
+async function pollForChatResult(loadingMsg) {
   const POLL_INTERVAL_MS = 3000;
   const TIMEOUT_MS = 20 * 60 * 1000;
   const startedAt = Date.now();
@@ -631,7 +632,12 @@ async function pollForChatResult() {
       const response = await fetch(`/api/chat/poll/${encodeURIComponent(sessionId)}`);
       const data = await response.json();
       consecutiveFailures = 0;
-      if (data && data.pending) continue;
+      if (data && data.pending) {
+        if (loadingMsg && typeof loadingMsg.setProgress === 'function') {
+          loadingMsg.setProgress(data.progress);
+        }
+        continue;
+      }
       return data;
     } catch (error) {
       console.warn('Poll failed (will retry):', error);
@@ -743,14 +749,9 @@ async function handleCreatePr() {
 
     addMessage(
       'assistant',
-      `PR creation requested for \`${currentFeatureId}\`.\n\nGitHub Actions will create a branch from \`${data.baseBranch || 'main'}\`, commit the generated files, and open a pull request.\n\nTrack progress here: ${data.workflowUrl || 'https://github.com/karthiksreedhar/gmail-plugin/actions'}`
+      `⏳ PR creation started for \`${currentFeatureId}\`.\n\nGitHub Actions is creating a branch from \`${data.baseBranch || 'main'}\`, committing the generated files, and opening a pull request. This usually takes about a minute.\n\n**I'll post a message here the moment the workflow finishes** — no need to watch the repository. (Progress, if you're curious: ${data.workflowUrl || 'https://github.com/karthiksreedhar/gmail-plugin/actions'})`
     );
-    currentPrRequested = true;
-    updateCreatePrButton();
-    addMessage(
-      'assistant',
-      `Approval stage ready for \`${currentFeatureId}\`.\n\nClick **Approve Merge + Deploy** to merge the generated PR into \`${data.baseBranch || 'main'}\` and trigger production deployment.`
-    );
+    watchWorkflowCompletion(currentFeatureId, 'pr');
     showToast('PR creation requested', 'success');
   } catch (error) {
     addMessage('assistant', `Failed to request a PR for \`${currentFeatureId}\`.\n\nError: ${error.message}`);
@@ -780,8 +781,9 @@ async function handleApproveDeploy() {
 
     addMessage(
       'assistant',
-      `Approval accepted for \`${currentFeatureId}\`.\n\nGitHub Actions will validate and merge the generated PR into \`${data.productionBranch || 'main'}\`.\n\nTrack progress here: ${data.workflowUrl || 'https://github.com/karthiksreedhar/gmail-plugin/actions'}`
+      `⏳ Approval accepted for \`${currentFeatureId}\`.\n\nGitHub Actions is validating and merging the generated PR into \`${data.productionBranch || 'main'}\`.\n\n**I'll post a message here when the merge workflow completes** — no need to watch the repository. (Progress, if you're curious: ${data.workflowUrl || 'https://github.com/karthiksreedhar/gmail-plugin/actions'})`
     );
+    watchWorkflowCompletion(currentFeatureId, 'merge');
     showToast('Approve + deploy requested', 'success');
   } catch (error) {
     addMessage('assistant', `Failed to approve/deploy \`${currentFeatureId}\`.\n\nError: ${error.message}`);
@@ -790,6 +792,98 @@ async function handleApproveDeploy() {
     approveDeployBtn.disabled = false;
     approveDeployBtn.innerHTML = originalHtml;
   }
+}
+
+// --- GitHub Actions completion watcher ---------------------------------
+// The PR and approval workflows report their status back to the main system
+// as they run; polling the proxied pipeline-status endpoint lets us post a
+// chat message the moment a workflow actually completes, so the user knows
+// when to move to the next step without watching the repository.
+const activePipelineWatchers = new Set();
+
+function watchWorkflowCompletion(featureId, stage) {
+  const key = `${featureId}:${stage}`;
+  if (!featureId || activePipelineWatchers.has(key)) return;
+  activePipelineWatchers.add(key);
+
+  const POLL_INTERVAL_MS = 8000;
+  const TIMEOUT_MS = 15 * 60 * 1000;
+  const startedAt = Date.now();
+  const stageLabel = stage === 'pr' ? 'PR creation' : 'merge + deploy';
+  const actionsUrl = 'https://github.com/karthiksreedhar/gmail-plugin/actions';
+
+  const finish = (message, toast, toastType) => {
+    activePipelineWatchers.delete(key);
+    addMessage('assistant', message);
+    if (toast) showToast(toast, toastType);
+  };
+
+  const tick = async () => {
+    if (!activePipelineWatchers.has(key)) return;
+    if (Date.now() - startedAt > TIMEOUT_MS) {
+      finish(`⏱️ I stopped watching the ${stageLabel} workflow for \`${featureId}\` after 15 minutes without a result. Check it directly here: ${actionsUrl}`);
+      return;
+    }
+
+    try {
+      const response = await fetch(`/api/features/${encodeURIComponent(featureId)}/pipeline-status`);
+      const data = await response.json().catch(() => ({}));
+      const feature = (data && data.success && data.feature) ? data.feature : null;
+
+      if (feature) {
+        const status = String(feature.status || '').trim();
+        const failureDetail = feature.lastError ? `\n\nDetails: ${feature.lastError}` : '';
+
+        if (stage === 'pr') {
+          if (status === 'pr_open' || status === 'merge_in_progress' || status === 'pr_merged') {
+            const prLink = feature.prUrl
+              ? `\n\nPull request: ${feature.prUrl}`
+              : '';
+            currentPrRequested = true;
+            updateCreatePrButton();
+            finish(
+              `✅ The **${stageLabel}** GitHub Action is complete for \`${featureId}\` — the pull request is open.${prLink}\n\nYou can now click **Approve Merge + Deploy** whenever you're ready.`,
+              'PR is open — ready to approve',
+              'success'
+            );
+            return;
+          }
+          if (status === 'error') {
+            finish(
+              `❌ The **${stageLabel}** GitHub Action failed for \`${featureId}\`.${failureDetail}\n\nSee the run logs: ${actionsUrl}`,
+              'PR workflow failed',
+              'error'
+            );
+            return;
+          }
+        } else {
+          if (status === 'pr_merged') {
+            finish(
+              `✅ The **${stageLabel}** GitHub Action is complete for \`${featureId}\` — the PR was merged into main.\n\nProduction deployment is now underway and typically finishes within a couple of minutes; after that the feature is live.`,
+              'PR merged — deployment underway',
+              'success'
+            );
+            return;
+          }
+          if (status === 'deploy_failed' || status === 'error') {
+            finish(
+              `❌ The **${stageLabel}** GitHub Action failed for \`${featureId}\`.${failureDetail}\n\nSee the run logs: ${actionsUrl}`,
+              'Merge workflow failed',
+              'error'
+            );
+            return;
+          }
+        }
+      }
+    } catch (error) {
+      // Transient network/server hiccup: keep polling.
+      console.warn('Pipeline status poll failed (will retry):', error);
+    }
+
+    setTimeout(tick, POLL_INTERVAL_MS);
+  };
+
+  setTimeout(tick, POLL_INTERVAL_MS);
 }
 
 // Store the current operations log for display in preview panel
@@ -1357,35 +1451,78 @@ function truncateEmail(email) {
   return email;
 }
 
-// Add loading message
+// Add loading message. The returned element exposes setProgress(progress) so
+// the poll loop can stream live Claude Code activity into the bubble, and its
+// remove() also stops the elapsed-time ticker.
 function addLoadingMessage() {
   const messageDiv = document.createElement('div');
   messageDiv.className = 'message assistant-message';
-  
+
   const avatar = document.createElement('div');
   avatar.className = 'message-avatar';
   avatar.textContent = '🤖';
-  
+
   const contentDiv = document.createElement('div');
   contentDiv.className = 'message-content loading-message';
-  
+
   // Different loading text based on mode
   const loadingText = currentMode === 'chat' ? 'Thinking' : 'Generating files';
   contentDiv.innerHTML = `
-    <span>${loadingText}</span>
-    <div class="loading-dots">
-      <span></span>
-      <span></span>
-      <span></span>
+    <div class="loading-header">
+      <span>${loadingText}</span>
+      <div class="loading-dots">
+        <span></span>
+        <span></span>
+        <span></span>
+      </div>
+      <span class="loading-elapsed"></span>
     </div>
+    <div class="loading-activity" style="display: none;"></div>
+    <div class="loading-note" style="display: none;"></div>
   `;
-  
+
   messageDiv.appendChild(avatar);
   messageDiv.appendChild(contentDiv);
-  
+
   chatMessages.appendChild(messageDiv);
   scrollToBottom();
-  
+
+  const elapsedEl = contentDiv.querySelector('.loading-elapsed');
+  const activityEl = contentDiv.querySelector('.loading-activity');
+  const noteEl = contentDiv.querySelector('.loading-note');
+  const startedAt = Date.now();
+
+  const elapsedTimer = setInterval(() => {
+    const secs = Math.floor((Date.now() - startedAt) / 1000);
+    if (secs < 5) return;
+    const mins = Math.floor(secs / 60);
+    elapsedEl.textContent = mins > 0 ? `${mins}m ${secs % 60}s` : `${secs}s`;
+  }, 1000);
+
+  if (currentMode === 'generate') {
+    activityEl.style.display = '';
+    activityEl.textContent = '⚙️ Starting a Claude Code session in a sandbox…';
+  }
+
+  messageDiv.setProgress = (progress) => {
+    if (!progress) return;
+    if (progress.currentActivity) {
+      activityEl.style.display = '';
+      const steps = progress.toolUseCount ? ` · ${progress.toolUseCount} step${progress.toolUseCount === 1 ? '' : 's'} so far` : '';
+      activityEl.textContent = `⚙️ ${progress.currentActivity}${steps}`;
+    }
+    if (progress.lastMessage) {
+      noteEl.style.display = '';
+      noteEl.textContent = progress.lastMessage;
+    }
+  };
+
+  const originalRemove = messageDiv.remove.bind(messageDiv);
+  messageDiv.remove = () => {
+    clearInterval(elapsedTimer);
+    originalRemove();
+  };
+
   return messageDiv;
 }
 

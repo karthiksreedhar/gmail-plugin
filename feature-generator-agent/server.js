@@ -1155,7 +1155,12 @@ app.get('/api/chat/poll/:sessionId', async (req, res) => {
     const poll = await managedAgent.pollTurn(session);
 
     if (!poll.done) {
-      return res.json({ success: true, pending: true, status: poll.status || 'running' });
+      return res.json({
+        success: true,
+        pending: true,
+        status: poll.status || 'running',
+        progress: poll.progress || null
+      });
     }
 
     if (poll.error) {
@@ -1319,6 +1324,42 @@ app.post('/api/features/:featureId/create-pr', async (req, res) => {
     return res.status(500).json({
       success: false,
       error: error.message || 'Failed to create PR request'
+    });
+  }
+});
+
+// Pipeline status for a feature, proxied from the main system. The GitHub
+// Actions workflows report back to the main system as they run (pr_open,
+// merge_in_progress, pr_merged, deploy_failed, error), so polling this lets
+// the UI tell the user the moment a workflow actually completes.
+app.get('/api/features/:featureId/pipeline-status', async (req, res) => {
+  try {
+    const featureId = String(req.params.featureId || '').trim();
+    if (!featureId) {
+      return res.status(400).json({ success: false, error: 'featureId is required' });
+    }
+
+    const endpoint = `${MAIN_SYSTEM_BASE_URL}/api/internal/generated-features/${encodeURIComponent(featureId)}/status`;
+    const headers = { 'Content-Type': 'application/json' };
+    if (FEATURE_PUBLISH_TOKEN) {
+      headers['x-feature-publish-token'] = FEATURE_PUBLISH_TOKEN;
+    }
+
+    const response = await fetch(endpoint, { method: 'GET', headers });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !data.success) {
+      return res.status(response.status || 500).json({
+        success: false,
+        error: data.error || `Failed to read pipeline status (status ${response.status})`
+      });
+    }
+
+    return res.json({ success: true, feature: data.feature || null });
+  } catch (error) {
+    console.error('Pipeline status request failed:', error);
+    return res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to read pipeline status'
     });
   }
 });

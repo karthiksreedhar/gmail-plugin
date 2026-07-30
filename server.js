@@ -788,6 +788,45 @@ app.post('/api/internal/generated-features/:featureId/pr-status', async (req, re
   }
 });
 
+// Read-only pipeline status for a generated feature, polled by the hosted
+// feature-generator so its UI can announce when the GitHub Actions workflows
+// (PR creation, approve+merge) actually finish. Accepts the same tokens as
+// the other internal generated-feature endpoints.
+app.get('/api/internal/generated-features/:featureId/status', async (req, res) => {
+  try {
+    if (!shouldAllowFeatureRegistryWrite(req) && !shouldAllowFeaturePrCallback(req)) {
+      return res.status(401).json({ success: false, error: 'Unauthorized feature status request' });
+    }
+
+    const featureId = sanitizeFeatureId(req.params.featureId);
+    if (!featureId) {
+      return res.status(400).json({ success: false, error: 'Invalid featureId' });
+    }
+
+    const feature = await getGeneratedFeature(featureId);
+    if (!feature) {
+      return res.status(404).json({ success: false, error: 'Feature not found' });
+    }
+
+    res.json({
+      success: true,
+      feature: {
+        featureId: feature.featureId,
+        status: feature.status || 'draft',
+        deploymentStatus: feature.deploymentStatus || 'pending',
+        prUrl: feature.prUrl || null,
+        prNumber: feature.prNumber ?? null,
+        prBranch: feature.prBranch || null,
+        lastError: feature.lastError || null,
+        updatedAt: feature.updatedAt || null
+      }
+    });
+  } catch (error) {
+    console.error('Failed to read generated feature status:', error);
+    res.status(500).json({ success: false, error: error.message || 'Failed to read feature status' });
+  }
+});
+
 app.post('/api/feature-registry/:featureId/preferences', async (req, res) => {
   try {
     const userEmail = getEffectiveUserEmailForRequest(req);

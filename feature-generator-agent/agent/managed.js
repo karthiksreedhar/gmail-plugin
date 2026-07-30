@@ -188,6 +188,71 @@ async function startTurn(session, message) {
   return session.managedTurn;
 }
 
+/**
+ * Human-readable label for an agent.tool_use event, so the frontend can show
+ * what Claude Code is doing right now ("Writing backend.js", "Searching the
+ * codebase", ...). Field names on tool inputs are read defensively -- an
+ * unrecognized tool still yields a generic but truthful label.
+ */
+function describeToolUse(event) {
+  const name = String(event.name || '').toLowerCase();
+  const input = (event.input && typeof event.input === 'object') ? event.input : {};
+  const rawPath = String(input.file_path || input.path || input.filename || '');
+  const fileName = rawPath ? rawPath.replace(/^.*\//, '') : '';
+
+  switch (name) {
+    case 'write':
+      return fileName ? `Writing ${fileName}` : 'Writing a file';
+    case 'edit':
+      return fileName ? `Editing ${fileName}` : 'Editing a file';
+    case 'read':
+      return fileName ? `Reading ${fileName}` : 'Reading files';
+    case 'bash': {
+      const command = String(input.command || '').trim().split('\n')[0];
+      return command ? `Running: ${command.slice(0, 60)}${command.length > 60 ? '…' : ''}` : 'Running a command';
+    }
+    case 'glob':
+    case 'grep':
+      return 'Searching the reference codebase';
+    case 'ls':
+      return 'Listing files';
+    default:
+      return name ? `Using tool: ${event.name}` : 'Working';
+  }
+}
+
+/**
+ * Summarize what has happened so far in an in-flight turn, for display in the
+ * UI's loading bubble. Returns a small serializable object.
+ */
+function describeTurnProgress(turnEvents, turn) {
+  const activities = [];
+  let lastMessage = '';
+
+  for (const event of turnEvents) {
+    if (event.type === 'agent.tool_use') {
+      activities.push(describeToolUse(event));
+    } else if (event.type === 'agent.message') {
+      const text = eventText(event).trim();
+      if (text) lastMessage = text;
+    }
+  }
+
+  // Collapse consecutive duplicates ("Searching..." x4 reads as noise).
+  const recent = [];
+  for (const label of activities) {
+    if (recent[recent.length - 1] !== label) recent.push(label);
+  }
+
+  return {
+    elapsedMs: Date.now() - (turn.startedAt || Date.now()),
+    toolUseCount: activities.length,
+    currentActivity: recent[recent.length - 1] || (turn.isRefinement ? 'Reviewing the existing feature files' : 'Planning the feature'),
+    recentActivities: recent.slice(-5),
+    lastMessage: lastMessage.slice(0, 300)
+  };
+}
+
 /** Extract text from an agent.message event's content blocks. */
 function eventText(event) {
   if (!Array.isArray(event.content)) return '';
@@ -234,7 +299,7 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
  * Check whether the turn recorded in session.managedTurn has finished.
  *
  * Returns one of:
- *   { done: false, status }                            — still running
+ *   { done: false, status, progress }                  — still running
  *   { done: true, error }                              — turn failed
  *   { done: true, responseText, files, updatedFiles }  — turn finished
  *     files: full newest file set from the session (may be empty when the
@@ -268,7 +333,7 @@ async function pollTurn(session) {
 
   const idleEvent = turnEvents.find(e => e.type === 'session.status_idle');
   if (!idleEvent) {
-    return { done: false, status: remote.status };
+    return { done: false, status: remote.status, progress: describeTurnProgress(turnEvents, turn) };
   }
 
   if (idleEvent.stop_reason && idleEvent.stop_reason.type === 'requires_action') {

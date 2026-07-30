@@ -614,8 +614,32 @@ body.chat-mode .mode-btn.active[data-mode="chat"] {
 /* Loading Message */
 .loading-message {
   display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.loading-header {
+  display: flex;
   align-items: center;
   gap: 12px;
+}
+
+.loading-elapsed {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+.loading-activity {
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+}
+
+.loading-note {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  font-style: italic;
+  max-width: 520px;
 }
 
 .loading-dots {
