@@ -2452,7 +2452,7 @@ async function updateEmailCategory(emailId, newCategory, oldCategory) {
                 container.innerHTML = `
                     <div class="compose-popup-header">
                         <span>New Message</span>
-                        <button type="button" class="compose-popup-close" onclick="closeComposeEmail()" title="Close (draft is kept)">&times;</button>
+                        <button type="button" class="compose-popup-close" onclick="closeComposeEmail()" title="Close (use Save as Draft to keep this message)">&times;</button>
                     </div>
                     <div class="gmail-compose-card">
                         <div class="gc-row gc-cc-row">
@@ -2481,11 +2481,24 @@ async function updateEmailCategory(emailId, newCategory, oldCategory) {
                 `;
                 document.body.appendChild(container);
             }
+            // Send always starts a fresh, empty message. Opening a saved
+            // draft prefills AFTER this reset (see openDraftInCompose), so
+            // drafts are unaffected; use Save as Draft to keep work instead.
+            const bodyEl = document.getElementById('composeBody');
+            if (bodyEl) bodyEl.innerHTML = '';
+            ['composeToInput', 'composeCcInput', 'composeBccInput', 'composeSubjectInput'].forEach(id => {
+                const el = document.getElementById(id);
+                if (el) el.value = '';
+            });
+            const bccRow = document.getElementById('composeBccRow');
+            if (bccRow) bccRow.style.display = 'none';
+            composeCurrentDraftId = null;
+            composeReplyToMessageId = '';
+
             container.style.display = 'block';
             try { document.getElementById('composeToInput').focus(); } catch(_) {}
         }
 
-        // Closing keeps the draft; it is only cleared after a successful send.
         function closeComposeEmail() {
             const container = document.getElementById('composeEmailContainer');
             if (container) container.style.display = 'none';
