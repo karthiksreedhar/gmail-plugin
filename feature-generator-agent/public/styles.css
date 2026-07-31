@@ -2864,6 +2864,11 @@ body.chat-mode .mode-btn.active[data-mode="chat"] {
   margin-right: 8px;
 }
 
+/* Sits directly below the category-suggestion button */
+.response-template-trigger {
+  margin-top: 0;
+}
+
 /* Responsive adjustments */
 @media (max-width: 768px) {
   .header {

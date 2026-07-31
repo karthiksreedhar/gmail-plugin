@@ -2904,6 +2904,25 @@ function addCategorySuggestionTrigger() {
   
   // Show/hide based on mode
   triggerBtn.style.display = currentMode === 'chat' ? 'block' : 'none';
+
+  // "Surface Response Templates" sits directly below the category button.
+  // UI only for now: the mining backend isn't built yet, so clicking
+  // explains that instead of calling an endpoint.
+  let templateBtn = document.getElementById('responseTemplateTriggerBtn');
+  if (!templateBtn) {
+    templateBtn = document.createElement('button');
+    templateBtn.id = 'responseTemplateTriggerBtn';
+    templateBtn.className = 'btn btn-secondary category-suggestion-trigger response-template-trigger';
+    templateBtn.innerHTML = '<span>📝</span> Surface Response Templates';
+    templateBtn.addEventListener('click', triggerResponseTemplateSuggestions);
+    triggerBtn.parentNode.insertBefore(templateBtn, triggerBtn.nextSibling);
+  }
+  templateBtn.style.display = currentMode === 'chat' ? 'block' : 'none';
+}
+
+function triggerResponseTemplateSuggestions() {
+  if (isGenerating) return;
+  showToast('Response template analysis is coming soon — the backend for this button is not built yet', 'info');
 }
 
 let availableUsers = [];
@@ -3551,6 +3570,10 @@ setMode = function(mode) {
     const triggerBtn = document.getElementById('categorySuggestionTriggerBtn');
     if (triggerBtn) {
       triggerBtn.style.display = 'none';
+    }
+    const templateBtn = document.getElementById('responseTemplateTriggerBtn');
+    if (templateBtn) {
+      templateBtn.style.display = 'none';
     }
   }
 };
