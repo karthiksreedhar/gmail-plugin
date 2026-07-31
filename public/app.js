@@ -1460,8 +1460,9 @@ async function updateEmailCategory(emailId, newCategory, oldCategory) {
 }
 
         function filterByCategory(category) {
+            draftsViewActive = false;
             currentFilter = category;
-            
+
             // Update active state in sidebar
             document.querySelectorAll('.category-item').forEach(item => {
                 item.classList.remove('active');
@@ -1608,6 +1609,9 @@ async function updateEmailCategory(emailId, newCategory, oldCategory) {
         }
 
         async function displayEmails(emails) {
+            // Background refreshes must not clobber the drafts view; explicit
+            // navigation (category click, search) clears the flag first.
+            if (draftsViewActive) return;
             const container = document.getElementById('emailContainer');
             container.innerHTML = '';
 
@@ -1668,6 +1672,7 @@ async function updateEmailCategory(emailId, newCategory, oldCategory) {
         }
 
         function updateDisplayStats(emails) {
+            if (draftsViewActive) return;
             document.getElementById('displayedCount').textContent = emails.length;
         }
 
@@ -1720,6 +1725,8 @@ async function updateEmailCategory(emailId, newCategory, oldCategory) {
                 if (!isSearchActive) {
                     lastNonSearchFilter = currentFilter;
                 }
+                // Searching leaves the drafts view and shows inbox results
+                draftsViewActive = false;
 
                 if (container) container.innerHTML = '<div class="loading">Searching…</div>';
 
@@ -1773,6 +1780,7 @@ async function updateEmailCategory(emailId, newCategory, oldCategory) {
                 isSearchActive = false;
                 lastSearchQuery = '';
                 currentFilter = 'all';
+                draftsViewActive = false;
 
                 const cf = document.getElementById('currentFilter');
                 if (cf) cf.textContent = 'All Emails';
@@ -2613,57 +2621,38 @@ async function updateEmailCategory(emailId, newCategory, oldCategory) {
             }
         }
 
-        // --- Drafts modal (sidebar "Drafts" button) ---
-        let draftsModalCache = [];
+        // --- Drafts view (sidebar "Drafts" button) ---
+        // Renders drafts in the main email pane, styled like the inbox list.
+        // While active, background inbox re-renders are suppressed; switching
+        // category, searching, or clearing search exits the view.
+        let draftsViewActive = false;
+        let draftsViewCache = [];
 
-        async function showDraftsModal() {
-            // Hide any open composer so the drafts list never stacks on top of
-            // a stale "New Message" window (its content is kept, not lost).
+        async function showDraftsView() {
+            // Hide any open composer so a stale "New Message" window doesn't
+            // linger while browsing drafts (its content is kept, not lost).
             closeComposeEmail();
-            let modal = document.getElementById('draftsModal');
-            if (!modal) {
-                modal = document.createElement('div');
-                modal.id = 'draftsModal';
-                modal.className = 'modal';
-                modal.innerHTML = `
-                    <div class="modal-content view-saved-generations-modal">
-                        <div class="modal-header">
-                            <h2 class="modal-title">Drafts</h2>
-                            <button class="close" onclick="closeDraftsModal()">&times;</button>
-                        </div>
-                        <div class="saved-generations-container">
-                            <div class="saved-generations-header">
-                                <div class="saved-generations-count" id="draftsCount">Loading...</div>
-                            </div>
-                            <div id="draftsList" class="drafts-list-container">
-                                <div class="loading">Loading drafts...</div>
-                            </div>
-                        </div>
-                    </div>
-                `;
-                document.body.appendChild(modal);
-            }
-            modal.style.display = 'block';
-            await loadDraftsList();
-        }
+            draftsViewActive = true;
 
-        function closeDraftsModal() {
-            const modal = document.getElementById('draftsModal');
-            if (modal) modal.style.display = 'none';
-        }
+            // Mirror what filterByCategory does for the header/sidebar state
+            document.querySelectorAll('.category-item').forEach(item => item.classList.remove('active'));
+            const filterEl = document.getElementById('currentFilter');
+            if (filterEl) filterEl.textContent = 'Drafts';
+            const prio = document.getElementById('priorityContainer');
+            if (prio) prio.innerHTML = '';
 
-        async function loadDraftsList() {
-            const list = document.getElementById('draftsList');
-            const count = document.getElementById('draftsCount');
+            const container = document.getElementById('emailContainer');
+            container.innerHTML = '<div class="loading">Loading drafts...</div>';
             try {
                 const resp = await fetch('/api/drafts');
                 const data = await resp.json().catch(() => ({}));
                 if (!resp.ok || !data.success) throw new Error(data.error || `Request failed (${resp.status})`);
 
-                draftsModalCache = Array.isArray(data.drafts) ? data.drafts : [];
-                if (!draftsModalCache.length) {
-                    count.textContent = 'No drafts';
-                    list.innerHTML = `
+                draftsViewCache = Array.isArray(data.drafts) ? data.drafts : [];
+                document.getElementById('displayedCount').textContent = draftsViewCache.length;
+
+                if (!draftsViewCache.length) {
+                    container.innerHTML = `
                         <div class="no-drafts">
                             <div class="no-drafts-icon">📝</div>
                             <div>No drafts yet</div>
@@ -2673,43 +2662,54 @@ async function updateEmailCategory(emailId, newCategory, oldCategory) {
                     return;
                 }
 
-                count.textContent = `${draftsModalCache.length} draft${draftsModalCache.length === 1 ? '' : 's'}`;
-                list.innerHTML = '';
-                draftsModalCache.forEach((draft, idx) => {
-                    const item = document.createElement('div');
-                    item.className = 'draft-item';
-                    const when = draft.updatedAt ? new Date(draft.updatedAt).toLocaleString() : '';
-                    const preview = String(draft.body || '').replace(/\s+/g, ' ').trim().slice(0, 200);
-                    item.innerHTML = `
-                        <div class="draft-item-top">
-                            <div class="draft-item-subject">${escapeHtml(draft.subject || '(no subject)')}${draft.source === 'gmail' ? '<span class="draft-source-badge">Gmail</span>' : ''}</div>
-                            <div class="draft-item-meta">${escapeHtml(when)}</div>
-                        </div>
-                        <div class="draft-item-to">To: ${escapeHtml(draft.to || '(no recipient)')}</div>
-                        <div class="draft-item-preview">${escapeHtml(preview) || '<em>(empty)</em>'}</div>
-                        <div class="draft-item-actions">
-                            <button type="button" class="draft-delete-btn">Delete</button>
-                        </div>
-                    `;
-                    // Clicking the card opens the draft; Delete stays independent
-                    item.addEventListener('click', () => openDraftInCompose(idx));
-                    item.querySelector('.draft-delete-btn').addEventListener('click', (e) => {
-                        e.stopPropagation();
-                        confirmDeleteDraft(idx);
-                    });
-                    list.appendChild(item);
+                container.innerHTML = '';
+                draftsViewCache.forEach((draft, idx) => {
+                    container.appendChild(buildDraftRowElement(draft, idx));
                 });
             } catch (error) {
                 console.error('Error loading drafts:', error);
-                if (count) count.textContent = 'Error loading drafts';
-                if (list) list.innerHTML = '<div class="error">Failed to load drafts. Please try again.</div>';
+                container.innerHTML = '<div class="error">Failed to load drafts. Please try again.</div>';
             }
         }
 
-        // Open a draft in the fresh-compose popup, prefilled. Saving again
-        // updates the same draft; sending deletes it.
+        // One drafts row, matching the inbox's email-item layout: red "Draft"
+        // marker + recipient where the sender goes, subject + snippet, date.
+        function buildDraftRowElement(draft, idx) {
+            const row = document.createElement('div');
+            row.className = 'email-item email-read';
+            row.onclick = () => openDraftInCompose(idx);
+
+            const snippet = String(draft.body || '').replace(/\s+/g, ' ').trim().slice(0, 160);
+            const toText = draft.to || '(no recipient)';
+            const gmailBadge = draft.source === 'gmail' ? '<span class="draft-source-badge">Gmail</span>' : '';
+            row.innerHTML = `
+                <div class="email-content">
+                    <div class="email-header">
+                        <div class="email-from" style="display:flex; align-items:center; gap:8px;">
+                            <span class="draft-row-label">Draft</span>
+                            <span style="color:#5f6368; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">To: ${escapeHtml(toText)}</span>
+                            ${gmailBadge}
+                        </div>
+                        <div class="email-subject">${escapeHtml(draft.subject || '(no subject)')}${snippet ? ` <span style="color:#5f6368; font-weight:400;">&ndash; ${escapeHtml(snippet)}</span>` : ''}</div>
+                        <div class="email-date">${formatDate(draft.updatedAt || draft.createdAt)}</div>
+                    </div>
+                </div>
+                <div class="email-actions">
+                    <button class="delete-thread-btn" title="Delete this draft">🗑️</button>
+                </div>
+            `;
+            row.querySelector('.delete-thread-btn').addEventListener('click', (e) => {
+                e.stopPropagation();
+                confirmDeleteDraft(idx);
+            });
+            return row;
+        }
+
+        // Open a draft in the compose window (the same one the sidebar Send
+        // button opens), prefilled. Saving again updates the same draft;
+        // sending deletes it.
         function openDraftInCompose(idx) {
-            const draft = draftsModalCache[idx];
+            const draft = draftsViewCache[idx];
             if (!draft) return;
             openComposeEmail();
             const setVal = (id, val) => { const el = document.getElementById(id); if (el) el.value = val || ''; };
@@ -2723,11 +2723,10 @@ async function updateEmailCategory(emailId, newCategory, oldCategory) {
             if (bodyEl) bodyEl.textContent = draft.body || '';
             composeCurrentDraftId = draft.id;
             composeReplyToMessageId = draft.replyToMessageId || '';
-            closeDraftsModal();
         }
 
         function confirmDeleteDraft(idx) {
-            const draft = draftsModalCache[idx];
+            const draft = draftsViewCache[idx];
             if (!draft) return;
             showConfirmPopup(
                 `Delete the draft "${escapeHtml(draft.subject || '(no subject)')}"? This only removes it from this app${draft.source === 'gmail' ? ', not from Gmail' : ''}.`,
@@ -2742,7 +2741,7 @@ async function updateEmailCategory(emailId, newCategory, oldCategory) {
                             composeReplyToMessageId = '';
                         }
                         if (window.gcCurrentDraftId === draft.id) window.gcCurrentDraftId = null;
-                        await loadDraftsList();
+                        if (draftsViewActive) await showDraftsView();
                     } catch (e) {
                         console.error('Draft delete failed:', e);
                         showErrorPopup('Failed to delete the draft.', 'Delete Failed');

@@ -3084,7 +3084,7 @@ app.post('/api/backfill-important-flag', async (req, res) => {
       await writeUserArrayDoc('email_threads', userEmail, 'threads', nextThreads, paths.EMAIL_THREADS_PATH);
     }
 
-    // "Load from Gmail" also pulls in the user's 20 most recent Gmail drafts.
+    // "Load from Gmail" also pulls in the user's 50 most recent Gmail drafts.
     // Draft import problems shouldn't fail the flag backfill, so only counts
     // are reported.
     let draftsImported = 0;
@@ -6035,50 +6035,60 @@ app.delete('/api/drafts/:id', async (req, res) => {
   }
 });
 
-// Import the user's 20 most recent Gmail drafts into the drafts store.
+// Import the user's 50 most recent Gmail drafts into the drafts store.
 // Used by the "Load from Gmail" button; failures here should not fail the
 // caller's primary work, so this returns counts instead of throwing.
 async function importGmailDraftsForUser(userEmail, gmailClient) {
   const result = { imported: 0, failed: 0 };
   const listResp = await withTimeout(
-    gmailClient.users.drafts.list({ userId: 'me', maxResults: 20 }),
+    gmailClient.users.drafts.list({ userId: 'me', maxResults: 50 }),
     AUTO_SYNC_GMAIL_CALL_TIMEOUT_MS,
     'gmail_drafts_list'
   );
   const gmailDrafts = Array.isArray(listResp?.data?.drafts) ? listResp.data.drafts : [];
   if (!gmailDrafts.length) return result;
 
+  // Fetch draft bodies with the same bounded concurrency as the flags
+  // backfill so 50 drafts don't turn into 50 serial Gmail calls.
   const imported = [];
-  for (const d of gmailDrafts) {
-    try {
-      const draftResp = await withTimeout(
-        gmailClient.users.drafts.get({ userId: 'me', id: d.id, format: 'full' }),
-        AUTO_SYNC_GMAIL_CALL_TIMEOUT_MS,
-        'gmail_drafts_get'
-      );
-      const message = draftResp?.data?.message || {};
-      const headers = message?.payload?.headers || [];
-      const header = (name) => headers.find(h => h.name && h.name.toLowerCase() === name.toLowerCase())?.value || '';
-      const internalMs = Number(message.internalDate || 0);
-      const when = internalMs > 0 ? new Date(internalMs).toISOString() : new Date().toISOString();
-      imported.push({
-        id: `gmail-${d.id}`,
-        gmailDraftId: d.id,
-        source: 'gmail',
-        to: header('To'),
-        cc: header('Cc'),
-        bcc: header('Bcc'),
-        subject: header('Subject'),
-        body: String(extractEmailBody(message.payload || {}) || ''),
-        replyToMessageId: '',
-        createdAt: when,
-        updatedAt: when
-      });
-    } catch (e) {
-      result.failed++;
-      console.warn(`[GmailDrafts] Failed to load draft ${d?.id}:`, e?.message || e);
+  let cursor = 0;
+  const workerCount = Math.max(1, Math.min(AUTO_SYNC_GMAIL_FETCH_CONCURRENCY, gmailDrafts.length));
+  async function worker() {
+    while (true) {
+      const idx = cursor++;
+      if (idx >= gmailDrafts.length) return;
+      const d = gmailDrafts[idx];
+      try {
+        const draftResp = await withTimeout(
+          gmailClient.users.drafts.get({ userId: 'me', id: d.id, format: 'full' }),
+          AUTO_SYNC_GMAIL_CALL_TIMEOUT_MS,
+          'gmail_drafts_get'
+        );
+        const message = draftResp?.data?.message || {};
+        const headers = message?.payload?.headers || [];
+        const header = (name) => headers.find(h => h.name && h.name.toLowerCase() === name.toLowerCase())?.value || '';
+        const internalMs = Number(message.internalDate || 0);
+        const when = internalMs > 0 ? new Date(internalMs).toISOString() : new Date().toISOString();
+        imported.push({
+          id: `gmail-${d.id}`,
+          gmailDraftId: d.id,
+          source: 'gmail',
+          to: header('To'),
+          cc: header('Cc'),
+          bcc: header('Bcc'),
+          subject: header('Subject'),
+          body: String(extractEmailBody(message.payload || {}) || ''),
+          replyToMessageId: '',
+          createdAt: when,
+          updatedAt: when
+        });
+      } catch (e) {
+        result.failed++;
+        console.warn(`[GmailDrafts] Failed to load draft ${d?.id}:`, e?.message || e);
+      }
     }
   }
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
 
   if (imported.length) {
     const paths = getUserPaths(userEmail);
