@@ -1,0 +1,13 @@
+{
+  "id": "drafts-column",
+  "name": "Drafts Column",
+  "version": "1.0.0",
+  "description": "Adds a persistent third column to the inbox (to the right of the email list) that lists all of your saved drafts. Click a draft to open it in the composer, or delete it inline. Pure UI layout feature that reads from the app's existing /api/drafts endpoints - no data is changed on load.",
+  "author": "Gmail Plugin Feature Generator",
+  "frontend": "frontend.js",
+  "permissions": [
+    "emails:read",
+    "emails:write",
+    "api:custom"
+  ]
+}
