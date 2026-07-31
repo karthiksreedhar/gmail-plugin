@@ -1151,7 +1151,8 @@ function getUserPathsWithRoot(userEmail = getRequestUserEmail(), rootDir = USER_
     CATEGORY_GUIDELINES_PATH: path.join(USER_DATA_DIR, 'category-guidelines.json'),
     HIDDEN_THREADS_PATH: path.join(USER_DATA_DIR, 'hidden-threads.json'),
     CATEGORY_SUMMARIES_PATH: path.join(USER_DATA_DIR, 'categorysummaries.json'),
-    EMAIL_NOTES_PATH: path.join(USER_DATA_DIR, 'email-notes.json')
+    EMAIL_NOTES_PATH: path.join(USER_DATA_DIR, 'email-notes.json'),
+    DRAFTS_PATH: path.join(USER_DATA_DIR, 'drafts.json')
   };
 }
 
@@ -3083,12 +3084,28 @@ app.post('/api/backfill-important-flag', async (req, res) => {
       await writeUserArrayDoc('email_threads', userEmail, 'threads', nextThreads, paths.EMAIL_THREADS_PATH);
     }
 
+    // "Load from Gmail" also pulls in the user's 20 most recent Gmail drafts.
+    // Draft import problems shouldn't fail the flag backfill, so only counts
+    // are reported.
+    let draftsImported = 0;
+    let draftsFailed = 0;
+    try {
+      const draftResult = await importGmailDraftsForUser(userEmail, gmailClient);
+      draftsImported = draftResult.imported;
+      draftsFailed = draftResult.failed;
+    } catch (e) {
+      draftsFailed = -1;
+      console.warn('[LoadFromGmail] Draft import failed:', e?.message || e);
+    }
+
     return res.json({
       success: true,
       threadsChecked: threadIds.length,
       updatedResponses,
       updatedThreads,
-      failed
+      failed,
+      draftsImported,
+      draftsFailed
     });
   } catch (error) {
     console.error('Error backfilling important flag:', error);
@@ -5928,6 +5945,151 @@ app.post('/api/send-email', async (req, res) => {
     return res.status(500).json({ success: false, error: apiMessage ? `Failed to send email: ${apiMessage}` : 'Failed to send email' });
   }
 });
+
+// --- Drafts ---
+// Drafts live in the per-user 'drafts' array doc. Two sources:
+//   'app'   — saved from a composer in this UI
+//   'gmail' — imported from the user's Gmail drafts by "Load from Gmail"
+// Gmail-imported drafts are keyed by id `gmail-<draftId>` so re-imports update
+// in place instead of duplicating.
+
+// List all drafts, newest first
+app.get('/api/drafts', async (req, res) => {
+  try {
+    const userEmail = getEffectiveUserEmailForRequest(req);
+    const paths = getUserPaths(userEmail);
+    const drafts = await readUserArrayDoc('drafts', userEmail, 'drafts', paths.DRAFTS_PATH);
+    const sorted = (drafts || []).slice().sort((a, b) =>
+      new Date(b.updatedAt || b.createdAt || 0) - new Date(a.updatedAt || a.createdAt || 0)
+    );
+    return res.json({ success: true, drafts: sorted });
+  } catch (error) {
+    console.error('Error listing drafts:', error);
+    return res.status(500).json({ success: false, error: 'Failed to load drafts' });
+  }
+});
+
+// Save (create or update) a draft. Pass an existing id to update it in place.
+app.post('/api/drafts', async (req, res) => {
+  try {
+    const { id, to, cc, bcc, subject, body, replyToMessageId } = req.body || {};
+    const bodyText = String(body || '').replace(/\r\n/g, '\n');
+    const subjectText = String(subject || '').replace(/[\r\n]+/g, ' ').trim();
+    if (!bodyText.trim() && !subjectText && !String(to || '').trim()) {
+      return res.status(400).json({ success: false, error: 'Draft is empty — add a recipient, subject, or body first' });
+    }
+    if (bodyText.length > 200000) {
+      return res.status(400).json({ success: false, error: 'Draft body is too long' });
+    }
+
+    const userEmail = getEffectiveUserEmailForRequest(req);
+    const paths = getUserPaths(userEmail);
+    const drafts = await readUserArrayDoc('drafts', userEmail, 'drafts', paths.DRAFTS_PATH);
+
+    const now = new Date().toISOString();
+    const requestedId = String(id || '').trim();
+    const existingIdx = requestedId ? (drafts || []).findIndex(d => d && d.id === requestedId) : -1;
+    const draft = {
+      ...(existingIdx >= 0 ? drafts[existingIdx] : { createdAt: now, source: 'app' }),
+      id: existingIdx >= 0 ? requestedId : `draft-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      to: String(to || '').trim(),
+      cc: String(cc || '').trim(),
+      bcc: String(bcc || '').trim(),
+      subject: subjectText,
+      body: bodyText,
+      replyToMessageId: String(replyToMessageId || '').trim(),
+      updatedAt: now
+    };
+
+    const next = (drafts || []).slice();
+    if (existingIdx >= 0) next[existingIdx] = draft;
+    else next.push(draft);
+
+    await writeUserArrayDoc('drafts', userEmail, 'drafts', next, paths.DRAFTS_PATH);
+    return res.json({ success: true, draft });
+  } catch (error) {
+    console.error('Error saving draft:', error);
+    return res.status(500).json({ success: false, error: 'Failed to save draft' });
+  }
+});
+
+// Delete a draft by id
+app.delete('/api/drafts/:id', async (req, res) => {
+  try {
+    const draftId = String(req.params.id || '').trim();
+    if (!draftId) {
+      return res.status(400).json({ success: false, error: 'Draft id is required' });
+    }
+    const userEmail = getEffectiveUserEmailForRequest(req);
+    const paths = getUserPaths(userEmail);
+    const drafts = await readUserArrayDoc('drafts', userEmail, 'drafts', paths.DRAFTS_PATH);
+    const next = (drafts || []).filter(d => !(d && d.id === draftId));
+    if (next.length === (drafts || []).length) {
+      return res.status(404).json({ success: false, error: 'Draft not found' });
+    }
+    await writeUserArrayDoc('drafts', userEmail, 'drafts', next, paths.DRAFTS_PATH);
+    return res.json({ success: true });
+  } catch (error) {
+    console.error('Error deleting draft:', error);
+    return res.status(500).json({ success: false, error: 'Failed to delete draft' });
+  }
+});
+
+// Import the user's 20 most recent Gmail drafts into the drafts store.
+// Used by the "Load from Gmail" button; failures here should not fail the
+// caller's primary work, so this returns counts instead of throwing.
+async function importGmailDraftsForUser(userEmail, gmailClient) {
+  const result = { imported: 0, failed: 0 };
+  const listResp = await withTimeout(
+    gmailClient.users.drafts.list({ userId: 'me', maxResults: 20 }),
+    AUTO_SYNC_GMAIL_CALL_TIMEOUT_MS,
+    'gmail_drafts_list'
+  );
+  const gmailDrafts = Array.isArray(listResp?.data?.drafts) ? listResp.data.drafts : [];
+  if (!gmailDrafts.length) return result;
+
+  const imported = [];
+  for (const d of gmailDrafts) {
+    try {
+      const draftResp = await withTimeout(
+        gmailClient.users.drafts.get({ userId: 'me', id: d.id, format: 'full' }),
+        AUTO_SYNC_GMAIL_CALL_TIMEOUT_MS,
+        'gmail_drafts_get'
+      );
+      const message = draftResp?.data?.message || {};
+      const headers = message?.payload?.headers || [];
+      const header = (name) => headers.find(h => h.name && h.name.toLowerCase() === name.toLowerCase())?.value || '';
+      const internalMs = Number(message.internalDate || 0);
+      const when = internalMs > 0 ? new Date(internalMs).toISOString() : new Date().toISOString();
+      imported.push({
+        id: `gmail-${d.id}`,
+        gmailDraftId: d.id,
+        source: 'gmail',
+        to: header('To'),
+        cc: header('Cc'),
+        bcc: header('Bcc'),
+        subject: header('Subject'),
+        body: String(extractEmailBody(message.payload || {}) || ''),
+        replyToMessageId: '',
+        createdAt: when,
+        updatedAt: when
+      });
+    } catch (e) {
+      result.failed++;
+      console.warn(`[GmailDrafts] Failed to load draft ${d?.id}:`, e?.message || e);
+    }
+  }
+
+  if (imported.length) {
+    const paths = getUserPaths(userEmail);
+    const existing = await readUserArrayDoc('drafts', userEmail, 'drafts', paths.DRAFTS_PATH);
+    const importedIds = new Set(imported.map(d => d.id));
+    const next = (existing || []).filter(d => !(d && importedIds.has(d.id))).concat(imported);
+    await writeUserArrayDoc('drafts', userEmail, 'drafts', next, paths.DRAFTS_PATH);
+    result.imported = imported.length;
+  }
+  return result;
+}
 
 // API endpoint to load email threads using Gmail API
 app.post('/api/load-email-threads', async (req, res) => {

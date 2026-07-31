@@ -37,6 +37,7 @@ const COLLECTIONS = [
   'hidden_inbox',
   'test_emails',
   'user_state',
+  'drafts',
   'classifier_log',
   'priority_emails',
   'precategorized_emails'

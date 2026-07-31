@@ -1320,6 +1320,88 @@
             margin: 4px auto 14px auto;
         }
         .compose-send-btn:hover { box-shadow: 0 1px 3px 1px rgba(60,64,67,.35); background: #b3ddf9; }
+        .compose-drafts-btn {
+            background: #e8eaed;
+            color: #202124;
+            margin-top: -6px;
+        }
+        .compose-drafts-btn:hover { background: #dadce0; }
+
+        /* "Save as Draft" next to Send inside both composers */
+        .gc-save-draft-btn {
+            border: 1px solid #dadce0;
+            background: #fff;
+            color: #0b57d0;
+            border-radius: 18px;
+            height: 36px;
+            padding: 0 16px;
+            font-size: 13px;
+            font-weight: 500;
+            cursor: pointer;
+            margin-right: 8px;
+            white-space: nowrap;
+        }
+        .gc-save-draft-btn:hover { background: #f0f4fe; }
+        .gc-save-draft-btn:disabled { opacity: .6; cursor: default; }
+
+        /* Drafts modal list */
+        .drafts-list-container { max-height: 60vh; overflow-y: auto; }
+        .draft-item {
+            border: 1px solid #e0e0e0;
+            border-radius: 8px;
+            padding: 12px 14px;
+            margin-bottom: 10px;
+            background: #fff;
+            cursor: pointer;
+            transition: background .15s;
+        }
+        .draft-item:hover { background: #f8f9fa; }
+        .draft-item-top {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            margin-bottom: 4px;
+        }
+        .draft-item-subject { font-weight: 600; color: #202124; font-size: 14px; }
+        .draft-item-meta { color: #5f6368; font-size: 12px; white-space: nowrap; }
+        .draft-item-to { color: #5f6368; font-size: 13px; margin-bottom: 4px; }
+        .draft-item-preview {
+            color: #5f6368;
+            font-size: 13px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+        }
+        .draft-item-actions { display: flex; gap: 8px; margin-top: 8px; }
+        .draft-source-badge {
+            display: inline-block;
+            background: #e8f0fe;
+            color: #0b57d0;
+            border-radius: 10px;
+            padding: 1px 8px;
+            font-size: 11px;
+            font-weight: 500;
+            margin-left: 8px;
+        }
+        .draft-delete-btn {
+            border: 1px solid #dadce0;
+            background: #fff;
+            color: #d93025;
+            border-radius: 14px;
+            padding: 4px 12px;
+            font-size: 12px;
+            cursor: pointer;
+        }
+        .draft-delete-btn:hover { background: #fce8e6; }
+        .no-drafts {
+            text-align: center;
+            color: #5f6368;
+            padding: 40px 0;
+        }
+        .no-drafts-icon { font-size: 34px; margin-bottom: 8px; }
         .compose-popup {
             position: fixed;
             bottom: 0;
@@ -3278,7 +3360,7 @@
                 </div>
             </div>
             <div class="header-buttons">
-                <button id="backfillImportantBtn" class="view-saved-generations-btn header-compact-btn" onclick="backfillImportantFlags()" title="Fetch the Important, Starred, and Read/Unread flags from Gmail for emails synced before these features existed">Update Important/Starred/Read Flags</button>
+                <button id="backfillImportantBtn" class="view-saved-generations-btn header-compact-btn" onclick="backfillImportantFlags()" title="Fetch the Important, Starred, and Read/Unread flags from Gmail, and load your 20 most recent Gmail drafts">Load from Gmail</button>
                 <button class="view-saved-generations-btn header-compact-btn" onclick="showViewSavedGenerationsModal()">View Saved Generations</button>
                 <button class="view-refinements-btn header-compact-btn" onclick="showViewRefinementsModal()">View Refinements</button>
                 <button class="view-refinements-btn header-compact-btn" style="background-color: #d93025;" onclick="window.location.href='/api/auth/logout'">Logout</button>
@@ -3295,6 +3377,10 @@
                 <button id="composeSendBtn" class="compose-send-btn" type="button" onclick="openComposeEmail()" title="Send a new email">
                     <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M3 5.5v13c0 .83.67 1.5 1.5 1.5h15c.83 0 1.5-.67 1.5-1.5v-13c0-.83-.67-1.5-1.5-1.5h-15C3.67 4 3 4.67 3 5.5zm16.06.5L12 10.56 4.94 6h14.12zM5 18V7.83l7 4.52 7-4.52V18H5z"/></svg>
                     Send
+                </button>
+                <button id="draftsBtn" class="compose-send-btn compose-drafts-btn" type="button" onclick="showDraftsModal()" title="View saved drafts">
+                    <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z"/></svg>
+                    Drafts
                 </button>
                 <div class="sidebar-section">
                     <div class="sidebar-title-row">

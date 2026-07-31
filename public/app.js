@@ -674,7 +674,7 @@ window.__categoryChats = window.__categoryChats || {};
             const originalText = btn ? btn.textContent : '';
             if (btn) {
                 btn.disabled = true;
-                btn.textContent = 'Updating…';
+                btn.textContent = 'Loading…';
             }
             try {
                 const resp = await fetch('/api/backfill-important-flag', { method: 'POST' });
@@ -682,14 +682,17 @@ window.__categoryChats = window.__categoryChats || {};
                 if (!resp.ok || !data.success) {
                     throw new Error(data.error || `Request failed (${resp.status})`);
                 }
+                const draftsPart = data.draftsFailed === -1
+                    ? 'Drafts could not be loaded from Gmail.'
+                    : `Loaded ${data.draftsImported || 0} draft(s) from Gmail${data.draftsFailed ? ` (${data.draftsFailed} failed)` : ''}.`;
                 showSuccessPopup(
-                    `Checked ${data.threadsChecked} thread(s). Updated ${data.updatedResponses} email(s)${data.failed ? `, ${data.failed} failed` : ''}.`,
-                    'Important/Starred/Read Flags Updated'
+                    `Checked ${data.threadsChecked} thread(s). Updated ${data.updatedResponses} email(s)${data.failed ? `, ${data.failed} failed` : ''}. ${draftsPart}`,
+                    'Loaded from Gmail'
                 );
                 await loadEmails();
             } catch (error) {
-                console.error('Backfill important/starred/read flags failed:', error);
-                showErrorPopup(error.message || 'Failed to update important/starred/read flags.', 'Update Failed');
+                console.error('Load from Gmail failed:', error);
+                showErrorPopup(error.message || 'Failed to load from Gmail.', 'Load Failed');
             } finally {
                 if (btn) {
                     btn.disabled = false;
@@ -2153,6 +2156,7 @@ async function updateEmailCategory(emailId, newCategory, oldCategory) {
 
                             <div class="gc-actions">
                                 <button type="button" class="gc-send-btn" onclick="gcSendReply()">Send</button>
+                                <button type="button" class="gc-save-draft-btn" onclick="gcSaveDraft()" title="Save this reply as a draft">Save as Draft</button>
                                 <button type="submit" class="generate-submit-btn gc-generate-btn" title="Generate an AI response draft">
                                     <span class="btn-text">&#10024; Generate Response</span>
                                     <span class="btn-loading" style="display:none;">Generating&hellip;</span>
@@ -2194,6 +2198,8 @@ async function updateEmailCategory(emailId, newCategory, oldCategory) {
                 // Fresh open starts a clean draft; re-opening keeps it.
                 const gcBody = document.getElementById('gcBody');
                 if (gcBody && wasHidden) gcBody.innerHTML = '';
+                // A fresh open is a new draft, not an update to a previously saved one
+                if (wasHidden) window.gcCurrentDraftId = null;
 
                 // Subject defaults to "Re: <first email in the thread>" but stays
                 // editable; like the body, it only resets on a fresh open.
@@ -2303,6 +2309,62 @@ async function updateEmailCategory(emailId, newCategory, oldCategory) {
             );
         }
 
+        // Save the inline reply composer's contents as a draft. Re-saving
+        // updates the same draft (tracked via window.gcCurrentDraftId).
+        let gcSaveDraftInFlight = false;
+        async function gcSaveDraft() {
+            if (gcSaveDraftInFlight) return;
+            const bodyEl = document.getElementById('gcBody');
+            const text = bodyEl ? bodyEl.innerText.trim() : '';
+            const to = (document.getElementById('gcToInput')?.value || '').trim();
+            const cc = (document.getElementById('gcCcInput')?.value || '').trim();
+            const bcc = (document.getElementById('gcBccInput')?.value || '').trim();
+            const subject = (document.getElementById('gcSubjectInput')?.value
+                || document.getElementById('subjectInput')?.value || '').trim();
+            if (!text && !subject && !to) {
+                showErrorPopup('Write something first — an empty draft cannot be saved.', 'Empty Draft');
+                return;
+            }
+            gcSaveDraftInFlight = true;
+            const btn = document.querySelector('#inlineReplyCompose .gc-save-draft-btn');
+            const prevLabel = btn ? btn.textContent : '';
+            if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+            try {
+                const replyTarget = window.gcReplyTarget || {};
+                const resp = await fetch('/api/drafts', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        id: window.gcCurrentDraftId || '',
+                        to, cc, bcc, subject,
+                        body: text,
+                        replyToMessageId: replyTarget.messageId || ''
+                    })
+                });
+                const data = await resp.json().catch(() => ({}));
+                if (!resp.ok || !data.success) {
+                    showErrorPopup(escapeHtml(data.error || 'The draft could not be saved.'), 'Save Failed');
+                    return;
+                }
+                window.gcCurrentDraftId = data.draft && data.draft.id;
+                showSuccessPopup('Your reply was saved as a draft. Find it under Drafts in the sidebar.', 'Draft Saved');
+            } catch (e) {
+                console.error('gcSaveDraft failed:', e);
+                showErrorPopup('Network error while saving the draft.', 'Save Failed');
+            } finally {
+                gcSaveDraftInFlight = false;
+                if (btn) { btn.disabled = false; btn.textContent = prevLabel || 'Save as Draft'; }
+            }
+        }
+
+        // Remove a stored draft once its email has actually been sent.
+        // Best-effort: a failure here just leaves a stale draft behind.
+        async function deleteDraftSilently(draftId) {
+            if (!draftId) return;
+            try { await fetch(`/api/drafts/${encodeURIComponent(draftId)}`, { method: 'DELETE' }); }
+            catch (_) {}
+        }
+
         async function gcPerformSend(payload) {
             if (gcSendInFlight) return;
             gcSendInFlight = true;
@@ -2347,6 +2409,12 @@ async function updateEmailCategory(emailId, newCategory, oldCategory) {
                 if (gcBody) gcBody.innerHTML = '';
                 const composer = document.getElementById('inlineReplyCompose');
                 if (composer) composer.style.display = 'none';
+
+                // The reply went out, so its saved draft (if any) is obsolete
+                if (window.gcCurrentDraftId) {
+                    deleteDraftSilently(window.gcCurrentDraftId);
+                    window.gcCurrentDraftId = null;
+                }
 
                 showSuccessPopup(
                     data.threaded
@@ -2399,6 +2467,7 @@ async function updateEmailCategory(emailId, newCategory, oldCategory) {
                         <div class="gc-body" id="composeBody" contenteditable="true"></div>
                         <div class="gc-actions">
                             <button type="button" class="gc-send-btn" onclick="composeSendEmail()">Send</button>
+                            <button type="button" class="gc-save-draft-btn" onclick="composeSaveDraft()" title="Save this email as a draft">Save as Draft</button>
                         </div>
                     </div>
                 `;
@@ -2417,6 +2486,55 @@ async function updateEmailCategory(emailId, newCategory, oldCategory) {
         function composeToggleBcc() {
             const row = document.getElementById('composeBccRow');
             if (row) row.style.display = row.style.display === 'none' ? 'flex' : 'none';
+        }
+
+        // Draft currently loaded in the fresh-compose popup. Saving again
+        // updates the same draft; a successful send deletes it.
+        let composeCurrentDraftId = null;
+        let composeReplyToMessageId = '';
+
+        let composeSaveDraftInFlight = false;
+        async function composeSaveDraft() {
+            if (composeSaveDraftInFlight) return;
+            const bodyEl = document.getElementById('composeBody');
+            const text = bodyEl ? bodyEl.innerText.trim() : '';
+            const to = (document.getElementById('composeToInput')?.value || '').trim();
+            const cc = (document.getElementById('composeCcInput')?.value || '').trim();
+            const bcc = (document.getElementById('composeBccInput')?.value || '').trim();
+            const subject = (document.getElementById('composeSubjectInput')?.value || '').trim();
+            if (!text && !subject && !to) {
+                showErrorPopup('Write something first — an empty draft cannot be saved.', 'Empty Draft');
+                return;
+            }
+            composeSaveDraftInFlight = true;
+            const btn = document.querySelector('#composeEmailContainer .gc-save-draft-btn');
+            const prevLabel = btn ? btn.textContent : '';
+            if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+            try {
+                const resp = await fetch('/api/drafts', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        id: composeCurrentDraftId || '',
+                        to, cc, bcc, subject,
+                        body: text,
+                        replyToMessageId: composeReplyToMessageId || ''
+                    })
+                });
+                const data = await resp.json().catch(() => ({}));
+                if (!resp.ok || !data.success) {
+                    showErrorPopup(escapeHtml(data.error || 'The draft could not be saved.'), 'Save Failed');
+                    return;
+                }
+                composeCurrentDraftId = data.draft && data.draft.id;
+                showSuccessPopup('Your email was saved as a draft. Find it under Drafts in the sidebar.', 'Draft Saved');
+            } catch (e) {
+                console.error('composeSaveDraft failed:', e);
+                showErrorPopup('Network error while saving the draft.', 'Save Failed');
+            } finally {
+                composeSaveDraftInFlight = false;
+                if (btn) { btn.disabled = false; btn.textContent = prevLabel || 'Save as Draft'; }
+            }
         }
 
         let composeSendInFlight = false;
@@ -2454,10 +2572,11 @@ async function updateEmailCategory(emailId, newCategory, oldCategory) {
             const prevLabel = sendBtn ? sendBtn.textContent : '';
             if (sendBtn) { sendBtn.disabled = true; sendBtn.textContent = 'Sending…'; }
             try {
+                // Drafts loaded from a reply carry their original thread target
                 const resp = await fetch('/api/send-email', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload)
+                    body: JSON.stringify({ ...payload, replyToMessageId: composeReplyToMessageId || '' })
                 });
                 const data = await resp.json().catch(() => ({}));
 
@@ -2477,6 +2596,12 @@ async function updateEmailCategory(emailId, newCategory, oldCategory) {
                     const el = document.getElementById(id);
                     if (el) el.value = '';
                 });
+                // The email went out, so its saved draft (if any) is obsolete
+                if (composeCurrentDraftId) {
+                    deleteDraftSilently(composeCurrentDraftId);
+                }
+                composeCurrentDraftId = null;
+                composeReplyToMessageId = '';
                 closeComposeEmail();
                 showSuccessPopup('Your email was sent.', 'Email Sent');
             } catch (e) {
@@ -2486,6 +2611,146 @@ async function updateEmailCategory(emailId, newCategory, oldCategory) {
                 composeSendInFlight = false;
                 if (sendBtn) { sendBtn.disabled = false; sendBtn.textContent = prevLabel || 'Send'; }
             }
+        }
+
+        // --- Drafts modal (sidebar "Drafts" button) ---
+        let draftsModalCache = [];
+
+        async function showDraftsModal() {
+            // Hide any open composer so the drafts list never stacks on top of
+            // a stale "New Message" window (its content is kept, not lost).
+            closeComposeEmail();
+            let modal = document.getElementById('draftsModal');
+            if (!modal) {
+                modal = document.createElement('div');
+                modal.id = 'draftsModal';
+                modal.className = 'modal';
+                modal.innerHTML = `
+                    <div class="modal-content view-saved-generations-modal">
+                        <div class="modal-header">
+                            <h2 class="modal-title">Drafts</h2>
+                            <button class="close" onclick="closeDraftsModal()">&times;</button>
+                        </div>
+                        <div class="saved-generations-container">
+                            <div class="saved-generations-header">
+                                <div class="saved-generations-count" id="draftsCount">Loading...</div>
+                            </div>
+                            <div id="draftsList" class="drafts-list-container">
+                                <div class="loading">Loading drafts...</div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+                document.body.appendChild(modal);
+            }
+            modal.style.display = 'block';
+            await loadDraftsList();
+        }
+
+        function closeDraftsModal() {
+            const modal = document.getElementById('draftsModal');
+            if (modal) modal.style.display = 'none';
+        }
+
+        async function loadDraftsList() {
+            const list = document.getElementById('draftsList');
+            const count = document.getElementById('draftsCount');
+            try {
+                const resp = await fetch('/api/drafts');
+                const data = await resp.json().catch(() => ({}));
+                if (!resp.ok || !data.success) throw new Error(data.error || `Request failed (${resp.status})`);
+
+                draftsModalCache = Array.isArray(data.drafts) ? data.drafts : [];
+                if (!draftsModalCache.length) {
+                    count.textContent = 'No drafts';
+                    list.innerHTML = `
+                        <div class="no-drafts">
+                            <div class="no-drafts-icon">📝</div>
+                            <div>No drafts yet</div>
+                            <div style="font-size:13px; margin-top:4px;">Use "Save as Draft" in a composer, or "Load from Gmail" to pull in your Gmail drafts.</div>
+                        </div>
+                    `;
+                    return;
+                }
+
+                count.textContent = `${draftsModalCache.length} draft${draftsModalCache.length === 1 ? '' : 's'}`;
+                list.innerHTML = '';
+                draftsModalCache.forEach((draft, idx) => {
+                    const item = document.createElement('div');
+                    item.className = 'draft-item';
+                    const when = draft.updatedAt ? new Date(draft.updatedAt).toLocaleString() : '';
+                    const preview = String(draft.body || '').replace(/\s+/g, ' ').trim().slice(0, 200);
+                    item.innerHTML = `
+                        <div class="draft-item-top">
+                            <div class="draft-item-subject">${escapeHtml(draft.subject || '(no subject)')}${draft.source === 'gmail' ? '<span class="draft-source-badge">Gmail</span>' : ''}</div>
+                            <div class="draft-item-meta">${escapeHtml(when)}</div>
+                        </div>
+                        <div class="draft-item-to">To: ${escapeHtml(draft.to || '(no recipient)')}</div>
+                        <div class="draft-item-preview">${escapeHtml(preview) || '<em>(empty)</em>'}</div>
+                        <div class="draft-item-actions">
+                            <button type="button" class="draft-delete-btn">Delete</button>
+                        </div>
+                    `;
+                    // Clicking the card opens the draft; Delete stays independent
+                    item.addEventListener('click', () => openDraftInCompose(idx));
+                    item.querySelector('.draft-delete-btn').addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        confirmDeleteDraft(idx);
+                    });
+                    list.appendChild(item);
+                });
+            } catch (error) {
+                console.error('Error loading drafts:', error);
+                if (count) count.textContent = 'Error loading drafts';
+                if (list) list.innerHTML = '<div class="error">Failed to load drafts. Please try again.</div>';
+            }
+        }
+
+        // Open a draft in the fresh-compose popup, prefilled. Saving again
+        // updates the same draft; sending deletes it.
+        function openDraftInCompose(idx) {
+            const draft = draftsModalCache[idx];
+            if (!draft) return;
+            openComposeEmail();
+            const setVal = (id, val) => { const el = document.getElementById(id); if (el) el.value = val || ''; };
+            setVal('composeToInput', draft.to);
+            setVal('composeCcInput', draft.cc);
+            setVal('composeBccInput', draft.bcc);
+            setVal('composeSubjectInput', draft.subject);
+            const bccRow = document.getElementById('composeBccRow');
+            if (bccRow) bccRow.style.display = draft.bcc ? 'flex' : 'none';
+            const bodyEl = document.getElementById('composeBody');
+            if (bodyEl) bodyEl.textContent = draft.body || '';
+            composeCurrentDraftId = draft.id;
+            composeReplyToMessageId = draft.replyToMessageId || '';
+            closeDraftsModal();
+        }
+
+        function confirmDeleteDraft(idx) {
+            const draft = draftsModalCache[idx];
+            if (!draft) return;
+            showConfirmPopup(
+                `Delete the draft "${escapeHtml(draft.subject || '(no subject)')}"? This only removes it from this app${draft.source === 'gmail' ? ', not from Gmail' : ''}.`,
+                async () => {
+                    try {
+                        const resp = await fetch(`/api/drafts/${encodeURIComponent(draft.id)}`, { method: 'DELETE' });
+                        const data = await resp.json().catch(() => ({}));
+                        if (!resp.ok || !data.success) throw new Error(data.error || 'Delete failed');
+                        // The deleted draft may be the one loaded in the composer
+                        if (composeCurrentDraftId === draft.id) {
+                            composeCurrentDraftId = null;
+                            composeReplyToMessageId = '';
+                        }
+                        if (window.gcCurrentDraftId === draft.id) window.gcCurrentDraftId = null;
+                        await loadDraftsList();
+                    } catch (e) {
+                        console.error('Draft delete failed:', e);
+                        showErrorPopup('Failed to delete the draft.', 'Delete Failed');
+                    }
+                },
+                () => {},
+                'Delete Draft?'
+            );
         }
 
         function closeModal() {
