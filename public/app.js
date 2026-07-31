@@ -2132,20 +2132,20 @@ async function updateEmailCategory(emailId, newCategory, oldCategory) {
                                     <span class="gc-chip-name" id="gcToName"></span>
                                     <button type="button" class="gc-chip-x" onclick="gcRemoveToChip()" title="Remove">&times;</button>
                                 </span>
-                                <input type="text" id="gcToInput" class="gc-plain-input" style="display:none;">
+                                <input type="text" id="gcToInput" class="gc-plain-input" style="display:none;" autocomplete="off">
                             </div>
                             <div class="gc-row gc-cc-row">
                                 <span class="gc-cc-label">Cc</span>
-                                <input type="text" id="gcCcInput" class="gc-plain-input">
+                                <input type="text" id="gcCcInput" class="gc-plain-input" autocomplete="off">
                                 <button type="button" class="gc-bcc-toggle" onclick="gcToggleBcc()">Bcc</button>
                             </div>
                             <div class="gc-row gc-cc-row" id="gcBccRow" style="display:none;">
                                 <span class="gc-cc-label">Bcc</span>
-                                <input type="text" id="gcBccInput" class="gc-plain-input">
+                                <input type="text" id="gcBccInput" class="gc-plain-input" autocomplete="off">
                             </div>
                             <div class="gc-row gc-cc-row">
                                 <span class="gc-cc-label">Subject</span>
-                                <input type="text" id="gcSubjectInput" class="gc-plain-input" placeholder="Subject">
+                                <input type="text" id="gcSubjectInput" class="gc-plain-input" placeholder="Subject" autocomplete="off">
                             </div>
 
                             <div class="gc-body" id="gcBody" contenteditable="true"></div>
@@ -2457,20 +2457,20 @@ async function updateEmailCategory(emailId, newCategory, oldCategory) {
                     <div class="gmail-compose-card">
                         <div class="gc-row gc-cc-row">
                             <span class="gc-cc-label">To</span>
-                            <input type="text" id="composeToInput" class="gc-plain-input" placeholder="Recipients">
+                            <input type="text" id="composeToInput" class="gc-plain-input" placeholder="Recipients" autocomplete="off">
                             <button type="button" class="gc-bcc-toggle" onclick="composeToggleBcc()">Bcc</button>
                         </div>
                         <div class="gc-row gc-cc-row">
                             <span class="gc-cc-label">Cc</span>
-                            <input type="text" id="composeCcInput" class="gc-plain-input">
+                            <input type="text" id="composeCcInput" class="gc-plain-input" autocomplete="off">
                         </div>
                         <div class="gc-row gc-cc-row" id="composeBccRow" style="display:none;">
                             <span class="gc-cc-label">Bcc</span>
-                            <input type="text" id="composeBccInput" class="gc-plain-input">
+                            <input type="text" id="composeBccInput" class="gc-plain-input" autocomplete="off">
                         </div>
                         <div class="gc-row gc-cc-row">
                             <span class="gc-cc-label">Subject</span>
-                            <input type="text" id="composeSubjectInput" class="gc-plain-input" placeholder="Subject">
+                            <input type="text" id="composeSubjectInput" class="gc-plain-input" placeholder="Subject" autocomplete="off">
                         </div>
                         <div class="gc-body" id="composeBody" contenteditable="true"></div>
                         <div class="gc-actions">
@@ -2484,6 +2484,13 @@ async function updateEmailCategory(emailId, newCategory, oldCategory) {
             // Send always starts a fresh, empty message. Opening a saved
             // draft prefills AFTER this reset (see openDraftInCompose), so
             // drafts are unaffected; use Save as Draft to keep work instead.
+            resetComposeFields();
+
+            container.style.display = 'block';
+            try { document.getElementById('composeToInput').focus(); } catch(_) {}
+        }
+
+        function resetComposeFields() {
             const bodyEl = document.getElementById('composeBody');
             if (bodyEl) bodyEl.innerHTML = '';
             ['composeToInput', 'composeCcInput', 'composeBccInput', 'composeSubjectInput'].forEach(id => {
@@ -2494,14 +2501,15 @@ async function updateEmailCategory(emailId, newCategory, oldCategory) {
             if (bccRow) bccRow.style.display = 'none';
             composeCurrentDraftId = null;
             composeReplyToMessageId = '';
-
-            container.style.display = 'block';
-            try { document.getElementById('composeToInput').focus(); } catch(_) {}
         }
 
+        // Fields are cleared on close AND on open so no path — including any
+        // future code that shows the popup directly — can surface a stale
+        // recipient or body. Unfinished work is kept via Save as Draft.
         function closeComposeEmail() {
             const container = document.getElementById('composeEmailContainer');
             if (container) container.style.display = 'none';
+            resetComposeFields();
         }
 
         function composeToggleBcc() {
