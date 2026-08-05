@@ -35,6 +35,7 @@ const COLLECTIONS = [
   'email_notes',
   'hidden_threads',
   'hidden_inbox',
+  'archived_emails',
   'test_emails',
   'user_state',
   'drafts',

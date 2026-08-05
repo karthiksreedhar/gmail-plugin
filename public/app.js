@@ -749,8 +749,8 @@ window.__categoryChats = window.__categoryChats || {};
                     allEmails = data.emails;
                     await loadCurrentCategories();
                     populateCategories(allEmails);
-                    displayEmails(allEmails);
-                    updateDisplayStats(allEmails);
+                    displayEmails(activeInboxEmails());
+                    updateDisplayStats(activeInboxEmails());
                 } else {
                     container.innerHTML = '<div class="loading">No emails found.</div>';
                 }
@@ -809,6 +809,13 @@ window.__categoryChats = window.__categoryChats || {};
 
         function populateCategories(emails) {
             const categoryList = document.getElementById('categoryList');
+
+            // Archived emails only count toward the sidebar Archive entry, not
+            // the regular categories or "View All".
+            const archivedTotal = (emails || []).filter(e => !!e?.archived).length;
+            const archiveCountEl = document.getElementById('archiveCount');
+            if (archiveCountEl) archiveCountEl.textContent = archivedTotal;
+            emails = (emails || []).filter(e => !e?.archived);
 
             // Determine authoritative category order if available
             const ordered = Array.isArray(currentCategoriesOrder) && currentCategoriesOrder.length
@@ -1427,13 +1434,13 @@ async function updateEmailCategory(emailId, newCategory, oldCategory) {
 
         // Re-display emails to show updated category pill
         if (currentFilter === 'all') {
-            displayEmails(allEmails);
+            displayEmails(activeInboxEmails());
         } else if (currentFilter === oldCategory) {
             // If we're filtered by the old category, switch to the new category view
             filterByCategory(newCategory);
         } else if (currentFilter === newCategory) {
             // If we're already on the new category, just refresh
-            const filteredEmails = allEmails.filter(email => {
+            const filteredEmails = activeInboxEmails().filter(email => {
                 const arr = Array.isArray(email?.categories) && email.categories.length
                     ? email.categories
                     : (email?.category ? [email.category] : []);
@@ -1442,7 +1449,7 @@ async function updateEmailCategory(emailId, newCategory, oldCategory) {
             displayEmails(filteredEmails);
         } else {
             // Otherwise, just refresh current view
-            const filteredEmails = allEmails.filter(email => {
+            const filteredEmails = activeInboxEmails().filter(email => {
                 const arr = Array.isArray(email?.categories) && email.categories.length
                     ? email.categories
                     : (email?.category ? [email.category] : []);
@@ -1459,6 +1466,16 @@ async function updateEmailCategory(emailId, newCategory, oldCategory) {
     }
 }
 
+        // Archived emails stay in allEmails (and Mongo) but are excluded from the
+        // main views; the sidebar Archive entry is the only place they render.
+        function activeInboxEmails() {
+            return (allEmails || []).filter(e => !e?.archived);
+        }
+
+        function archivedInboxEmails() {
+            return (allEmails || []).filter(e => !!e?.archived);
+        }
+
         function filterByCategory(category) {
             draftsViewActive = false;
             currentFilter = category;
@@ -1467,16 +1484,25 @@ async function updateEmailCategory(emailId, newCategory, oldCategory) {
             document.querySelectorAll('.category-item').forEach(item => {
                 item.classList.remove('active');
             });
-            
+
             if (category === 'all') {
                 document.getElementById('viewAll').classList.add('active');
                 document.getElementById('currentFilter').textContent = 'All Emails';
-                displayEmails(allEmails);
-                updateDisplayStats(allEmails);
+                displayEmails(activeInboxEmails());
+                updateDisplayStats(activeInboxEmails());
                 // Show all priority cards when viewing all
                 try { renderPriorityToday(); } catch (_) {}
+            } else if (category === 'archive') {
+                const archivedEmails = archivedInboxEmails();
+                const archiveEl = document.getElementById('viewArchive');
+                if (archiveEl) archiveEl.classList.add('active');
+                document.getElementById('currentFilter').textContent = 'Archive';
+                displayEmails(archivedEmails);
+                updateDisplayStats(archivedEmails);
+                // No priority cards in the archive view
+                try { renderPriorityToday('archive'); } catch (_) {}
             } else {
-                const filteredEmails = allEmails.filter(email => {
+                const filteredEmails = activeInboxEmails().filter(email => {
                     const arr = Array.isArray(email?.categories) && email.categories.length
                         ? email.categories
                         : (email?.category ? [email.category] : []);
@@ -1559,6 +1585,9 @@ async function updateEmailCategory(emailId, newCategory, oldCategory) {
                     <div class="notes-preview" data-email-notes="${email.id}" style="display:none;"></div>
                 </div>
                 <div class="email-actions">
+                    <button class="archive-thread-btn" onclick="${email.archived ? 'unarchiveEmailThread' : 'archiveEmailThread'}('${email.id}', event)" title="${email.archived ? 'Move back to inbox' : 'Archive this thread'}">
+                        ${email.archived ? '📥' : '🗃️'}
+                    </button>
                     <button class="delete-thread-btn" onclick="deleteEmailThread('${email.id}', '${email.subject.replace(/'/g, "\\'")}', event)" title="Delete this thread">
                         🗑️
                     </button>
@@ -1785,9 +1814,9 @@ async function updateEmailCategory(emailId, newCategory, oldCategory) {
                 const cf = document.getElementById('currentFilter');
                 if (cf) cf.textContent = 'All Emails';
 
-                // Restore full list
-                displayEmails(allEmails || []);
-                updateDisplayStats(allEmails || []);
+                // Restore full list (minus archived, which live under Archive)
+                displayEmails(activeInboxEmails());
+                updateDisplayStats(activeInboxEmails());
 
                 // Restore sidebar state to "View All"
                 try {
@@ -9496,6 +9525,43 @@ function rejectCurrentEmail() {
         }
 
         // Delete Email Thread functionality
+        async function setEmailArchivedState(emailId, archived) {
+            const endpoint = archived ? 'archive-email' : 'unarchive-email';
+            const response = await fetch(`/api/${endpoint}/${encodeURIComponent(emailId)}`, { method: 'POST' });
+            const data = await response.json();
+            if (!data.success) {
+                throw new Error(data.error || 'Unknown error');
+            }
+
+            // Update local state and re-render current view + sidebar counts
+            const email = (allEmails || []).find(e => e && e.id === emailId);
+            if (email) email.archived = archived;
+            populateCategories(allEmails);
+            filterByCategory(currentFilter || 'all');
+        }
+
+        async function archiveEmailThread(emailId, event) {
+            // Prevent the email item click event from firing
+            event.stopPropagation();
+            try {
+                await setEmailArchivedState(emailId, true);
+            } catch (error) {
+                console.error('Error archiving email thread:', error);
+                showErrorPopup('Failed to archive email. Please try again.', 'Archive Failed');
+            }
+        }
+
+        async function unarchiveEmailThread(emailId, event) {
+            // Prevent the email item click event from firing
+            event.stopPropagation();
+            try {
+                await setEmailArchivedState(emailId, false);
+            } catch (error) {
+                console.error('Error unarchiving email thread:', error);
+                showErrorPopup('Failed to move email back to inbox. Please try again.', 'Unarchive Failed');
+            }
+        }
+
         async function deleteEmailThread(emailId, emailSubject, event) {
             // Prevent the email item click event from firing
             event.stopPropagation();

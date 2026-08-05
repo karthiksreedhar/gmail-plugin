@@ -2984,8 +2984,20 @@ app.get('/api/response-emails', async (req, res) => {
     if (filteredEmails.length !== validatedEmails.length) {
       console.log(`Filtered out ${validatedEmails.length - filteredEmails.length} hidden emails`);
     }
-    console.log(`Returning ${filteredEmails.length} validated emails (source: ${source})`);
-    res.json({ emails: filteredEmails, source });
+
+    // Archived emails stay in Mongo and are still returned here, flagged so the
+    // client can keep them out of the main views and list them under Archive.
+    let archivedIds = new Set();
+    try {
+      const archivedDoc = await getUserDoc('archived_emails', userEmail);
+      archivedIds = new Set(Array.isArray(archivedDoc?.archivedIds) ? archivedDoc.archivedIds : []);
+    } catch (error) {
+      console.warn('Failed to load archived_emails; returning emails unflagged:', error.message);
+    }
+    const emailsWithArchived = filteredEmails.map(e => ({ ...e, archived: archivedIds.has(e.id) }));
+
+    console.log(`Returning ${emailsWithArchived.length} validated emails (source: ${source})`);
+    res.json({ emails: emailsWithArchived, source });
   } catch (error) {
     console.error('Error fetching response emails:', error);
     res.status(500).json({ error: 'Failed to fetch response emails', details: error.message });
@@ -8304,6 +8316,38 @@ app.put('/api/email/:emailId/category', async (req, res) => {
 });
 
 // API endpoint to delete an email thread
+// Archive / unarchive an email thread. Archived emails are not deleted from
+// Mongo — they only carry an id in the per-user archived_emails doc, which the
+// client uses to hide them from the main views and show them under Archive.
+async function handleSetEmailArchived(req, res, archived) {
+  try {
+    const emailId = String(req.params.emailId || '').trim();
+    if (!emailId) {
+      return res.status(400).json({ success: false, error: 'Email ID is required' });
+    }
+    const userEmail = getEffectiveUserEmailForRequest(req);
+    if (!userEmail) {
+      return res.status(401).json({ success: false, error: 'Not authenticated' });
+    }
+
+    const doc = await getUserDoc('archived_emails', userEmail);
+    const current = Array.isArray(doc?.archivedIds) ? doc.archivedIds : [];
+    const next = archived
+      ? Array.from(new Set([...current, emailId]))
+      : current.filter(id => id !== emailId);
+    await setUserDoc('archived_emails', userEmail, { archivedIds: next });
+
+    console.log(`${archived ? 'Archived' : 'Unarchived'} email ${emailId} for ${userEmail} (${next.length} archived total)`);
+    res.json({ success: true, archived, archivedCount: next.length });
+  } catch (error) {
+    console.error(`Error ${archived ? 'archiving' : 'unarchiving'} email:`, error);
+    res.status(500).json({ success: false, error: 'Failed to update archive state' });
+  }
+}
+
+app.post('/api/archive-email/:emailId', (req, res) => handleSetEmailArchived(req, res, true));
+app.post('/api/unarchive-email/:emailId', (req, res) => handleSetEmailArchived(req, res, false));
+
 app.delete('/api/email-thread/:emailId', async (req, res) => {
   try {
     const emailId = req.params.emailId;
