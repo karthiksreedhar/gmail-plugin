@@ -228,6 +228,20 @@
         white-space: nowrap;
       }
       .iust-draft-snippet { color: #5f6368; font-weight: 400; }
+      .iust-draft-delete {
+        background: #dc3545;
+        color: #fff;
+        border: none;
+        border-radius: 4px;
+        padding: 3px 8px;
+        font-size: 12px;
+        cursor: pointer;
+        flex-shrink: 0;
+        opacity: 0;
+        transition: opacity 0.15s ease;
+      }
+      .iust-draft-item:hover .iust-draft-delete { opacity: 1; }
+      .iust-draft-delete:hover { background: #c82333; }
 
       /* Layout selector menu (anchored under the header button). */
       .iust-mode-menu {
@@ -427,6 +441,42 @@
     }
   }
 
+  // Delete a draft from the column (same semantics as the native drafts view:
+  // removes it from this app only, never from Gmail). Uses the app's styled
+  // confirm popup when available, falling back to a native confirm().
+  function deleteDraftFromColumn(draft) {
+    const doDelete = () => {
+      fetch('/api/drafts/' + encodeURIComponent(draft.id), { method: 'DELETE' })
+        .then(resp => resp.json())
+        .then(data => {
+          if (!data || !data.success) throw new Error((data && data.error) || 'Delete failed');
+          draftsCache = draftsCache.filter(d => d && d.id !== draft.id);
+          renderDraftsColumnContent();
+          // If the deleted draft is loaded in the composer, unlink it so a
+          // later save doesn't try to update a draft that no longer exists.
+          try {
+            if (composeCurrentDraftId === draft.id) {
+              composeCurrentDraftId = null;
+              composeReplyToMessageId = '';
+            }
+          } catch (e) { /* compose state unavailable — nothing to unlink */ }
+          if (window.gcCurrentDraftId === draft.id) window.gcCurrentDraftId = null;
+        })
+        .catch(err => {
+          console.error('Important+Unread / Starred Layout: draft delete failed', err);
+          if (typeof API.showError === 'function') API.showError('Failed to delete the draft.');
+        });
+    };
+
+    const question = 'Delete the draft "' + (draft.subject || '(no subject)') + '"? This only removes it from this app' +
+      (draft.source === 'gmail' ? ', not from Gmail' : '') + '.';
+    if (typeof window.showConfirmPopup === 'function') {
+      window.showConfirmPopup(question, doDelete, () => {}, 'Delete Draft?');
+    } else if (window.confirm(question)) {
+      doDelete();
+    }
+  }
+
   function buildDraftCard(draft) {
     const card = document.createElement('div');
     card.className = 'iust-draft-item';
@@ -436,11 +486,19 @@
         '<span class="iust-draft-label">Draft</span>' +
         '<span class="iust-draft-to">To: ' + escapeHtml(draft.to || '(no recipient)') + '</span>' +
         '<span class="iust-draft-date">' + escapeHtml(formatCompactDate(draft.updatedAt || draft.createdAt)) + '</span>' +
+        '<button type="button" class="iust-draft-delete" title="Delete this draft">🗑️</button>' +
       '</div>' +
       '<div class="iust-draft-subject">' + escapeHtml(draft.subject || '(no subject)') +
         (snippet ? ' <span class="iust-draft-snippet">&ndash; ' + escapeHtml(snippet) + '</span>' : '') +
       '</div>';
     card.addEventListener('click', () => openDraftFromColumn(draft));
+    const deleteBtn = card.querySelector('.iust-draft-delete');
+    if (deleteBtn) {
+      deleteBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        deleteDraftFromColumn(draft);
+      });
+    }
     return card;
   }
 
