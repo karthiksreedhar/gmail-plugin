@@ -4417,6 +4417,542 @@ app.delete('/api/debug/category-suggestion-runs/:runId', async (req, res) => {
   }
 });
 
+// =====================================================
+// RESPONSE TEMPLATE SUGGESTIONS API
+// =====================================================
+// Mines the user's sent replies for reusable response templates: replies the
+// user sends over and over for the same kind of incoming email. Two stages,
+// mirroring the category-suggestion pipeline: one long-context clustering
+// call over compact reply lines, then one drafting call per surviving
+// cluster (bounded concurrency) that writes the canonical template with
+// {{placeholders}}. Every run is persisted to a debug collection.
+
+const TEMPLATE_SUGGESTION_MAX_REPLIES = 150;
+const TEMPLATE_SUGGESTION_MIN_REPLIES_PER_TEMPLATE = 3;
+const TEMPLATE_SUGGESTION_MIN_REPLY_WORDS = 8;
+const TEMPLATE_SUGGESTION_DRAFT_CONCURRENCY = 3;
+const TEMPLATE_SUGGESTION_MAX_EXAMPLES_PER_DRAFT = 8;
+const TEMPLATE_DEBUG_RUNS_COLLECTION = String(
+  process.env.TEMPLATE_DEBUG_RUNS_COLLECTION || 'template_suggestion_runs'
+).trim() || 'template_suggestion_runs';
+const TEMPLATE_DEBUG_RUNS_KEEP = 100;
+
+function createTemplateRunDebug({ userEmail, trigger, model }) {
+  return {
+    runId: uuidv4(),
+    userEmail: normalizeEmail(userEmail) || 'unknown',
+    trigger: trigger || 'unknown',
+    model,
+    startedAt: new Date().toISOString(),
+    finishedAt: null,
+    durationMs: null,
+    ok: null,
+    failure: null,
+    pool: null,
+    clustering: null,
+    drafting: null,
+    final: null,
+    errors: [],
+    apiCalls: null
+  };
+}
+
+async function persistTemplateRunDebug(runDebug, logger) {
+  runDebug.finishedAt = new Date().toISOString();
+  runDebug.durationMs = Date.now() - new Date(runDebug.startedAt).getTime();
+  if (logger) {
+    runDebug.errors = (logger.errors || []).slice();
+    runDebug.apiCalls = {
+      count: (logger.apiCalls || []).length,
+      failed: (logger.apiCalls || []).filter(c => !c.success).length,
+      totalDurationMs: (logger.apiCalls || []).reduce((sum, c) => sum + (c.duration || 0), 0)
+    };
+  }
+  try {
+    await ensureMongoReady();
+    const db = getDb();
+    const coll = db.collection(TEMPLATE_DEBUG_RUNS_COLLECTION);
+    await coll.insertOne({ ...runDebug, createdAt: new Date() });
+    const excess = await coll
+      .find({}, { projection: { _id: 1 } })
+      .sort({ createdAt: -1 })
+      .skip(TEMPLATE_DEBUG_RUNS_KEEP)
+      .toArray();
+    if (excess.length) {
+      await coll.deleteMany({ _id: { $in: excess.map(doc => doc._id) } });
+    }
+    return true;
+  } catch (error) {
+    console.warn('Failed to persist template debug run:', error?.message || error);
+    return false;
+  }
+}
+
+// Thread message bodies are stored as HTML; templates need plain text.
+function htmlToPlainTextForTemplates(raw) {
+  return String(raw || '')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/(p|div|li)>/gi, '\n')
+    .replace(/<[^>]*>/g, '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#0?39;/g, "'")
+    .replace(/\r\n/g, '\n')
+    .trim();
+}
+
+// Pool of the user's sent replies, newest first, capped. Primary source is
+// response_emails (each record pairs the user's reply body with the original
+// incoming email); thread messages the user authored fill in replies that
+// never became response_emails records.
+function buildReplyPoolForTemplates(userData, targetUserEmail) {
+  const pool = [];
+  const seenIds = new Set();
+  const userAddr = normalizeEmail(targetUserEmail) || '';
+  const wordCount = (text) => String(text || '').trim().split(/\s+/).filter(Boolean).length;
+
+  for (const email of userData?.responseEmails || []) {
+    if (email?.seededOriginalOnly) continue;
+    const replyBody = String(email?.body || '').trim();
+    if (wordCount(replyBody) < TEMPLATE_SUGGESTION_MIN_REPLY_WORDS) continue;
+    const id = String(email?.id || '').trim();
+    if (!id || seenIds.has(id)) continue;
+    seenIds.add(id);
+    pool.push({
+      id,
+      subject: String(email?.subject || ''),
+      incomingFrom: String(email?.originalFrom || ''),
+      replyBody,
+      category: String(email?.category || (Array.isArray(email?.categories) ? email.categories[0] : '') || ''),
+      date: email?.date || null
+    });
+  }
+
+  for (const thread of userData?.emailThreads || []) {
+    const msgs = Array.isArray(thread?.messages) ? thread.messages : [];
+    for (const msg of msgs) {
+      const fromAddr = String(msg?.from || '').toLowerCase();
+      const isUsers = msg?.isResponse === true || (userAddr && fromAddr.includes(userAddr));
+      if (!isUsers) continue;
+      const replyBody = htmlToPlainTextForTemplates(msg?.body);
+      if (wordCount(replyBody) < TEMPLATE_SUGGESTION_MIN_REPLY_WORDS) continue;
+      const id = String(msg?.id || '').trim();
+      if (!id || seenIds.has(id)) continue;
+      seenIds.add(id);
+      pool.push({
+        id,
+        subject: String(msg?.subject || thread?.subject || ''),
+        incomingFrom: String(thread?.originalFrom || thread?.from || ''),
+        replyBody,
+        category: '',
+        date: msg?.date || thread?.date || null
+      });
+    }
+  }
+
+  pool.sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
+  return pool.slice(0, TEMPLATE_SUGGESTION_MAX_REPLIES);
+}
+
+// Tolerant JSON envelope extraction: code fences and prose around the object
+// are stripped; returns null (never throws) so invokeBatchWithRetry can retry.
+function parseTemplateJsonEnvelope(responseText) {
+  if (!responseText) return null;
+  let text = String(responseText).trim();
+  const fenceMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fenceMatch) text = fenceMatch[1].trim();
+  const start = text.indexOf('{');
+  const end = text.lastIndexOf('}');
+  if (start === -1 || end <= start) return null;
+  try {
+    return JSON.parse(text.slice(start, end + 1));
+  } catch (_) {
+    return null;
+  }
+}
+
+function compactReplyLine(reply) {
+  const clean = (value, max) => String(value || '').replace(/\s+/g, ' ').trim().slice(0, max);
+  return `${reply.id} | ${clean(reply.incomingFrom, 40) || 'unknown'} | ${clean(reply.subject, 60) || '(no subject)'} | ${clean(reply.replyBody, 220)}`;
+}
+
+async function generateResponseTemplatesForUser(userData, logger, options = {}) {
+  const modelName = getAnthropicModel();
+  const runDebug = createTemplateRunDebug({
+    userEmail: options.userEmail,
+    trigger: options.trigger,
+    model: modelName
+  });
+
+  const pool = buildReplyPoolForTemplates(userData, options.userEmail);
+  runDebug.pool = {
+    responseEmailsLoaded: (userData?.responseEmails || []).length,
+    threadsLoaded: (userData?.emailThreads || []).length,
+    repliesConsidered: pool.length,
+    maxReplies: TEMPLATE_SUGGESTION_MAX_REPLIES,
+    minRepliesPerTemplate: TEMPLATE_SUGGESTION_MIN_REPLIES_PER_TEMPLATE,
+    minReplyWords: TEMPLATE_SUGGESTION_MIN_REPLY_WORDS
+  };
+
+  if (pool.length < TEMPLATE_SUGGESTION_MIN_REPLIES_PER_TEMPLATE) {
+    runDebug.ok = true;
+    runDebug.final = { templates: [], note: 'Too few substantive sent replies -- pipeline skipped.' };
+    await persistTemplateRunDebug(runDebug, logger);
+    return { templates: [], poolCount: pool.length, debugRunId: runDebug.runId };
+  }
+
+  try {
+    const replyById = new Map(pool.map(reply => [reply.id, reply]));
+    const counters = { batchErrorCount: 0, parseFailureCount: 0, retries: 0, retriesRecovered: 0, lastBatchError: null };
+
+    // Stage A: one long-context clustering call over the whole pool.
+    const clusterPrompt = `You are analyzing replies a user has SENT from their email account, looking for RESPONSE TEMPLATES: kinds of replies the user writes over and over, with substantially similar wording or structure, in response to the same kind of incoming email.
+
+REPLIES (one per line: id | original sender | subject | user's reply):
+${pool.map(reply => compactReplyLine(reply)).join('\n')}
+
+Rules:
+- A template needs at least ${TEMPLATE_SUGGESTION_MIN_REPLIES_PER_TEMPLATE} member replies with clearly similar substance and structure
+- Only propose templates worth reusing: scheduling replies, recurring request handling, standard acknowledgments with real content, etc. Never propose one for generic pleasantries ("Thanks!", "Sounds good")
+- name: a short specific label for the reply pattern (4-8 words)
+- whenToUse: one sentence describing the incoming email that should trigger this reply
+- memberIds: only ids from the lines above; each id may appear in at most one template
+- Prefer fewer, tighter templates over many loose ones; propose none if nothing repeats
+
+Respond with ONLY this JSON (no other text):
+{"templates": [{"name": "Template Name", "whenToUse": "One sentence trigger description", "memberIds": ["id1", "id2", "id3"]}]}`;
+
+    const clusterEnvelope = await invokeBatchWithRetry({
+      label: 'Template clustering',
+      prompt: clusterPrompt,
+      modelName,
+      maxOutputTokens: 4000,
+      parse: parseTemplateJsonEnvelope,
+      logger,
+      counters
+    });
+
+    const proposed = Array.isArray(clusterEnvelope?.templates) ? clusterEnvelope.templates : [];
+    const assignedIds = new Set();
+    const keptClusters = [];
+    const droppedClusters = [];
+    for (const cluster of proposed) {
+      const name = String(cluster?.name || '').trim();
+      const memberIds = (Array.isArray(cluster?.memberIds) ? cluster.memberIds : [])
+        .map(id => String(id || '').trim())
+        .filter(id => replyById.has(id) && !assignedIds.has(id));
+      if (!name || memberIds.length < TEMPLATE_SUGGESTION_MIN_REPLIES_PER_TEMPLATE) {
+        droppedClusters.push({ name: name || '(unnamed)', validMembers: memberIds.length });
+        continue;
+      }
+      memberIds.forEach(id => assignedIds.add(id));
+      keptClusters.push({
+        name,
+        whenToUse: String(cluster?.whenToUse || '').trim(),
+        memberIds
+      });
+    }
+
+    runDebug.clustering = {
+      proposed: proposed.length,
+      kept: keptClusters.map(c => ({ name: c.name, members: c.memberIds.length })),
+      dropped: droppedClusters,
+      counters: { ...counters, lastBatchError: counters.lastBatchError ? String(counters.lastBatchError.message || counters.lastBatchError) : null }
+    };
+
+    if (!keptClusters.length) {
+      runDebug.ok = true;
+      runDebug.final = { templates: [], note: 'Clustering found no repeated reply patterns.' };
+      await persistTemplateRunDebug(runDebug, logger);
+      return { templates: [], poolCount: pool.length, debugRunId: runDebug.runId };
+    }
+
+    // Stage B: draft the canonical template for each cluster.
+    const templates = [];
+    const draftFailures = [];
+    let cursor = 0;
+    const workerCount = Math.max(1, Math.min(TEMPLATE_SUGGESTION_DRAFT_CONCURRENCY, keptClusters.length));
+    async function draftWorker() {
+      while (true) {
+        const idx = cursor++;
+        if (idx >= keptClusters.length) return;
+        const cluster = keptClusters[idx];
+        const members = cluster.memberIds.map(id => replyById.get(id)).filter(Boolean);
+        const examples = members.slice(0, TEMPLATE_SUGGESTION_MAX_EXAMPLES_PER_DRAFT);
+
+        const draftPrompt = `These ${examples.length} replies were all sent by the same user and follow one repeated pattern ("${cluster.name}"). Write ONE reusable template for it.
+
+${examples.map((reply, i) => `REPLY ${i + 1} (responding to "${String(reply.subject || '').slice(0, 80)}"):\n${String(reply.replyBody || '').slice(0, 1500)}`).join('\n\n')}
+
+Rules:
+- Where the replies agree, keep the user's own wording verbatim -- this must sound like them, not like you
+- Where they differ (names, dates, courses, links, amounts), use {{snake_case}} placeholders
+- Plain text only, no subject line, ready to paste into a composer
+- whenToUse: one sentence describing the incoming email that should trigger this reply
+
+Respond with ONLY this JSON (no other text):
+{"name": "Template Name", "whenToUse": "One sentence", "body": "Template text with {{placeholders}}", "placeholders": ["placeholder_one"]}`;
+
+        const draft = await invokeBatchWithRetry({
+          label: `Template draft "${cluster.name}"`,
+          prompt: draftPrompt,
+          modelName,
+          maxOutputTokens: 2000,
+          parse: parseTemplateJsonEnvelope,
+          logger,
+          counters
+        });
+
+        const body = String(draft?.body || '').trim();
+        if (!body) {
+          draftFailures.push(cluster.name);
+          continue;
+        }
+
+        // Most common category among members, if any -- lets phase 2 offer
+        // the template in category context.
+        const categoryCounts = new Map();
+        for (const member of members) {
+          if (member.category) categoryCounts.set(member.category, (categoryCounts.get(member.category) || 0) + 1);
+        }
+        const topCategory = [...categoryCounts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] || '';
+
+        templates.push({
+          id: uuidv4(),
+          name: String(draft?.name || cluster.name).trim(),
+          whenToUse: String(draft?.whenToUse || cluster.whenToUse).trim(),
+          body,
+          placeholders: (Array.isArray(draft?.placeholders) ? draft.placeholders : [])
+            .map(p => String(p || '').trim()).filter(Boolean),
+          category: topCategory,
+          sourceEmailIds: cluster.memberIds,
+          sourceExamples: members.map(member => ({
+            id: member.id,
+            subject: member.subject,
+            snippet: String(member.replyBody || '').replace(/\s+/g, ' ').trim().slice(0, 160)
+          }))
+        });
+      }
+    }
+    await Promise.all(Array.from({ length: workerCount }, () => draftWorker()));
+
+    runDebug.drafting = {
+      attempted: keptClusters.length,
+      succeeded: templates.length,
+      failures: draftFailures,
+      counters: { ...counters, lastBatchError: counters.lastBatchError ? String(counters.lastBatchError.message || counters.lastBatchError) : null }
+    };
+    runDebug.ok = true;
+    runDebug.final = {
+      templates: templates.map(t => ({ name: t.name, whenToUse: t.whenToUse, members: t.sourceEmailIds.length, category: t.category }))
+    };
+    await persistTemplateRunDebug(runDebug, logger);
+
+    return { templates, poolCount: pool.length, debugRunId: runDebug.runId };
+  } catch (error) {
+    runDebug.ok = false;
+    runDebug.failure = String(error?.message || error);
+    await persistTemplateRunDebug(runDebug, logger);
+    throw error;
+  }
+}
+
+// Mine the selected user's sent replies for reusable response templates.
+app.post('/api/response-template-suggestions', async (req, res) => {
+  const { userEmail } = req.body || {};
+  const logger = new OperationsLogger();
+
+  try {
+    await ensureMongoReady();
+  } catch (_) {}
+
+  if (!mongoInitialized) {
+    return res.status(503).json({
+      success: false,
+      error: mongoInitError
+        ? `Database unavailable: ${mongoInitError.message}`
+        : 'Database connection not ready'
+    });
+  }
+
+  const availableUsers = await getAvailableUsers();
+  const normalizedRequested = String(userEmail || '').trim().toLowerCase();
+  const targetUser = normalizedRequested && availableUsers.includes(normalizedRequested)
+    ? normalizedRequested
+    : (availableUsers[0] || DEFAULT_AVAILABLE_USERS[0]);
+
+  try {
+    console.log(`\n📝 GENERATING RESPONSE TEMPLATE SUGGESTIONS for ${targetUser}`);
+    const userData = await loadUserEmailData(targetUser, logger);
+    const { templates, poolCount, debugRunId } = await generateResponseTemplatesForUser(userData, logger, {
+      trigger: 'surface-button',
+      userEmail: targetUser
+    });
+    console.log(`   Found ${templates.length} template(s) from ${poolCount} replies (debug run ${debugRunId})`);
+
+    res.json({
+      success: true,
+      templates,
+      debugRunId,
+      operationsLog: logger.getLog(),
+      debug: {
+        requestedUserEmail: userEmail || null,
+        resolvedTargetUser: targetUser,
+        repliesConsidered: poolCount
+      }
+    });
+  } catch (error) {
+    console.error('Error generating response template suggestions:', error);
+    logger.logError('response-template-suggestions endpoint', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to generate response template suggestions',
+      operationsLog: logger.getLog()
+    });
+  }
+});
+
+// Save approved (possibly user-edited) templates to the per-user store.
+// Upserts by id, then by case-insensitive name, so re-approving updates
+// instead of duplicating.
+app.post('/api/response-templates/apply', async (req, res) => {
+  const { userEmail, templates } = req.body || {};
+
+  if (!Array.isArray(templates) || templates.length === 0) {
+    return res.status(400).json({ success: false, error: 'templates array is required' });
+  }
+
+  try {
+    await ensureMongoReady();
+  } catch (_) {}
+  if (!mongoInitialized) {
+    return res.status(503).json({ success: false, error: 'Database connection not ready' });
+  }
+
+  const availableUsers = await getAvailableUsers();
+  const normalizedRequested = String(userEmail || '').trim().toLowerCase();
+  const targetUser = normalizedRequested && availableUsers.includes(normalizedRequested)
+    ? normalizedRequested
+    : (availableUsers[0] || DEFAULT_AVAILABLE_USERS[0]);
+
+  try {
+    const doc = await getUserDoc('response_templates', targetUser);
+    const next = Array.isArray(doc?.templates) ? doc.templates.slice() : [];
+    const now = new Date().toISOString();
+    let created = 0;
+    let updated = 0;
+    let skipped = 0;
+
+    for (const raw of templates) {
+      const name = String(raw?.name || '').trim();
+      const body = String(raw?.body || '').trim();
+      if (!name || !body) {
+        skipped++;
+        continue;
+      }
+      const record = {
+        name,
+        whenToUse: String(raw?.whenToUse || '').trim(),
+        body,
+        placeholders: (Array.isArray(raw?.placeholders) ? raw.placeholders : [])
+          .map(p => String(p || '').trim()).filter(Boolean),
+        category: String(raw?.category || '').trim(),
+        sourceEmailIds: (Array.isArray(raw?.sourceEmailIds) ? raw.sourceEmailIds : [])
+          .map(id => String(id || '').trim()).filter(Boolean),
+        updatedAt: now
+      };
+      const requestedId = String(raw?.id || '').trim();
+      const idx = next.findIndex(t =>
+        (requestedId && t?.id === requestedId) ||
+        String(t?.name || '').trim().toLowerCase() === name.toLowerCase()
+      );
+      if (idx >= 0) {
+        next[idx] = { ...next[idx], ...record };
+        updated++;
+      } else {
+        next.push({ ...record, id: requestedId || uuidv4(), createdAt: now });
+        created++;
+      }
+    }
+
+    await setUserDoc('response_templates', targetUser, { templates: next });
+    res.json({ success: true, summary: { created, updated, skipped, total: next.length } });
+  } catch (error) {
+    console.error('Error saving response templates:', error);
+    res.status(500).json({ success: false, error: error.message || 'Failed to save response templates' });
+  }
+});
+
+// List the user's saved templates (used for verification now, composer
+// integration later).
+app.get('/api/response-templates', async (req, res) => {
+  try {
+    await ensureMongoReady();
+    const targetUser = normalizeEmail(req.query.userEmail);
+    if (!targetUser) {
+      return res.status(400).json({ success: false, error: 'userEmail query parameter is required' });
+    }
+    const doc = await getUserDoc('response_templates', targetUser);
+    res.json({ success: true, templates: Array.isArray(doc?.templates) ? doc.templates : [] });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error?.message || 'Failed to load response templates' });
+  }
+});
+
+// Debug-run browsing for template suggestion runs, mirroring the category
+// debug endpoints (URL-only tooling; nothing in the app UI links here).
+app.get('/api/debug/template-suggestion-runs', async (req, res) => {
+  try {
+    await ensureMongoReady();
+    const db = getDb();
+    const filter = {};
+    const userEmail = normalizeEmail(req.query.userEmail);
+    if (userEmail) filter.userEmail = userEmail;
+    const limit = clampLogLimit(req.query.limit, 50);
+    const runs = await db.collection(TEMPLATE_DEBUG_RUNS_COLLECTION)
+      .find(filter, { projection: { _id: 0 } })
+      .sort({ createdAt: -1 })
+      .limit(limit)
+      .toArray();
+    res.json({ success: true, runs });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error?.message || 'Failed to list template debug runs' });
+  }
+});
+
+app.get('/api/debug/template-suggestion-runs/:runId', async (req, res) => {
+  try {
+    await ensureMongoReady();
+    const db = getDb();
+    const run = await db.collection(TEMPLATE_DEBUG_RUNS_COLLECTION)
+      .findOne({ runId: String(req.params.runId || '') }, { projection: { _id: 0 } });
+    if (!run) {
+      return res.status(404).json({ success: false, error: 'Run not found' });
+    }
+    res.json({ success: true, run });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error?.message || 'Failed to load template debug run' });
+  }
+});
+
+app.delete('/api/debug/template-suggestion-runs/:runId', async (req, res) => {
+  try {
+    await ensureMongoReady();
+    const db = getDb();
+    const result = await db.collection(TEMPLATE_DEBUG_RUNS_COLLECTION)
+      .deleteOne({ runId: String(req.params.runId || '') });
+    if (result.deletedCount === 0) {
+      return res.status(404).json({ success: false, error: 'Run not found' });
+    }
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error?.message || 'Failed to delete template debug run' });
+  }
+});
+
 // GET /api/email-thread-preview/:emailId?userEmail=<email>
 // Returns the full stored thread for a suggested email (from email_threads,
 // the same collection the main app uses), or a synthesized single-message

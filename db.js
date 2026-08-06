@@ -42,6 +42,7 @@ const COLLECTIONS = [
   'test_emails',
   'user_state',
   'drafts',
+  'response_templates',
   'classifier_log',
   'priority_emails',
   'precategorized_emails'

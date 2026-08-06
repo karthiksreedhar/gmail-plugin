@@ -3024,9 +3024,129 @@ function addCategorySuggestionTrigger() {
   templateBtn.style.display = currentMode === 'chat' ? 'block' : 'none';
 }
 
-function triggerResponseTemplateSuggestions() {
+async function triggerResponseTemplateSuggestions() {
   if (isGenerating) return;
-  showToast('Response template analysis is coming soon — the backend for this button is not built yet', 'info');
+  const selectedUser = selectedUserDropdown ? selectedUserDropdown.value : (availableUsers[0] || '');
+
+  setGenerating(true);
+  showToast('Analyzing your sent replies for reusable templates...', 'info');
+
+  try {
+    const response = await fetch('/api/response-template-suggestions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userEmail: selectedUser })
+    });
+    const data = await response.json();
+
+    if (data.success) {
+      if (Array.isArray(data.templates) && data.templates.length > 0) {
+        showResponseTemplateReviewModal(data.templates);
+        addMessage('assistant', `I analyzed ${data.debug?.repliesConsidered ?? 'your'} sent replies and found ${data.templates.length} response template${data.templates.length === 1 ? '' : 's'} you use repeatedly. Review and edit them in the panel, then save the ones you want to keep.`);
+        showToast(`Found ${data.templates.length} response template${data.templates.length === 1 ? '' : 's'}`, 'success');
+      } else {
+        const considered = data.debug?.repliesConsidered ?? 0;
+        showToast(`No repeated response patterns found (${considered} sent repl${considered === 1 ? 'y' : 'ies'} analyzed)`, 'info');
+      }
+    } else {
+      showToast(data.error || 'Failed to surface response templates', 'error');
+    }
+  } catch (error) {
+    console.error('Error surfacing response templates:', error);
+    showToast('Failed to surface response templates', 'error');
+  } finally {
+    setGenerating(false);
+  }
+}
+
+// Review modal: checkbox + editable name/body per template, with the source
+// replies each template was derived from. Save posts the checked (possibly
+// edited) templates to the per-user store.
+let responseTemplateReviewData = null;
+
+function showResponseTemplateReviewModal(templates) {
+  const existing = document.getElementById('responseTemplateReviewOverlay');
+  if (existing) existing.remove();
+  responseTemplateReviewData = templates;
+
+  const overlay = document.createElement('div');
+  overlay.id = 'responseTemplateReviewOverlay';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:10000;display:flex;align-items:center;justify-content:center;';
+
+  const items = templates.map((tpl, i) => `
+    <div style="border:1px solid #d0d5dd;border-radius:8px;padding:14px;margin-bottom:12px;">
+      <label style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+        <input type="checkbox" class="tpl-include" data-idx="${i}" checked>
+        <input type="text" class="tpl-name" data-idx="${i}" value="${escapeHtml(tpl.name || '')}" style="flex:1;font-weight:600;font-size:14px;padding:6px 8px;border:1px solid #d0d5dd;border-radius:6px;">
+      </label>
+      <div style="font-size:13px;color:#667085;margin-bottom:8px;"><strong>When to use:</strong> ${escapeHtml(tpl.whenToUse || '')}</div>
+      <textarea class="tpl-body" data-idx="${i}" rows="7" style="width:100%;font-size:13px;font-family:inherit;padding:8px;border:1px solid #d0d5dd;border-radius:6px;box-sizing:border-box;">${escapeHtml(tpl.body || '')}</textarea>
+      <details style="margin-top:6px;font-size:12px;color:#667085;">
+        <summary style="cursor:pointer;">Based on ${(tpl.sourceEmailIds || []).length} of your replies</summary>
+        ${(tpl.sourceExamples || []).map(src => `<div style="margin:4px 0 4px 12px;">&bull; <strong>${escapeHtml(src.subject || '(no subject)')}</strong> &mdash; ${escapeHtml(src.snippet || '')}</div>`).join('')}
+      </details>
+    </div>`).join('');
+
+  overlay.innerHTML = `
+    <div style="background:#fff;color:#111827;border-radius:12px;padding:24px;max-width:720px;width:92%;max-height:85vh;overflow-y:auto;box-shadow:0 10px 40px rgba(0,0,0,.2);">
+      <h3 style="margin:0 0 8px;">📝 Response Templates</h3>
+      <p style="margin:0 0 16px;color:#555;font-size:14px;">These reply patterns showed up repeatedly in your sent mail. Edit the names and bodies as needed, untick any you don't want, then save.</p>
+      ${items}
+      <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:8px;">
+        <button type="button" id="tplCancelBtn" style="border:1px solid #d0d5dd;background:#fff;color:#374151;border-radius:8px;padding:10px 18px;cursor:pointer;font-size:14px;">Cancel</button>
+        <button type="button" id="tplSaveBtn" style="border:none;background:var(--primary-color, #6366f1);color:#fff;border-radius:8px;padding:10px 18px;cursor:pointer;font-size:14px;font-weight:600;">Save Selected</button>
+      </div>
+    </div>`;
+
+  document.body.appendChild(overlay);
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+  document.getElementById('tplCancelBtn').onclick = () => overlay.remove();
+  document.getElementById('tplSaveBtn').onclick = () => saveSelectedResponseTemplates(overlay);
+}
+
+async function saveSelectedResponseTemplates(overlay) {
+  const selected = [];
+  overlay.querySelectorAll('.tpl-include').forEach(checkbox => {
+    if (!checkbox.checked) return;
+    const idx = Number(checkbox.dataset.idx);
+    const source = responseTemplateReviewData?.[idx];
+    if (!source) return;
+    selected.push({
+      ...source,
+      name: overlay.querySelector(`.tpl-name[data-idx="${idx}"]`)?.value?.trim() || source.name,
+      body: overlay.querySelector(`.tpl-body[data-idx="${idx}"]`)?.value ?? source.body
+    });
+  });
+
+  if (!selected.length) {
+    showToast('Tick at least one template to save', 'warning');
+    return;
+  }
+
+  const saveBtn = document.getElementById('tplSaveBtn');
+  if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = 'Saving...'; }
+  try {
+    const response = await fetch('/api/response-templates/apply', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        userEmail: selectedUserDropdown?.value,
+        templates: selected
+      })
+    });
+    const data = await response.json();
+    if (!data.success) throw new Error(data.error || 'Save failed');
+
+    overlay.remove();
+    responseTemplateReviewData = null;
+    const s = data.summary || {};
+    showToast(`Saved: ${s.created || 0} new, ${s.updated || 0} updated (${s.total || 0} total)`, 'success');
+    addMessage('assistant', `✅ **Response templates saved!** ${s.created || 0} new and ${s.updated || 0} updated — ${s.total || 0} total on file.`);
+  } catch (error) {
+    console.error('Error saving response templates:', error);
+    showToast('Failed to save templates: ' + error.message, 'error');
+    if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = 'Save Selected'; }
+  }
 }
 
 let availableUsers = [];

@@ -1,0 +1,46 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "agentic-inbox",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["/Users/karthiksreedhar/agentic-inbox/src/server.js"],
+      "port": 4477
+    },
+    {
+      "name": "habit-dashboard",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["/Users/karthiksreedhar/habit-dashboard/server.js"],
+      "port": 5757
+    },
+    {
+      "name": "gmail-plugin-server",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev"],
+      "port": 3000
+    },
+    {
+      "name": "gmail-plugin-server-3100",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": ["-lc", "PORT=3100 node server.js"],
+      "port": 3100
+    },
+    {
+      "name": "feature-generator-agent",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev", "--prefix", "feature-generator-agent"],
+      "port": 5000,
+      "autoPort": true
+    },
+    {
+      "name": "feature-generator-5178",
+      "url": "http://localhost:5178"
+    },
+    {
+      "name": "feature-agent-5050-local-main",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": ["-lc", "cd feature-generator-agent && PORT=5050 MAIN_SYSTEM_BASE_URL=http://localhost:3100 node server.js"],
+      "port": 5050
+    }
+  ]
+}
