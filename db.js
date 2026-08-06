@@ -5,9 +5,12 @@ require('dotenv').config({ path: ['.env.local', '.env'] });
 const MONGODB_URI = process.env.MONGODB_URI || 'mongodb+srv://ks4190_db_user:pulY33BbK3UQRjKW@please-god.erkorn3.mongodb.net/?appName=please-god';
 // Database name: prefer env, else sensible default
 const DB_NAME = process.env.MONGODB_DB || 'gmail_plugin';
-const MONGODB_MAX_POOL_SIZE = parseInt(process.env.MONGODB_MAX_POOL_SIZE || '3', 10);
+// Pool defaults: 3 connections proved too small — request bursts (registry +
+// emails + notes + feature calls in parallel) exhausted the pool and follow-up
+// writes died with WaitQueueTimeoutError ("Failed to archive" in the UI).
+const MONGODB_MAX_POOL_SIZE = parseInt(process.env.MONGODB_MAX_POOL_SIZE || '10', 10);
 const MONGODB_MIN_POOL_SIZE = parseInt(process.env.MONGODB_MIN_POOL_SIZE || '0', 10);
-const MONGODB_MAX_CONNECTING = parseInt(process.env.MONGODB_MAX_CONNECTING || '2', 10);
+const MONGODB_MAX_CONNECTING = parseInt(process.env.MONGODB_MAX_CONNECTING || '4', 10);
 const MONGODB_WAIT_QUEUE_TIMEOUT_MS = parseInt(process.env.MONGODB_WAIT_QUEUE_TIMEOUT_MS || '15000', 10);
 
 const mongoGlobal = globalThis.__gmailPluginMongo || (globalThis.__gmailPluginMongo = {

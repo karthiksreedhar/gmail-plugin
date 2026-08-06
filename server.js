@@ -8330,15 +8330,23 @@ async function handleSetEmailArchived(req, res, archived) {
       return res.status(401).json({ success: false, error: 'Not authenticated' });
     }
 
-    const doc = await getUserDoc('archived_emails', userEmail);
-    const current = Array.isArray(doc?.archivedIds) ? doc.archivedIds : [];
-    const next = archived
-      ? Array.from(new Set([...current, emailId]))
-      : current.filter(id => id !== emailId);
-    await setUserDoc('archived_emails', userEmail, { archivedIds: next });
+    // Single atomic update (one pool checkout, no read-modify-write race).
+    // The tiny default connection pool made the old two-op version time out
+    // under load with WaitQueueTimeoutError, surfacing as intermittent
+    // "Failed to archive" errors in the UI.
+    const update = archived
+      ? { $addToSet: { archivedIds: emailId }, $set: { userEmail, _updatedAt: new Date() } }
+      : { $pull: { archivedIds: emailId }, $set: { userEmail, _updatedAt: new Date() } };
+    const result = await getDb().collection('archived_emails').findOneAndUpdate(
+      { userEmail },
+      update,
+      { upsert: true, returnDocument: 'after' }
+    );
+    const doc = result && (result.value || result); // driver v4/v5 shape compatibility
+    const archivedCount = Array.isArray(doc?.archivedIds) ? doc.archivedIds.length : 0;
 
-    console.log(`${archived ? 'Archived' : 'Unarchived'} email ${emailId} for ${userEmail} (${next.length} archived total)`);
-    res.json({ success: true, archived, archivedCount: next.length });
+    console.log(`${archived ? 'Archived' : 'Unarchived'} email ${emailId} for ${userEmail} (${archivedCount} archived total)`);
+    res.json({ success: true, archived, archivedCount });
   } catch (error) {
     console.error(`Error ${archived ? 'archiving' : 'unarchiving'} email:`, error);
     res.status(500).json({ success: false, error: 'Failed to update archive state' });
