@@ -1,62 +1,74 @@
-# Important + Unread / Starred Two-Column Layout
+# Important + Unread / Starred Layout (Standard / Two Col / Three Col)
 
 **Feature ID:** `important-starred-two-column`
-**Type:** Frontend only (pure layout — no backend, no data changes)
+**Type:** Frontend only (layout + a read-only drafts list fetch — no data changes)
 
 ## What it does
 
-Replaces the single stacked email list on the main page with a **two-column
-layout**:
+Adds a **"▤ Layout"** button to the header that opens a small menu with three
+modes (the current one is check-marked):
 
-| Left column | Right column |
-| --- | --- |
-| **❗ Important & Unread** — emails that are *important* **or** *unread* | **⭐ Starred** — all *starred* emails |
+- **Standard** — the app's native single stacked email list; the feature stays
+  completely inert.
+- **Two Col** — the original two-column layout:
 
-Any remaining emails (read, not important, not starred) are shown in a
-full-width **"Everything else"** section **below** the two columns, so nothing
-is ever hidden.
+  | Left column | Right column |
+  | --- | --- |
+  | **❗ Important & Unread** — emails that are *important* **or** *unread* | **⭐ Starred** — all *starred* emails |
+
+  Any remaining emails (read, not important, not starred) are shown in a
+  full-width **"Everything else"** section **below** the columns, so nothing is
+  ever hidden.
+- **Three Col** — same as Two Col plus a third **📝 Drafts** column listing
+  your saved drafts (from `GET /api/drafts`, refreshed every 30s). Clicking a
+  draft opens it in the compose window, prefilled, exactly like the native
+  drafts view — saving updates the same draft.
 
 ## How an email is placed
 
 Each email lands in exactly one place (no card is duplicated). The rules are
 applied in this order:
 
-1. If the email is **Starred** → right column (this honors "all the starred
+1. If the email is **Starred** → Starred column (this honors "all the starred
    stuff" — starred emails always go here, even if they're also important or
    unread).
-2. Else if the email is **Important** *or* **Unread** → left column.
+2. Else if the email is **Important** *or* **Unread** → Important & Unread
+   column.
 3. Otherwise → "Everything else" (full-width, below).
 
 Emails keep the app's normal newest-first ordering inside each group.
 
 ## Behavior notes
 
-- **Pure layout.** The feature never fetches, edits, deletes or re-classifies
-  any email. It reads each email's `isImportant` / `isStarred` / `isUnread`
-  flags and physically **moves the row nodes the app already rendered** (it
-  never clones them), so opening a thread, the delete button, notes previews
-  and the "recently added" highlight all keep working exactly as before.
+- **Emails are never touched.** The feature never fetches, edits, deletes or
+  re-classifies any email. It reads each email's `isImportant` / `isStarred` /
+  `isUnread` flags and physically **moves the row nodes the app already
+  rendered** (it never clones them), so opening a thread, the delete/archive
+  buttons, notes previews and the "recently added" highlight all keep working
+  exactly as before. The drafts column is the only part that fetches data, and
+  that call is read-only.
 - **Respects filters & search.** Only the rows currently on screen are
   re-arranged, so the active category filter or search results are preserved.
 - **Stays in sync.** The app re-renders the list on approvals, filter changes
   and refreshes (and does not emit an `emailsLoaded` event), so the feature
   wraps `displayEmails()` and runs a lightweight periodic check to re-flow the
   columns after every render.
-- **Empty columns.** If one column has no emails it shows a small
-  "No emails here" placeholder so the two-column shape stays stable. If *both*
-  columns would be empty (only "everything else" emails exist), the feature
-  leaves the app's native single list untouched.
-- **Responsive.** On narrow screens (≤ 768px) the two columns stack vertically.
+- **Empty columns.** If a column has no items it shows a small placeholder so
+  the column shape stays stable. If *both* email columns would be empty (only
+  "everything else" emails exist), the feature leaves the app's native single
+  list untouched.
+- **Responsive.** On narrow screens (≤ 768px) the columns stack vertically; in
+  Three Col mode the columns start wrapping below 1000px.
 
-## Toggle
+## Mode selection & persistence
 
-A **"2-Column: On/Off"** button is added to the header bar. Turning it off
-restores the app's native stacked list; the choice is remembered in
-`localStorage` (key `importantUnreadStarredTwoColEnabled`) across reloads.
-The layout is **on** by default.
+The selected mode is remembered in `localStorage` (key
+`importantUnreadStarredLayoutMode`). The old on/off boolean from the
+two-column version (`importantUnreadStarredTwoColEnabled`) is migrated
+automatically: `true` → Two Col, `false` → Standard. The default is Two Col.
 
 ## Files
 
 - `manifest.json` — feature metadata (frontend-only).
-- `frontend.js` — the entire layout implementation (IIFE, no globals leaked
-  besides a one-time init guard).
+- `frontend.js` — the entire implementation (IIFE, no globals leaked besides a
+  one-time init guard).

@@ -1,8 +1,8 @@
 {
   "id": "important-starred-two-column",
-  "name": "Important + Unread / Starred Two-Column Layout",
-  "version": "2.0.0",
-  "description": "Re-arranges the approved email list into two side-by-side columns: the left column holds Important + Unread emails and the right column holds all Starred emails. Any remaining (read, non-important, non-starred) emails are shown full-width below the two columns. Pure layout only - no data is changed.",
+  "name": "Important + Unread / Starred Layout (Standard / Two Col / Three Col)",
+  "version": "3.0.0",
+  "description": "Adds a header layout selector with three modes. Standard keeps the app's native stacked list. Two Col re-arranges the approved email list into two side-by-side columns: Important + Unread on the left, Starred on the right, with the remaining emails full-width below. Three Col adds a third column listing your saved drafts; clicking a draft opens it in the composer. Emails are never changed - the drafts column is the only part that fetches (read-only) data.",
   "author": "Gmail Plugin Feature Generator",
   "frontend": "frontend.js",
   "permissions": [
