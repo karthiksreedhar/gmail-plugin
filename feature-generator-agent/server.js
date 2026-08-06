@@ -757,6 +757,35 @@ async function listFeaturesFromMainSystem() {
   })).filter(feature => !!feature.featureId);
 }
 
+// Mongo fallback: the main system's /api/feature-registry requires a signed-in
+// browser session, which server-to-server calls don't have. The registry
+// collection lives in the same Mongo database, so read it directly.
+async function listFeaturesFromRegistryMongo() {
+  await ensureMongoReady();
+  const docs = await getDb().collection('generated_features')
+    .find({}, { projection: { featureId: 1, name: 1, status: 1, deploymentStatus: 1, source: 1, createdBy: 1 } })
+    .toArray();
+  return docs.map(doc => ({
+    featureId: doc.featureId,
+    id: doc.featureId,
+    name: doc.name || doc.featureId,
+    status: doc.status || 'draft',
+    deploymentStatus: doc.deploymentStatus || 'pending',
+    source: doc.source || null,
+    createdBy: doc.createdBy || null
+  })).filter(feature => !!feature.featureId);
+}
+
+async function listFeaturesResilient() {
+  try {
+    const features = await listFeaturesFromMainSystem();
+    if (features.length) return features;
+  } catch (error) {
+    console.warn('Feature list via main system failed, falling back to Mongo:', error.message);
+  }
+  return listFeaturesFromRegistryMongo();
+}
+
 async function exportFeatureFromMainSystem(featureId) {
   if (!FEATURE_EXPORT_TOKEN) {
     throw new Error('FEATURE_EXPORT_TOKEN is not configured on the feature-generator app');
@@ -785,7 +814,7 @@ async function exportFeatureFromMainSystem(featureId) {
 async function matchMessageToExistingFeature(message) {
   let features = [];
   try {
-    features = await listFeaturesFromMainSystem();
+    features = await listFeaturesResilient();
   } catch (_) {
     return null;
   }
@@ -866,7 +895,7 @@ app.get('/api/session/:sessionId', async (req, res) => {
 
 app.get('/api/features/list', async (req, res) => {
   try {
-    const features = await listFeaturesFromMainSystem();
+    const features = await listFeaturesResilient();
     res.json({
       success: true,
       count: features.length,
@@ -948,6 +977,103 @@ app.post('/api/session/:sessionId/load-feature', async (req, res) => {
       success: false,
       error: error.message || 'Failed to load feature'
     });
+  }
+});
+
+// Pre-flight for generate mode: before the agent runs, report which features
+// are currently shown/enabled in the app and which feature this request will
+// modify (or that it will create a new one). The frontend renders the response
+// with Proceed/Cancel buttons and only calls /api/chat after the user confirms.
+// Read-only: it never touches session.chatHistory or generated files.
+app.post('/api/chat/preflight', async (req, res) => {
+  const { sessionId, message, userEmail } = req.body || {};
+
+  if (!message || String(message).trim() === '') {
+    return res.status(400).json({ success: false, error: 'Message is required' });
+  }
+
+  try {
+    const { session } = await getSession(sessionId);
+    const actorEmail = resolveActorEmail(userEmail || session.actorEmail);
+
+    let features = [];
+    try {
+      features = await listFeaturesResilient();
+    } catch (error) {
+      console.warn('Preflight: could not list features:', error.message);
+    }
+
+    // Per-user shown/enabled flags live in the main system's Mongo.
+    const prefMap = new Map();
+    try {
+      await ensureMongoReady();
+      const prefs = await getDb().collection('user_feature_preferences')
+        .find({ userEmail: actorEmail })
+        .toArray();
+      prefs.forEach(pref => prefMap.set(pref.featureId, pref));
+    } catch (error) {
+      console.warn('Preflight: could not load user feature preferences:', error.message);
+    }
+
+    const annotated = features.map(feature => ({
+      ...feature,
+      visible: !!prefMap.get(feature.featureId)?.visible,
+      enabled: !!prefMap.get(feature.featureId)?.enabled
+    }));
+
+    // Which feature will this request touch? A feature already loaded in the
+    // session wins; otherwise classify the message against the registry.
+    let target = { action: 'create', featureId: null, reason: null };
+    if (session.generatedFiles && session.featureId) {
+      target = { action: 'modify', featureId: session.featureId, reason: 'loaded' };
+    } else {
+      const matched = await matchMessageToExistingFeature(message);
+      if (matched) target = { action: 'modify', featureId: matched, reason: 'matched' };
+    }
+    const targetFeature = annotated.find(f => f.featureId === target.featureId) || null;
+
+    const isDeployed = f => f.status === 'deployed' || f.deploymentStatus === 'deployed';
+    const shown = annotated.filter(f => f.visible);
+    const deployedHidden = annotated.filter(f => !f.visible && isDeployed(f));
+    const drafts = annotated.filter(f => !f.visible && !isDeployed(f));
+
+    const formatList = list => list.map(f =>
+      `- \`${f.featureId}\` — ${f.name}${f.enabled ? ' (enabled)' : ''}`
+    ).join('\n');
+
+    const lines = [];
+    lines.push(`Before I run anything, here is the current state of your app's features:`);
+    lines.push('');
+    lines.push(`**Shown in your app right now (${shown.length}):**`);
+    lines.push(shown.length ? formatList(shown) : '_none_');
+    if (deployedHidden.length) {
+      lines.push('');
+      lines.push(`**Deployed but currently hidden (${deployedHidden.length}):**`);
+      lines.push(formatList(deployedHidden));
+    }
+    if (drafts.length) {
+      lines.push('');
+      lines.push(`**Drafts / not deployed (${drafts.length}):**`);
+      lines.push(formatList(drafts));
+    }
+    lines.push('');
+    if (target.action === 'modify') {
+      const suffix = target.reason === 'loaded' ? ' (already loaded in this session)' : '';
+      lines.push(`**Your request will modify the existing feature \`${target.featureId}\`${targetFeature ? ` — ${targetFeature.name}` : ''}${suffix}.**`);
+    } else {
+      lines.push(`**Your request doesn't match any existing feature, so it will create a brand-new feature.**`);
+    }
+
+    res.json({
+      success: true,
+      sessionId: session.id,
+      response: lines.join('\n'),
+      features: annotated,
+      target: { ...target, name: targetFeature?.name || null }
+    });
+  } catch (error) {
+    console.error('Preflight error:', error);
+    res.status(500).json({ success: false, error: error.message || 'Preflight failed' });
   }
 });
 

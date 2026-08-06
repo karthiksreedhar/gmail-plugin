@@ -499,14 +499,118 @@ async function handleSend() {
   // Clear input
   messageInput.value = '';
   messageInput.style.height = 'auto';
-  
+
   // Add user message to chat
   addMessage('user', message);
-  
+
+  // Generate mode: run a read-only preflight first. It reports which features
+  // are currently shown/enabled in the app and which feature this request
+  // targets; the agent only runs after the user confirms.
+  if (currentMode === 'generate') {
+    await runGeneratePreflight(message);
+    return;
+  }
+
+  await runChatRequest(message);
+}
+
+// Preflight for generate mode: ask the server what this request will touch,
+// then wait for explicit confirmation before running the feature agent.
+async function runGeneratePreflight(message) {
+  setGenerating(true);
+  const loadingMsg = addLoadingMessage();
+
+  try {
+    const requestBody = { sessionId, message };
+    const actorUserEmail = getActorUserEmail();
+    if (actorUserEmail) requestBody.userEmail = actorUserEmail;
+
+    const response = await fetch('/api/chat/preflight', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(requestBody)
+    });
+    const data = await response.json();
+    loadingMsg.remove();
+    setGenerating(false);
+
+    if (!data.success) {
+      throw new Error(data.error || 'Preflight failed');
+    }
+
+    addMessage('assistant', data.response);
+    addPreflightConfirmation(message, data.target);
+  } catch (error) {
+    // Preflight is best-effort: never block feature generation on it.
+    console.warn('Preflight failed, running the agent directly:', error);
+    loadingMsg.remove();
+    setGenerating(false);
+    await runChatRequest(message);
+  }
+}
+
+// Inline Proceed/Cancel bubble shown after the preflight summary.
+function addPreflightConfirmation(message, target) {
+  const existing = document.getElementById('preflight-confirmation');
+  if (existing) existing.remove();
+
+  const messageDiv = document.createElement('div');
+  messageDiv.className = 'message assistant-message confirmation-message';
+  messageDiv.id = 'preflight-confirmation';
+
+  const avatar = document.createElement('div');
+  avatar.className = 'message-avatar';
+  avatar.textContent = '⚠️';
+
+  const contentDiv = document.createElement('div');
+  contentDiv.className = 'message-content confirmation-content';
+
+  const summaryText = document.createElement('div');
+  summaryText.className = 'confirmation-text';
+  const targetLabel = target && target.action === 'modify'
+    ? `modify <strong>${target.featureId}</strong>${target.name ? ` (${target.name})` : ''}`
+    : 'create a <strong>new feature</strong>';
+  summaryText.innerHTML = `
+    <strong>Confirm before the agent runs</strong><br>
+    This request will ${targetLabel}. Proceed?
+  `;
+  contentDiv.appendChild(summaryText);
+
+  const buttonsDiv = document.createElement('div');
+  buttonsDiv.className = 'confirmation-buttons';
+
+  const cancelBtn = document.createElement('button');
+  cancelBtn.className = 'btn-secondary cancel-btn';
+  cancelBtn.innerHTML = '✕ Cancel';
+  cancelBtn.addEventListener('click', () => {
+    messageDiv.remove();
+    addMessage('assistant', 'Cancelled — nothing was generated. Rephrase your request whenever you are ready.');
+  });
+
+  const approveBtn = document.createElement('button');
+  approveBtn.className = 'btn-primary approve-btn';
+  approveBtn.innerHTML = '✓ Proceed';
+  approveBtn.addEventListener('click', async () => {
+    messageDiv.remove();
+    await runChatRequest(message);
+  });
+
+  buttonsDiv.appendChild(cancelBtn);
+  buttonsDiv.appendChild(approveBtn);
+  contentDiv.appendChild(buttonsDiv);
+
+  messageDiv.appendChild(avatar);
+  messageDiv.appendChild(contentDiv);
+  chatMessages.appendChild(messageDiv);
+  scrollToBottom();
+}
+
+// Send the message to the chat/agent endpoints (previously inline in handleSend).
+async function runChatRequest(message) {
   // Show loading state
   setGenerating(true);
   const loadingMsg = addLoadingMessage();
-  
+
   try {
     // Use different endpoints based on mode
     const endpoint = currentMode === 'chat' ? '/api/email-chat' : '/api/chat';
