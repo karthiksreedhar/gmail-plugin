@@ -1577,10 +1577,7 @@ async function updateEmailCategory(emailId, newCategory, oldCategory) {
                     <div class="email-header">
                         <div class="email-from" style="display:flex; align-items:center; gap:8px;">${participantsHtml} ${messageCountHtml} ${gmailLinkHtml(email)}<div class="email-categories">${pillsHtml}</div></div>
                         <div class="email-subject">${escapeHtml(email.subject)}</div>
-                        <div class="email-date" style="display:flex; align-items:center; gap:8px;">
-                            ${formatDate(email.date)}
-                            <span style="font-size: 11px; color: #9aa0a6; font-weight: 400;">${escapeHtml(email.id || '')}</span>
-                        </div>
+                        <div class="email-date">${formatCardDate(email.date)}</div>
                     </div>
                     <div class="notes-preview" data-email-notes="${email.id}" style="display:none;"></div>
                 </div>
@@ -1669,6 +1666,27 @@ async function updateEmailCategory(emailId, newCategory, oldCategory) {
             } else {
                 sorted.forEach(email => container.appendChild(buildEmailRowElement(email)));
             }
+        }
+
+        // Compact date for inbox rows: time only when sent today, date only
+        // otherwise (year added when it isn't the current year).
+        function formatCardDate(dateString) {
+            const date = new Date(dateString);
+            if (Number.isNaN(date.getTime())) return '';
+
+            const now = new Date();
+            const sentToday = date.getFullYear() === now.getFullYear()
+                && date.getMonth() === now.getMonth()
+                && date.getDate() === now.getDate();
+
+            if (sentToday) {
+                return date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+            }
+            return date.toLocaleDateString('en-US', {
+                month: 'short',
+                day: 'numeric',
+                year: date.getFullYear() === now.getFullYear() ? undefined : 'numeric'
+            });
         }
 
         function formatDate(dateString) {
