@@ -2062,6 +2062,9 @@ async function updateEmailCategory(emailId, newCategory, oldCategory) {
             }).join('');
 
             const latestMessage = sorted[lastIdx] || {};
+            const threadEmailId = (window.currentThreadContext && window.currentThreadContext.emailId) || '';
+            const threadEmail = (Array.isArray(allEmails) ? allEmails : []).find(e => e && e.id === threadEmailId);
+            const threadIsArchived = !!(threadEmail && threadEmail.archived);
             threadPane.innerHTML = `
                 <div class="thread-header">
                     <div class="thread-header-left">
@@ -2070,6 +2073,7 @@ async function updateEmailCategory(emailId, newCategory, oldCategory) {
                     </div>
                     <div style="display:flex; align-items:center; gap:10px;">
                         ${gmailLinkHtml(latestMessage)}
+                        <button class="archive-current-thread-btn" onclick="toggleArchiveCurrentThread()" title="${threadIsArchived ? 'Move this thread back to the inbox' : 'Archive this thread'}">${threadIsArchived ? '📥 Unarchive' : '🗃️ Archive'}</button>
                         <button class="reply-thread-btn" onclick="replyToCurrentThread()">Reply</button>
                     </div>
                 </div>
@@ -2127,6 +2131,35 @@ async function updateEmailCategory(emailId, newCategory, oldCategory) {
                 backToEmailList();
             }
         });
+
+        // Archive (or unarchive) the thread currently open in the reading pane,
+        // then return the user to the main inbox.
+        async function toggleArchiveCurrentThread() {
+            const ctx = window.currentThreadContext || {};
+            const emailId = ctx.emailId || window.currentContextEmailId;
+            if (!emailId) return;
+
+            const email = (Array.isArray(allEmails) ? allEmails : []).find(e => e && e.id === emailId);
+            const archiving = !(email && email.archived);
+
+            const btn = document.querySelector('.archive-current-thread-btn');
+            if (btn) { btn.disabled = true; btn.textContent = archiving ? 'Archiving…' : 'Unarchiving…'; }
+
+            try {
+                await setEmailArchivedState(emailId, archiving);
+                goBackFromThread();
+                showSuccessPopup(
+                    archiving
+                        ? 'Thread archived. You can find it under the Archive category.'
+                        : 'Thread moved back to the inbox.',
+                    archiving ? 'Thread Archived' : 'Thread Unarchived'
+                );
+            } catch (error) {
+                console.error('Error toggling archive from thread view:', error);
+                if (btn) { btn.disabled = false; btn.textContent = archiving ? '🗃️ Archive' : '📥 Unarchive'; }
+                showErrorPopup(`Failed to ${archiving ? 'archive' : 'unarchive'} this thread. Please try again.`, archiving ? 'Archive Failed' : 'Unarchive Failed');
+            }
+        }
 
         // Reply button entrypoint: open inline Generate Response with latest message filled in
         function replyToCurrentThread() {
