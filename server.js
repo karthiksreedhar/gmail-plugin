@@ -699,6 +699,87 @@ app.post('/api/internal/generated-features/save-draft', async (req, res) => {
   }
 });
 
+// Recent messages from the user's Gmail SENT folder, for response-template
+// mining. The stored collections only hold a user's sent mail when a thread
+// re-synced after a later incoming message (the sync query is in:inbox), so
+// replies where the user had the last word never reach Mongo -- Sent is the
+// ground truth for how the user actually writes.
+app.post('/api/internal/sent-replies', async (req, res) => {
+  try {
+    if (!shouldAllowFeatureRegistryWrite(req)) {
+      return res.status(401).json({ success: false, error: 'Unauthorized sent-replies request' });
+    }
+    const userEmail = normalizeUserEmailForData(req.body?.userEmail);
+    if (!userEmail) {
+      return res.status(400).json({ success: false, error: 'userEmail is required' });
+    }
+    const maxResults = Math.min(300, Math.max(20, Number(req.body?.maxResults) || 200));
+
+    const { gmailClient, reason } = await buildGmailClientForUser(userEmail);
+    if (!gmailClient) {
+      return res.status(401).json({ success: false, error: 'Gmail authentication unavailable', reason });
+    }
+
+    const refs = [];
+    let pageToken = null;
+    do {
+      const listResp = await withTimeout(
+        gmailClient.users.messages.list({
+          userId: 'me',
+          q: 'in:sent',
+          maxResults: 100,
+          pageToken: pageToken || undefined
+        }),
+        AUTO_SYNC_GMAIL_CALL_TIMEOUT_MS,
+        'gmail_sent_list'
+      );
+      refs.push(...(Array.isArray(listResp?.data?.messages) ? listResp.data.messages : []));
+      pageToken = listResp?.data?.nextPageToken || null;
+    } while (pageToken && refs.length < maxResults);
+
+    const ids = refs.slice(0, maxResults).map(r => String(r?.id || '')).filter(Boolean);
+    const replies = [];
+    let failed = 0;
+    let cursor = 0;
+    const workerCount = Math.max(1, Math.min(AUTO_SYNC_GMAIL_FETCH_CONCURRENCY, ids.length));
+    async function worker() {
+      while (true) {
+        const idx = cursor++;
+        if (idx >= ids.length) return;
+        try {
+          const msg = await withTimeout(
+            gmailClient.users.messages.get({ userId: 'me', id: ids[idx], format: 'full' }),
+            AUTO_SYNC_GMAIL_CALL_TIMEOUT_MS,
+            'gmail_sent_get'
+          );
+          const payload = msg?.data?.payload || {};
+          const headers = payload.headers || [];
+          const header = (name) => headers.find(h => h.name && h.name.toLowerCase() === name.toLowerCase())?.value || '';
+          const internalMs = Number(msg?.data?.internalDate || 0);
+          replies.push({
+            id: String(msg?.data?.id || ids[idx]),
+            threadId: String(msg?.data?.threadId || ''),
+            to: header('To'),
+            subject: header('Subject'),
+            date: internalMs > 0 ? new Date(internalMs).toISOString() : null,
+            body: String(extractEmailBody(payload) || '')
+          });
+        } catch (e) {
+          failed++;
+        }
+      }
+    }
+    await Promise.all(Array.from({ length: workerCount }, () => worker()));
+
+    replies.sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
+    console.log(`[SentReplies] Served ${replies.length} sent message(s) for ${userEmail} (${failed} failed)`);
+    return res.json({ success: true, replies, failed });
+  } catch (error) {
+    console.error('Error fetching sent replies:', error);
+    res.status(500).json({ success: false, error: error.message || 'Failed to fetch sent replies' });
+  }
+});
+
 app.get('/api/internal/generated-features/:featureId/export', async (req, res) => {
   try {
     if (!shouldAllowFeatureExport(req)) {

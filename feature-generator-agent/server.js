@@ -4527,9 +4527,66 @@ app.delete('/api/debug/category-suggestion-runs/:runId', async (req, res) => {
 // cluster (bounded concurrency) that writes the canonical template with
 // {{placeholders}}. Every run is persisted to a debug collection.
 
-const TEMPLATE_SUGGESTION_MAX_REPLIES = 150;
+const TEMPLATE_SUGGESTION_MAX_REPLIES = 250;
 const TEMPLATE_SUGGESTION_MIN_REPLIES_PER_TEMPLATE = 3;
-const TEMPLATE_SUGGESTION_MIN_REPLY_WORDS = 8;
+const TEMPLATE_SUGGESTION_MIN_REPLY_WORDS = 6;
+
+// Machine-generated mail must never count as the user's writing: calendar
+// bookings sent "on their behalf" once made up 36 of an advisor's 44-reply
+// pool and produced a template of Google Calendar's confirmation text.
+const TEMPLATE_AUTOMATED_SENDER_RE = /via google calendar|calendar-notification|no-?reply|do-?not-?reply|noreply|calendly|mailer-daemon|postmaster|notification@|notifications@|invitations?@/i;
+const TEMPLATE_AUTOMATED_SUBJECT_RE = /^(invitation:|accepted:|declined:|tentative:|updated invitation:|canceled event:|new event:|booking confirmed|new booking:|appointment (booked|canceled|rescheduled|confirmed)|updated video conference|video conference (updated|canceled))/i;
+
+function isAutomatedReply(fromOrTo, subject, body) {
+  if (TEMPLATE_AUTOMATED_SENDER_RE.test(String(fromOrTo || ''))) return true;
+  if (TEMPLATE_AUTOMATED_SUBJECT_RE.test(String(subject || '').trim())) return true;
+  return /this event was (created|updated|canceled)|invitation from google calendar|powered by calendly/i.test(String(body || '').slice(0, 600));
+}
+
+// Sent bodies carry the quoted history ("On ... wrote:", "> ..."); templates
+// should only learn from the text the user actually typed above it.
+function stripQuotedReplyText(raw) {
+  let text = String(raw || '').replace(/\r\n/g, '\n');
+  const cutMarkers = [
+    /^\s*On .{0,160}wrote:\s*$/m,
+    /^-{2,}\s*Original Message\s*-{2,}$/mi,
+    /^_{10,}$/m,
+    /^From:\s.+$/m
+  ];
+  for (const marker of cutMarkers) {
+    const match = text.match(marker);
+    if (match && match.index > 0) text = text.slice(0, match.index);
+  }
+  // Drop trailing fully-quoted lines
+  const lines = text.split('\n');
+  while (lines.length && /^\s*(>|$)/.test(lines[lines.length - 1])) lines.pop();
+  return lines.join('\n').trim();
+}
+
+// The user's actual sent mail, straight from Gmail via the main system.
+// Stored collections miss every reply where the user had the last word in a
+// thread (the sync only follows in:inbox), so Sent is the primary source.
+async function fetchSentRepliesFromMainSystem(userEmail) {
+  const endpoint = `${MAIN_SYSTEM_BASE_URL}/api/internal/sent-replies`;
+  const headers = { 'Content-Type': 'application/json' };
+  if (FEATURE_PUBLISH_TOKEN) headers['x-feature-publish-token'] = FEATURE_PUBLISH_TOKEN;
+  try {
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ userEmail, maxResults: 200 })
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !data.success) {
+      console.warn(`[Templates] Sent-mail fetch failed for ${userEmail}: ${data.error || response.status}`);
+      return [];
+    }
+    return Array.isArray(data.replies) ? data.replies : [];
+  } catch (error) {
+    console.warn(`[Templates] Sent-mail fetch errored for ${userEmail}:`, error?.message || error);
+    return [];
+  }
+}
 const TEMPLATE_SUGGESTION_DRAFT_CONCURRENCY = 3;
 const TEMPLATE_SUGGESTION_MAX_EXAMPLES_PER_DRAFT = 8;
 const TEMPLATE_DEBUG_RUNS_COLLECTION = String(
@@ -4608,16 +4665,37 @@ function htmlToPlainTextForTemplates(raw) {
 // response_emails (each record pairs the user's reply body with the original
 // incoming email); thread messages the user authored fill in replies that
 // never became response_emails records.
-function buildReplyPoolForTemplates(userData, targetUserEmail) {
+function buildReplyPoolForTemplates(userData, targetUserEmail, sentReplies = []) {
   const pool = [];
   const seenIds = new Set();
   const userAddr = normalizeEmail(targetUserEmail) || '';
   const wordCount = (text) => String(text || '').trim().split(/\s+/).filter(Boolean).length;
+  let automatedFiltered = 0;
+
+  // Primary source: the user's real Gmail Sent mail (quoted history stripped).
+  for (const sent of sentReplies || []) {
+    const replyBody = stripQuotedReplyText(sent?.body);
+    if (wordCount(replyBody) < TEMPLATE_SUGGESTION_MIN_REPLY_WORDS) continue;
+    if (isAutomatedReply(sent?.to, sent?.subject, replyBody)) { automatedFiltered++; continue; }
+    const id = String(sent?.id || '').trim();
+    if (!id || seenIds.has(id)) continue;
+    seenIds.add(id);
+    pool.push({
+      id,
+      subject: String(sent?.subject || ''),
+      incomingFrom: String(sent?.to || ''),
+      replyBody,
+      category: '',
+      date: sent?.date || null,
+      source: 'gmail-sent'
+    });
+  }
 
   for (const email of userData?.responseEmails || []) {
     if (email?.seededOriginalOnly) continue;
-    const replyBody = String(email?.body || '').trim();
+    const replyBody = stripQuotedReplyText(email?.body);
     if (wordCount(replyBody) < TEMPLATE_SUGGESTION_MIN_REPLY_WORDS) continue;
+    if (isAutomatedReply(email?.originalFrom, email?.subject, replyBody)) { automatedFiltered++; continue; }
     const id = String(email?.id || '').trim();
     if (!id || seenIds.has(id)) continue;
     seenIds.add(id);
@@ -4627,7 +4705,8 @@ function buildReplyPoolForTemplates(userData, targetUserEmail) {
       incomingFrom: String(email?.originalFrom || ''),
       replyBody,
       category: String(email?.category || (Array.isArray(email?.categories) ? email.categories[0] : '') || ''),
-      date: email?.date || null
+      date: email?.date || null,
+      source: 'response-emails'
     });
   }
 
@@ -4637,8 +4716,9 @@ function buildReplyPoolForTemplates(userData, targetUserEmail) {
       const fromAddr = String(msg?.from || '').toLowerCase();
       const isUsers = msg?.isResponse === true || (userAddr && fromAddr.includes(userAddr));
       if (!isUsers) continue;
-      const replyBody = htmlToPlainTextForTemplates(msg?.body);
+      const replyBody = stripQuotedReplyText(htmlToPlainTextForTemplates(msg?.body));
       if (wordCount(replyBody) < TEMPLATE_SUGGESTION_MIN_REPLY_WORDS) continue;
+      if (isAutomatedReply(msg?.from, msg?.subject || thread?.subject, replyBody)) { automatedFiltered++; continue; }
       const id = String(msg?.id || '').trim();
       if (!id || seenIds.has(id)) continue;
       seenIds.add(id);
@@ -4648,13 +4728,16 @@ function buildReplyPoolForTemplates(userData, targetUserEmail) {
         incomingFrom: String(thread?.originalFrom || thread?.from || ''),
         replyBody,
         category: '',
-        date: msg?.date || thread?.date || null
+        date: msg?.date || thread?.date || null,
+        source: 'threads'
       });
     }
   }
 
   pool.sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
-  return pool.slice(0, TEMPLATE_SUGGESTION_MAX_REPLIES);
+  const capped = pool.slice(0, TEMPLATE_SUGGESTION_MAX_REPLIES);
+  capped.automatedFiltered = automatedFiltered;
+  return capped;
 }
 
 // Tolerant JSON envelope extraction: code fences and prose around the object
@@ -4687,10 +4770,14 @@ async function generateResponseTemplatesForUser(userData, logger, options = {}) 
     model: modelName
   });
 
-  const pool = buildReplyPoolForTemplates(userData, options.userEmail);
+  const sentReplies = await fetchSentRepliesFromMainSystem(options.userEmail);
+  const pool = buildReplyPoolForTemplates(userData, options.userEmail, sentReplies);
   runDebug.pool = {
     responseEmailsLoaded: (userData?.responseEmails || []).length,
     threadsLoaded: (userData?.emailThreads || []).length,
+    sentMailFetched: sentReplies.length,
+    automatedFiltered: pool.automatedFiltered || 0,
+    bySource: pool.reduce((acc, r) => { acc[r.source] = (acc[r.source] || 0) + 1; return acc; }, {}),
     repliesConsidered: pool.length,
     maxReplies: TEMPLATE_SUGGESTION_MAX_REPLIES,
     minRepliesPerTemplate: TEMPLATE_SUGGESTION_MIN_REPLIES_PER_TEMPLATE,
@@ -4717,6 +4804,7 @@ ${pool.map(reply => compactReplyLine(reply)).join('\n')}
 Rules:
 - A template needs at least ${TEMPLATE_SUGGESTION_MIN_REPLIES_PER_TEMPLATE} member replies with clearly similar substance and structure
 - Only propose templates worth reusing: scheduling replies, recurring request handling, standard acknowledgments with real content, etc. Never propose one for generic pleasantries ("Thanks!", "Sounds good")
+- NEVER build a template from automated or machine-generated mail (calendar invitations/confirmations, booking notifications, receipts, newsletters, out-of-office). Templates must come only from replies the user personally typed
 - name: a short specific label for the reply pattern (4-8 words)
 - whenToUse: one sentence describing the incoming email that should trigger this reply
 - memberIds: only ids from the lines above; each id may appear in at most one template
