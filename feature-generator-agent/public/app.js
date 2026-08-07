@@ -13,6 +13,18 @@ let isGenerating = false;
 let currentMode = localStorage.getItem('featureGeneratorMode') || 'generate'; // 'chat' or 'generate'
 let currentDraftSaved = false;
 let currentPrRequested = false;
+// Gates the pipeline buttons on a chat-confirmed workflow completion:
+//   'idle'          -> Create PR clickable (nothing running)
+//   'pr_running'    -> both locked until the watcher posts ✅/❌ in the chat
+//   'pr_confirmed'  -> Approve clickable; Create PR stays locked (PR is open)
+//   'merge_running' -> both locked until the watcher posts ✅/❌ in the chat
+//   'merge_done'    -> both locked (feature merged/deployed)
+let workflowGate = 'idle';
+
+function setWorkflowGate(next) {
+  workflowGate = next;
+  updateCreatePrButton();
+}
 let availableExistingFeatures = [];
 let existingFeaturesLoaded = false;
 const URL_USER_EMAIL = String(new URLSearchParams(window.location.search).get('userEmail') || '').trim().toLowerCase();
@@ -135,6 +147,7 @@ async function loadSessionFiles() {
       currentFiles = data.files;
       currentFeatureId = data.featureId;
       currentPrRequested = false;
+  workflowGate = 'idle';
       await refreshExistingFeaturesList(true);
       updateCreatePrButton();
       showPreview();
@@ -333,6 +346,19 @@ function isFeatureInPrOrDeployStage(feature) {
     deploymentStatus === 'deploying';
 }
 
+// Initial workflow gate for a feature loaded from the registry, so the
+// buttons reflect reality even before any workflow runs in this session.
+function gateFromFeatureStatus(feature) {
+  if (!feature) return 'idle';
+  const status = String(feature.status || '').trim();
+  const deploymentStatus = String(feature.deploymentStatus || '').trim();
+  if (status === 'pr_merged' || status === 'deployed' || deploymentStatus === 'deployed') return 'merge_done';
+  if (status === 'merge_in_progress' || status === 'approval_requested' || deploymentStatus === 'deploying') return 'merge_running';
+  if (status === 'pr_open') return 'pr_confirmed';
+  if (status === 'pr_requested') return 'pr_running';
+  return 'idle';
+}
+
 async function refreshExistingFeaturesList(force = false) {
   if (currentMode !== 'generate' || !existingFeatureDropdown) return;
   if (existingFeaturesLoaded && !force) return;
@@ -349,7 +375,12 @@ async function refreshExistingFeaturesList(force = false) {
     if (currentFeatureId) {
       const current = availableExistingFeatures.find(f => f.featureId === currentFeatureId);
       currentPrRequested = isFeatureInPrOrDeployStage(current);
+      workflowGate = gateFromFeatureStatus(current);
       updateCreatePrButton();
+      // A workflow already mid-flight (e.g. page reloaded during a run):
+      // resume watching so the unlocking chat confirmation still arrives.
+      if (workflowGate === 'pr_running') watchWorkflowCompletion(currentFeatureId, 'pr');
+      if (workflowGate === 'merge_running') watchWorkflowCompletion(currentFeatureId, 'merge');
     }
     existingFeaturesLoaded = true;
     renderExistingFeaturesDropdown();
@@ -431,6 +462,7 @@ async function handleLoadExistingFeature() {
     updatedFiles = [];
     currentDraftSaved = false;
     currentPrRequested = false;
+  workflowGate = 'idle';
     updateCreatePrButton();
     showPreview();
     updateFileTabs();
@@ -469,6 +501,7 @@ async function autoLoadSelectedFeatureForGenerate() {
   updatedFiles = [];
   currentDraftSaved = false;
   currentPrRequested = false;
+  workflowGate = 'idle';
   updateCreatePrButton();
   showPreview();
   updateFileTabs();
@@ -674,6 +707,7 @@ async function runChatRequest(message) {
           currentFeatureId = data.featureId;
           updatedFiles = data.updatedFiles || [];
           currentPrRequested = false;
+  workflowGate = 'idle';
           
           // Show/update preview
           showPreview();
@@ -780,6 +814,7 @@ async function handleNewSession() {
   updatedFiles = [];
   currentDraftSaved = false;
   currentPrRequested = false;
+  workflowGate = 'idle';
   updateCreatePrButton();
   
   // Create new session
@@ -828,9 +863,29 @@ function updateCreatePrButton() {
   if (!createPrBtn) return;
   const shouldShow = currentMode === 'generate' && !!currentFeatureId && currentDraftSaved;
   createPrBtn.style.display = shouldShow ? 'inline-flex' : 'none';
+
+  // Clickability is gated on the chat confirmation of the previous GitHub
+  // Action: while a workflow runs (or once the PR exists / is merged) the
+  // button stays visible but locked, with the tooltip explaining why.
+  const prLocked = workflowGate !== 'idle';
+  createPrBtn.disabled = prLocked;
+  createPrBtn.title =
+    workflowGate === 'pr_running' ? 'Waiting for the PR workflow to finish — I will confirm in the chat' :
+    workflowGate === 'merge_running' ? 'Waiting for the merge workflow to finish — I will confirm in the chat' :
+    workflowGate === 'pr_confirmed' ? 'A PR is already open for this feature — approve it instead' :
+    workflowGate === 'merge_done' ? 'This feature is already merged' :
+    'Create a GitHub PR from the saved draft';
+
   if (approveDeployBtn) {
     const shouldShowApprove = shouldShow && currentPrRequested;
     approveDeployBtn.style.display = shouldShowApprove ? 'inline-flex' : 'none';
+    const approveLocked = workflowGate !== 'pr_confirmed';
+    approveDeployBtn.disabled = approveLocked;
+    approveDeployBtn.title =
+      workflowGate === 'pr_confirmed' ? 'Merge the open PR and deploy' :
+      workflowGate === 'merge_running' ? 'Waiting for the merge workflow to finish — I will confirm in the chat' :
+      workflowGate === 'merge_done' ? 'Already merged' :
+      'Available after the chat confirms the PR workflow completed';
   }
 }
 
@@ -855,14 +910,17 @@ async function handleCreatePr() {
       'assistant',
       `⏳ PR creation started for \`${currentFeatureId}\`.\n\nGitHub Actions is creating a branch from \`${data.baseBranch || 'main'}\`, committing the generated files, and opening a pull request. This usually takes about a minute.\n\n**I'll post a message here the moment the workflow finishes** — no need to watch the repository. (Progress, if you're curious: ${data.workflowUrl || 'https://github.com/karthiksreedhar/gmail-plugin/actions'})`
     );
+    setWorkflowGate('pr_running');
     watchWorkflowCompletion(currentFeatureId, 'pr');
     showToast('PR creation requested', 'success');
   } catch (error) {
     addMessage('assistant', `Failed to request a PR for \`${currentFeatureId}\`.\n\nError: ${error.message}`);
     showToast(error.message || 'Failed to create PR', 'error');
   } finally {
-    createPrBtn.disabled = false;
     createPrBtn.innerHTML = originalHtml;
+    // Gate decides clickability: stays locked while the workflow runs,
+    // unlocks (or not) when the chat confirmation arrives.
+    updateCreatePrButton();
   }
 }
 
@@ -887,14 +945,15 @@ async function handleApproveDeploy() {
       'assistant',
       `⏳ Approval accepted for \`${currentFeatureId}\`.\n\nGitHub Actions is validating and merging the generated PR into \`${data.productionBranch || 'main'}\`.\n\n**I'll post a message here when the merge workflow completes** — no need to watch the repository. (Progress, if you're curious: ${data.workflowUrl || 'https://github.com/karthiksreedhar/gmail-plugin/actions'})`
     );
+    setWorkflowGate('merge_running');
     watchWorkflowCompletion(currentFeatureId, 'merge');
     showToast('Approve + deploy requested', 'success');
   } catch (error) {
     addMessage('assistant', `Failed to approve/deploy \`${currentFeatureId}\`.\n\nError: ${error.message}`);
     showToast(error.message || 'Failed to approve/deploy', 'error');
   } finally {
-    approveDeployBtn.disabled = false;
     approveDeployBtn.innerHTML = originalHtml;
+    updateCreatePrButton();
   }
 }
 
@@ -916,8 +975,12 @@ function watchWorkflowCompletion(featureId, stage) {
   const stageLabel = stage === 'pr' ? 'PR creation' : 'merge + deploy';
   const actionsUrl = 'https://github.com/karthiksreedhar/gmail-plugin/actions';
 
-  const finish = (message, toast, toastType) => {
+  // nextGate: the workflow gate to move to WHEN the chat confirmation posts —
+  // this is the only place the buttons unlock, so a click is impossible
+  // before the completion message exists in the chat.
+  const finish = (message, toast, toastType, nextGate) => {
     activePipelineWatchers.delete(key);
+    if (nextGate) setWorkflowGate(nextGate);
     addMessage('assistant', message);
     if (toast) showToast(toast, toastType);
   };
@@ -925,7 +988,12 @@ function watchWorkflowCompletion(featureId, stage) {
   const tick = async () => {
     if (!activePipelineWatchers.has(key)) return;
     if (Date.now() - startedAt > TIMEOUT_MS) {
-      finish(`⏱️ I stopped watching the ${stageLabel} workflow for \`${featureId}\` after 15 minutes without a result. Check it directly here: ${actionsUrl}`);
+      finish(
+        `⏱️ I stopped watching the ${stageLabel} workflow for \`${featureId}\` after 15 minutes without a result. Check it directly here: ${actionsUrl}\n\nThe pipeline buttons are unlocked again so you can retry once you know the outcome.`,
+        null,
+        null,
+        stage === 'pr' ? 'idle' : 'pr_confirmed'
+      );
       return;
     }
 
@@ -944,19 +1012,20 @@ function watchWorkflowCompletion(featureId, stage) {
               ? `\n\nPull request: ${feature.prUrl}`
               : '';
             currentPrRequested = true;
-            updateCreatePrButton();
             finish(
               `✅ The **${stageLabel}** GitHub Action is complete for \`${featureId}\` — the pull request is open.${prLink}\n\nYou can now click **Approve Merge + Deploy** whenever you're ready.`,
               'PR is open — ready to approve',
-              'success'
+              'success',
+              'pr_confirmed'
             );
             return;
           }
           if (status === 'error') {
             finish(
-              `❌ The **${stageLabel}** GitHub Action failed for \`${featureId}\`.${failureDetail}\n\nSee the run logs: ${actionsUrl}`,
+              `❌ The **${stageLabel}** GitHub Action failed for \`${featureId}\`.${failureDetail}\n\nSee the run logs: ${actionsUrl}\n\n**Create PR** is unlocked again so you can retry.`,
               'PR workflow failed',
-              'error'
+              'error',
+              'idle'
             );
             return;
           }
@@ -965,15 +1034,17 @@ function watchWorkflowCompletion(featureId, stage) {
             finish(
               `✅ The **${stageLabel}** GitHub Action is complete for \`${featureId}\` — the PR was merged into main.\n\nProduction deployment is now underway and typically finishes within a couple of minutes; after that the feature is live.`,
               'PR merged — deployment underway',
-              'success'
+              'success',
+              'merge_done'
             );
             return;
           }
           if (status === 'deploy_failed' || status === 'error') {
             finish(
-              `❌ The **${stageLabel}** GitHub Action failed for \`${featureId}\`.${failureDetail}\n\nSee the run logs: ${actionsUrl}`,
+              `❌ The **${stageLabel}** GitHub Action failed for \`${featureId}\`.${failureDetail}\n\nSee the run logs: ${actionsUrl}\n\n**Approve Merge + Deploy** is unlocked again so you can retry.`,
               'Merge workflow failed',
-              'error'
+              'error',
+              'pr_confirmed'
             );
             return;
           }
