@@ -1383,6 +1383,15 @@
         .gc-save-draft-btn:hover { background: #f0f4fe; }
         .gc-save-draft-btn:disabled { opacity: .6; cursor: default; }
 
+        /* Gmail-style star + importance markers on inbox rows */
+        .gm-markers {
+            display: inline-flex;
+            align-items: center;
+            gap: 2px;
+            flex-shrink: 0;
+        }
+        .gm-markers .gm-marker { display: block; }
+
         /* Drafts rows in the main pane (inbox-style) */
         .draft-row-label {
             color: #d93025;

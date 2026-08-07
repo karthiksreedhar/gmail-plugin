@@ -685,8 +685,14 @@ window.__categoryChats = window.__categoryChats || {};
                 const draftsPart = data.draftsFailed === -1
                     ? 'Drafts could not be loaded from Gmail.'
                     : `Loaded ${data.draftsImported || 0} draft(s) from Gmail${data.draftsFailed ? ` (${data.draftsFailed} failed)` : ''}.`;
+                const recoveredPart = data.recoveredEmails
+                    ? ` Recovered ${data.recoveredEmails} email(s) that were missing from your inbox.`
+                    : '';
+                const storageWarning = (data.storage && (data.storage.responses === 'file' || data.storage.threads === 'file'))
+                    ? ' Warning: changes could not be saved to the database.'
+                    : '';
                 showSuccessPopup(
-                    `Checked ${data.threadsChecked} thread(s). Updated ${data.updatedResponses} email(s)${data.failed ? `, ${data.failed} failed` : ''}. ${draftsPart}`,
+                    `Checked ${data.threadsChecked} thread(s). Updated ${data.updatedResponses} email(s)${data.failed ? `, ${data.failed} failed` : ''}.${recoveredPart} ${draftsPart}${storageWarning}`,
                     'Loaded from Gmail'
                 );
                 await loadEmails();
@@ -1518,6 +1524,22 @@ async function updateEmailCategory(emailId, newCategory, oldCategory) {
             }
         }
 
+        // Gmail-style row markers: star first, then the importance chevron.
+        // Filled yellow when set, grey outline when not — mirrors Gmail's own
+        // leftmost columns. Indicators only (state comes from Gmail via sync).
+        function gmailMarkersHtml(email) {
+            const starred = !!email?.isStarred;
+            const important = !!email?.isImportant;
+            const star = starred
+                ? '<svg class="gm-marker" viewBox="0 0 24 24" width="18" height="18" fill="#f4b400"><path d="M22 9.24l-7.19-.62L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21 12 17.27 18.18 21l-1.63-7.03L22 9.24z"/></svg>'
+                : '<svg class="gm-marker" viewBox="0 0 24 24" width="18" height="18" fill="#c4c7c5"><path d="M22 9.24l-7.19-.62L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21 12 17.27 18.18 21l-1.63-7.03L22 9.24zM12 15.4l-3.76 2.27 1-4.28-3.32-2.88 4.38-.38L12 6.1l1.71 4.04 4.38.38-3.32 2.88 1 4.28L12 15.4z"/></svg>';
+            const marker = important
+                ? '<svg class="gm-marker" viewBox="0 0 24 24" width="18" height="18" fill="#f7cb69"><path d="M19.5 12L13 4.5H4.5L10 12l-5.5 7.5H13l6.5-7.5z"/></svg>'
+                : '<svg class="gm-marker" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="#c4c7c5" stroke-width="1.6"><path d="M18.6 12l-6-7H5.4l5.1 7-5.1 7h7.2l6-7z"/></svg>';
+            const titleParts = [important ? 'Important' : '', starred ? 'Starred' : ''].filter(Boolean).join(' · ');
+            return `<span class="gm-markers" title="${titleParts}">${star}${marker}</span>`;
+        }
+
         function buildEmailRowElement(email) {
             const emailDiv = document.createElement('div');
             emailDiv.className = `email-item ${email && email.isUnread ? 'email-unread' : 'email-read'}`;
@@ -1575,7 +1597,7 @@ async function updateEmailCategory(emailId, newCategory, oldCategory) {
             emailDiv.innerHTML = `
                 <div class="email-content">
                     <div class="email-header">
-                        <div class="email-from" style="display:flex; align-items:center; gap:8px;">${participantsHtml} ${messageCountHtml} ${gmailLinkHtml(email)}<div class="email-categories">${pillsHtml}</div></div>
+                        <div class="email-from" style="display:flex; align-items:center; gap:8px;">${gmailMarkersHtml(email)}${participantsHtml} ${messageCountHtml} ${gmailLinkHtml(email)}<div class="email-categories">${pillsHtml}</div></div>
                         <div class="email-subject">${escapeHtml(email.subject)}</div>
                         <div class="email-date">${formatCardDate(email.date)}</div>
                     </div>
@@ -1647,11 +1669,13 @@ async function updateEmailCategory(emailId, newCategory, oldCategory) {
             }
 
             const sorted = (emails || []).slice().sort((a, b) => new Date(b.date) - new Date(a.date));
-            // Mutually exclusive, matching Gmail's own precedence: an email that's both
-            // important and starred shows once, under Important.
-            const important = sorted.filter(e => e && e.isImportant);
-            const starred = sorted.filter(e => e && e.isStarred && !e.isImportant);
-            const everythingElse = sorted.filter(e => !e || (!e.isImportant && !e.isStarred));
+            // Important section = important AND unread. Once read, an important
+            // email drops to Everything else (its yellow importance marker still
+            // shows on the row). Starred keeps every starred email not already
+            // shown under Important; sections stay mutually exclusive.
+            const important = sorted.filter(e => e && e.isImportant && e.isUnread);
+            const starred = sorted.filter(e => e && e.isStarred && !(e.isImportant && e.isUnread));
+            const everythingElse = sorted.filter(e => !e || (!(e.isImportant && e.isUnread) && !e.isStarred));
 
             const sections = [
                 { key: 'important', label: 'Important', items: important },
