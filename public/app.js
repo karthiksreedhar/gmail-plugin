@@ -1835,7 +1835,7 @@ async function updateEmailCategory(emailId, newCategory, oldCategory) {
             const everythingElse = sorted.filter(e => !e || (!(e.isImportant && e.isUnread) && !e.isStarred));
 
             const sections = [
-                { key: 'important', label: 'Important', items: important },
+                { key: 'important', label: 'Important and Unread', items: important },
                 { key: 'starred', label: 'Starred', items: starred },
                 { key: 'other', label: 'Everything else', items: everythingElse }
             ].filter(s => s.items.length > 0);
@@ -2033,14 +2033,22 @@ async function updateEmailCategory(emailId, newCategory, oldCategory) {
         // persists it server-side so it survives a refresh.
         function markThreadReadLocally(emailId) {
             try {
-                if (Array.isArray(allEmails)) {
-                    const email = allEmails.find(e => e && e.id === emailId);
-                    if (email && email.isUnread) email.isUnread = false;
+                let changed = false;
+                for (const list of [allEmails, lastDisplayedEmails]) {
+                    if (!Array.isArray(list)) continue;
+                    const email = list.find(e => e && e.id === emailId);
+                    if (email && email.isUnread) { email.isUnread = false; changed = true; }
                 }
-                const row = document.querySelector(`.email-item[data-email-id="${CSS.escape(emailId)}"]`);
-                if (row) {
-                    row.classList.remove('email-unread');
-                    row.classList.add('email-read');
+                // Re-render the list so the row leaves "Important and Unread"
+                // the moment it's read, re-sorting into its new section.
+                if (changed && !draftsViewActive && Array.isArray(lastDisplayedEmails) && lastDisplayedEmails.length) {
+                    displayEmails(lastDisplayedEmails);
+                } else {
+                    const row = document.querySelector(`.email-item[data-email-id="${CSS.escape(emailId)}"]`);
+                    if (row) {
+                        row.classList.remove('email-unread');
+                        row.classList.add('email-read');
+                    }
                 }
             } catch (_) {}
             fetch(`/api/mark-thread-read/${encodeURIComponent(emailId)}`, { method: 'POST' }).catch(() => {});
