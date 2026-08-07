@@ -234,6 +234,14 @@ function setupEventListeners() {
     approveDeployBtn.addEventListener('click', handleApproveDeploy);
   }
 
+  // RHS response-template panel controls
+  const rhsTemplateCloseBtn = document.getElementById('rhsTemplateCloseBtn');
+  const rhsTemplateCancelBtn = document.getElementById('rhsTemplateCancelBtn');
+  const rhsTemplateSaveBtn = document.getElementById('rhsTemplateSaveBtn');
+  if (rhsTemplateCloseBtn) rhsTemplateCloseBtn.addEventListener('click', closeResponseTemplatePanel);
+  if (rhsTemplateCancelBtn) rhsTemplateCancelBtn.addEventListener('click', closeResponseTemplatePanel);
+  if (rhsTemplateSaveBtn) rhsTemplateSaveBtn.addEventListener('click', saveSelectedResponseTemplates);
+
   if (loadExistingFeatureBtn) {
     loadExistingFeatureBtn.disabled = true;
     loadExistingFeatureBtn.addEventListener('click', handleLoadExistingFeature);
@@ -3112,7 +3120,7 @@ async function triggerResponseTemplateSuggestions() {
 
     if (data.success) {
       if (Array.isArray(data.templates) && data.templates.length > 0) {
-        showResponseTemplateReviewModal(data.templates);
+        showResponseTemplatePanel(data.templates);
         addMessage('assistant', `I analyzed ${data.debug?.repliesConsidered ?? 'your'} sent replies and found ${data.templates.length} response template${data.templates.length === 1 ? '' : 's'} you use repeatedly. Review and edit them in the panel, then save the ones you want to keep.`);
         showToast(`Found ${data.templates.length} response template${data.templates.length === 1 ? '' : 's'}`, 'success');
       } else {
@@ -3130,62 +3138,66 @@ async function triggerResponseTemplateSuggestions() {
   }
 }
 
-// Review modal: checkbox + editable name/body per template, with the source
-// replies each template was derived from. Save posts the checked (possibly
-// edited) templates to the per-user store.
+// Template review lives in the RHS panel (same workspace takeover as the
+// category suggestions), keeping the white editable cards: checkbox +
+// editable name/body per template, with the source replies each template was
+// derived from. Save posts the checked (possibly edited) templates.
 let responseTemplateReviewData = null;
 
-function showResponseTemplateReviewModal(templates) {
-  const existing = document.getElementById('responseTemplateReviewOverlay');
-  if (existing) existing.remove();
+function showResponseTemplatePanel(templates) {
+  const panel = document.getElementById('rhsTemplatePanel');
+  const list = document.getElementById('rhsTemplateList');
+  if (!panel || !list) return;
   responseTemplateReviewData = templates;
 
-  const overlay = document.createElement('div');
-  overlay.id = 'responseTemplateReviewOverlay';
-  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:10000;display:flex;align-items:center;justify-content:center;';
+  // Only one RHS takeover at a time: category suggestions yield the space.
+  if (rhsPanel && rhsPanel.style.display !== 'none') closeRHSPanel();
 
-  const items = templates.map((tpl, i) => `
-    <div style="border:1px solid #d0d5dd;border-radius:8px;padding:14px;margin-bottom:12px;">
+  const info = document.getElementById('rhsTemplateInfo');
+  if (info) info.textContent = `${templates.length} reply pattern${templates.length === 1 ? '' : 's'} found in your sent mail — edit, untick, then save.`;
+
+  list.innerHTML = templates.map((tpl, i) => `
+    <div style="background:#fff;color:#111827;border:1px solid #d0d5dd;border-radius:8px;padding:14px;margin-bottom:12px;">
       <label style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
         <input type="checkbox" class="tpl-include" data-idx="${i}" checked>
-        <input type="text" class="tpl-name" data-idx="${i}" value="${escapeHtml(tpl.name || '')}" style="flex:1;font-weight:600;font-size:14px;padding:6px 8px;border:1px solid #d0d5dd;border-radius:6px;">
+        <input type="text" class="tpl-name" data-idx="${i}" value="${escapeHtml(tpl.name || '')}" style="flex:1;font-weight:600;font-size:14px;padding:6px 8px;border:1px solid #d0d5dd;border-radius:6px;background:#fff;color:#111827;">
       </label>
       <div style="font-size:13px;color:#667085;margin-bottom:8px;"><strong>When to use:</strong> ${escapeHtml(tpl.whenToUse || '')}</div>
-      <textarea class="tpl-body" data-idx="${i}" rows="7" style="width:100%;font-size:13px;font-family:inherit;padding:8px;border:1px solid #d0d5dd;border-radius:6px;box-sizing:border-box;">${escapeHtml(tpl.body || '')}</textarea>
+      <textarea class="tpl-body" data-idx="${i}" rows="7" style="width:100%;font-size:13px;font-family:inherit;padding:8px;border:1px solid #d0d5dd;border-radius:6px;box-sizing:border-box;background:#fff;color:#111827;">${escapeHtml(tpl.body || '')}</textarea>
       <details style="margin-top:6px;font-size:12px;color:#667085;">
         <summary style="cursor:pointer;">Based on ${(tpl.sourceEmailIds || []).length} of your replies</summary>
         ${(tpl.sourceExamples || []).map(src => `<div style="margin:4px 0 4px 12px;">&bull; <strong>${escapeHtml(src.subject || '(no subject)')}</strong> &mdash; ${escapeHtml(src.snippet || '')}</div>`).join('')}
       </details>
     </div>`).join('');
 
-  overlay.innerHTML = `
-    <div style="background:#fff;color:#111827;border-radius:12px;padding:24px;max-width:720px;width:92%;max-height:85vh;overflow-y:auto;box-shadow:0 10px 40px rgba(0,0,0,.2);">
-      <h3 style="margin:0 0 8px;">📝 Response Templates</h3>
-      <p style="margin:0 0 16px;color:#555;font-size:14px;">These reply patterns showed up repeatedly in your sent mail. Edit the names and bodies as needed, untick any you don't want, then save.</p>
-      ${items}
-      <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:8px;">
-        <button type="button" id="tplCancelBtn" style="border:1px solid #d0d5dd;background:#fff;color:#374151;border-radius:8px;padding:10px 18px;cursor:pointer;font-size:14px;">Cancel</button>
-        <button type="button" id="tplSaveBtn" style="border:none;background:var(--primary-color, #6366f1);color:#fff;border-radius:8px;padding:10px 18px;cursor:pointer;font-size:14px;font-weight:600;">Save Selected</button>
-      </div>
-    </div>`;
-
-  document.body.appendChild(overlay);
-  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
-  document.getElementById('tplCancelBtn').onclick = () => overlay.remove();
-  document.getElementById('tplSaveBtn').onclick = () => saveSelectedResponseTemplates(overlay);
+  panel.style.display = 'flex';
+  document.querySelector('.main-content')?.classList.add('suggestions-expanded');
 }
 
-async function saveSelectedResponseTemplates(overlay) {
+function closeResponseTemplatePanel() {
+  const panel = document.getElementById('rhsTemplatePanel');
+  if (panel) panel.style.display = 'none';
+  responseTemplateReviewData = null;
+  // Restore the normal layout unless the category panel still owns the space.
+  if (!rhsPanel || rhsPanel.style.display === 'none') {
+    document.querySelector('.main-content')?.classList.remove('suggestions-expanded');
+  }
+}
+
+async function saveSelectedResponseTemplates() {
+  const list = document.getElementById('rhsTemplateList');
+  if (!list) return;
+
   const selected = [];
-  overlay.querySelectorAll('.tpl-include').forEach(checkbox => {
+  list.querySelectorAll('.tpl-include').forEach(checkbox => {
     if (!checkbox.checked) return;
     const idx = Number(checkbox.dataset.idx);
     const source = responseTemplateReviewData?.[idx];
     if (!source) return;
     selected.push({
       ...source,
-      name: overlay.querySelector(`.tpl-name[data-idx="${idx}"]`)?.value?.trim() || source.name,
-      body: overlay.querySelector(`.tpl-body[data-idx="${idx}"]`)?.value ?? source.body
+      name: list.querySelector(`.tpl-name[data-idx="${idx}"]`)?.value?.trim() || source.name,
+      body: list.querySelector(`.tpl-body[data-idx="${idx}"]`)?.value ?? source.body
     });
   });
 
@@ -3194,8 +3206,9 @@ async function saveSelectedResponseTemplates(overlay) {
     return;
   }
 
-  const saveBtn = document.getElementById('tplSaveBtn');
-  if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = 'Saving...'; }
+  const saveBtn = document.getElementById('rhsTemplateSaveBtn');
+  const originalHtml = saveBtn ? saveBtn.innerHTML : '';
+  if (saveBtn) { saveBtn.disabled = true; saveBtn.innerHTML = '<span class="spinner"></span> Saving...'; }
   try {
     const response = await fetch('/api/response-templates/apply', {
       method: 'POST',
@@ -3208,15 +3221,15 @@ async function saveSelectedResponseTemplates(overlay) {
     const data = await response.json();
     if (!data.success) throw new Error(data.error || 'Save failed');
 
-    overlay.remove();
-    responseTemplateReviewData = null;
+    closeResponseTemplatePanel();
     const s = data.summary || {};
     showToast(`Saved: ${s.created || 0} new, ${s.updated || 0} updated (${s.total || 0} total)`, 'success');
     addMessage('assistant', `✅ **Response templates saved!** ${s.created || 0} new and ${s.updated || 0} updated — ${s.total || 0} total on file.`);
   } catch (error) {
     console.error('Error saving response templates:', error);
     showToast('Failed to save templates: ' + error.message, 'error');
-    if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = 'Save Selected'; }
+  } finally {
+    if (saveBtn) { saveBtn.disabled = false; saveBtn.innerHTML = originalHtml || '<span>✓</span> Save Selected'; }
   }
 }
 
@@ -3422,6 +3435,8 @@ function showRHSCategorySuggestionPanel(suggestions) {
   
   // Show the panel expanded across the whole workspace (chat column hides
   // via .suggestions-expanded and comes back when the panel closes)
+  // Only one RHS takeover at a time: the template panel yields the space.
+  closeResponseTemplatePanel();
   rhsPanel.style.display = 'flex';
   document.querySelector('.main-content')?.classList.add('suggestions-expanded');
 
@@ -3852,10 +3867,16 @@ const originalSetMode = setMode;
 setMode = function(mode) {
   originalSetMode(mode);
 
-  // Leaving chat while the expanded suggestions panel is open would strand a
-  // blank workspace -- close it so the normal layout is restored first.
+  // Leaving chat while an expanded RHS panel is open would strand a blank
+  // workspace -- close them so the normal layout is restored first.
   if (mode !== 'chat' && rhsPanel && rhsPanel.style.display !== 'none') {
     closeRHSPanel();
+  }
+  if (mode !== 'chat') {
+    const templatePanel = document.getElementById('rhsTemplatePanel');
+    if (templatePanel && templatePanel.style.display !== 'none') {
+      closeResponseTemplatePanel();
+    }
   }
 
   // Add category suggestion trigger button in chat mode

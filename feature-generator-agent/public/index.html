@@ -182,6 +182,34 @@
           </button>
         </div>
       </section>
+
+      <!-- RHS Response Template Panel (same workspace takeover as categories) -->
+      <section id="rhsTemplatePanel" class="rhs-category-panel" style="display: none;">
+        <div class="rhs-panel-header">
+          <div class="rhs-panel-title">
+            <h3>📝 Response Templates</h3>
+            <button id="rhsTemplateCloseBtn" class="btn-icon close-btn" title="Close panel">✕</button>
+          </div>
+          <div class="rhs-panel-subtitle">
+            <span id="rhsTemplateInfo">Reply patterns found in your sent mail</span>
+          </div>
+        </div>
+
+        <div class="rhs-panel-content">
+          <div id="rhsTemplateList" class="rhs-template-list">
+            <!-- Template cards rendered dynamically -->
+          </div>
+        </div>
+
+        <div class="rhs-panel-actions">
+          <button id="rhsTemplateCancelBtn" class="btn btn-secondary">
+            <span>✕</span> Cancel
+          </button>
+          <button id="rhsTemplateSaveBtn" class="btn btn-primary">
+            <span>✓</span> Save Selected
+          </button>
+        </div>
+      </section>
     </main>
 
     <!-- Footer -->

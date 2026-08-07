@@ -2869,6 +2869,15 @@ body.chat-mode .mode-btn.active[data-mode="chat"] {
   margin-top: 0;
 }
 
+/* Response template review cards inside the RHS panel: intentionally light
+   (white cards on the dark panel) to match the original review modal look. */
+.rhs-template-list {
+  padding: 20px;
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+}
+
 /* Responsive adjustments */
 @media (max-width: 768px) {
   .header {
