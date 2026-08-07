@@ -656,11 +656,17 @@ app.post('/api/internal/generated-features/save-draft', async (req, res) => {
     // Internal endpoint called by the hosted agent without a browser session:
     // fall back to the process-level user for attribution when the payload
     // doesn't name one.
-    const createdBy = String(req.body?.createdBy || '').trim().toLowerCase() || getEffectiveUserEmailForRequest(req) || getRequestUserEmail();
+    const actorEmail = String(req.body?.createdBy || '').trim().toLowerCase() || getEffectiveUserEmailForRequest(req) || getRequestUserEmail();
     const name = String(req.body?.name || featureId).trim();
     const description = String(req.body?.description || '').trim();
     const requestPrompt = String(req.body?.requestPrompt || '').trim();
     const manifest = req.body?.manifest && typeof req.body.manifest === 'object' ? req.body.manifest : null;
+
+    // Creator provenance: the original builder keeps createdBy even when
+    // someone else saves an update to the feature (ownership decides whether
+    // edits land in place or as a derived feature).
+    const existingFeature = await getGeneratedFeature(featureId).catch(() => null);
+    const createdBy = String(existingFeature?.createdBy || '').trim().toLowerCase() || actorEmail;
 
     const feature = await createOrUpdateGeneratedFeature(featureId, {
       name,
@@ -674,7 +680,9 @@ app.post('/api/internal/generated-features/save-draft', async (req, res) => {
       deploymentStatus: 'pending'
     });
 
-    await upsertUserFeaturePreference(createdBy, featureId, {
+    // The preference row goes to whoever saved this draft (not the original
+    // creator), so a different user deriving a feature sees their new copy.
+    await upsertUserFeaturePreference(actorEmail, featureId, {
       visible: false,
       enabled: true,
       pinned: false

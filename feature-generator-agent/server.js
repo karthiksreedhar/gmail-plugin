@@ -545,7 +545,98 @@ function parseManifestFromFiles(files) {
   }
 }
 
-async function saveDraftFeatureToMainSystem(featureId, files, requestPrompt = '') {
+// Ownership check for refinements: who originally built this feature?
+// Same owner -> the edit should update the feature in place; different
+// owner (or unknown) -> keep the derive-a-new-feature behavior.
+async function decideRefinementTarget(featureId, actorEmail) {
+  const actor = normalizeEmail(actorEmail);
+  try {
+    await ensureMongoReady();
+    const feature = await getDb().collection('generated_features').findOne(
+      { featureId: String(featureId || '').trim() },
+      { projection: { createdBy: 1 } }
+    );
+    const ownerEmail = normalizeEmail(feature?.createdBy);
+    return { sameOwner: !!actor && !!ownerEmail && actor === ownerEmail, ownerEmail: ownerEmail || null };
+  } catch (error) {
+    console.warn(`Ownership lookup failed for ${featureId} (treating as different owner):`, error?.message || error);
+    return { sameOwner: false, ownerEmail: null };
+  }
+}
+
+// Force the manifest's id back to the feature being modified so the saved
+// files stay consistent when a same-owner edit discards an agent-invented id.
+function rewriteManifestId(files, featureId) {
+  try {
+    const manifest = JSON.parse(files['manifest.json']);
+    manifest.id = featureId;
+    return { ...files, 'manifest.json': JSON.stringify(manifest, null, 2) };
+  } catch (_) {
+    return files;
+  }
+}
+
+// Collision-free id for a derived copy of someone else's feature:
+// <base>-<actor local part>, with a numeric suffix if taken.
+async function deriveFeatureIdForActor(baseFeatureId, actorEmail) {
+  const local = String(normalizeEmail(actorEmail) || 'user').split('@')[0]
+    .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'user';
+  let candidate = `${baseFeatureId}-${local}`;
+  try {
+    await ensureMongoReady();
+    const coll = getDb().collection('generated_features');
+    for (let n = 2; await coll.findOne({ featureId: candidate }, { projection: { _id: 1 } }); n++) {
+      if (n > 20) break;
+      candidate = `${baseFeatureId}-${local}-${n}`;
+    }
+  } catch (_) {}
+  return candidate;
+}
+
+// The ownership rule for refinements, applied after files are final:
+//   same owner      -> update the original feature in place (discarding any
+//                      agent-invented id)
+//   different owner -> save as a derived feature (minting an id when the
+//                      agent kept the original), leaving the original intact
+//   unknown owner   -> legacy behavior (trust whatever the manifest says)
+// Mutates session.featureId / session.generatedFiles; returns a chat note
+// explaining the decision ('' when nothing noteworthy happened).
+async function applyOwnershipRuleToRefinement(session, previousFeatureId) {
+  const manifest = parseManifestFromFiles(session.generatedFiles);
+  const proposedId = manifest?.id || null;
+
+  if (!previousFeatureId) {
+    if (proposedId) session.featureId = proposedId;
+    return '';
+  }
+
+  const decision = await decideRefinementTarget(previousFeatureId, session.actorEmail);
+  const proposedDiffers = !!proposedId && proposedId !== previousFeatureId;
+
+  if (decision.sameOwner) {
+    session.featureId = previousFeatureId;
+    if (proposedDiffers) {
+      session.generatedFiles = rewriteManifestId(session.generatedFiles, previousFeatureId);
+      return `✏️ You built \`${previousFeatureId}\`, so I updated it in place (the agent proposed a separate feature \`${proposedId}\`; I discarded that id).`;
+    }
+    return '';
+  }
+
+  if (decision.ownerEmail) {
+    const derivedId = proposedDiffers
+      ? proposedId
+      : await deriveFeatureIdForActor(previousFeatureId, session.actorEmail);
+    session.generatedFiles = rewriteManifestId(session.generatedFiles, derivedId);
+    session.featureId = derivedId;
+    return `🌱 \`${previousFeatureId}\` was built by ${decision.ownerEmail}, so your changes were saved as a new feature \`${derivedId}\` that builds on top of it — their original is untouched.`;
+  }
+
+  // Unknown owner: keep the legacy behavior.
+  if (proposedId) session.featureId = proposedId;
+  return '';
+}
+
+async function saveDraftFeatureToMainSystem(featureId, files, requestPrompt = '', actorEmail = '') {
   if (!featureId || !files || typeof files !== 'object') {
     return { success: false, error: 'Missing featureId or files for draft save' };
   }
@@ -566,7 +657,7 @@ async function saveDraftFeatureToMainSystem(featureId, files, requestPrompt = ''
         files,
         manifest,
         requestPrompt,
-        createdBy: FEATURE_GENERATOR_CREATED_BY || undefined,
+        createdBy: normalizeEmail(actorEmail) || FEATURE_GENERATOR_CREATED_BY || undefined,
         name: manifest?.name || featureId,
         description: manifest?.description || ''
       })
@@ -1153,6 +1244,7 @@ app.post('/api/chat', async (req, res) => {
     }
 
     let result;
+    const previousFeatureId = isRefinement ? (session.featureId || autoLoadedFeatureId || null) : null;
 
     if (isRefinement) {
       // Refinement mode - fix/modify existing files
@@ -1171,11 +1263,16 @@ app.post('/api/chat', async (req, res) => {
     // Update session with generated files
     session.generatedFiles = result.files;
 
-    if (autoLoadedFeatureId) {
+    // Same owner -> in-place update; different owner -> derived feature.
+    const ownershipNote = await applyOwnershipRuleToRefinement(session, previousFeatureId);
+
+    if (ownershipNote) {
+      result.response = `${ownershipNote}\n\n${result.response}`;
+    } else if (autoLoadedFeatureId) {
       result.response = `🔁 I recognized this as a change to your existing feature \`${autoLoadedFeatureId}\`, so I loaded its current files and modified them in place (no new feature was created).\n\n${result.response}`;
     }
 
-    const draftSaveResult = await saveDraftFeatureToMainSystem(session.featureId, session.generatedFiles, message);
+    const draftSaveResult = await saveDraftFeatureToMainSystem(session.featureId, session.generatedFiles, message, session.actorEmail);
 
     // Add assistant response to history
     session.chatHistory.push({
@@ -1321,13 +1418,14 @@ app.get('/api/chat/poll/:sessionId', async (req, res) => {
     // session, resolve the feature id from manifest.json, and save the draft.
     const isRefinement = !!turn.isRefinement;
     const hasNewFiles = poll.files && Object.keys(poll.files).length > 0;
+    const previousFeatureId = session.featureId || turn.autoLoadedFeatureId || null;
     if (hasNewFiles) {
       session.generatedFiles = { ...(session.generatedFiles || {}), ...poll.files };
     }
-    const manifest = parseManifestFromFiles(session.generatedFiles);
-    if (manifest?.id) {
-      session.featureId = manifest.id;
-    }
+    const ownershipNote = await applyOwnershipRuleToRefinement(
+      session,
+      isRefinement ? previousFeatureId : null
+    );
 
     let responseText = (poll.responseText || '').trim();
     if (!responseText) {
@@ -1335,13 +1433,15 @@ app.get('/api/chat/poll/:sessionId', async (req, res) => {
         ? `Generated files: ${Object.keys(poll.files).map(f => `\`${f}\``).join(', ')}`
         : 'Done.';
     }
-    if (turn.autoLoadedFeatureId) {
+    if (ownershipNote) {
+      responseText = `${ownershipNote}\n\n${responseText}`;
+    } else if (turn.autoLoadedFeatureId) {
       responseText = `🔁 I recognized this as a change to your existing feature \`${turn.autoLoadedFeatureId}\`, so I loaded its current files and modified them in place (no new feature was created).\n\n${responseText}`;
     }
 
     let draftSaveResult = null;
     if (hasNewFiles && session.featureId && session.generatedFiles) {
-      draftSaveResult = await saveDraftFeatureToMainSystem(session.featureId, session.generatedFiles, turn.message);
+      draftSaveResult = await saveDraftFeatureToMainSystem(session.featureId, session.generatedFiles, turn.message, session.actorEmail);
     }
 
     // Mirror the legacy contract: initial generations report no per-file
