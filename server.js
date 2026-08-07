@@ -3019,10 +3019,22 @@ app.post('/api/backfill-important-flag', async (req, res) => {
       return res.status(401).json({ success: false, error: 'Gmail authentication required', reason });
     }
 
-    const [responses, threads] = await Promise.all([
+    const [rawResponses, rawThreads] = await Promise.all([
       readUserArrayDoc('response_emails', userEmail, 'emails', paths.RESPONSE_EMAILS_PATH),
       readUserArrayDoc('email_threads', userEmail, 'threads', paths.EMAIL_THREADS_PATH)
     ]);
+
+    // Compact old bodies first: these per-user array docs grow toward
+    // Mongo's 16MB document limit, and once response_emails hits it every
+    // sync write silently fails (which is how inboxes froze on 2026-07-31).
+    const respCompact = compactResponseEmailsArray(rawResponses);
+    const thrCompact = compactEmailThreadsArray(rawThreads);
+    const threads = thrCompact.threads;
+
+    // Rebuild inbox records for mail that reached email_threads but never
+    // got its response_emails record during the outage.
+    const recovery = await recoverMissingResponseRecords(userEmail, threads, respCompact.emails);
+    const responses = recovery.responses;
 
     const needsBackfill = (item) => item && item.threadId && (
       typeof item.isImportant !== 'boolean' || typeof item.isStarred !== 'boolean' || typeof item.isUnread !== 'boolean'
@@ -3089,11 +3101,18 @@ app.post('/api/backfill-important-flag', async (req, res) => {
       };
     });
 
-    if (updatedResponses > 0) {
-      await writeUserArrayDoc('response_emails', userEmail, 'emails', nextResponses, paths.RESPONSE_EMAILS_PATH);
+    // Persist when anything changed: flag updates, compaction, or recovery.
+    // The write destination is reported so a Mongo failure is visible to the
+    // caller instead of silently landing in the file fallback.
+    const responsesChanged = updatedResponses > 0 || respCompact.truncated > 0 || recovery.recovered > 0;
+    const threadsChanged = updatedThreads > 0 || thrCompact.truncated > 0;
+    let responsesWrite = null;
+    let threadsWrite = null;
+    if (responsesChanged) {
+      responsesWrite = await writeUserArrayDoc('response_emails', userEmail, 'emails', nextResponses, paths.RESPONSE_EMAILS_PATH);
     }
-    if (updatedThreads > 0) {
-      await writeUserArrayDoc('email_threads', userEmail, 'threads', nextThreads, paths.EMAIL_THREADS_PATH);
+    if (threadsChanged) {
+      threadsWrite = await writeUserArrayDoc('email_threads', userEmail, 'threads', nextThreads, paths.EMAIL_THREADS_PATH);
     }
 
     // "Load from Gmail" also pulls in the user's 50 most recent Gmail drafts.
@@ -3117,7 +3136,10 @@ app.post('/api/backfill-important-flag', async (req, res) => {
       updatedThreads,
       failed,
       draftsImported,
-      draftsFailed
+      draftsFailed,
+      recoveredEmails: recovery.recovered,
+      compactedBodies: respCompact.truncated + thrCompact.truncated,
+      storage: { responses: responsesWrite, threads: threadsWrite }
     });
   } catch (error) {
     console.error('Error backfilling important flag:', error);
@@ -4108,22 +4130,173 @@ async function readUserArrayDoc(collection, userEmail, field, filePath) {
   return [];
 }
 
+// Returns 'mongo' when the write landed in Mongo, 'file' when it only landed
+// in the local file fallback, false when both failed. Both string values are
+// truthy so existing boolean callers keep working. The Mongo failure is
+// logged loudly: a silent fallback here once froze inboxes for a week when
+// response_emails hit Mongo's 16MB document limit (writes failed, the file
+// fallback "succeeded", and reads kept serving the stale Mongo doc).
 async function writeUserArrayDoc(collection, userEmail, field, value, filePath) {
   const normalizedEmail = normalizeUserEmailForData(userEmail);
   const safeValue = Array.isArray(value) ? value : [];
   try {
     await setUserDoc(collection, normalizedEmail, { [field]: safeValue });
-    return true;
-  } catch (_) {}
+    return 'mongo';
+  } catch (e) {
+    console.error(`[writeUserArrayDoc] MONGO WRITE FAILED for ${collection}/${normalizedEmail} (${safeValue.length} items): ${e?.message || e} -- falling back to local file`);
+  }
   try {
     if (filePath) {
       const dir = path.dirname(filePath);
       if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
       fs.writeFileSync(filePath, JSON.stringify({ [field]: safeValue }, null, 2));
-      return true;
+      return 'file';
     }
-  } catch (_) {}
+  } catch (e) {
+    console.error(`[writeUserArrayDoc] File fallback also failed for ${collection}/${normalizedEmail}: ${e?.message || e}`);
+  }
   return false;
+}
+
+// --- Storage compaction ---
+// response_emails and email_threads are single per-user array docs, so they
+// grow toward Mongo's 16MB BSON limit. Old records keep full email bodies
+// they no longer need; truncating them keeps the docs bounded. Deterministic
+// and idempotent, so it runs on every sync write.
+const COMPACT_AGE_DAYS = 45;
+const COMPACT_OLD_BODY_CHARS = 1200;
+const COMPACT_MAX_BODY_CHARS = 20000;
+
+function compactResponseEmailsArray(emails) {
+  const cutoffMs = Date.now() - COMPACT_AGE_DAYS * 24 * 3600 * 1000;
+  let truncated = 0;
+  const out = (Array.isArray(emails) ? emails : []).map(email => {
+    if (!email) return email;
+    const isOld = new Date(email.date || 0).getTime() < cutoffMs;
+    const limit = isOld ? COMPACT_OLD_BODY_CHARS : COMPACT_MAX_BODY_CHARS;
+    let changed = false;
+    const next = { ...email };
+    for (const field of ['body', 'originalBody']) {
+      if (typeof next[field] === 'string' && next[field].length > limit) {
+        next[field] = next[field].slice(0, limit);
+        changed = true;
+      }
+    }
+    if (changed) truncated++;
+    return changed ? next : email;
+  });
+  return { emails: out, truncated };
+}
+
+function compactEmailThreadsArray(threads) {
+  const cutoffMs = Date.now() - COMPACT_AGE_DAYS * 24 * 3600 * 1000;
+  let truncated = 0;
+  const out = (Array.isArray(threads) ? threads : []).map(thread => {
+    if (!thread || new Date(thread.date || 0).getTime() >= cutoffMs) return thread;
+    const msgs = Array.isArray(thread.messages) ? thread.messages : [];
+    let changed = false;
+    const nextMsgs = msgs.map(msg => {
+      if (msg && typeof msg.body === 'string' && msg.body.length > COMPACT_OLD_BODY_CHARS) {
+        changed = true;
+        return { ...msg, body: msg.body.slice(0, COMPACT_OLD_BODY_CHARS) };
+      }
+      return msg;
+    });
+    if (!changed) return thread;
+    truncated++;
+    return { ...thread, messages: nextMsgs };
+  });
+  return { threads: out, truncated };
+}
+
+// Rebuild response_emails records for threads that have none. This is the
+// repair for the 16MB outage: the response_emails write failed while the
+// paired email_threads write succeeded, so the mail exists in threads but
+// never appeared in the inbox. Recovered emails are classified with the same
+// V4 classifier auto-sync uses; capped per run to bound classification cost.
+const RECOVERY_MAX_PER_RUN = 300;
+
+function threadIdOfRecord(record) {
+  return String(
+    record?.threadId ||
+    (String(record?.id || '').startsWith('thread-') ? String(record.id).slice(7) : '')
+  ).trim();
+}
+
+async function recoverMissingResponseRecords(userEmail, threads, responses) {
+  const respIds = new Set((responses || []).map(r => r?.id).filter(Boolean));
+  const respThreadIds = new Set((responses || []).map(r => String(r?.threadId || '')).filter(Boolean));
+
+  const missing = (threads || [])
+    .filter(t => {
+      const tid = threadIdOfRecord(t);
+      const rid = t?.responseId;
+      return !(rid && respIds.has(rid)) && !(tid && respThreadIds.has(tid));
+    })
+    .sort((a, b) => new Date(b?.date || 0) - new Date(a?.date || 0))
+    .slice(0, RECOVERY_MAX_PER_RUN);
+  if (!missing.length) return { responses: responses || [], recovered: 0 };
+
+  const candidates = missing.map(t => {
+    const tid = threadIdOfRecord(t);
+    const msgs = Array.isArray(t?.messages) ? t.messages : [];
+    const firstIncoming = msgs.find(m => m && !m.isResponse) || msgs[0] || {};
+    const body = String(firstIncoming.body || '');
+    return {
+      id: String(t?.responseId || `recovered-${tid || t?.id}`),
+      threadId: tid,
+      from: t?.originalFrom || firstIncoming.from || 'Unknown Sender',
+      subject: t?.subject || 'No Subject',
+      date: t?.date || new Date().toISOString(),
+      body,
+      snippet: body.replace(/\s+/g, ' ').trim().slice(0, 200) || 'No content available',
+      isImportant: t?.isImportant,
+      isStarred: t?.isStarred,
+      isUnread: t?.isUnread,
+      webUrl: t?.webUrl || '',
+      gmailInternalDateMs: t?.gmailInternalDateMs
+    };
+  });
+
+  let classifiedById = {};
+  try {
+    const classified = await classifySyncedEmailsWithV4ForUser(userEmail, candidates);
+    classifiedById = classified?.byId || {};
+  } catch (e) {
+    console.warn(`[Recovery] Classification failed for ${userEmail}; recovered emails default to Other:`, e?.message || e);
+  }
+
+  const syncedAt = new Date().toISOString();
+  const meEmail = normalizeUserEmailForData(userEmail);
+  const next = (responses || []).slice();
+  for (const c of candidates) {
+    const category = (classifiedById[c.id] && classifiedById[c.id].category) || 'Other';
+    next.push({
+      id: c.id,
+      threadId: c.threadId || undefined,
+      subject: c.subject,
+      from: meEmail,
+      originalFrom: c.from,
+      date: c.date,
+      seededOriginalOnly: true,
+      category,
+      categories: [category],
+      body: c.body || '(synced item)',
+      snippet: c.snippet,
+      originalBody: c.body || '',
+      webUrl: c.webUrl,
+      gmailInternalDateMs: Number(c.gmailInternalDateMs || 0) || undefined,
+      ...(typeof c.isImportant === 'boolean' ? { isImportant: c.isImportant } : {}),
+      ...(typeof c.isStarred === 'boolean' ? { isStarred: c.isStarred } : {}),
+      ...(typeof c.isUnread === 'boolean' ? { isUnread: c.isUnread } : {}),
+      source: 'load-from-gmail-recovery',
+      autoSynced: true,
+      autoSyncedAt: syncedAt,
+      autoSyncExplanation: (classifiedById[c.id] && classifiedById[c.id].explanation) || 'Recovered from email_threads after storage-limit outage'
+    });
+  }
+  console.log(`[Recovery] Rebuilt ${candidates.length} missing response record(s) for ${meEmail}`);
+  return { responses: next, recovered: candidates.length };
 }
 
 function pickCurrentCategoriesForUser(rawCategories, userEmail = getRequestUserEmail()) {
@@ -4690,10 +4863,15 @@ async function syncUserInboxFromGmail(userEmail, opts = {}) {
     }
 
     if (added > 0) {
-      await Promise.all([
-        writeUserArrayDoc('email_threads', normalizedEmail, 'threads', nextThreads, paths.EMAIL_THREADS_PATH),
-        writeUserArrayDoc('response_emails', normalizedEmail, 'emails', nextResponses, paths.RESPONSE_EMAILS_PATH)
+      // Compact on every sync write so the array docs stay bounded instead
+      // of growing into Mongo's 16MB limit (the 2026-07-31 inbox freeze).
+      const writeResults = await Promise.all([
+        writeUserArrayDoc('email_threads', normalizedEmail, 'threads', compactEmailThreadsArray(nextThreads).threads, paths.EMAIL_THREADS_PATH),
+        writeUserArrayDoc('response_emails', normalizedEmail, 'emails', compactResponseEmailsArray(nextResponses).emails, paths.RESPONSE_EMAILS_PATH)
       ]);
+      if (writeResults.some(r => r !== 'mongo')) {
+        console.error(`[AutoSync] Non-Mongo write result for ${normalizedEmail}: threads=${writeResults[0]}, responses=${writeResults[1]}`);
+      }
       if (newlyAddedResponseIds.length > 0) {
         setTimeout(() => {
           precomputeTodosForUser(normalizedEmail, newlyAddedResponseIds).catch(() => {});
