@@ -1,8 +1,8 @@
 {
   "id": "column-reorder",
-  "name": "Drag-and-Drop Column Reorder",
-  "version": "1.0.0",
-  "description": "Lets you drag the inbox layout columns by their headers and reorder them left-to-right. Works with the multi-column inbox layout (Important & Unread / Starred / Drafts). The chosen order is remembered per user.",
+  "name": "Column Controls: Reorder & Minimize",
+  "version": "1.1.0",
+  "description": "Drag the inbox layout columns by their headers to reorder them left-to-right, and minimize/expand each column individually to free up space. Works with the multi-column inbox layout (Important & Unread / Starred / Drafts). Column order and minimized state are remembered per user.",
   "author": "Gmail Plugin Feature Generator",
   "backend": "backend.js",
   "frontend": "frontend.js",
