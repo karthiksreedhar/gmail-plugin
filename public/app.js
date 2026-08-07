@@ -1526,7 +1526,9 @@ async function updateEmailCategory(emailId, newCategory, oldCategory) {
 
         // Gmail-style row markers: star first, then the importance chevron.
         // Filled yellow when set, grey outline when not — mirrors Gmail's own
-        // leftmost columns. Indicators only (state comes from Gmail via sync).
+        // leftmost columns. Clicking toggles the flag: the row moves to its
+        // new section immediately, and the change is persisted (and synced to
+        // Gmail itself when the token allows it).
         function gmailMarkersHtml(email) {
             const starred = !!email?.isStarred;
             const important = !!email?.isImportant;
@@ -1536,8 +1538,56 @@ async function updateEmailCategory(emailId, newCategory, oldCategory) {
             const marker = important
                 ? '<svg class="gm-marker" viewBox="0 0 24 24" width="18" height="18" fill="#f7cb69"><path d="M19.5 12L13 4.5H4.5L10 12l-5.5 7.5H13l6.5-7.5z"/></svg>'
                 : '<svg class="gm-marker" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="#c4c7c5" stroke-width="1.6"><path d="M18.6 12l-6-7H5.4l5.1 7-5.1 7h7.2l6-7z"/></svg>';
-            const titleParts = [important ? 'Important' : '', starred ? 'Starred' : ''].filter(Boolean).join(' · ');
-            return `<span class="gm-markers" title="${titleParts}">${star}${marker}</span>`;
+            const id = String(email?.id || '').replace(/'/g, '');
+            return `<span class="gm-markers">
+                <button type="button" class="gm-marker-btn" onclick="toggleEmailFlag(event, '${id}', 'starred')" title="${starred ? 'Unstar' : 'Star'}">${star}</button>
+                <button type="button" class="gm-marker-btn" onclick="toggleEmailFlag(event, '${id}', 'important')" title="${important ? 'Mark not important' : 'Mark important'}">${marker}</button>
+            </span>`;
+        }
+
+        // Optimistic toggle: flip the flag everywhere we hold the email,
+        // re-render so the row moves sections, then persist. On failure the
+        // flip is reverted and re-rendered.
+        let toggleFlagInFlight = new Set();
+        async function toggleEmailFlag(event, emailId, flag) {
+            event.stopPropagation();
+            const inFlightKey = `${emailId}:${flag}`;
+            if (toggleFlagInFlight.has(inFlightKey)) return;
+
+            const field = flag === 'starred' ? 'isStarred' : 'isImportant';
+            const targets = [
+                (allEmails || []).find(e => e && e.id === emailId),
+                (lastDisplayedEmails || []).find(e => e && e.id === emailId)
+            ].filter(Boolean);
+            if (!targets.length) return;
+            const newValue = !targets[0][field];
+
+            const applyValue = (v) => {
+                targets.forEach(t => { t[field] = v; });
+                if (!draftsViewActive && Array.isArray(lastDisplayedEmails)) {
+                    displayEmails(lastDisplayedEmails);
+                }
+            };
+            applyValue(newValue);
+
+            toggleFlagInFlight.add(inFlightKey);
+            try {
+                const resp = await fetch('/api/toggle-email-flag', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ emailId, flag, value: newValue })
+                });
+                const data = await resp.json().catch(() => ({}));
+                if (!resp.ok || !data.success) {
+                    throw new Error(data.error || `Request failed (${resp.status})`);
+                }
+            } catch (e) {
+                console.error('toggleEmailFlag failed:', e);
+                applyValue(!newValue);
+                showErrorPopup(`Could not update the ${flag} flag. Please try again.`, 'Update Failed');
+            } finally {
+                toggleFlagInFlight.delete(inFlightKey);
+            }
         }
 
         function buildEmailRowElement(email) {
@@ -1656,10 +1706,15 @@ async function updateEmailCategory(emailId, newCategory, oldCategory) {
             container.appendChild(rowsWrap);
         }
 
+        // The most recent list passed to displayEmails; flag toggles re-render
+        // from this so rows move sections in any view (category or search).
+        let lastDisplayedEmails = [];
+
         async function displayEmails(emails) {
             // Background refreshes must not clobber the drafts view; explicit
             // navigation (category click, search) clears the flag first.
             if (draftsViewActive) return;
+            lastDisplayedEmails = Array.isArray(emails) ? emails : [];
             const container = document.getElementById('emailContainer');
             container.innerHTML = '';
 

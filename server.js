@@ -3204,6 +3204,83 @@ app.post('/api/mark-thread-read/:emailId', async (req, res) => {
   }
 });
 
+// Toggle the starred/important flag for an email. Persists in this system's
+// records (both collections) and best-effort syncs the label to Gmail itself
+// via threads.modify -- without the Gmail write, the next sync of that thread
+// would revert the flag to Gmail's value. Users whose token lacks the
+// gmail.modify scope still get the local update (gmailSynced: false).
+app.post('/api/toggle-email-flag', async (req, res) => {
+  try {
+    const { emailId, flag, value } = req.body || {};
+    if (!emailId || !['starred', 'important'].includes(flag) || typeof value !== 'boolean') {
+      return res.status(400).json({ success: false, error: 'emailId, flag (starred|important), and boolean value are required' });
+    }
+    const field = flag === 'starred' ? 'isStarred' : 'isImportant';
+    const gmailLabel = flag === 'starred' ? 'STARRED' : 'IMPORTANT';
+
+    const userEmail = getEffectiveUserEmailForRequest(req);
+    const paths = getUserPaths(userEmail);
+
+    const [responses, threads] = await Promise.all([
+      readUserArrayDoc('response_emails', userEmail, 'emails', paths.RESPONSE_EMAILS_PATH),
+      readUserArrayDoc('email_threads', userEmail, 'threads', paths.EMAIL_THREADS_PATH)
+    ]);
+
+    let changed = false;
+    let gmailThreadId = '';
+    const nextResponses = (responses || []).map(r => {
+      if (!r || r.id !== emailId) return r;
+      gmailThreadId = String(r.threadId || '').trim() || gmailThreadId;
+      if (r[field] === value) return r;
+      changed = true;
+      return { ...r, [field]: value };
+    });
+    const nextThreads = (threads || []).map(t => {
+      if (!t || (t.responseId !== emailId && t.id !== emailId)) return t;
+      gmailThreadId = gmailThreadId || threadIdOfRecord(t);
+      if (t[field] === value) return t;
+      changed = true;
+      return { ...t, [field]: value };
+    });
+
+    if (changed) {
+      await Promise.all([
+        writeUserArrayDoc('response_emails', userEmail, 'emails', nextResponses, paths.RESPONSE_EMAILS_PATH),
+        writeUserArrayDoc('email_threads', userEmail, 'threads', nextThreads, paths.EMAIL_THREADS_PATH)
+      ]);
+    }
+
+    // Best-effort Gmail label change so the flag survives future syncs.
+    let gmailSynced = false;
+    let gmailSyncError = null;
+    if (gmailThreadId) {
+      try {
+        const { gmailClient } = await buildGmailClientForUser(userEmail);
+        if (gmailClient) {
+          await withTimeout(
+            gmailClient.users.threads.modify({
+              userId: 'me',
+              id: gmailThreadId,
+              requestBody: value ? { addLabelIds: [gmailLabel] } : { removeLabelIds: [gmailLabel] }
+            }),
+            AUTO_SYNC_GMAIL_CALL_TIMEOUT_MS,
+            'gmail_thread_modify_flag'
+          );
+          gmailSynced = true;
+        }
+      } catch (e) {
+        gmailSyncError = e?.message || String(e);
+        console.warn(`[ToggleFlag] Gmail label sync failed for ${userEmail} thread ${gmailThreadId}: ${gmailSyncError}`);
+      }
+    }
+
+    return res.json({ success: true, changed, gmailSynced, gmailSyncError });
+  } catch (error) {
+    console.error('Error toggling email flag:', error);
+    res.status(500).json({ success: false, error: 'Failed to toggle flag', details: error.message });
+  }
+});
+
 // API endpoint to get thread for a specific email
 app.get('/api/email-thread/:emailId', async (req, res) => {
   try {

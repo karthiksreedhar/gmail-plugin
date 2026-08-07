@@ -1387,9 +1387,21 @@
         .gm-markers {
             display: inline-flex;
             align-items: center;
-            gap: 2px;
+            gap: 0;
             flex-shrink: 0;
         }
+        .gm-marker-btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            background: none;
+            border: none;
+            padding: 3px;
+            border-radius: 50%;
+            cursor: pointer;
+            line-height: 0;
+        }
+        .gm-marker-btn:hover { background: #e8eaed; }
         .gm-markers .gm-marker { display: block; }
 
         /* Drafts rows in the main pane (inbox-style) */
