@@ -43,6 +43,7 @@ const COLLECTIONS = [
   'user_state',
   'drafts',
   'response_templates',
+  'template_matches',
   'classifier_log',
   'priority_emails',
   'precategorized_emails'

@@ -1383,6 +1383,88 @@
         .gc-save-draft-btn:hover { background: #f0f4fe; }
         .gc-save-draft-btn:disabled { opacity: .6; cursor: default; }
 
+        /* Suggested-reply badge on inbox rows */
+        .suggested-reply-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 3px;
+            background: #e6f4ea;
+            color: #137333;
+            border-radius: 10px;
+            padding: 1px 8px;
+            font-size: 11px;
+            font-weight: 500;
+            white-space: nowrap;
+            flex-shrink: 0;
+        }
+
+        /* Templates dropdown in the composers */
+        .template-picker-menu {
+            position: fixed;
+            z-index: 3000;
+            width: 360px;
+            max-height: 320px;
+            overflow-y: auto;
+            background: #fff;
+            border: 1px solid #dadce0;
+            border-radius: 10px;
+            box-shadow: 0 4px 16px rgba(60,64,67,.28);
+            padding: 6px;
+        }
+        .template-picker-item {
+            display: block;
+            width: 100%;
+            text-align: left;
+            background: none;
+            border: none;
+            border-radius: 8px;
+            padding: 8px 10px;
+            cursor: pointer;
+        }
+        .template-picker-item:hover { background: #f1f3f4; }
+        .template-picker-name { display: block; font-size: 13px; font-weight: 600; color: #202124; }
+        .template-picker-suggested {
+            background: #e6f4ea;
+            color: #137333;
+            border-radius: 8px;
+            padding: 0 6px;
+            font-size: 10px;
+            font-weight: 500;
+        }
+        .template-picker-when {
+            display: block;
+            font-size: 12px;
+            color: #5f6368;
+            margin-top: 2px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .template-picker-empty { padding: 14px; font-size: 13px; color: #5f6368; text-align: center; }
+
+        /* Suggested-template hint inside the reply composer */
+        .gc-template-suggestion {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            background: #e6f4ea;
+            color: #137333;
+            border-radius: 8px;
+            padding: 6px 10px;
+            font-size: 13px;
+            margin: 8px 0 2px 0;
+        }
+        .gc-template-suggestion button {
+            border: none;
+            background: #137333;
+            color: #fff;
+            border-radius: 12px;
+            padding: 3px 12px;
+            font-size: 12px;
+            cursor: pointer;
+            flex-shrink: 0;
+        }
+
         /* Gmail-style star + importance markers on inbox rows */
         .gm-markers {
             display: inline-flex;

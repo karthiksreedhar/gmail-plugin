@@ -3427,6 +3427,138 @@ function scoreSavedGenerationForPrompt(generation, target) {
 }
 
 // API endpoint to generate response using Anthropic
+// --- Response templates (mined in the feature generator, used here) ---
+
+async function loadResponseTemplatesForUser(userEmail) {
+  try {
+    const doc = await getUserDoc('response_templates', normalizeUserEmailForData(userEmail));
+    return Array.isArray(doc?.templates) ? doc.templates : [];
+  } catch (_) {
+    return [];
+  }
+}
+
+// Cheap stable fingerprint of the template set; cached email->template
+// matches are invalidated whenever any template changes.
+function templatesFingerprint(templates) {
+  const source = JSON.stringify((templates || []).map(t => [t?.id, t?.updatedAt, t?.whenToUse]));
+  let hash = 5381;
+  for (let i = 0; i < source.length; i++) {
+    hash = ((hash << 5) + hash + source.charCodeAt(i)) | 0;
+  }
+  return String(hash);
+}
+
+// List the current user's saved response templates (for the composer picker).
+app.get('/api/response-templates', async (req, res) => {
+  try {
+    const userEmail = getEffectiveUserEmailForRequest(req);
+    const templates = await loadResponseTemplatesForUser(userEmail);
+    res.json({ success: true, templates });
+  } catch (error) {
+    console.error('Error loading response templates:', error);
+    res.status(500).json({ success: false, error: 'Failed to load response templates' });
+  }
+});
+
+// Which inbox emails have a matching saved template ("suggested reply")?
+// One LLM batch call matches uncached emails against the templates'
+// when-to-use descriptions; results are cached per user and invalidated when
+// the template set changes, so repeated inbox loads cost nothing.
+const TEMPLATE_MATCH_MAX_PER_CALL = 150;
+app.post('/api/template-matches', async (req, res) => {
+  try {
+    const userEmail = getEffectiveUserEmailForRequest(req);
+    const requestedIds = Array.from(new Set(
+      (Array.isArray(req.body?.emailIds) ? req.body.emailIds : [])
+        .map(id => String(id || '').trim()).filter(Boolean)
+    ));
+
+    const templates = await loadResponseTemplatesForUser(userEmail);
+    if (!templates.length || !requestedIds.length) {
+      return res.json({ success: true, matches: {}, templatesCount: templates.length });
+    }
+    const templateById = new Map(templates.map(t => [String(t.id), t]));
+    const fingerprint = templatesFingerprint(templates);
+
+    const cacheDoc = await getUserDoc('template_matches', normalizeUserEmailForData(userEmail)).catch(() => null);
+    const cache = (cacheDoc && cacheDoc.templatesHash === fingerprint && cacheDoc.matches && typeof cacheDoc.matches === 'object')
+      ? { ...cacheDoc.matches }
+      : {};
+
+    const uncachedIds = requestedIds.filter(id => !(id in cache)).slice(0, TEMPLATE_MATCH_MAX_PER_CALL);
+    if (uncachedIds.length) {
+      const paths = getUserPaths(userEmail);
+      const responses = await readUserArrayDoc('response_emails', userEmail, 'emails', paths.RESPONSE_EMAILS_PATH);
+      const emailById = new Map((responses || []).map(e => [String(e?.id || ''), e]));
+      const lines = uncachedIds
+        .map(id => {
+          const email = emailById.get(id);
+          if (!email) return null;
+          const clean = (v, max) => String(v || '').replace(/\s+/g, ' ').trim().slice(0, max);
+          return `${id} | ${clean(email.originalFrom, 40)} | ${clean(email.subject, 70)} | ${clean(email.originalBody || email.snippet, 160)}`;
+        })
+        .filter(Boolean);
+
+      if (lines.length) {
+        const prompt = `You match a user's saved reply templates to incoming emails.
+
+TEMPLATES (templateId | name | when to use):
+${templates.map(t => `${t.id} | ${String(t.name || '').slice(0, 60)} | ${String(t.whenToUse || '').slice(0, 160)}`).join('\n')}
+
+EMAILS (id | from | subject | snippet):
+${lines.join('\n')}
+
+Rules:
+- Match an email to a template ONLY when the email clearly fits that template's "when to use" description
+- When in doubt, answer null -- a wrong suggestion is worse than none
+- Include every email id exactly once
+
+Respond with ONLY this JSON (no other text):
+{"matches": [{"id": "email_id", "templateId": "template_id or null"}]}`;
+
+        try {
+          const completion = await invokeAnthropic({
+            model: getAnthropicModel(),
+            messages: [{ role: 'user', content: prompt }],
+            temperature: 0,
+            maxOutputTokens: 4000
+          });
+          const text = String(completion?.content || '');
+          const start = text.indexOf('{');
+          const end = text.lastIndexOf('}');
+          const parsed = (start >= 0 && end > start) ? JSON.parse(text.slice(start, end + 1)) : null;
+          for (const m of (parsed?.matches || [])) {
+            const id = String(m?.id || '').trim();
+            if (!id || !uncachedIds.includes(id)) continue;
+            const tplId = m?.templateId && templateById.has(String(m.templateId)) ? String(m.templateId) : null;
+            cache[id] = tplId;
+          }
+          await setUserDoc('template_matches', normalizeUserEmailForData(userEmail), {
+            templatesHash: fingerprint,
+            matches: cache
+          });
+        } catch (e) {
+          console.warn(`[TemplateMatches] LLM matching failed for ${userEmail}:`, e?.message || e);
+        }
+      }
+    }
+
+    const matches = {};
+    for (const id of requestedIds) {
+      const tplId = cache[id];
+      if (tplId && templateById.has(tplId)) {
+        const tpl = templateById.get(tplId);
+        matches[id] = { templateId: tplId, templateName: tpl.name || 'Template' };
+      }
+    }
+    res.json({ success: true, matches, templatesCount: templates.length });
+  } catch (error) {
+    console.error('Error computing template matches:', error);
+    res.status(500).json({ success: false, error: 'Failed to compute template matches' });
+  }
+});
+
 app.post('/api/generate-response', async (req, res) => {
   try {
     const { sender, subject, emailBody, context } = req.body;
@@ -3546,6 +3678,20 @@ PREVIOUS EMAIL RESPONSES:
       }
     }
 
+
+    // The user's saved response templates: when one clearly matches the
+    // incoming email, the generated reply should follow it -- these are the
+    // user's own distilled reply patterns, so they beat example inference.
+    const savedTemplates = await loadResponseTemplatesForUser(getEffectiveUserEmailForRequest(req));
+    if (savedTemplates.length) {
+      prompt += `\nSAVED RESPONSE TEMPLATES (the user's own reusable reply patterns):\n`;
+      savedTemplates.slice(0, 10).forEach((tpl, i) => {
+        prompt += `\n--- TEMPLATE ${i + 1}: ${truncateForModel(tpl.name || 'Template', 80)} ---\n` +
+          `When to use: ${truncateForModel(tpl.whenToUse || '', 200)}\n` +
+          `Template body: ${truncateForModel(tpl.body || '', 1200)}\n`;
+      });
+      prompt += `\nIf one of these templates clearly matches the new email's situation (per its "When to use"), base the response on that template: keep its structure and wording, and fill each {{placeholder}} with the correct value from the new email's context (never leave {{...}} markers in the output). State in the justification which template you used. If none clearly applies, ignore the templates entirely.\n`;
+    }
 
     // Add additional context if provided
     if (context && context !== 'None') {

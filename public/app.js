@@ -757,6 +757,7 @@ window.__categoryChats = window.__categoryChats || {};
                     populateCategories(allEmails);
                     displayEmails(activeInboxEmails());
                     updateDisplayStats(activeInboxEmails());
+                    refreshTemplateMatches(allEmails);
                 } else {
                     container.innerHTML = '<div class="loading">No emails found.</div>';
                 }
@@ -1524,6 +1525,102 @@ async function updateEmailCategory(emailId, newCategory, oldCategory) {
             }
         }
 
+        // --- Suggested replies (saved response templates) ---
+        // emailId -> { templateId, templateName } for emails whose incoming
+        // content matches one of the user's saved templates. Populated
+        // asynchronously after the inbox loads; rows re-render when it lands.
+        let templateMatchesByEmailId = {};
+        let userResponseTemplatesCache = null;
+
+        async function refreshTemplateMatches(emails) {
+            try {
+                const ids = (emails || []).map(e => e && e.id).filter(Boolean);
+                if (!ids.length) return;
+                const resp = await fetch('/api/template-matches', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ emailIds: ids })
+                });
+                const data = await resp.json().catch(() => ({}));
+                if (!resp.ok || !data.success) return;
+                templateMatchesByEmailId = data.matches || {};
+                // Re-render so the badges appear on the currently shown rows
+                if (!draftsViewActive && Object.keys(templateMatchesByEmailId).length && Array.isArray(lastDisplayedEmails) && lastDisplayedEmails.length) {
+                    displayEmails(lastDisplayedEmails);
+                }
+            } catch (e) {
+                console.warn('Template match refresh failed:', e);
+            }
+        }
+
+        async function loadUserResponseTemplates() {
+            if (Array.isArray(userResponseTemplatesCache)) return userResponseTemplatesCache;
+            try {
+                const resp = await fetch('/api/response-templates');
+                const data = await resp.json().catch(() => ({}));
+                userResponseTemplatesCache = (resp.ok && data.success && Array.isArray(data.templates)) ? data.templates : [];
+            } catch (_) {
+                userResponseTemplatesCache = [];
+            }
+            return userResponseTemplatesCache;
+        }
+
+        // Templates dropdown for the composers. For replies, the template
+        // matched to the open email (if any) is pinned on top as "Suggested".
+        async function showTemplatePicker(kind, event) {
+            event.stopPropagation();
+            const anchor = event.currentTarget;
+            document.getElementById('templatePickerMenu')?.remove();
+
+            const templates = await loadUserResponseTemplates();
+            const menu = document.createElement('div');
+            menu.id = 'templatePickerMenu';
+            menu.className = 'template-picker-menu';
+
+            if (!templates.length) {
+                menu.innerHTML = '<div class="template-picker-empty">No saved templates yet.<br>Use "Surface Response Templates" in the feature generator to mine them from your sent mail.</div>';
+            } else {
+                const suggestedId = kind === 'reply'
+                    ? templateMatchesByEmailId[window.currentContextEmailId]?.templateId
+                    : null;
+                const ordered = templates.slice().sort((a, b) =>
+                    (b.id === suggestedId ? 1 : 0) - (a.id === suggestedId ? 1 : 0)
+                );
+                ordered.forEach(tpl => {
+                    const item = document.createElement('button');
+                    item.type = 'button';
+                    item.className = 'template-picker-item';
+                    item.innerHTML = `
+                        <span class="template-picker-name">${tpl.id === suggestedId ? '⭐ ' : ''}${escapeHtml(tpl.name || 'Template')}${tpl.id === suggestedId ? ' <span class="template-picker-suggested">Suggested</span>' : ''}</span>
+                        <span class="template-picker-when">${escapeHtml(tpl.whenToUse || '')}</span>`;
+                    item.addEventListener('click', () => {
+                        insertTemplateIntoComposer(kind, tpl);
+                        menu.remove();
+                    });
+                    menu.appendChild(item);
+                });
+            }
+
+            document.body.appendChild(menu);
+            const rect = anchor.getBoundingClientRect();
+            menu.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - 380))}px`;
+            menu.style.top = `${Math.max(8, rect.top - menu.offsetHeight - 6)}px`;
+            setTimeout(() => {
+                const dismiss = (e) => {
+                    if (!menu.contains(e.target)) { menu.remove(); document.removeEventListener('click', dismiss); }
+                };
+                document.addEventListener('click', dismiss);
+            }, 0);
+        }
+
+        function insertTemplateIntoComposer(kind, tpl) {
+            const bodyEl = document.getElementById(kind === 'reply' ? 'gcBody' : 'composeBody');
+            if (!bodyEl) return;
+            const existing = bodyEl.innerText.trim();
+            bodyEl.innerText = existing ? `${existing}\n\n${tpl.body || ''}` : (tpl.body || '');
+            try { bodyEl.focus(); } catch (_) {}
+        }
+
         // Gmail-style row markers: star first, then the importance chevron.
         // Filled yellow when set, grey outline when not — mirrors Gmail's own
         // leftmost columns. Clicking toggles the flag: the row moves to its
@@ -1644,10 +1741,15 @@ async function updateEmailCategory(emailId, newCategory, oldCategory) {
                 ? `<span style="font-size:12px; color:#9aa0a6; font-weight:400;">${Number(email.messageCount)}</span>`
                 : '';
 
+            const templateMatch = templateMatchesByEmailId[email.id];
+            const suggestedReplyHtml = templateMatch
+                ? `<span class="suggested-reply-badge" title="Suggested reply: ${escapeHtml(templateMatch.templateName)}">📝 Suggested reply</span>`
+                : '';
+
             emailDiv.innerHTML = `
                 <div class="email-content">
                     <div class="email-header">
-                        <div class="email-from" style="display:flex; align-items:center; gap:8px;">${gmailMarkersHtml(email)}${participantsHtml} ${messageCountHtml} ${gmailLinkHtml(email)}<div class="email-categories">${pillsHtml}</div></div>
+                        <div class="email-from" style="display:flex; align-items:center; gap:8px;">${gmailMarkersHtml(email)}${participantsHtml} ${messageCountHtml} ${gmailLinkHtml(email)}${suggestedReplyHtml}<div class="email-categories">${pillsHtml}</div></div>
                         <div class="email-subject">${escapeHtml(email.subject)}</div>
                         <div class="email-date">${formatCardDate(email.date)}</div>
                     </div>
@@ -2321,9 +2423,11 @@ async function updateEmailCategory(emailId, newCategory, oldCategory) {
                                 <textarea id="contextInput" rows="2" placeholder="Any additional context or specific instructions (optional)"></textarea>
                             </div>
 
+                            <div id="gcTemplateSuggestion" class="gc-template-suggestion" style="display:none;"></div>
                             <div class="gc-actions">
                                 <button type="button" class="gc-send-btn" onclick="gcSendReply()">Send</button>
                                 <button type="button" class="gc-save-draft-btn" onclick="gcSaveDraft()" title="Save this reply as a draft">Save as Draft</button>
+                                <button type="button" class="gc-save-draft-btn gc-template-btn" onclick="showTemplatePicker('reply', event)" title="Insert one of your saved response templates">📝 Templates</button>
                                 <button type="submit" class="generate-submit-btn gc-generate-btn" title="Generate an AI response draft">
                                     <span class="btn-text">&#10024; Generate Response</span>
                                     <span class="btn-loading" style="display:none;">Generating&hellip;</span>
@@ -2417,6 +2521,26 @@ async function updateEmailCategory(emailId, newCategory, oldCategory) {
                     } else {
                         seeEmailNotesBtn.style.display = 'none';
                         seeEmailNotesBtn.onclick = null;
+                    }
+                }
+
+                // Suggested-template hint: when this email matched one of the
+                // user's saved templates, offer a one-click insert.
+                const suggestionEl = document.getElementById('gcTemplateSuggestion');
+                if (suggestionEl) {
+                    const match = templateMatchesByEmailId[window.currentContextEmailId];
+                    if (match) {
+                        suggestionEl.innerHTML = `<span>📝 Suggested reply template: <strong>${escapeHtml(match.templateName)}</strong></span>` +
+                            `<button type="button" id="gcInsertSuggestedTplBtn">Insert</button>`;
+                        suggestionEl.style.display = 'flex';
+                        suggestionEl.querySelector('#gcInsertSuggestedTplBtn').onclick = async () => {
+                            const templates = await loadUserResponseTemplates();
+                            const tpl = templates.find(t => t.id === match.templateId);
+                            if (tpl) insertTemplateIntoComposer('reply', tpl);
+                        };
+                    } else {
+                        suggestionEl.style.display = 'none';
+                        suggestionEl.innerHTML = '';
                     }
                 }
 
@@ -2635,6 +2759,7 @@ async function updateEmailCategory(emailId, newCategory, oldCategory) {
                         <div class="gc-actions">
                             <button type="button" class="gc-send-btn" onclick="composeSendEmail()">Send</button>
                             <button type="button" class="gc-save-draft-btn" onclick="composeSaveDraft()" title="Save this email as a draft">Save as Draft</button>
+                            <button type="button" class="gc-save-draft-btn gc-template-btn" onclick="showTemplatePicker('compose', event)" title="Insert one of your saved response templates">📝 Templates</button>
                         </div>
                     </div>
                 `;
