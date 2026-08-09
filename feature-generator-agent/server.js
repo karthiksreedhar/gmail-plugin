@@ -4527,7 +4527,13 @@ app.delete('/api/debug/category-suggestion-runs/:runId', async (req, res) => {
 // cluster (bounded concurrency) that writes the canonical template with
 // {{placeholders}}. Every run is persisted to a debug collection.
 
-const TEMPLATE_SUGGESTION_MAX_REPLIES = 250;
+// Pool cap and Sent-fetch size are env-tunable: one clustering call carries
+// ~450 chars per reply, so 400 replies is ~45k tokens -- well within limits.
+// Raising these costs a longer Gmail fetch and a pricier clustering call.
+const TEMPLATE_SUGGESTION_MAX_REPLIES = Math.min(600,
+  parseInt(process.env.TEMPLATE_SUGGESTION_MAX_REPLIES || '400', 10) || 400);
+const TEMPLATE_SUGGESTION_SENT_FETCH = Math.min(600,
+  parseInt(process.env.TEMPLATE_SUGGESTION_SENT_FETCH || '400', 10) || 400);
 const TEMPLATE_SUGGESTION_MIN_REPLIES_PER_TEMPLATE = 3;
 const TEMPLATE_SUGGESTION_MIN_REPLY_WORDS = 6;
 
@@ -4574,7 +4580,7 @@ async function fetchSentRepliesFromMainSystem(userEmail) {
     const response = await fetch(endpoint, {
       method: 'POST',
       headers,
-      body: JSON.stringify({ userEmail, maxResults: 200 })
+      body: JSON.stringify({ userEmail, maxResults: TEMPLATE_SUGGESTION_SENT_FETCH })
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok || !data.success) {
@@ -4759,7 +4765,7 @@ function parseTemplateJsonEnvelope(responseText) {
 
 function compactReplyLine(reply) {
   const clean = (value, max) => String(value || '').replace(/\s+/g, ' ').trim().slice(0, max);
-  return `${reply.id} | ${clean(reply.incomingFrom, 40) || 'unknown'} | ${clean(reply.subject, 60) || '(no subject)'} | ${clean(reply.replyBody, 220)}`;
+  return `${reply.id} | ${clean(reply.incomingFrom, 40) || 'unknown'} | ${clean(reply.subject, 60) || '(no subject)'} | ${clean(reply.replyBody, 400)}`;
 }
 
 async function generateResponseTemplatesForUser(userData, logger, options = {}) {
@@ -4858,16 +4864,95 @@ Respond with ONLY this JSON (no other text):
       return { templates: [], poolCount: pool.length, debugRunId: runDebug.runId };
     }
 
+    // Stage A.5: strict membership verification. Clustering only saw short
+    // snippets, so it sometimes lumps in unrelated replies; each kept cluster
+    // is re-judged against the FULL reply texts with instructions to exclude
+    // anything that doesn't clearly share the pattern. Clusters that fall
+    // below the minimum after pruning are discarded, so every template that
+    // reaches drafting is backed only by verified evidence.
+    const verifiedClusters = [];
+    const verificationDebug = [];
+    {
+      let vCursor = 0;
+      const vWorkers = Math.max(1, Math.min(TEMPLATE_SUGGESTION_DRAFT_CONCURRENCY, keptClusters.length));
+      async function verifyWorker() {
+        while (true) {
+          const idx = vCursor++;
+          if (idx >= keptClusters.length) return;
+          const cluster = keptClusters[idx];
+          const members = cluster.memberIds.map(id => replyById.get(id)).filter(Boolean);
+
+          const verifyPrompt = `A clustering step claimed these replies from one user all follow the same repeated pattern:
+Pattern: "${cluster.name}" -- ${cluster.whenToUse || '(no description)'}
+
+${members.map(m => `REPLY ${m.id} (re: "${String(m.subject || '').slice(0, 80)}"):\n${String(m.replyBody || '').slice(0, 1200)}`).join('\n\n')}
+
+For EACH reply, judge whether it genuinely shares this pattern's substance and structure with the others. Be strict: an unrelated or only loosely similar reply must be excluded -- weak evidence makes bad templates. When in doubt, exclude.
+
+Respond with ONLY this JSON (no other text):
+{"members": [{"id": "reply_id", "belongs": true, "reason": "under 10 words"}]}`;
+
+          const verdict = await invokeBatchWithRetry({
+            label: `Template verification "${cluster.name}"`,
+            prompt: verifyPrompt,
+            modelName,
+            maxOutputTokens: 1500,
+            parse: parseTemplateJsonEnvelope,
+            logger,
+            counters
+          });
+
+          const verdictById = new Map(
+            (Array.isArray(verdict?.members) ? verdict.members : [])
+              .map(m => [String(m?.id || '').trim(), m])
+          );
+          // If the verification call itself failed (null), keep the cluster
+          // untouched rather than nuking it on a transient error.
+          const keptIds = verdict
+            ? cluster.memberIds.filter(id => verdictById.get(id)?.belongs === true)
+            : cluster.memberIds;
+          const removed = cluster.memberIds
+            .filter(id => !keptIds.includes(id))
+            .map(id => ({ id, reason: String(verdictById.get(id)?.reason || 'judged unrelated').slice(0, 80) }));
+
+          verificationDebug.push({
+            name: cluster.name,
+            before: cluster.memberIds.length,
+            after: keptIds.length,
+            removed,
+            verified: !!verdict
+          });
+          if (keptIds.length >= TEMPLATE_SUGGESTION_MIN_REPLIES_PER_TEMPLATE) {
+            verifiedClusters.push({ ...cluster, memberIds: keptIds });
+          }
+        }
+      }
+      await Promise.all(Array.from({ length: vWorkers }, () => verifyWorker()));
+    }
+    runDebug.verification = {
+      clusters: verificationDebug,
+      droppedBelowMin: verificationDebug
+        .filter(v => v.after < TEMPLATE_SUGGESTION_MIN_REPLIES_PER_TEMPLATE)
+        .map(v => v.name)
+    };
+
+    if (!verifiedClusters.length) {
+      runDebug.ok = true;
+      runDebug.final = { templates: [], note: 'No cluster survived membership verification.' };
+      await persistTemplateRunDebug(runDebug, logger);
+      return { templates: [], poolCount: pool.length, debugRunId: runDebug.runId };
+    }
+
     // Stage B: draft the canonical template for each cluster.
     const templates = [];
     const draftFailures = [];
     let cursor = 0;
-    const workerCount = Math.max(1, Math.min(TEMPLATE_SUGGESTION_DRAFT_CONCURRENCY, keptClusters.length));
+    const workerCount = Math.max(1, Math.min(TEMPLATE_SUGGESTION_DRAFT_CONCURRENCY, verifiedClusters.length));
     async function draftWorker() {
       while (true) {
         const idx = cursor++;
-        if (idx >= keptClusters.length) return;
-        const cluster = keptClusters[idx];
+        if (idx >= verifiedClusters.length) return;
+        const cluster = verifiedClusters[idx];
         const members = cluster.memberIds.map(id => replyById.get(id)).filter(Boolean);
         const examples = members.slice(0, TEMPLATE_SUGGESTION_MAX_EXAMPLES_PER_DRAFT);
 
@@ -4928,7 +5013,7 @@ Respond with ONLY this JSON (no other text):
     await Promise.all(Array.from({ length: workerCount }, () => draftWorker()));
 
     runDebug.drafting = {
-      attempted: keptClusters.length,
+      attempted: verifiedClusters.length,
       succeeded: templates.length,
       failures: draftFailures,
       counters: { ...counters, lastBatchError: counters.lastBatchError ? String(counters.lastBatchError.message || counters.lastBatchError) : null }

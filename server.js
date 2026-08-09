@@ -713,7 +713,7 @@ app.post('/api/internal/sent-replies', async (req, res) => {
     if (!userEmail) {
       return res.status(400).json({ success: false, error: 'userEmail is required' });
     }
-    const maxResults = Math.min(300, Math.max(20, Number(req.body?.maxResults) || 200));
+    const maxResults = Math.min(600, Math.max(20, Number(req.body?.maxResults) || 200));
 
     const { gmailClient, reason } = await buildGmailClientForUser(userEmail);
     if (!gmailClient) {
