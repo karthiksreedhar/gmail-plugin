@@ -238,7 +238,10 @@ function setupEventListeners() {
   // may data-reading flows proceed (see requireSelectedUser).
   if (selectedUserDropdown) {
     selectedUserDropdown.addEventListener('change', () => {
-      userSelectionDeliberate = !!String(selectedUserDropdown.value || '').trim();
+      const value = String(selectedUserDropdown.value || '').trim().toLowerCase();
+      userSelectionDeliberate = !!value;
+      if (value) localStorage.setItem(USER_SELECTION_STORAGE_KEY, value);
+      else localStorage.removeItem(USER_SELECTION_STORAGE_KEY);
     });
   }
 
@@ -3260,6 +3263,10 @@ let urlUserEmailApplied = false;
 // changing the dropdown themselves. Without it, NO user is preselected --
 // a silent default once served one user's mined sent mail to another.
 let userSelectionDeliberate = false;
+// Last deliberate choice, per browser: lets a plain refresh (no ?userEmail=
+// handoff) restore this person's own previous selection instead of forcing a
+// re-pick -- while still never guessing for a brand-new browser.
+const USER_SELECTION_STORAGE_KEY = 'featureGeneratorSelectedUser';
 
 // Returns the deliberately selected user email, or null (with a toast).
 // Every data-reading flow must go through this instead of trusting
@@ -3307,15 +3314,22 @@ async function refreshAvailableUsers() {
     selectedUserDropdown.appendChild(option);
   }
 
+  const storedUser = String(localStorage.getItem(USER_SELECTION_STORAGE_KEY) || '').trim().toLowerCase();
   if (!urlUserEmailApplied && URL_USER_EMAIL && availableUsers.includes(URL_USER_EMAIL)) {
     // Opened from the Gmail page: preselect the user who was logged in
-    // there. This is the only automatic selection allowed -- it reflects an
-    // authenticated session, not a guess.
+    // there -- it reflects an authenticated session, not a guess.
     selectedUserDropdown.value = URL_USER_EMAIL;
     urlUserEmailApplied = true;
     userSelectionDeliberate = true;
+    localStorage.setItem(USER_SELECTION_STORAGE_KEY, URL_USER_EMAIL);
   } else if (userSelectionDeliberate && previous && availableUsers.includes(previous)) {
     selectedUserDropdown.value = previous;
+  } else if (storedUser && availableUsers.includes(storedUser)) {
+    // This browser previously made a deliberate choice (handoff or manual
+    // pick) -- restore it so a plain refresh of the page doesn't demand
+    // re-selection. Per-browser, so it restores THIS person's own choice.
+    selectedUserDropdown.value = storedUser;
+    userSelectionDeliberate = true;
   } else {
     // No trustworthy identity: force an explicit choice. Never fall back to
     // the first user in the list.
