@@ -3711,7 +3711,10 @@ app.post('/api/email-chat', async (req, res) => {
   // Validate userEmail if provided
   const normalizedRequested = String(userEmail || '').trim().toLowerCase();
   const selectedUser = normalizedRequested && availableUsers.includes(normalizedRequested) ? normalizedRequested : null;
-  const usersToQuery = selectedUser ? [selectedUser] : availableUsers;
+  if (!selectedUser) {
+    return res.status(400).json({ success: false, error: 'A valid userEmail is required -- refusing to query other users\' data' });
+  }
+  const usersToQuery = [selectedUser];
   const actorEmail = resolveActorEmail(selectedUser || session.actorEmail || userEmail);
   session.actorEmail = actorEmail;
 
@@ -4020,7 +4023,10 @@ app.post('/api/email-chat-category-suggestions', async (req, res) => {
   const normalizedRequested = String(userEmail || '').trim().toLowerCase();
   const targetUser = (normalizedRequested && availableUsers.includes(normalizedRequested))
     ? normalizedRequested
-    : (availableUsers[0] || DEFAULT_AVAILABLE_USERS[0]);
+    : null;
+  if (!targetUser) {
+    return res.status(400).json({ success: false, error: 'A valid userEmail is required -- refusing to fall back to another user\'s data' });
+  }
   const results = {
     categoriesCreated: [],
     categoriesUpdated: [],
@@ -4374,7 +4380,10 @@ app.post('/api/category-suggestions', async (req, res) => {
   const normalizedRequested = String(userEmail || '').trim().toLowerCase();
   const targetUser = normalizedRequested && availableUsers.includes(normalizedRequested)
     ? normalizedRequested
-    : (availableUsers[0] || DEFAULT_AVAILABLE_USERS[0]);
+    : null;
+  if (!targetUser) {
+    return res.status(400).json({ success: false, error: 'A valid userEmail is required -- refusing to fall back to another user\'s data' });
+  }
   
   try {
     console.log(`\n📂 GENERATING CATEGORY SUGGESTIONS for ${targetUser}`);
@@ -5055,7 +5064,10 @@ app.post('/api/response-template-suggestions', async (req, res) => {
   const normalizedRequested = String(userEmail || '').trim().toLowerCase();
   const targetUser = normalizedRequested && availableUsers.includes(normalizedRequested)
     ? normalizedRequested
-    : (availableUsers[0] || DEFAULT_AVAILABLE_USERS[0]);
+    : null;
+  if (!targetUser) {
+    return res.status(400).json({ success: false, error: 'A valid userEmail is required -- refusing to fall back to another user\'s data' });
+  }
 
   try {
     console.log(`\n📝 GENERATING RESPONSE TEMPLATE SUGGESTIONS for ${targetUser}`);
@@ -5109,7 +5121,10 @@ app.post('/api/response-templates/apply', async (req, res) => {
   const normalizedRequested = String(userEmail || '').trim().toLowerCase();
   const targetUser = normalizedRequested && availableUsers.includes(normalizedRequested)
     ? normalizedRequested
-    : (availableUsers[0] || DEFAULT_AVAILABLE_USERS[0]);
+    : null;
+  if (!targetUser) {
+    return res.status(400).json({ success: false, error: 'A valid userEmail is required -- refusing to fall back to another user\'s data' });
+  }
 
   try {
     const doc = await getUserDoc('response_templates', targetUser);
@@ -5164,9 +5179,10 @@ app.post('/api/response-templates/apply', async (req, res) => {
 app.get('/api/response-templates', async (req, res) => {
   try {
     await ensureMongoReady();
+    const availableUsers = await getAvailableUsers();
     const targetUser = normalizeEmail(req.query.userEmail);
-    if (!targetUser) {
-      return res.status(400).json({ success: false, error: 'userEmail query parameter is required' });
+    if (!targetUser || !availableUsers.includes(targetUser)) {
+      return res.status(400).json({ success: false, error: 'A valid userEmail query parameter is required' });
     }
     const doc = await getUserDoc('response_templates', targetUser);
     res.json({ success: true, templates: Array.isArray(doc?.templates) ? doc.templates : [] });
@@ -5255,7 +5271,10 @@ app.get('/api/email-thread-preview/:emailId', async (req, res) => {
   const normalizedRequested = String(userEmail || '').trim().toLowerCase();
   const targetUser = normalizedRequested && availableUsers.includes(normalizedRequested)
     ? normalizedRequested
-    : (availableUsers[0] || DEFAULT_AVAILABLE_USERS[0]);
+    : null;
+  if (!targetUser) {
+    return res.status(400).json({ success: false, error: 'A valid userEmail is required -- refusing to fall back to another user\'s data' });
+  }
 
   try {
     const userData = await loadUserEmailData(targetUser);

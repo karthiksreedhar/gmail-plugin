@@ -234,6 +234,14 @@ function setupEventListeners() {
     approveDeployBtn.addEventListener('click', handleApproveDeploy);
   }
 
+  // A hand-picked dropdown value is a deliberate identity choice; only then
+  // may data-reading flows proceed (see requireSelectedUser).
+  if (selectedUserDropdown) {
+    selectedUserDropdown.addEventListener('change', () => {
+      userSelectionDeliberate = !!String(selectedUserDropdown.value || '').trim();
+    });
+  }
+
   // RHS response-template panel controls
   const rhsTemplateCloseBtn = document.getElementById('rhsTemplateCloseBtn');
   const rhsTemplateCancelBtn = document.getElementById('rhsTemplateCancelBtn');
@@ -659,7 +667,13 @@ async function runChatRequest(message) {
     // Build request body - include selected user for chat mode
     const requestBody = { sessionId, message };
     if (currentMode === 'chat' && selectedUserDropdown) {
-      requestBody.userEmail = selectedUserDropdown.value;
+      const chatUser = requireSelectedUser('chatting about email data');
+      if (!chatUser) {
+        try { loadingMsg?.remove?.(); } catch (_) {}
+        setGenerating(false);
+        return;
+      }
+      requestBody.userEmail = chatUser;
     } else {
       const actorUserEmail = getActorUserEmail();
       if (actorUserEmail) requestBody.userEmail = actorUserEmail;
@@ -3105,10 +3119,11 @@ function addCategorySuggestionTrigger() {
 
 async function triggerResponseTemplateSuggestions() {
   if (isGenerating) return;
-  const selectedUser = selectedUserDropdown ? selectedUserDropdown.value : (availableUsers[0] || '');
+  const selectedUser = requireSelectedUser('mining response templates');
+  if (!selectedUser) return;
 
   setGenerating(true);
-  showToast('Analyzing your sent replies for reusable templates...', 'info');
+  showToast(`Analyzing ${selectedUser}'s sent replies for reusable templates...`, 'info');
 
   try {
     const response = await fetch('/api/response-template-suggestions', {
@@ -3154,7 +3169,8 @@ function showResponseTemplatePanel(templates) {
   if (rhsPanel && rhsPanel.style.display !== 'none') closeRHSPanel();
 
   const info = document.getElementById('rhsTemplateInfo');
-  if (info) info.textContent = `${templates.length} reply pattern${templates.length === 1 ? '' : 's'} found in your sent mail — edit, untick, then save.`;
+  const minedUser = String(selectedUserDropdown?.value || '').trim().toLowerCase();
+  if (info) info.textContent = `${templates.length} reply pattern${templates.length === 1 ? '' : 's'} from ${minedUser || 'this user'}'s sent mail — edit, untick, then save.`;
 
   list.innerHTML = templates.map((tpl, i) => `
     <div style="background:#fff;color:#111827;border:1px solid #d0d5dd;border-radius:8px;padding:14px;margin-bottom:12px;">
@@ -3187,6 +3203,8 @@ function closeResponseTemplatePanel() {
 async function saveSelectedResponseTemplates() {
   const list = document.getElementById('rhsTemplateList');
   if (!list) return;
+  const targetUser = requireSelectedUser('saving templates');
+  if (!targetUser) return;
 
   const selected = [];
   list.querySelectorAll('.tpl-include').forEach(checkbox => {
@@ -3214,7 +3232,7 @@ async function saveSelectedResponseTemplates() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        userEmail: selectedUserDropdown?.value,
+        userEmail: targetUser,
         templates: selected
       })
     });
@@ -3237,6 +3255,21 @@ let availableUsers = [];
 // Apply the ?userEmail= preselection only once, so later refreshes never
 // clobber a user the operator picked manually in the dropdown.
 let urlUserEmailApplied = false;
+// True only when the target user came from an explicit source: the
+// ?userEmail= handoff from the authenticated Gmail page, or the person
+// changing the dropdown themselves. Without it, NO user is preselected --
+// a silent default once served one user's mined sent mail to another.
+let userSelectionDeliberate = false;
+
+// Returns the deliberately selected user email, or null (with a toast).
+// Every data-reading flow must go through this instead of trusting
+// whatever happens to be in the dropdown.
+function requireSelectedUser(actionLabel = 'this action') {
+  const value = String(selectedUserDropdown?.value || '').trim().toLowerCase();
+  if (value && userSelectionDeliberate) return value;
+  showToast(`Select which user's data to use (top of the page) before ${actionLabel}`, 'warning');
+  return null;
+}
 
 async function refreshAvailableUsers() {
   if (!selectedUserDropdown) return;
@@ -3263,6 +3296,10 @@ async function refreshAvailableUsers() {
   const previous = String(selectedUserDropdown.value || '').trim().toLowerCase();
 
   selectedUserDropdown.innerHTML = '';
+  const placeholder = document.createElement('option');
+  placeholder.value = '';
+  placeholder.textContent = 'Select a user…';
+  selectedUserDropdown.appendChild(placeholder);
   for (const email of availableUsers) {
     const option = document.createElement('option');
     option.value = email;
@@ -3271,15 +3308,18 @@ async function refreshAvailableUsers() {
   }
 
   if (!urlUserEmailApplied && URL_USER_EMAIL && availableUsers.includes(URL_USER_EMAIL)) {
-    // Opened from the Gmail page: preselect the user who was logged in there.
-    // This must beat `previous`, which on first load is just the static
-    // HTML's default option (e.g. ks4190@columbia.edu).
+    // Opened from the Gmail page: preselect the user who was logged in
+    // there. This is the only automatic selection allowed -- it reflects an
+    // authenticated session, not a guess.
     selectedUserDropdown.value = URL_USER_EMAIL;
     urlUserEmailApplied = true;
-  } else if (previous && availableUsers.includes(previous)) {
+    userSelectionDeliberate = true;
+  } else if (userSelectionDeliberate && previous && availableUsers.includes(previous)) {
     selectedUserDropdown.value = previous;
-  } else if (availableUsers.length > 0) {
-    selectedUserDropdown.value = availableUsers[0];
+  } else {
+    // No trustworthy identity: force an explicit choice. Never fall back to
+    // the first user in the list.
+    selectedUserDropdown.value = '';
   }
 }
 
@@ -3350,10 +3390,11 @@ function showCategoryVariantChooser() {
 async function runCategorySuggestions(variant) {
   if (isGenerating) return;
 
-  const selectedUser = selectedUserDropdown ? selectedUserDropdown.value : (availableUsers[0] || '');
+  const selectedUser = requireSelectedUser('suggesting categories');
+  if (!selectedUser) return;
 
   setGenerating(true);
-  showToast('Analyzing "Other" emails...', 'info');
+  showToast(`Analyzing ${selectedUser}'s "Other" emails...`, 'info');
 
   try {
     const response = await fetch('/api/category-suggestions', {
@@ -3795,6 +3836,8 @@ function handleRHSCancel() {
 // Handle RHS approve
 async function handleRHSApprove() {
   if (!rhsCategorySuggestions) return;
+  const approveTargetUser = requireSelectedUser('applying category changes');
+  if (!approveTargetUser) return;
   
   // Build final suggestions with selected emails only
   const finalSuggestions = {
