@@ -4818,6 +4818,7 @@ ${pool.map(reply => compactReplyLine(reply)).join('\n')}
 
 Rules:
 - A template needs at least ${TEMPLATE_SUGGESTION_MIN_REPLIES_PER_TEMPLATE} member replies with clearly similar substance and structure
+- List EVERY reply id that fits a template's pattern (up to 12 per template), not just the first ${TEMPLATE_SUGGESTION_MIN_REPLIES_PER_TEMPLATE} -- a later verification step prunes weak members, so templates need all their genuine evidence to survive it. Each id still appears in at most one template
 - Only propose templates worth reusing: scheduling replies, recurring request handling, standard acknowledgments with real content, etc. Never propose one for generic pleasantries ("Thanks!", "Sounds good")
 - NEVER build a template from automated or machine-generated mail (calendar invitations/confirmations, booking notifications, receipts, newsletters, out-of-office). Templates must come only from replies the user personally typed
 - name: a short specific label for the reply pattern (4-8 words)
@@ -4844,9 +4845,12 @@ Respond with ONLY this JSON (no other text):
     const droppedClusters = [];
     for (const cluster of proposed) {
       const name = String(cluster?.name || '').trim();
-      const memberIds = (Array.isArray(cluster?.memberIds) ? cluster.memberIds : [])
-        .map(id => String(id || '').trim())
-        .filter(id => replyById.has(id) && !assignedIds.has(id));
+      // De-dupe WITHIN the cluster too: the model has emitted the same id
+      // twice, silently inflating a cluster past the evidence minimum.
+      const memberIds = [...new Set(
+        (Array.isArray(cluster?.memberIds) ? cluster.memberIds : [])
+          .map(id => String(id || '').trim())
+      )].filter(id => replyById.has(id) && !assignedIds.has(id));
       if (!name || memberIds.length < TEMPLATE_SUGGESTION_MIN_REPLIES_PER_TEMPLATE) {
         droppedClusters.push({ name: name || '(unnamed)', validMembers: memberIds.length });
         continue;
