@@ -713,7 +713,7 @@ app.post('/api/internal/sent-replies', async (req, res) => {
     if (!userEmail) {
       return res.status(400).json({ success: false, error: 'userEmail is required' });
     }
-    const maxResults = Math.min(600, Math.max(20, Number(req.body?.maxResults) || 200));
+    const maxResults = Math.min(1000, Math.max(20, Number(req.body?.maxResults) || 200));
 
     const { gmailClient, reason } = await buildGmailClientForUser(userEmail);
     if (!gmailClient) {
@@ -741,7 +741,9 @@ app.post('/api/internal/sent-replies', async (req, res) => {
     const replies = [];
     let failed = 0;
     let cursor = 0;
-    const workerCount = Math.max(1, Math.min(AUTO_SYNC_GMAIL_FETCH_CONCURRENCY, ids.length));
+    // Higher concurrency than auto-sync: this endpoint fetches up to 1000
+    // messages in one request, and the caller (template mining) is waiting.
+    const workerCount = Math.max(1, Math.min(16, ids.length));
     async function worker() {
       while (true) {
         const idx = cursor++;

@@ -4539,10 +4539,14 @@ app.delete('/api/debug/category-suggestion-runs/:runId', async (req, res) => {
 // Pool cap and Sent-fetch size are env-tunable: one clustering call carries
 // ~450 chars per reply, so 400 replies is ~45k tokens -- well within limits.
 // Raising these costs a longer Gmail fetch and a pricier clustering call.
-const TEMPLATE_SUGGESTION_MAX_REPLIES = Math.min(600,
-  parseInt(process.env.TEMPLATE_SUGGESTION_MAX_REPLIES || '400', 10) || 400);
-const TEMPLATE_SUGGESTION_SENT_FETCH = Math.min(600,
-  parseInt(process.env.TEMPLATE_SUGGESTION_SENT_FETCH || '400', 10) || 400);
+// Sent fetch runs well ahead of the pool cap because automated mail is
+// filtered AFTER fetching -- one user's 400 fetched became only 236 usable
+// (171 were calendar/notification mail). 800 fetched keeps a ~500 pool
+// realistic even at that filter rate.
+const TEMPLATE_SUGGESTION_MAX_REPLIES = Math.min(1000,
+  parseInt(process.env.TEMPLATE_SUGGESTION_MAX_REPLIES || '500', 10) || 500);
+const TEMPLATE_SUGGESTION_SENT_FETCH = Math.min(1000,
+  parseInt(process.env.TEMPLATE_SUGGESTION_SENT_FETCH || '800', 10) || 800);
 const TEMPLATE_SUGGESTION_MIN_REPLIES_PER_TEMPLATE = 3;
 const TEMPLATE_SUGGESTION_MIN_REPLY_WORDS = 6;
 
