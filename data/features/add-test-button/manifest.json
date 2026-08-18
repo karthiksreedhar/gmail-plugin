@@ -1,0 +1,9 @@
+{
+  "id": "add-test-button",
+  "name": "Add Test Button",
+  "version": "1.0.0",
+  "description": "Adds a 'Test' button next to the 'Open Feature Generator' button that displays a message when clicked.",
+  "author": "Feature Generator Agent",
+  "frontend": "frontend.js",
+  "permissions": []
+}
