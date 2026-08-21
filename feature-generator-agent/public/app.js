@@ -856,7 +856,10 @@ async function runChatRequest(message) {
             updateCreatePrButton();
             addMessage('assistant', `Saved feature \`${data.featureId}\` as a draft in the main system.\n\n${draftMsg}\n\nNext step: create a GitHub pull request from this saved draft so it can be reviewed and deployed.`);
             addChatPipelineButtons(
-              [{ label: '🔀 Create pull request', run: handleCreatePr }],
+              [
+                { label: '🔀 Create pull request', run: handleCreatePr },
+                { label: '✕ Not now', kind: 'dismiss', run: () => {} }
+              ],
               { title: 'Draft saved — ready for review', text: 'Open a GitHub pull request from this draft so it can be approved and deployed.' }
             );
             showToast('Feature draft saved', 'success');
@@ -1180,7 +1183,10 @@ function watchWorkflowCompletion(featureId, stage) {
               'pr_confirmed'
             );
             addChatPipelineButtons(
-              [{ label: '🚀 Approve merge + deploy', run: handleApproveDeploy }],
+              [
+                { label: '🚀 Approve merge + deploy', run: handleApproveDeploy },
+                { label: '✕ Not now', kind: 'dismiss', run: () => {} }
+              ],
               { title: 'Pull request is open', text: 'Approving merges it into main and deploys the feature to production.' }
             );
             return;
@@ -1833,13 +1839,33 @@ function addChatPipelineButtons(actions, opts = {}) {
 
   const buttonsDiv = document.createElement('div');
   buttonsDiv.className = 'confirmation-buttons';
+  const primary = actions[0];
   actions.forEach(({ label, run, kind }, idx) => {
     const btn = document.createElement('button');
     btn.className = kind === 'neutral'
       ? 'btn-neutral'
-      : (idx === 0 ? 'btn-primary approve-btn' : 'btn-secondary cancel-btn');
+      : (kind === 'dismiss' || idx > 0 ? 'btn-secondary cancel-btn' : 'btn-primary approve-btn');
     btn.innerHTML = label;
     btn.addEventListener('click', async () => {
+      if (kind === 'dismiss') {
+        // Declining must not strand the step (there are no header buttons
+        // any more): the big card collapses to a small chip that still
+        // performs the primary action whenever the user is ready.
+        messageDiv.remove();
+        const chipWrap = document.createElement('div');
+        chipWrap.style.cssText = 'margin:2px 0 10px 44px;';
+        const chip = document.createElement('button');
+        chip.innerHTML = primary.label;
+        chip.style.cssText = 'padding:4px 14px; border-radius:14px; border:1px solid #dadce0; background:#fff; color:#3c4043; cursor:pointer; font-size:12px;';
+        chip.addEventListener('click', async () => {
+          chip.disabled = true; chip.style.opacity = '0.5';
+          try { await primary.run(); } finally { chipWrap.remove(); }
+        });
+        chipWrap.appendChild(chip);
+        chatMessages.appendChild(chipWrap);
+        scrollToBottom();
+        return;
+      }
       // One shot: the workflow watcher posts the next step's card when this
       // step actually completes.
       buttonsDiv.querySelectorAll('button').forEach(b => { b.disabled = true; b.style.opacity = '0.5'; });
