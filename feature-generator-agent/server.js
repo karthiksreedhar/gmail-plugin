@@ -1312,9 +1312,21 @@ app.post('/api/chat', async (req, res) => {
     // recorded. No identity -> refuse, with a pointer to the right entry path.
     const actorEmail = resolveVerifiedActor(session, req.body);
     if (!actorEmail) {
+      // Log WHY, so "identity could not be verified" reports are diagnosable
+      // from the logs: stale pre-deploy tab (no sig at all), expired link, or
+      // a FEATURE_EXPORT_TOKEN mismatch between the two Vercel apps (sig
+      // present + unexpired but failing).
+      const exp = Number(req.body?.identityExp);
+      const reason = !req.body?.identitySig
+        ? 'no signature (stale tab or bookmarked URL)'
+        : (Number.isFinite(exp) && Date.now() > exp)
+          ? 'signature expired'
+          : (!FEATURE_EXPORT_TOKEN ? 'FEATURE_EXPORT_TOKEN not set on this app' : 'signature mismatch (token parity between apps?)');
+      console.warn(`[Identity] chat refused for session ${session.id}: ${reason}`);
       return res.status(400).json({
         success: false,
-        error: 'Your identity could not be verified. Open the Feature Generator from the Gmail app (the "Open Feature Generator" button) so it knows who you are.'
+        identityReason: reason,
+        error: 'Your identity could not be verified. Go back to the Gmail app tab, refresh it, and click "Open Feature Generator" again.'
       });
     }
     session.actorEmail = actorEmail;

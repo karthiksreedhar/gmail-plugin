@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Study Dashboard</title>
+<style>
+  * { box-sizing: border-box; margin: 0; }
+  body { font-family: -apple-system, 'Segoe UI', Roboto, Arial, sans-serif; background: #f6f8fa; color: #1f2328; }
+  header { background: #fff; border-bottom: 1px solid #d8dee4; padding: 14px 24px; display: flex; align-items: baseline; gap: 14px; }
+  header h1 { font-size: 17px; }
+  header .sub { color: #656d76; font-size: 13px; }
+  .layout { display: grid; grid-template-columns: minmax(540px, 1.4fr) 1fr; gap: 18px; padding: 18px 24px; align-items: start; }
+  .card { background: #fff; border: 1px solid #d8dee4; border-radius: 8px; overflow: hidden; }
+  .card h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: #656d76; padding: 12px 16px; border-bottom: 1px solid #eaeef2; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { text-align: left; padding: 8px 10px; color: #656d76; font-weight: 600; border-bottom: 1px solid #eaeef2; white-space: nowrap; }
+  td { padding: 8px 10px; border-bottom: 1px solid #f0f3f6; white-space: nowrap; }
+  tr.user-row { cursor: pointer; }
+  tr.user-row:hover { background: #f3f6fa; }
+  tr.user-row.selected { background: #e7f0fe; }
+  .num { text-align: right; font-variant-numeric: tabular-nums; }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+  .dot.ok { background: #1a7f37; } .dot.bad { background: #cf222e; }
+  .muted { color: #8b949e; }
+  .pill { display: inline-block; border-radius: 10px; padding: 1px 8px; font-size: 11px; margin: 1px 2px; }
+  .pill.on { background: #dafbe1; color: #116329; }
+  .pill.off { background: #ffebe9; color: #a40e26; text-decoration: line-through; }
+  .detail-empty { padding: 40px; text-align: center; color: #8b949e; font-size: 14px; }
+  .detail-section { padding: 12px 16px; border-bottom: 1px solid #f0f3f6; }
+  .detail-section h3 { font-size: 12px; color: #656d76; text-transform: uppercase; letter-spacing: .04em; margin-bottom: 8px; }
+  .stat-row { display: flex; gap: 22px; flex-wrap: wrap; }
+  .stat b { display: block; font-size: 20px; }
+  .stat span { font-size: 12px; color: #656d76; }
+  .spark { display: flex; align-items: flex-end; gap: 2px; height: 46px; margin-top: 6px; }
+  .spark div { width: 8px; background: #54aeff; border-radius: 2px 2px 0 0; min-height: 2px; }
+  .event-list { max-height: 300px; overflow-y: auto; font-size: 12px; }
+  .event-list div { padding: 3px 0; border-bottom: 1px dotted #f0f3f6; }
+  .event-type { display: inline-block; min-width: 130px; font-weight: 600; }
+  .err { padding: 20px; color: #cf222e; }
+  @media (max-width: 1000px) { .layout { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Study Dashboard</h1>
+  <span class="sub" id="generatedAt"></span>
+</header>
+<div class="layout">
+  <div class="card">
+    <h2>Users</h2>
+    <div id="overview">
+      <div class="detail-empty">Loading…</div>
+    </div>
+  </div>
+  <div class="card">
+    <h2>User detail</h2>
+    <div id="detail"><div class="detail-empty">Select a user</div></div>
+  </div>
+</div>
+<script>
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const fmtDate = d => d ? new Date(d).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '—';
+const ago = d => {
+  if (!d) return '—';
+  const mins = Math.round((Date.now() - new Date(d).getTime()) / 60000);
+  if (mins < 60) return mins + 'm ago';
+  if (mins < 1440) return Math.round(mins / 60) + 'h ago';
+  return Math.round(mins / 1440) + 'd ago';
+};
+
+async function loadOverview() {
+  const el = document.getElementById('overview');
+  try {
+    const resp = await fetch('/api/admin/study/overview');
+    if (resp.status === 401 || resp.status === 403) {
+      el.innerHTML = '<div class="err">Administrator access required — sign in to the app as an admin account first.</div>';
+      return;
+    }
+    const data = await resp.json();
+    if (!data.success) throw new Error(data.error || 'failed');
+    document.getElementById('generatedAt').textContent = 'as of ' + new Date(data.generatedAt).toLocaleTimeString();
+    const rows = data.users.map(u => `
+      <tr class="user-row" data-email="${esc(u.userEmail)}">
+        <td><span class="dot ${u.syncHealthy === null ? '' : (u.syncHealthy ? 'ok' : 'bad')}" style="${u.syncHealthy === null ? 'background:#d0d7de' : ''}" title="${esc(u.syncFailureReason || 'sync healthy')}"></span>${esc(u.displayName)}<br><span class="muted">${esc(u.userEmail)}</span></td>
+        <td class="num" title="last active">${ago(u.lastActive)}</td>
+        <td class="num">${u.emailsStored}</td>
+        <td class="num">${u.categories}</td>
+        <td class="num">${u.featuresCreated}<span class="muted">/${u.featuresDeployed}</span></td>
+        <td class="num">${u.featuresDisabled ? '<span style="color:#a40e26">' + u.featuresDisabled + ' off</span>' : '—'}</td>
+        <td class="num">${u.agentChatTurns}</td>
+        <td class="num">${u.events.email_sent || 0}</td>
+        <td class="num">${u.events.search || 0}</td>
+        <td class="num">${u.events.login || 0}</td>
+      </tr>`).join('');
+    el.innerHTML = `<table>
+      <tr><th>User</th><th class="num">Active</th><th class="num">Emails</th><th class="num">Cats</th>
+      <th class="num" title="created/deployed">Feat</th><th class="num">Disabled</th><th class="num" title="feature-agent chat turns">Agent</th>
+      <th class="num">Sent</th><th class="num">Search</th><th class="num">Logins</th></tr>${rows}</table>`;
+    el.querySelectorAll('.user-row').forEach(tr => tr.addEventListener('click', () => {
+      el.querySelectorAll('.user-row').forEach(r => r.classList.remove('selected'));
+      tr.classList.add('selected');
+      loadDetail(tr.dataset.email);
+    }));
+  } catch (e) {
+    el.innerHTML = '<div class="err">Failed to load: ' + esc(e.message) + '</div>';
+  }
+}
+
+async function loadDetail(email) {
+  const el = document.getElementById('detail');
+  el.innerHTML = '<div class="detail-empty">Loading…</div>';
+  try {
+    const resp = await fetch('/api/admin/study/user/' + encodeURIComponent(email));
+    const data = await resp.json();
+    if (!data.success) throw new Error(data.error || 'failed');
+
+    const days = Object.keys(data.activityByDay).sort();
+    const last21 = days.slice(-21);
+    const max = Math.max(1, ...last21.map(d => data.activityByDay[d]));
+    const spark = last21.map(d =>
+      `<div style="height:${Math.round(data.activityByDay[d] / max * 44)}px" title="${d}: ${data.activityByDay[d]} events"></div>`).join('');
+
+    const feats = data.featuresCreated.map(f =>
+      `<div><b>${esc(f.name || f.featureId)}</b> <span class="muted">(${esc(f.status || 'draft')}, ${fmtDate(f.createdAt)})</span></div>`).join('') || '<span class="muted">none</span>';
+
+    const prefs = data.featurePreferences.map(p =>
+      `<span class="pill ${p.enabled && p.visible ? 'on' : 'off'}" title="updated ${fmtDate(p.updatedAt)}">${esc(p.featureId)}</span>`).join('') || '<span class="muted">no toggles recorded</span>';
+
+    const chats = data.agentChats.map(c =>
+      `<div><span class="muted">${fmtDate(c.at)}</span> ${c.isRefinement ? '✏️' : '✨'} ${esc(c.request)}${c.success ? '' : ' <span style="color:#a40e26">(failed)</span>'}</div>`).join('') || '<span class="muted">none</span>';
+
+    const events = data.recentEvents.map(e =>
+      `<div><span class="muted">${fmtDate(e.at)}</span> <span class="event-type">${esc(e.type)}</span>${esc(e.meta?.featureId || e.meta?.name || '')}</div>`).join('') || '<span class="muted">none yet</span>';
+
+    el.innerHTML = `
+      <div class="detail-section">
+        <h3>${esc(data.displayName)} — ${esc(data.userEmail)}</h3>
+        <div class="stat-row">
+          <div class="stat"><b>${data.featuresCreated.length}</b><span>features created</span></div>
+          <div class="stat"><b>${data.featurePreferences.filter(p => !p.enabled || !p.visible).length}</b><span>disabled</span></div>
+          <div class="stat"><b>${data.categories.length}</b><span>categories</span></div>
+          <div class="stat"><b>${data.agentChats.length}</b><span>recent agent chats</span></div>
+        </div>
+        <div class="spark">${spark}</div>
+        <div class="muted" style="font-size:11px; margin-top:2px;">daily activity, last 21 days</div>
+      </div>
+      <div class="detail-section"><h3>Categories</h3>${data.categories.map(c => `<span class="pill on">${esc(c)}</span>`).join('') || '<span class="muted">none</span>'}</div>
+      <div class="detail-section"><h3>Features created</h3>${feats}</div>
+      <div class="detail-section"><h3>Feature toggles</h3>${prefs}</div>
+      <div class="detail-section"><h3>Feature-agent activity</h3><div class="event-list">${chats}</div></div>
+      <div class="detail-section"><h3>Recent events</h3><div class="event-list">${events}</div></div>`;
+  } catch (e) {
+    el.innerHTML = '<div class="err">Failed to load detail: ' + esc(e.message) + '</div>';
+  }
+}
+
+loadOverview();
+setInterval(loadOverview, 60000);
+</script>
+</body>
+</html>

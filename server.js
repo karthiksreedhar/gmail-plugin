@@ -341,6 +341,43 @@ function shouldAllowFeatureRegistryWrite(req) {
   return ip === '127.0.0.1' || ip === '::1' || ip.endsWith('127.0.0.1');
 }
 
+// --- Study event log ---
+// Lightweight per-user action log for the study: what people actually do
+// (log in, send, search, open threads, toggle features), queryable by the
+// admin dashboard. One doc per event; capped detail; fire-and-forget so
+// instrumentation can never break the action it observes.
+const STUDY_EVENTS_COLLECTION = 'study_events';
+
+function recordStudyEvent(userEmail, type, meta = {}) {
+  const email = String(userEmail || '').trim().toLowerCase();
+  if (!email || !email.includes('@')) return;
+  (async () => {
+    await initMongo();
+    await getDb().collection(STUDY_EVENTS_COLLECTION).insertOne({
+      userEmail: email,
+      type: String(type || 'unknown'),
+      meta,
+      at: new Date()
+    });
+  })().catch(err => console.warn('[StudyEvents] record failed:', err?.message || err));
+}
+
+// Administrators for the study dashboard. Comma-separated env override;
+// defaults to the operator's accounts.
+const STUDY_ADMIN_EMAILS = new Set(
+  String(process.env.STUDY_ADMIN_EMAILS || 'ks4190@columbia.edu,kspowerrangersv2@gmail.com')
+    .split(',')
+    .map(e => e.trim().toLowerCase())
+    .filter(Boolean)
+);
+
+function requireStudyAdmin(req, res) {
+  const userEmail = getEffectiveUserEmailForRequest(req);
+  if (userEmail && STUDY_ADMIN_EMAILS.has(userEmail)) return userEmail;
+  res.status(403).json({ success: false, error: 'Administrator access required' });
+  return null;
+}
+
 // --- Feature error capture ---
 // Errors from generated features (load failures, runtime throws in their
 // routes, frontend script errors) get recorded per-feature in Mongo so the
@@ -933,6 +970,145 @@ app.post('/api/internal/sent-replies', async (req, res) => {
   }
 });
 
+// --- Study admin dashboard API ---
+// Aggregates everything the study cares about, per user. URL-only page (no
+// link in the user-facing UI) at /admin-study.html; both endpoints require a
+// logged-in administrator session.
+
+app.get('/api/admin/study/overview', async (req, res) => {
+  try {
+    if (!requireStudyAdmin(req, res)) return;
+    await initMongo();
+    const db = getDb();
+
+    const [tokenRows, featureDocs, prefDocs, eventAgg, chatAgg, statusDoc] = await Promise.all([
+      db.collection('oauth_tokens').find({}).project({ userEmail: 1, _updatedAt: 1 }).toArray(),
+      db.collection('generated_features').find({}).project({ featureId: 1, createdBy: 1, status: 1 }).toArray(),
+      db.collection('user_feature_preferences').find({}).toArray(),
+      db.collection(STUDY_EVENTS_COLLECTION).aggregate([
+        { $group: { _id: { u: '$userEmail', t: '$type' }, n: { $sum: 1 }, last: { $max: '$at' } } }
+      ]).toArray(),
+      db.collection('feature_generator_chat_logs').aggregate([
+        { $match: { userEmail: { $nin: [null, ''] } } },
+        { $group: { _id: '$userEmail', turns: { $sum: 1 }, last: { $max: '$at' } } }
+      ]).toArray(),
+      db.collection('system_status').findOne({ _id: 'auto-sync' })
+    ]);
+
+    const users = tokenRows.map(r => normalizeUserEmailForData(r.userEmail)).filter(Boolean);
+    // Health comes from the last CRON run only, and only a recent one: local
+    // dev servers share this Mongo and their credential-less runs would
+    // otherwise mark every user unhealthy.
+    const statusFresh = statusDoc?.reason === 'vercel-cron' &&
+      statusDoc?.startedAt && (Date.now() - new Date(statusDoc.startedAt).getTime()) < 30 * 60 * 1000;
+    const syncFailures = statusFresh
+      ? new Map((statusDoc?.failures || []).map(f => [String(f.userEmail || '').toLowerCase(), String(f.reason || '')]))
+      : null;
+
+    const eventsByUser = {};
+    for (const row of eventAgg) {
+      const u = row._id.u;
+      eventsByUser[u] = eventsByUser[u] || { counts: {}, lastActive: null };
+      eventsByUser[u].counts[row._id.t] = row.n;
+      if (!eventsByUser[u].lastActive || row.last > eventsByUser[u].lastActive) eventsByUser[u].lastActive = row.last;
+    }
+    const chatByUser = new Map(chatAgg.map(r => [String(r._id).toLowerCase(), r]));
+
+    const rows = await Promise.all(users.map(async (userEmail) => {
+      const [respDoc, catDoc] = await Promise.all([
+        db.collection('response_emails').findOne({ userEmail }, { projection: { emails: { $slice: 1 }, _updatedAt: 1 } }),
+        db.collection('categories').findOne({ userEmail })
+      ]);
+      const emailCount = await db.collection('response_emails').aggregate([
+        { $match: { userEmail } },
+        { $project: { n: { $size: { $ifNull: ['$emails', []] } } } }
+      ]).toArray().then(r => r[0]?.n || 0).catch(() => 0);
+
+      const created = featureDocs.filter(f => String(f.createdBy || '').toLowerCase() === userEmail);
+      const prefs = prefDocs.filter(pref => String(pref.userEmail || '').toLowerCase() === userEmail);
+      const ev = eventsByUser[userEmail] || { counts: {}, lastActive: null };
+      const chat = chatByUser.get(userEmail);
+
+      return {
+        userEmail,
+        displayName: getDisplayNameForUser(userEmail),
+        emailsStored: emailCount,
+        lastSyncedAt: respDoc?._updatedAt || null,
+        categories: Array.isArray(catDoc?.categories) ? catDoc.categories.length : 0,
+        featuresCreated: created.length,
+        featuresDeployed: created.filter(f => f.status === 'deployed').length,
+        featureTogglesTotal: prefs.length,
+        featuresDisabled: prefs.filter(pref => pref.enabled === false || pref.visible === false).length,
+        agentChatTurns: chat?.turns || 0,
+        events: ev.counts,
+        lastActive: ev.lastActive || chat?.last || null,
+        syncHealthy: syncFailures ? !syncFailures.has(userEmail) : null,
+        syncFailureReason: syncFailures ? (syncFailures.get(userEmail) || null) : 'no recent cron data'
+      };
+    }));
+
+    rows.sort((a, b) => new Date(b.lastActive || 0) - new Date(a.lastActive || 0));
+    return res.json({ success: true, generatedAt: new Date().toISOString(), users: rows });
+  } catch (error) {
+    console.error('Study overview failed:', error);
+    return res.status(500).json({ success: false, error: 'Failed to build study overview' });
+  }
+});
+
+app.get('/api/admin/study/user/:email', async (req, res) => {
+  try {
+    if (!requireStudyAdmin(req, res)) return;
+    const userEmail = normalizeUserEmailForData(req.params.email);
+    if (!userEmail || !userEmail.includes('@')) {
+      return res.status(400).json({ success: false, error: 'Invalid email' });
+    }
+    await initMongo();
+    const db = getDb();
+
+    const [events, features, prefs, catDoc, chatLogs] = await Promise.all([
+      db.collection(STUDY_EVENTS_COLLECTION).find({ userEmail }).sort({ at: -1 }).limit(200).toArray(),
+      db.collection('generated_features').find({ createdBy: userEmail })
+        .project({ featureId: 1, name: 1, status: 1, createdAt: 1, updatedAt: 1 }).toArray(),
+      db.collection('user_feature_preferences').find({ userEmail }).toArray(),
+      db.collection('categories').findOne({ userEmail }),
+      db.collection('feature_generator_chat_logs').find({ userEmail })
+        .sort({ at: -1 }).limit(30)
+        .project({ mode: 1, featureId: 1, isRefinement: 1, success: 1, at: 1, requestMessage: 1 }).toArray()
+    ]);
+
+    // Daily activity histogram from events (whole study window).
+    const byDay = {};
+    const allEvents = await db.collection(STUDY_EVENTS_COLLECTION)
+      .find({ userEmail }).project({ at: 1, type: 1 }).toArray();
+    for (const e of allEvents) {
+      const day = new Date(e.at).toISOString().slice(0, 10);
+      byDay[day] = (byDay[day] || 0) + 1;
+    }
+
+    return res.json({
+      success: true,
+      userEmail,
+      displayName: getDisplayNameForUser(userEmail),
+      categories: Array.isArray(catDoc?.categories) ? catDoc.categories : [],
+      featuresCreated: features,
+      featurePreferences: prefs.map(pref => ({
+        featureId: pref.featureId, enabled: pref.enabled !== false, visible: pref.visible !== false,
+        pinned: !!pref.pinned, updatedAt: pref.updatedAt || null
+      })),
+      recentEvents: events.map(e => ({ type: e.type, meta: e.meta || {}, at: e.at })),
+      agentChats: chatLogs.map(c => ({
+        at: c.at, mode: c.mode, featureId: c.featureId || null,
+        isRefinement: !!c.isRefinement, success: c.success !== false,
+        request: String(c.requestMessage || '').slice(0, 160)
+      })),
+      activityByDay: byDay
+    });
+  } catch (error) {
+    console.error('Study user detail failed:', error);
+    return res.status(500).json({ success: false, error: 'Failed to build user detail' });
+  }
+});
+
 // Browser-side feature errors, reported by the frontend feature loader.
 // Behind the normal session gate (not public), so reports carry a real user.
 app.post('/api/feature-error', async (req, res) => {
@@ -1135,6 +1311,7 @@ app.post('/api/feature-registry/:featureId/preferences', async (req, res) => {
     }
 
     const preference = await upsertUserFeaturePreference(userEmail, featureId, payload);
+    recordStudyEvent(userEmail, 'feature_preference', { featureId, ...payload });
     const feature = await getFeatureRegistryEntryForUser(featureId, userEmail);
     res.json({ success: true, preference, feature });
   } catch (error) {
@@ -2004,6 +2181,7 @@ async function finalizeLoginForUser(userEmail, tokens) {
 
   FALLBACK_USER_EMAIL = normalizedEmail;
   FALLBACK_SENDING_EMAIL = normalizedEmail;
+  recordStudyEvent(normalizedEmail, 'login');
 
   // Ensure first-time users get their per-user storage shape; do not block login indefinitely.
   await ensureUserBootstrapSafely(normalizedEmail, 1500);
@@ -3911,7 +4089,7 @@ app.post('/api/toggle-email-flag', async (req, res) => {
 app.get('/api/email-thread/:emailId', async (req, res) => {
   try {
     const emailId = req.params.emailId;
-    console.log(`Fetching thread for email ID: ${emailId}`);
+    recordStudyEvent(getEffectiveUserEmailForRequest(req), 'thread_open');
 
     // Resolve the user from this request's own session/cookie, not the shared
     // shared user global (loadEmailThreads/loadResponseEmails read that
@@ -7348,6 +7526,7 @@ app.post('/api/send-email', async (req, res) => {
     });
 
     console.log(`Sent email for ${userEmail}: message ${sendResp?.data?.id}${threadId ? ` in thread ${threadId}` : ' (new thread)'}`);
+    recordStudyEvent(userEmail, 'email_sent', { threaded: !!threadId, hasAttachments: Array.isArray(attachments) && attachments.length > 0 });
     return res.json({
       success: true,
       messageId: sendResp?.data?.id || null,
@@ -8563,6 +8742,7 @@ app.get('/api/seed-categories/progress', (req, res) => {
  * POST /api/categories/add { name }
  */
 app.post('/api/categories/add', (req, res) => {
+  recordStudyEvent(getEffectiveUserEmailForRequest(req), 'category_add', { name: String(req.body?.name || '').slice(0, 80) });
   try {
     const { name } = req.body || {};
     const n = String(name || '').trim();
@@ -8649,6 +8829,7 @@ app.get('/api/categories/all-with-counts', (req, res) => {
  * Returns: { success: true, removed, moved: { responses, unreplied }, categories: [...] }
  */
 app.delete('/api/categories/:name', async (req, res) => {
+  recordStudyEvent(getEffectiveUserEmailForRequest(req), 'category_delete', { name: String(req.params?.name || '').slice(0, 80) });
   try {
     const raw = String(req.params.name || '').trim();
     if (!raw) {
@@ -15026,6 +15207,7 @@ app.post('/api/search-emails', async (req, res) => {
   try {
     const { query, limit } = req.body || {};
     const q = String(query || '').trim();
+    if (q) recordStudyEvent(getEffectiveUserEmailForRequest(req), 'search');
     const topN = Math.max(1, Math.min(50, Number(limit) || 10));
     if (!q) return res.json({ success: true, emails: [] });
 
