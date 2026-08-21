@@ -3753,7 +3753,11 @@
       .msg-truncated-note.failed { background: #fce8e6; color: #c5221f; }
 
       /* Rendered HTML email bodies: contain wide content, neutralize layout surprises */
-      .msg-html-body { overflow-x: auto; max-width: 100%; }
+      /* The plain-text container uses pre-wrap, which this slot inherits.
+         Rendered HTML must NOT keep source newlines as blank lines -- that
+         inheritance was painting a band of whitespace at the top of every
+         HTML-heavy email (all the newlines between <head>/<table> tags). */
+      .msg-html-body { overflow-x: auto; max-width: 100%; white-space: normal; }
       .msg-html-body img { max-width: 100%; height: auto; }
       .msg-html-body table { max-width: 100%; }
     </style>

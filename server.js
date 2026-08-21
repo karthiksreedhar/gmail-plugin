@@ -5427,13 +5427,28 @@ async function syncUserInboxFromGmail(userEmail, opts = {}) {
       }
       return latestResponseTimestampMs || latestThreadTimestampMs || null;
     })();
-    const latestStoredTimestampMs = forceBackfill ? null : computedLatestStoredTimestampMs;
+    // Gap-aware backfill window. The naive "since the newest stored email"
+    // has a hole: someone who does not open the app for days comes back, sync
+    // fetches only the 50 most recent messages of that whole gap, and the
+    // rest are skipped FOREVER -- the next sync starts from the new latest
+    // timestamp. So: sync since the newest stored email, floored at two weeks
+    // ago (a longer absence backfills the most recent two weeks), and when the
+    // gap is more than a day, raise the fetch cap to its 200 maximum.
+    const AUTO_SYNC_MAX_GAP_MS = 14 * 24 * 3600 * 1000;
+    const gapFloorMs = Date.now() - AUTO_SYNC_MAX_GAP_MS;
+    const latestStoredTimestampMs = forceBackfill
+      ? null
+      : Math.max(computedLatestStoredTimestampMs || 0, gapFloorMs);
+    const gapMs = forceBackfill ? 0 : Date.now() - latestStoredTimestampMs;
+    const gapAwareMaxCandidates = (!forceBackfill && gapMs > 24 * 3600 * 1000)
+      ? 200
+      : maxCandidates;
 
     const candidates = await fetchInboxThreadCandidatesForUser(
       gmailClient,
       latestStoredTimestampMs,
       normalizedEmail,
-      { maxCandidates, beforeMs: opts.beforeMs }
+      { maxCandidates: gapAwareMaxCandidates, beforeMs: opts.beforeMs }
     );
     if (!candidates.length) {
       return {
@@ -5692,6 +5707,13 @@ async function runAutoSyncForAllUsers(reason = 'interval') {
     if (!users.length) {
       autoSyncLastSummary = { reason, usersProcessed: 0, added: 0, failed: 0, timestamp: new Date().toISOString() };
       return;
+    }
+    // Serverless cron runs are time-limited and this loop is sequential, so a
+    // run may be killed before reaching the end. Shuffle the order so no user
+    // sits permanently at the tail; per-user locks make partial runs safe.
+    for (let i = users.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [users[i], users[j]] = [users[j], users[i]];
     }
     const results = [];
     for (const userEmail of users) {
