@@ -2949,3 +2949,10 @@ body.chat-mode .mode-btn.active[data-mode="chat"] {
     margin: 4px;
   }
 }
+
+
+/* Composer-level mode pill: compact, at the point of use */
+.composer-mode-row { display: flex; align-items: center; padding: 0 0 6px 2px; }
+.composer-mode-toggle { background: #f1f3f4; border-radius: 14px; padding: 2px; gap: 0; }
+.composer-mode-toggle .mode-btn { padding: 3px 12px; font-size: 12px; border-radius: 12px; }
+.composer-mode-toggle .mode-btn span { font-size: 12px; }

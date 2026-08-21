@@ -231,6 +231,14 @@ function setupEventListeners() {
   // Mode toggle buttons
   chatModeBtn.addEventListener('click', () => setMode('chat'));
   generateModeBtn.addEventListener('click', () => setMode('generate'));
+  // Cmd/Ctrl+J flips modes from anywhere, including mid-typing.
+  document.addEventListener('keydown', (e) => {
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'j') {
+      e.preventDefault();
+      setMode(currentMode === 'chat' ? 'generate' : 'chat');
+      messageInput?.focus();
+    }
+  });
   
   // File tabs
   fileTabs.forEach(tab => {
@@ -292,7 +300,33 @@ function setupEventListeners() {
 }
 
 // Set mode (chat or generate)
+// Each mode keeps its own conversation. Switching swaps the whole thread in
+// and out of the DOM, so flipping modes never buries or interleaves either
+// conversation -- it costs nothing to go look and come back.
+const modeThreads = { chat: null, generate: null };
+
+function stashCurrentThread(mode) {
+  if (!chatMessages || !mode) return;
+  const frag = document.createDocumentFragment();
+  while (chatMessages.firstChild) frag.appendChild(chatMessages.firstChild);
+  modeThreads[mode] = frag;
+}
+
+function restoreThread(mode) {
+  if (!chatMessages) return;
+  const frag = modeThreads[mode];
+  if (frag && frag.childNodes.length) {
+    chatMessages.appendChild(frag);
+    modeThreads[mode] = null;
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+  } else {
+    addMessage('assistant', WELCOME_MESSAGES[mode]);
+  }
+}
+
 function setMode(mode) {
+  const previousMode = currentMode;
+  if (previousMode && previousMode !== mode) stashCurrentThread(previousMode);
   currentMode = mode;
   localStorage.setItem('featureGeneratorMode', mode);
   
@@ -340,12 +374,9 @@ function setMode(mode) {
   }
 
   updateCreatePrButton();
-  
-  // Update welcome message if chat is empty (only welcome message)
-  if (chatMessages.children.length <= 1) {
-    chatMessages.innerHTML = '';
-    addMessage('assistant', WELCOME_MESSAGES[mode]);
-  }
+
+  // Bring back this mode's own conversation (or greet if it has none).
+  if (previousMode !== mode || chatMessages.children.length === 0) restoreThread(mode);
 }
 
 function renderExistingFeaturesDropdown() {
@@ -554,6 +585,22 @@ async function autoLoadSelectedFeatureForGenerate() {
 }
 
 // Handle send message
+// Conservative cross-mode intent detector. Only flags messages that VERY
+// clearly belong to the other mode; everything else sends where the user is.
+function detectLikelyMisroute(message) {
+  const m = String(message || '').toLowerCase();
+  if (currentMode === 'chat') {
+    // Feature-building language typed into email chat.
+    if (/\b(build|create|make|add|generate)\b[^.?!]{0,60}\b(feature|button|column|filter|tracker|dashboard|panel|view|widget|layout)\b/.test(m)) return 'generate';
+    if (/\b(deploy|refine|modify)\b[^.?!]{0,40}\bfeature\b/.test(m)) return 'generate';
+  } else {
+    // Email questions typed into the feature builder.
+    if (/^(how many|which|who|when|what)\b[^.?!]{0,80}\b(email|emails|inbox|sender|thread|message)/.test(m)) return 'chat';
+    if (/\b(summarize|search|find|show me)\b[^.?!]{0,60}\b(email|emails|inbox|messages?)\b/.test(m)) return 'chat';
+  }
+  return null;
+}
+
 async function handleSend() {
   const message = messageInput.value.trim();
   
@@ -568,6 +615,38 @@ async function handleSend() {
     return;
   }
   
+  // High-confidence wrong-mode check BEFORE anything runs: a feature request
+  // typed into Chat (or an email question typed into Build) costs one click
+  // to redirect instead of a wasted run in the wrong pipeline. Deliberately
+  // conservative -- anything ambiguous just sends in the current mode.
+  const misroute = detectLikelyMisroute(message);
+  if (misroute && !handleSend._overrideOnce) {
+    messageInput.value = '';
+    messageInput.style.height = 'auto';
+    addMessage('user', message);
+    const targetLabel = misroute === 'generate' ? 'Build' : 'Chat';
+    addMessage('assistant', misroute === 'generate'
+      ? 'That looks like a **feature request**. Want me to send it to **Build**?'
+      : 'That looks like a **question about your emails**. Want me to send it to **Chat**?');
+    addChatPipelineButtons([
+      { label: `↪ Send in ${targetLabel}`, run: async () => {
+          setMode(misroute);
+          addMessage('user', message);
+          if (misroute === 'generate') { await runGeneratePreflight(message); }
+          else { await runChatRequest(message); }
+        } },
+      { label: 'Send here anyway', run: async () => {
+          handleSend._overrideOnce = true;
+          try {
+            if (currentMode === 'generate') { await runGeneratePreflight(message); }
+            else { await runChatRequest(message); }
+          } finally { handleSend._overrideOnce = false; }
+        } }
+    ]);
+    return;
+  }
+  handleSend._overrideOnce = false;
+
   // Clear input
   messageInput.value = '';
   messageInput.style.height = 'auto';
