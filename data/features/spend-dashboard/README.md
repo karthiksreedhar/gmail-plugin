@@ -18,10 +18,15 @@ merchants and a full transaction table.
   filtered out.
 - **Aggregates your spending** into:
   - Total spend, transaction count, merchant count, category count
-  - Spend by month (last 12 months) bar chart
+  - Spend by month (bar chart, window adapts to the selected period)
   - Spend by category
   - Top 12 merchants
   - A complete, date-sorted transaction table
+- **Filters by time period.** A **Period** dropdown lets you view Last 30 days,
+  Last 90 days, Last 6 months, Last 12 months, Year to date, or All time. Every
+  number, chart and table updates to the selected window. Changing the period is
+  instant — it re-filters the already-extracted transactions and never re-runs
+  the LLM.
 - **Caches results** per user so the dashboard opens instantly after the first
   run. It only re-runs the extraction when your receipt set changes or you press
   **Rescan inbox**.
@@ -31,7 +36,9 @@ merchants and a full transaction table.
 1. Click the **Spend** button in the header. The dashboard opens in a new tab.
 2. On first load it analyzes your receipts (this can take a moment). Later loads
    are served from cache.
-3. Use **Rescan inbox** to force a fresh extraction after new receipts arrive.
+3. Use the **Period** dropdown to filter by time duration (defaults to Last 12
+   months).
+4. Use **Rescan inbox** to force a fresh extraction after new receipts arrive.
 
 ## Categories
 
@@ -48,8 +55,9 @@ Travel, Transportation, Subscriptions, Utilities, Entertainment, Health, Other.
 
 ## Endpoints
 
-- `GET /api/spend-dashboard/summary` — returns aggregated spend data
-  (`?refresh=1` forces re-extraction).
+- `GET /api/spend-dashboard/summary` — returns aggregated spend data.
+  - `?range=` filters by period: `30d`, `90d`, `6m`, `12m` (default), `ytd`, `all`.
+  - `?refresh=1` forces re-extraction.
 - `GET /spend-dashboard` — the dashboard page.
 
 ## Notes & limits

@@ -338,8 +338,57 @@ module.exports = {
       return transactions;
     }
 
+    // Resolve a time-duration filter key into a cutoff timestamp + chart window.
+    function resolveRange(rangeKey) {
+      let key = safeStr(rangeKey).toLowerCase() || '12m';
+      const now = new Date();
+      let sinceMs = null;
+      let chartMonths = 12;
+      let label = 'Last 12 months';
+      switch (key) {
+        case '30d':
+          sinceMs = now.getTime() - 30 * 86400000; chartMonths = 2; label = 'Last 30 days'; break;
+        case '90d':
+          sinceMs = now.getTime() - 90 * 86400000; chartMonths = 4; label = 'Last 90 days'; break;
+        case '6m':
+          sinceMs = Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 5, 1); chartMonths = 6; label = 'Last 6 months'; break;
+        case '12m':
+          sinceMs = Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 11, 1); chartMonths = 12; label = 'Last 12 months'; break;
+        case 'ytd':
+          sinceMs = Date.UTC(now.getUTCFullYear(), 0, 1); chartMonths = now.getUTCMonth() + 1; label = 'Year to date'; break;
+        case 'all':
+          sinceMs = null; chartMonths = 0; label = 'All time'; break;
+        default:
+          key = '12m';
+          sinceMs = Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 11, 1); chartMonths = 12; label = 'Last 12 months';
+      }
+      return { key, sinceMs, chartMonths, label };
+    }
+
+    // Keep only transactions on/after the range cutoff (all time = keep all).
+    function filterByRange(transactions, range) {
+      if (range.sinceMs == null) return transactions.slice();
+      return transactions.filter(t => {
+        const ms = new Date(t.date || 0).getTime();
+        return Number.isFinite(ms) && ms > 0 && ms >= range.sinceMs;
+      });
+    }
+
+    // Ordered list of 'YYYY-MM' keys ending at the current month.
+    function buildMonthsList(chartMonths) {
+      const months = [];
+      const now = new Date();
+      const span = Math.max(1, chartMonths);
+      for (let i = span - 1; i >= 0; i--) {
+        const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - i, 1));
+        months.push(monthKey(d));
+      }
+      return months;
+    }
+
     // Roll up transactions into the numbers the dashboard renders.
-    function aggregate(transactions) {
+    // monthsList is the ordered set of 'YYYY-MM' buckets to display.
+    function aggregate(transactions, monthsList) {
       const currencyCounts = {};
       transactions.forEach(t => {
         if (t.currency) currencyCounts[t.currency] = (currencyCounts[t.currency] || 0) + 1;
@@ -373,18 +422,12 @@ module.exports = {
         if (mk) byMonth[mk] = (byMonth[mk] || 0) + t.amount;
       });
 
-      // Build a continuous 12-month window ending this month.
-      const months = [];
-      const now = new Date();
-      for (let i = 11; i >= 0; i--) {
-        const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - i, 1));
-        const m = d.getUTCMonth() + 1;
-        const key = `${d.getUTCFullYear()}-${m < 10 ? '0' + m : m}`;
-        months.push({ month: key, total: Math.round((byMonth[key] || 0) * 100) / 100 });
-      }
-
+      // Build the requested month window (bucket totals default to 0).
       const round = (n) => Math.round(n * 100) / 100;
-
+      const months = (Array.isArray(monthsList) ? monthsList : []).map(key => ({
+        month: key,
+        total: round(byMonth[key] || 0)
+      }));
       return {
         totalSpend: round(total),
         transactionCount: transactions.length,
@@ -410,7 +453,7 @@ module.exports = {
       return `${count}:${latest}`;
     }
 
-    async function buildSummary(userEmail, forceRefresh) {
+    async function buildSummary(userEmail, forceRefresh, rangeKey) {
       const emails = await loadInboxEmails(userEmail);
       const candidates = emails
         .filter(looksLikeReceipt)
@@ -418,45 +461,74 @@ module.exports = {
 
       const signature = computeSignature(candidates);
 
+      // Obtain the full (unfiltered) transaction set: reuse cache when the
+      // underlying receipt set is unchanged, otherwise re-extract via the LLM.
+      let transactions = null;
+      let updatedAt = null;
+
       if (!forceRefresh) {
         try {
           const cached = await getUserDoc('spend_dashboard_data', userEmail);
-          if (cached && cached.signature === signature && cached.aggregates) {
-            return {
-              ...cached,
-              cached: true,
-              candidateCount: candidates.length
-            };
+          if (cached && cached.signature === signature && Array.isArray(cached.transactions)) {
+            transactions = cached.transactions;
+            updatedAt = cached.updatedAt || null;
           }
         } catch (_) {}
       }
 
-      const transactions = await extractTransactions(candidates);
-      // Newest transactions first for the table.
-      transactions.sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
-      const aggregates = aggregate(transactions);
+      const fromCache = transactions !== null;
 
-      const payload = {
-        transactions,
-        aggregates,
-        signature,
-        candidateCount: candidates.length,
-        updatedAt: new Date().toISOString(),
-        cached: false
-      };
-
-      try {
-        await setUserDoc('spend_dashboard_data', userEmail, {
-          transactions,
-          aggregates,
-          signature,
-          updatedAt: payload.updatedAt
-        });
-      } catch (error) {
-        console.error('Spend Dashboard: failed to cache results:', error?.message || error);
+      if (!fromCache) {
+        transactions = await extractTransactions(candidates);
+        // Newest transactions first for the table.
+        transactions.sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
+        updatedAt = new Date().toISOString();
+        try {
+          await setUserDoc('spend_dashboard_data', userEmail, {
+            transactions,
+            signature,
+            updatedAt
+          });
+        } catch (error) {
+          console.error('Spend Dashboard: failed to cache results:', error?.message || error);
+        }
       }
 
-      return payload;
+      // Apply the requested time-duration filter, then aggregate.
+      const range = resolveRange(rangeKey);
+      const filtered = filterByRange(transactions, range);
+
+      let chartMonths = range.chartMonths;
+      if (range.key === 'all') {
+        // Size the "all time" chart to span from the earliest transaction to now.
+        let earliest = null;
+        filtered.forEach(t => {
+          const ms = new Date(t.date || 0).getTime();
+          if (Number.isFinite(ms) && ms > 0) earliest = earliest == null ? ms : Math.min(earliest, ms);
+        });
+        if (earliest == null) {
+          chartMonths = 1;
+        } else {
+          const now = new Date();
+          const e = new Date(earliest);
+          const span = (now.getUTCFullYear() - e.getUTCFullYear()) * 12 + (now.getUTCMonth() - e.getUTCMonth()) + 1;
+          chartMonths = Math.min(24, Math.max(1, span));
+        }
+      }
+
+      const monthsList = buildMonthsList(chartMonths);
+      const aggregates = aggregate(filtered, monthsList);
+
+      return {
+        transactions: filtered,
+        aggregates,
+        range: range.key,
+        rangeLabel: range.label,
+        totalTransactionCount: transactions.length,
+        candidateCount: candidates.length,
+        updatedAt,
+        cached: fromCache
+      };
     }
 
     // --- API: aggregated spend summary ---
@@ -464,7 +536,7 @@ module.exports = {
       try {
         const user = getCurrentUser();
         const forceRefresh = safeStr(req.query.refresh) === '1' || safeStr(req.query.refresh) === 'true';
-        const data = await buildSummary(user, forceRefresh);
+        const data = await buildSummary(user, forceRefresh, req.query.range);
         return res.json({ success: true, data });
       } catch (error) {
         console.error('Spend Dashboard: summary failed:', error);
@@ -490,6 +562,8 @@ module.exports = {
     .sub { color:#5f6368; font-size:13px; margin-top:4px; }
     .btn { border:1px solid #dadce0; border-radius:18px; background:#fff; color:#1f1f1f; padding:8px 14px; cursor:pointer; font-size:13px; }
     .btn:hover { background:#f1f3f4; }
+    .controls { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+    .range-select { border:1px solid #dadce0; border-radius:18px; background:#fff; color:#1f1f1f; padding:8px 12px; cursor:pointer; font-size:13px; }
     .cards { display:grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap:14px; margin-bottom:20px; }
     .stat { background:#fff; border:1px solid #e5e9ef; border-radius:12px; padding:16px 18px; }
     .stat .label { color:#5f6368; font-size:12px; text-transform:uppercase; letter-spacing:.4px; }
@@ -523,7 +597,18 @@ module.exports = {
         <div class="title">Spend Dashboard</div>
         <div class="sub" id="subline">Spending extracted from receipts &amp; order confirmations in your inbox.</div>
       </div>
-      <button id="refreshBtn" class="btn">Rescan inbox</button>
+      <div class="controls">
+        <label for="rangeSelect" class="muted">Period:</label>
+        <select id="rangeSelect" class="range-select" aria-label="Time period">
+          <option value="30d">Last 30 days</option>
+          <option value="90d">Last 90 days</option>
+          <option value="6m">Last 6 months</option>
+          <option value="12m" selected>Last 12 months</option>
+          <option value="ytd">Year to date</option>
+          <option value="all">All time</option>
+        </select>
+        <button id="refreshBtn" class="btn">Rescan inbox</button>
+      </div>
     </div>
     <div id="content" class="empty">Analyzing receipts in your inbox&hellip; this can take a moment on first run.</div>
   </div>
@@ -532,6 +617,7 @@ module.exports = {
     var content = document.getElementById('content');
     var refreshBtn = document.getElementById('refreshBtn');
     var subline = document.getElementById('subline');
+    var rangeSelect = document.getElementById('rangeSelect');
 
     function esc(v) {
       return String(v == null ? '' : v).replace(/[&<>"']/g, function (s) {
@@ -590,11 +676,17 @@ module.exports = {
       var agg = data.aggregates || {};
       var tx = data.transactions || [];
       var cur = agg.primaryCurrency || 'USD';
+      var rangeLabel = data.rangeLabel || 'Selected period';
 
       if (!tx.length) {
         content.className = 'empty';
-        content.innerHTML = 'No receipts detected in your inbox yet.<br><span class="muted">Scanned ' +
-          esc(data.candidateCount || 0) + ' receipt-like email(s).</span>';
+        if (!data.totalTransactionCount) {
+          content.innerHTML = 'No receipts detected in your inbox yet.<br><span class="muted">Scanned ' +
+            esc(data.candidateCount || 0) + ' receipt-like email(s).</span>';
+        } else {
+          content.innerHTML = 'No spending found for <strong>' + esc(rangeLabel) + '</strong>.<br>' +
+            '<span class="muted">' + esc(data.totalTransactionCount) + ' transaction(s) exist in other periods \u2014 try a wider range.</span>';
+        }
         return;
       }
 
@@ -613,7 +705,7 @@ module.exports = {
         '<div class="stat"><div class="label">Categories</div><div class="value">' + esc((agg.byCategory || []).length) + '</div></div>' +
         '</div>';
 
-      html += '<div class="panel"><h2>Spend by month (last 12 months)</h2>' + monthChart(agg.byMonth || [], cur) + '</div>';
+      html += '<div class="panel"><h2>Spend by month (' + esc(rangeLabel) + ')</h2>' + monthChart(agg.byMonth || [], cur) + '</div>';
 
       html += '<div class="panel"><h2>Spend by category</h2>' + barRows(agg.byCategory || [], cur) + '</div>';
 
@@ -629,16 +721,20 @@ module.exports = {
           '</tr>';
       }).join('');
 
-      html += '<div class="panel"><h2>All transactions (' + esc(tx.length) + ')</h2>' +
+      html += '<div class="panel"><h2>Transactions (' + esc(tx.length) + ') \u2014 ' + esc(rangeLabel) + '</h2>' +
         '<table><thead><tr><th>Date</th><th>Merchant</th><th>Category</th><th>Email</th><th class="amt">Amount</th></tr></thead>' +
         '<tbody>' + rows + '</tbody></table></div>';
 
       content.innerHTML = html;
 
       if (data.updatedAt) {
-        subline.innerHTML = 'Spending extracted from receipts &amp; order confirmations in your inbox. Last updated ' +
+        subline.innerHTML = 'Showing <strong>' + esc(rangeLabel) + '</strong>. Last updated ' +
           esc(fmtDate(data.updatedAt)) + (data.cached ? ' (cached)' : '') + '.';
       }
+    }
+
+    function currentRange() {
+      return rangeSelect ? rangeSelect.value : '12m';
     }
 
     function load(refresh) {
@@ -647,7 +743,10 @@ module.exports = {
         ? 'Rescanning your inbox for receipts\u2026 this can take a moment.'
         : 'Analyzing receipts in your inbox\u2026 this can take a moment on first run.';
       refreshBtn.disabled = true;
-      var url = '/api/spend-dashboard/summary' + (refresh ? '?refresh=1' : '');
+      if (rangeSelect) rangeSelect.disabled = true;
+      var params = 'range=' + encodeURIComponent(currentRange());
+      if (refresh) params += '&refresh=1';
+      var url = '/api/spend-dashboard/summary?' + params;
       fetch(url)
         .then(function (r) { return r.json(); })
         .then(function (d) {
@@ -658,10 +757,14 @@ module.exports = {
           content.className = 'empty';
           content.textContent = 'Failed to load spend data. Please try again.';
         })
-        .finally(function () { refreshBtn.disabled = false; });
+        .finally(function () {
+          refreshBtn.disabled = false;
+          if (rangeSelect) rangeSelect.disabled = false;
+        });
     }
 
     refreshBtn.addEventListener('click', function () { load(true); });
+    if (rangeSelect) rangeSelect.addEventListener('change', function () { load(false); });
     load(false);
   </script>
 </body>
