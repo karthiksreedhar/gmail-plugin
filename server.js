@@ -5751,10 +5751,28 @@ async function runAutoSyncForAllUsers(reason = 'interval') {
       const j = Math.floor(Math.random() * (i + 1));
       [users[i], users[j]] = [users[j], users[i]];
     }
+
+    // Progress goes to Mongo, not just memory: on serverless every instance
+    // has its own memory and dies unobserved, so a killed run leaves no trace.
+    // A run that never flips this doc to 'done' IS the evidence it was cut off
+    // (and shows exactly how many users it got through).
+    const runStartedAt = new Date();
+    const reportProgress = async (fields) => {
+      try {
+        await getDb().collection('system_status').updateOne(
+          { _id: 'auto-sync' },
+          { $set: { reason, startedAt: runStartedAt, ...fields } },
+          { upsert: true }
+        );
+      } catch (_) {}
+    };
+    await reportProgress({ status: 'running', usersTotal: users.length, usersProcessed: 0, finishedAt: null });
+
     const results = [];
     for (const userEmail of users) {
       const out = await syncUserInboxFromGmail(userEmail, { forceBackfill: false });
       results.push(out);
+      await reportProgress({ usersProcessed: results.length, lastUser: userEmail });
     }
     const added = results.reduce((sum, r) => sum + (Number(r?.added) || 0), 0);
     const failedResults = results.filter(r => !r?.success);
@@ -5771,6 +5789,14 @@ async function runAutoSyncForAllUsers(reason = 'interval') {
       failures,
       timestamp: new Date().toISOString()
     };
+    await reportProgress({
+      status: 'done',
+      finishedAt: new Date(),
+      durationMs: Date.now() - runStartedAt.getTime(),
+      added,
+      failed,
+      failures
+    });
     if (failures.length) {
       failures.forEach(f => console.error(`[AutoSync] user=${f.userEmail} failed: ${f.reason}`));
     }
