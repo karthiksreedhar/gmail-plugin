@@ -304,33 +304,10 @@ function setupEventListeners() {
 }
 
 // Set mode (chat or generate)
-// Each mode keeps its own conversation. Switching swaps the whole thread in
-// and out of the DOM, so flipping modes never buries or interleaves either
-// conversation -- it costs nothing to go look and come back.
-const modeThreads = { chat: null, generate: null };
-
-function stashCurrentThread(mode) {
-  if (!chatMessages || !mode) return;
-  const frag = document.createDocumentFragment();
-  while (chatMessages.firstChild) frag.appendChild(chatMessages.firstChild);
-  modeThreads[mode] = frag;
-}
-
-function restoreThread(mode) {
-  if (!chatMessages) return;
-  const frag = modeThreads[mode];
-  if (frag && frag.childNodes.length) {
-    chatMessages.appendChild(frag);
-    modeThreads[mode] = null;
-    chatMessages.scrollTop = chatMessages.scrollHeight;
-  } else {
-    addMessage('assistant', WELCOME_MESSAGES[mode]);
-  }
-}
-
 function setMode(mode) {
-  const previousMode = currentMode;
-  if (previousMode && previousMode !== mode) stashCurrentThread(previousMode);
+  // One session, one conversation: both modes write into the same thread
+  // (matching the server, where email-chat and generation turns share the
+  // session's chatHistory). Switching only changes which engine answers.
   currentMode = mode;
   localStorage.setItem('featureGeneratorMode', mode);
   
@@ -379,8 +356,8 @@ function setMode(mode) {
 
   updateCreatePrButton();
 
-  // Bring back this mode's own conversation (or greet if it has none).
-  if (previousMode !== mode || chatMessages.children.length === 0) restoreThread(mode);
+  // Greet only a brand-new, empty conversation.
+  if (chatMessages.children.length === 0) addMessage('assistant', WELCOME_MESSAGES[mode]);
 }
 
 function renderExistingFeaturesDropdown() {
