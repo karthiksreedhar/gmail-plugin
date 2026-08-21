@@ -2096,7 +2096,11 @@ async function updateEmailCategory(emailId, newCategory, oldCategory) {
                             <button class="reply-thread-btn" onclick="replyToCurrentThread()">Reply</button>
                         </div>
                         <div class="thread-body">
-                            <div class="loading">Loading thread...</div>
+                            <div class="loading">Loading thread...
+                                <div class="thread-load-skip" style="display:none; margin-top:10px;">
+                                    <a href="#" onclick="window.__skipLiveThreadLoad && window.__skipLiveThreadLoad(); return false;">Taking a while — load basic view now</a>
+                                </div>
+                            </div>
                         </div>
                     `;
                 }
@@ -2105,18 +2109,36 @@ async function updateEmailCategory(emailId, newCategory, oldCategory) {
                 let messages = null;
                 let finalSubject = subject;
 
-                // Try Gmail full thread by message id first
+                // Try the live Gmail thread first: one server round trip that
+                // returns text, HTML, and attachments for every message. It is
+                // abortable -- after 2.5s a "load basic view now" link appears,
+                // and at 8s we give up automatically. Either way the stored
+                // thread renders instead, so a slow Gmail moment costs patience,
+                // never a blank pane.
                 try {
-                    const g = await fetch(`/api/gmail-thread-by-message/${encodeURIComponent(emailId)}`);
-                    const gd = await g.json().catch(() => ({}));
-                    if (g.ok && gd && gd.success && Array.isArray(gd.messages) && gd.messages.length) {
-                        messages = gd.messages;
-                        if (gd.thread && gd.thread.subject) {
-                            finalSubject = gd.thread.subject || finalSubject;
+                    const controller = new AbortController();
+                    window.__skipLiveThreadLoad = () => controller.abort();
+                    const skipTimer = setTimeout(() => {
+                        const skipEl = threadPane && threadPane.querySelector('.thread-load-skip');
+                        if (skipEl) skipEl.style.display = 'block';
+                    }, 2500);
+                    const hardTimer = setTimeout(() => controller.abort(), 8000);
+                    try {
+                        const g = await fetch(`/api/gmail-thread-by-message/${encodeURIComponent(emailId)}`, { signal: controller.signal });
+                        const gd = await g.json().catch(() => ({}));
+                        if (g.ok && gd && gd.success && Array.isArray(gd.messages) && gd.messages.length) {
+                            messages = gd.messages;
+                            if (gd.thread && gd.thread.subject) {
+                                finalSubject = gd.thread.subject || finalSubject;
+                            }
                         }
+                    } finally {
+                        clearTimeout(skipTimer);
+                        clearTimeout(hardTimer);
+                        window.__skipLiveThreadLoad = null;
                     }
                 } catch (_) {
-                    // ignore and fall back
+                    // aborted or failed: fall back to the stored thread below
                 }
 
                 // Fallback to stored thread construction
@@ -2388,6 +2410,10 @@ async function updateEmailCategory(emailId, newCategory, oldCategory) {
             const safeSubject = (typeof escapeHtml === 'function') ? escapeHtml(subject || 'Email Thread') : (subject || 'Email Thread');
             const sorted = (Array.isArray(messages) ? messages.slice() : []).sort((a,b) => new Date(a.date) - new Date(b.date));
             const lastIdx = sorted.length - 1;
+            // HTML bodies that arrived inline with the live thread; applied
+            // right after the cards land in the DOM (they must be inserted via
+            // sanitizeIncomingEmailHtml, never through the template string).
+            const pendingInlineHtml = [];
             const cards = sorted.map((m, idx) => {
                 const toListRaw = Array.isArray(m.to) ? m.to.join(', ') : (m.to || '');
                 const toList = maskTextEmailsForPrivacy(toListRaw);
@@ -2415,11 +2441,15 @@ async function updateEmailCategory(emailId, newCategory, oldCategory) {
                 const bodyHtml = `<div id="${htmlSlotId}">${plainBody}</div>${truncNotice}`;
                 // The last message is the one the composer replies to.
                 if (idx === lastIdx) m.__isPrimaryMessage = true;
-                // Always restore, not just when we know there is something to
-                // get. Records synced before attachment parsing existed carry
-                // no `attachments` at all, so "fetch only if we already know"
-                // would leave every old email looking like it had none.
-                scheduleBodyRestore(htmlSlotId, m);
+                // Live-thread messages arrive with html and attachments inline
+                // (m.html !== undefined) and need no follow-up requests. Only
+                // stored-fallback messages schedule a Gmail restore -- those
+                // may be truncated or predate attachment parsing.
+                if (typeof m.html === 'string') {
+                    if (m.html) pendingInlineHtml.push({ slotId: htmlSlotId, html: m.html });
+                } else {
+                    scheduleBodyRestore(htmlSlotId, m);
+                }
                 const attachmentsHtml = `<div id="${htmlSlotId}_att">${renderMessageAttachments(m)}</div>`;
                 const senderName = (m.from || 'Unknown Sender').split('<')[0].trim() || 'Unknown Sender';
                 const initial = senderName.charAt(0).toUpperCase() || '?';
@@ -2470,6 +2500,14 @@ async function updateEmailCategory(emailId, newCategory, oldCategory) {
                     <div id="inlineReplyCompose" class="inline-compose" style="display:none; margin-top: 12px;"></div>
                 </div>
             `;
+            // Swap plain text for the sanitized inline HTML the live fetch
+            // already delivered -- zero additional requests.
+            pendingInlineHtml.forEach(({ slotId, html }) => {
+                const slot = document.getElementById(slotId);
+                if (!slot) return;
+                slot.className = 'msg-html-body';
+                slot.innerHTML = sanitizeIncomingEmailHtml(html);
+            });
             // Render email notes preview box for this thread
             try {
                 const __tnp = threadPane.querySelector('#thread-notes-preview');

@@ -2189,6 +2189,34 @@ function fallbackHeuristicClean(emailBody) {
   return s;
 }
 
+// Display-time trim of quoted history from a reply, without the LLM round
+// trip cleanResponseBody costs. Conservative by design: it only cuts at
+// unambiguous markers, and if the result would be empty it returns the
+// original text untouched.
+function stripQuotedReplyHistory(text) {
+  const body = String(text || '');
+  if (!body.trim()) return body;
+  const markers = [
+    /^On .{4,80} wrote:\s*$/m,
+    /^-{2,}\s*Original Message\s*-{2,}/mi,
+    /^Begin forwarded message:/mi,
+    /^From:\s.+\n(Sent|Date):\s/mi,
+    /^_{10,}\s*$/m
+  ];
+  let cutAt = -1;
+  for (const re of markers) {
+    const match = body.match(re);
+    if (match && match.index > 0 && (cutAt === -1 || match.index < cutAt)) {
+      cutAt = match.index;
+    }
+  }
+  let candidate = cutAt > 0 ? body.slice(0, cutAt) : body;
+  // Drop trailing fully-quoted lines ("> ...") left above the marker.
+  candidate = candidate.replace(/(\n>[^\n]*)+\s*$/g, '');
+  const trimmed = candidate.trim();
+  return trimmed.length > 0 ? candidate.trimEnd() : body;
+}
+
 async function cleanResponseBody(emailBody) {
   try {
     if (typeof emailBody !== 'string' || !emailBody) return emailBody;
@@ -4746,6 +4774,14 @@ async function buildGmailClientForUser(userEmail) {
   // Best-effort token refresh. If refresh fails, caller treats this user as skipped.
   try {
     await auth.getAccessToken();
+    // Persist a refreshed access token. Without this, the refreshed token was
+    // discarded and EVERY Gmail-backed request paid a full OAuth refresh round
+    // trip to Google -- one of the reasons opening a thread felt so slow.
+    const current = auth.credentials || {};
+    if (current.access_token && current.access_token !== tokens.access_token) {
+      saveStoredTokensForUser(normalizedEmail, { ...tokens, ...current })
+        .catch(err => console.warn(`[Auth] Failed to persist refreshed token for ${normalizedEmail}:`, err?.message || err));
+    }
   } catch (e) {
     return { gmailClient: null, reason: `token_invalid:${e?.message || 'unknown'}` };
   }
@@ -6686,33 +6722,52 @@ app.get('/api/gmail-thread-by-message/:id', async (req, res) => {
       return res.status(404).json({ success: false, error: 'Thread not found for this message' });
     }
 
-    // Fetch the entire thread
-    const threadResp = await gmailClient.users.threads.get({
-      userId: 'me',
-      id: threadId
-    });
+    // One threads.get carries every message's full payload. The old code
+    // ignored those payloads and re-fetched each message individually, then
+    // ran an LLM "reply cleaner" on every user-authored message -- so a long
+    // thread cost a dozen Gmail round trips plus several sequential model
+    // calls before the pane could render. Everything below comes from this
+    // single response.
+    const threadResp = await withTimeout(
+      gmailClient.users.threads.get({ userId: 'me', id: threadId, format: 'full' }),
+      AUTO_SYNC_GMAIL_CALL_TIMEOUT_MS,
+      'gmail_thread_get_for_view'
+    );
     const rawMessages = threadResp?.data?.messages || [];
 
     // Identify "me" for response detection
     const me = userEmail.toLowerCase();
 
-    // Build normalized message objects
     const out = [];
     for (const m of rawMessages) {
       try {
-        const data = await getGmailEmail(m.id, gmailClient);
-        const toArr = (data.to || '').split(',').map(e => e.trim()).filter(Boolean);
-        const lowerFrom = (data.from || '').toLowerCase();
-        const isResp = lowerFrom.includes(me);
-        const cleanedBody = isResp ? await cleanResponseBody(data.body) : data.body;
+        const headers = m?.payload?.headers || [];
+        const header = (name) => headers.find(h => h.name && h.name.toLowerCase() === name.toLowerCase())?.value || '';
+        const from = header('From') || 'Unknown Sender';
+        const toRaw = header('To') || '';
+        const toArr = toRaw.split(',').map(e => e.trim()).filter(Boolean);
+        const internalMs = Number(m.internalDate || 0);
+        const date = internalMs > 0 ? new Date(internalMs).toISOString() : (header('Date') || new Date().toISOString());
+        const isResp = from.toLowerCase().includes(me);
+        const text = extractEmailBody(m.payload) || '';
+        const html = extractHtmlBodyFromPayload(m.payload) || '';
+
+        // Quoted-history trim for the user's own replies: cheap and local.
+        // Display-only -- the full text is still what Gmail holds.
+        const cleanedBody = isResp ? stripQuotedReplyHistory(text) : text;
 
         out.push({
-          id: data.id,
-          from: data.from,
-          to: toArr.length ? toArr : [data.to || 'Unknown Recipient'],
-          date: data.date,
-          subject: data.subject,
+          id: m.id,
+          gmailMessageId: m.id,
+          from,
+          to: toArr.length ? toArr : [toRaw || 'Unknown Recipient'],
+          date,
+          subject: header('Subject') || 'No Subject',
           body: cleanedBody,
+          // Inline so the pane renders rich content with ZERO follow-up calls.
+          html,
+          hasHtml: !!html,
+          attachments: extractAttachmentsFromPayload(m.payload),
           isResponse: !!isResp
         });
       } catch (e) {
