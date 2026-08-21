@@ -280,6 +280,10 @@ function setupEventListeners() {
   if (rhsTemplateCancelBtn) rhsTemplateCancelBtn.addEventListener('click', closeResponseTemplatePanel);
   if (rhsTemplateSaveBtn) rhsTemplateSaveBtn.addEventListener('click', saveSelectedResponseTemplates);
 
+  const sessionHistoryBtn = document.getElementById('sessionHistoryBtn');
+  if (sessionHistoryBtn) {
+    sessionHistoryBtn.addEventListener('click', toggleSessionHistoryDrawer);
+  }
   if (loadExistingFeatureBtn) {
     loadExistingFeatureBtn.disabled = true;
     loadExistingFeatureBtn.addEventListener('click', handleLoadExistingFeature);
@@ -936,8 +940,9 @@ async function handleNewSession() {
     }
   }
   
-  // Clear current session on server
-  if (sessionId) {
+  // The old session stays in Mongo so the History drawer can resume it;
+  // deleting it here is what used to make history impossible.
+  if (false && sessionId) {
     try {
       await fetch(`/api/session/${sessionId}`, { method: 'DELETE' });
     } catch (e) {
@@ -1868,6 +1873,72 @@ function addChatPipelineButtons(actions, opts = {}) {
   chatMessages.appendChild(messageDiv);
   scrollToBottom();
   return messageDiv;
+}
+
+// --- Session history drawer ---
+// Slide-in panel listing this user's past sessions (titled by their first
+// message). Clicking one resumes it: the session id goes into localStorage
+// and the page reloads -- initializeSession already restores history, files,
+// and pipeline state from the server.
+function toggleSessionHistoryDrawer() {
+  const existing = document.getElementById('sessionHistoryDrawer');
+  if (existing) { existing.remove(); return; }
+
+  const drawer = document.createElement('div');
+  drawer.id = 'sessionHistoryDrawer';
+  drawer.style.cssText = 'position:fixed; top:0; right:0; bottom:0; width:320px; z-index:1000;' +
+    'background:var(--bg-card); border-left:1px solid var(--border-color);' +
+    'box-shadow:-8px 0 24px rgba(0,0,0,.35); display:flex; flex-direction:column;';
+  drawer.innerHTML = `
+    <div style="display:flex; align-items:center; justify-content:space-between; padding:14px 16px; border-bottom:1px solid var(--border-color);">
+      <strong style="color:var(--text-primary); font-size:14px;">Past sessions</strong>
+      <button id="closeHistoryDrawer" class="chat-chip">✕</button>
+    </div>
+    <div id="sessionHistoryList" style="flex:1; overflow-y:auto; padding:8px;">
+      <div style="color:var(--text-secondary); font-size:13px; padding:14px;">Loading…</div>
+    </div>`;
+  document.body.appendChild(drawer);
+  drawer.querySelector('#closeHistoryDrawer').addEventListener('click', () => drawer.remove());
+
+  const params = new URLSearchParams({
+    userEmail: URL_USER_EMAIL, identityExp: URL_IDENTITY_EXP, identitySig: URL_IDENTITY_SIG
+  });
+  fetch('/api/sessions/list?' + params.toString())
+    .then(r => r.json())
+    .then(data => {
+      const list = drawer.querySelector('#sessionHistoryList');
+      if (!data.success) {
+        list.innerHTML = `<div style="color:var(--text-secondary); font-size:13px; padding:14px;">${data.error || 'Could not load sessions.'}</div>`;
+        return;
+      }
+      if (!data.sessions.length) {
+        list.innerHTML = '<div style="color:var(--text-secondary); font-size:13px; padding:14px;">No past sessions yet.</div>';
+        return;
+      }
+      list.innerHTML = '';
+      data.sessions.forEach(sess => {
+        const isCurrent = sess.sessionId === sessionId;
+        const item = document.createElement('div');
+        item.style.cssText = 'padding:10px 12px; border-radius:8px; cursor:pointer; margin-bottom:2px;' +
+          (isCurrent ? 'background:var(--bg-tertiary);' : '');
+        item.addEventListener('mouseenter', () => { if (!isCurrent) item.style.background = 'var(--bg-secondary)'; });
+        item.addEventListener('mouseleave', () => { if (!isCurrent) item.style.background = ''; });
+        const when = sess.lastAccess ? new Date(sess.lastAccess).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '';
+        item.innerHTML = `
+          <div style="color:var(--text-primary); font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${sess.title.replace(/</g,'&lt;')}</div>
+          <div style="color:var(--text-secondary); font-size:11px; margin-top:2px;">${when}${sess.featureId ? ' · ' + sess.featureId : ''}${isCurrent ? ' · current' : ''}</div>`;
+        item.addEventListener('click', () => {
+          if (isCurrent) { drawer.remove(); return; }
+          localStorage.setItem('featureGeneratorSessionId', sess.sessionId);
+          window.location.reload();
+        });
+        list.appendChild(item);
+      });
+    })
+    .catch(() => {
+      drawer.querySelector('#sessionHistoryList').innerHTML =
+        '<div style="color:var(--text-secondary); font-size:13px; padding:14px;">Could not load sessions.</div>';
+    });
 }
 
 // Quick-reply buttons under a new-feature confirmation question. Clicking

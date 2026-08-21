@@ -21,6 +21,9 @@
       </div>
       <div class="header-center"></div>
       <div class="header-right">
+        <button id="sessionHistoryBtn" class="btn btn-secondary" title="Past sessions">
+          <span>🕘</span> History
+        </button>
         <button id="newSessionBtn" class="btn btn-secondary" title="Start a new session">
           <span>✨</span> New Session
         </button>
@@ -70,17 +73,6 @@
         </div>
 
         <!-- Input Area -->
-        <!-- Contextual bar hugs the composer: feature dropdown in Build,
-             quick-action chips in Chat (inserted here by the script). -->
-        <div id="existingFeatureSelector" class="feature-selector" style="display: none;">
-          <label for="existingFeatureDropdown">Edit existing feature:</label>
-          <select id="existingFeatureDropdown" class="user-dropdown">
-            <option value="">Select a feature...</option>
-          </select>
-          <button id="loadExistingFeatureBtn" class="btn btn-secondary" type="button">
-            Load Feature
-          </button>
-        </div>
         <div class="input-area">
           <div class="input-wrapper">
             <textarea 
