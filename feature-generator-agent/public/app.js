@@ -3223,36 +3223,29 @@ function addCategorySuggestionTrigger() {
   // Check if we're in chat mode and have a user selected
   if (currentMode !== 'chat') return;
   
-  // Add "Suggest Categories" button below user selector
-  let triggerBtn = document.getElementById('categorySuggestionTriggerBtn');
-  if (!triggerBtn) {
-    triggerBtn = document.createElement('button');
-    triggerBtn.id = 'categorySuggestionTriggerBtn';
-    triggerBtn.className = 'btn btn-secondary category-suggestion-trigger';
-    triggerBtn.innerHTML = '<span>📂</span> Suggest Categories for "Other" Emails';
-    triggerBtn.addEventListener('click', triggerCategorySuggestions);
-    
-    // Insert after user selector
+  // Chat-mode quick actions: one compact chip row instead of two stacked
+  // full-width buttons. Small, quiet, out of the way of the conversation.
+  let chipRow = document.getElementById('chatQuickActions');
+  if (!chipRow) {
+    chipRow = document.createElement('div');
+    chipRow.id = 'chatQuickActions';
+    chipRow.style.cssText = 'display:flex; gap:8px; padding:6px 16px; flex-wrap:wrap;';
+    const mkChip = (id, label, onClick) => {
+      const chip = document.createElement('button');
+      chip.id = id;
+      chip.innerHTML = label;
+      chip.style.cssText = 'padding:4px 12px; border-radius:14px; border:1px solid #dadce0; background:#fff; color:#3c4043; cursor:pointer; font-size:12px; line-height:18px;';
+      chip.addEventListener('mouseenter', () => { chip.style.background = '#f1f3f4'; });
+      chip.addEventListener('mouseleave', () => { chip.style.background = '#fff'; });
+      chip.addEventListener('click', onClick);
+      return chip;
+    };
+    chipRow.appendChild(mkChip('categorySuggestionTriggerBtn', '📂 Suggest categories', triggerCategorySuggestions));
+    chipRow.appendChild(mkChip('responseTemplateTriggerBtn', '📝 Response templates', triggerResponseTemplateSuggestions));
     const userSelector = document.getElementById('userSelector');
-    userSelector.parentNode.insertBefore(triggerBtn, userSelector.nextSibling);
+    userSelector.parentNode.insertBefore(chipRow, userSelector.nextSibling);
   }
-  
-  // Show/hide based on mode
-  triggerBtn.style.display = currentMode === 'chat' ? 'block' : 'none';
-
-  // "Surface Response Templates" sits directly below the category button.
-  // UI only for now: the mining backend isn't built yet, so clicking
-  // explains that instead of calling an endpoint.
-  let templateBtn = document.getElementById('responseTemplateTriggerBtn');
-  if (!templateBtn) {
-    templateBtn = document.createElement('button');
-    templateBtn.id = 'responseTemplateTriggerBtn';
-    templateBtn.className = 'btn btn-secondary category-suggestion-trigger response-template-trigger';
-    templateBtn.innerHTML = '<span>📝</span> Surface Response Templates';
-    templateBtn.addEventListener('click', triggerResponseTemplateSuggestions);
-    triggerBtn.parentNode.insertBefore(templateBtn, triggerBtn.nextSibling);
-  }
-  templateBtn.style.display = currentMode === 'chat' ? 'block' : 'none';
+  chipRow.style.display = currentMode === 'chat' ? 'flex' : 'none';
 }
 
 async function triggerResponseTemplateSuggestions() {
@@ -4071,18 +4064,12 @@ setMode = function(mode) {
     }
   }
 
-  // Add category suggestion trigger button in chat mode
+  // Quick-action chips live in one row; the row itself is what toggles.
   if (mode === 'chat') {
     setTimeout(() => addCategorySuggestionTrigger(), 100);
   } else {
-    const triggerBtn = document.getElementById('categorySuggestionTriggerBtn');
-    if (triggerBtn) {
-      triggerBtn.style.display = 'none';
-    }
-    const templateBtn = document.getElementById('responseTemplateTriggerBtn');
-    if (templateBtn) {
-      templateBtn.style.display = 'none';
-    }
+    const chipRow = document.getElementById('chatQuickActions');
+    if (chipRow) chipRow.style.display = 'none';
   }
 };
 
