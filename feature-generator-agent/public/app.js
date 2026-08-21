@@ -97,6 +97,15 @@ function attachIdentity(requestBody) {
 
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
+  // Opened without a signed identity (stale tab, bookmark): warn up front
+  // instead of letting the first generation attempt fail confusingly. A
+  // previously verified session may still work, so this is a hint, not a wall.
+  if (!URL_IDENTITY_SIG && chatMessages) {
+    const note = document.createElement('div');
+    note.style.cssText = 'background:#fef7e0; color:#8a6d1f; padding:8px 14px; font-size:13px; border-bottom:1px solid #f0e6c8;';
+    note.textContent = 'Heads up: this page was opened without a verified identity. If feature building fails, go to the Gmail app tab, refresh it, and use the "Open Feature Generator" button.';
+    document.body.insertBefore(note, document.body.firstChild);
+  }
   initializeSession();
   setupEventListeners();
   initRHSElements();
