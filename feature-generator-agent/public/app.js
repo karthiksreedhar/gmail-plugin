@@ -776,6 +776,7 @@ async function runChatRequest(message) {
             currentDraftSaved = true;
             updateCreatePrButton();
             addMessage('assistant', `Saved feature \`${data.featureId}\` as a draft in the main system.\n\n${draftMsg}\n\nNext step: create a GitHub pull request from this saved draft so it can be reviewed and deployed.`);
+            addChatPipelineButtons([{ label: '🔀 Create pull request', run: handleCreatePr }]);
             showToast('Feature draft saved', 'success');
           } else if (data.draftSave && !data.draftSave.success) {
             const err = data.draftSave.error || 'Draft save failed';
@@ -1064,11 +1065,12 @@ function watchWorkflowCompletion(featureId, stage) {
               : '';
             currentPrRequested = true;
             finish(
-              `✅ The **${stageLabel}** GitHub Action is complete for \`${featureId}\` — the pull request is open.${prLink}\n\nYou can now click **Approve Merge + Deploy** whenever you're ready.`,
+              `✅ The **${stageLabel}** GitHub Action is complete for \`${featureId}\` — the pull request is open.${prLink}\n\nApprove below whenever you're ready.`,
               'PR is open — ready to approve',
               'success',
               'pr_confirmed'
             );
+            addChatPipelineButtons([{ label: '🚀 Approve merge + deploy', run: handleApproveDeploy }]);
             return;
           }
           if (status === 'error') {
@@ -1675,6 +1677,31 @@ function truncateEmail(email) {
     return parts[0].substring(0, 10) + '...@' + parts[1];
   }
   return email;
+}
+
+// Inline pipeline action buttons in the chat, shown at the moment a step is
+// actually ready (draft saved -> Create PR; PR open -> Approve + Deploy).
+// They reuse the same handlers and gate state as the header buttons, so
+// clicking either place is equivalent and gates stay authoritative.
+function addChatPipelineButtons(actions) {
+  const wrap = document.createElement('div');
+  wrap.className = 'chat-pipeline-buttons';
+  wrap.style.cssText = 'display:flex; gap:8px; margin:4px 0 12px 44px; flex-wrap:wrap;';
+  actions.forEach(({ label, run }) => {
+    const btn = document.createElement('button');
+    btn.innerHTML = label;
+    btn.style.cssText = 'padding:7px 16px; border-radius:16px; border:1px solid #1a73e8; background:#1a73e8; color:#fff; cursor:pointer; font-size:13px; font-weight:500;';
+    btn.addEventListener('click', async () => {
+      // One shot: the workflow watcher posts the next step's buttons when
+      // this step actually completes.
+      wrap.querySelectorAll('button').forEach(b => { b.disabled = true; b.style.opacity = '0.5'; });
+      try { await run(); } finally { wrap.remove(); }
+    });
+    wrap.appendChild(btn);
+  });
+  chatMessages.appendChild(wrap);
+  scrollToBottom();
+  return wrap;
 }
 
 // Quick-reply buttons under a new-feature confirmation question. Clicking
