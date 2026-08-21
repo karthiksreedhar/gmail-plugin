@@ -858,7 +858,7 @@ async function runChatRequest(message) {
             addChatPipelineButtons(
               [
                 { label: '🔀 Create pull request', run: handleCreatePr },
-                { label: '✕ Not now', kind: 'dismiss', run: () => {} }
+                { label: '✕ Cancel', kind: 'dismiss', run: () => {} }
               ],
               { title: 'Draft saved — ready for review', text: 'Open a GitHub pull request from this draft so it can be approved and deployed.' }
             );
@@ -1185,7 +1185,7 @@ function watchWorkflowCompletion(featureId, stage) {
             addChatPipelineButtons(
               [
                 { label: '🚀 Approve merge + deploy', run: handleApproveDeploy },
-                { label: '✕ Not now', kind: 'dismiss', run: () => {} }
+                { label: '✕ Cancel', kind: 'dismiss', run: () => {} }
               ],
               { title: 'Pull request is open', text: 'Approving merges it into main and deploys the feature to production.' }
             );
