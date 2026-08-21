@@ -450,7 +450,9 @@
         let allEmails = [];
         let currentFilter = 'all';
         let currentCategoriesOrder = [];
-        const UI_AUTO_SYNC_INTERVAL_MS = 5 * 60 * 1000;
+        // Matches the server-side Vercel cron cadence (vercel.json). This is
+        // the open-tab refresh loop; the cron covers closed tabs.
+        const UI_AUTO_SYNC_INTERVAL_MS = 2 * 60 * 1000;
         let uiAutoSyncTimer = null;
         let uiAutoSyncCountdownTimer = null;
         let uiAutoSyncStatusTimer = null;
@@ -518,7 +520,7 @@ window.__categoryChats = window.__categoryChats || {};
             const banner = document.getElementById('autoSyncBanner');
             if (!banner) return;
             const mergedText = [text, serverAutoSyncStatusText].filter(Boolean).join(' | ');
-            const fallbackText = isAuthenticatedUser ? 'Next update in 5m 00s.' : 'Next update in 5m 00s.';
+            const fallbackText = 'Next update in 2m 00s.';
             const finalText = mergedText || fallbackText;
             if (!finalText) {
                 banner.style.display = 'none';
@@ -644,7 +646,7 @@ window.__categoryChats = window.__categoryChats || {};
                 startUiAutoSyncCountdown();
             } catch (e) {
                 console.error('triggerUiAutoSync failed:', e);
-                updateAutoSyncBanner('Auto update failed. Retrying in 5 minutes.', true);
+                updateAutoSyncBanner('Auto update failed. Retrying in 2 minutes.', true);
             } finally {
                 uiAutoSyncInFlight = false;
             }
@@ -656,7 +658,7 @@ window.__categoryChats = window.__categoryChats || {};
                 updateAutoSyncBanner('');
                 return;
             }
-            updateAutoSyncBanner('Next update in 5m 00s.');
+            updateAutoSyncBanner('Next update in 2m 00s.');
             uiNextSyncAt = Date.now() + UI_AUTO_SYNC_INTERVAL_MS;
             startUiAutoSyncCountdown();
             refreshServerAutoSyncStatus();
