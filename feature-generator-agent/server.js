@@ -1083,6 +1083,41 @@ Respond with ONLY this JSON (no other text):
 
 // API Routes
 
+// List this user's past chat sessions for the history drawer. Identity is
+// the signed handoff (query params); no signature, no list.
+app.get('/api/sessions/list', async (req, res) => {
+  try {
+    const email = verifyIdentitySignature(req.query.userEmail, req.query.identityExp, req.query.identitySig);
+    if (!email) {
+      return res.status(400).json({ success: false, error: 'Identity could not be verified' });
+    }
+    await ensureMongoReady();
+    if (!mongoInitialized) return res.json({ success: true, sessions: [] });
+
+    const docs = await getDb().collection(SESSIONS_COLLECTION)
+      .find({ $or: [{ verifiedActorEmail: email }, { actorEmail: email }] })
+      .sort({ lastAccess: -1 })
+      .limit(30)
+      .project({ chatHistory: { $slice: 2 }, featureId: 1, lastAccess: 1 })
+      .toArray();
+
+    const sessions = docs.map(doc => {
+      const firstUser = (doc.chatHistory || []).find(entry => entry?.role === 'user');
+      return {
+        sessionId: doc._id,
+        title: String(firstUser?.content || '').replace(/\s+/g, ' ').slice(0, 80) || '(empty session)',
+        featureId: doc.featureId || null,
+        lastAccess: doc.lastAccess || null
+      };
+    }).filter(sess => sess.title !== '(empty session)');
+
+    return res.json({ success: true, sessions });
+  } catch (error) {
+    console.error('Session list failed:', error);
+    return res.status(500).json({ success: false, error: 'Failed to list sessions' });
+  }
+});
+
 // Create new session
 app.post('/api/session/new', async (req, res) => {
   const sessionId = uuidv4();
