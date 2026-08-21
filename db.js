@@ -13,10 +13,21 @@ const DB_NAME = process.env.MONGODB_DB || 'gmail_plugin';
 // Pool defaults: 3 connections proved too small — request bursts (registry +
 // emails + notes + feature calls in parallel) exhausted the pool and follow-up
 // writes died with WaitQueueTimeoutError ("Failed to archive" in the UI).
-const MONGODB_MAX_POOL_SIZE = parseInt(process.env.MONGODB_MAX_POOL_SIZE || '10', 10);
+// Pool sizing is environment-dependent. A long-running local server handles
+// many requests concurrently in one process, so it gets a real pool. On
+// Vercel each function instance serves ONE request at a time -- but every warm
+// instance holds its own pool, so total connections = instances x pool size.
+// With a 2-minute cron plus per-tab refresh timers keeping instances warm,
+// a pool of 10 per instance blew through Atlas's connection limit (the
+// "Connections % above 80" alert). A single request needs at most a few
+// parallel Mongo ops (warmCacheForUser fans out reads), so 5 is plenty there,
+// and idle connections are released quickly instead of being held for 30s.
+const IS_SERVERLESS = !!process.env.VERCEL;
+const MONGODB_MAX_POOL_SIZE = parseInt(process.env.MONGODB_MAX_POOL_SIZE || (IS_SERVERLESS ? '5' : '10'), 10);
 const MONGODB_MIN_POOL_SIZE = parseInt(process.env.MONGODB_MIN_POOL_SIZE || '0', 10);
-const MONGODB_MAX_CONNECTING = parseInt(process.env.MONGODB_MAX_CONNECTING || '4', 10);
+const MONGODB_MAX_CONNECTING = parseInt(process.env.MONGODB_MAX_CONNECTING || (IS_SERVERLESS ? '2' : '4'), 10);
 const MONGODB_WAIT_QUEUE_TIMEOUT_MS = parseInt(process.env.MONGODB_WAIT_QUEUE_TIMEOUT_MS || '15000', 10);
+const MONGODB_MAX_IDLE_TIME_MS = parseInt(process.env.MONGODB_MAX_IDLE_TIME_MS || (IS_SERVERLESS ? '10000' : '30000'), 10);
 
 const mongoGlobal = globalThis.__gmailPluginMongo || (globalThis.__gmailPluginMongo = {
   client: null,
@@ -65,7 +76,7 @@ async function initMongo() {
       minPoolSize: Number.isFinite(MONGODB_MIN_POOL_SIZE) && MONGODB_MIN_POOL_SIZE >= 0 ? MONGODB_MIN_POOL_SIZE : 0,
       maxConnecting: Number.isFinite(MONGODB_MAX_CONNECTING) && MONGODB_MAX_CONNECTING > 0 ? MONGODB_MAX_CONNECTING : 2,
       waitQueueTimeoutMS: Number.isFinite(MONGODB_WAIT_QUEUE_TIMEOUT_MS) && MONGODB_WAIT_QUEUE_TIMEOUT_MS > 0 ? MONGODB_WAIT_QUEUE_TIMEOUT_MS : 15000,
-      maxIdleTimeMS: 30000,
+      maxIdleTimeMS: Number.isFinite(MONGODB_MAX_IDLE_TIME_MS) && MONGODB_MAX_IDLE_TIME_MS > 0 ? MONGODB_MAX_IDLE_TIME_MS : 30000,
       connectTimeoutMS: 15000,
       socketTimeoutMS: 20000,
       serverSelectionTimeoutMS: 15000,
@@ -379,6 +390,16 @@ function createMongoSessionStore(session, options = {}) {
     }
 
     touch(sid, sess, callback) {
+      // express-session calls touch on every request. With a 30-day TTL,
+      // bumping expiresAt each time is a wasted Mongo write per request --
+      // meaningful load when serverless instances multiply. Throttle to one
+      // real write per session per 15 minutes; the in-memory map is fine
+      // because losing it (instance recycle) merely causes one extra write.
+      const now = Date.now();
+      this._lastTouch = this._lastTouch || new Map();
+      const last = this._lastTouch.get(sid) || 0;
+      if (now - last < 15 * 60 * 1000) return callback(null);
+      this._lastTouch.set(sid, now);
       this.collection()
         .then(coll => coll.updateOne(
           { _id: sid },
