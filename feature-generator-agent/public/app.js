@@ -1135,7 +1135,6 @@ function watchWorkflowCompletion(featureId, stage) {
   const TIMEOUT_MS = 15 * 60 * 1000;
   const startedAt = Date.now();
   const stageLabel = stage === 'pr' ? 'PR creation' : 'merge + deploy';
-  let mergeAnnounced = false;
   const actionsUrl = 'https://github.com/karthiksreedhar/gmail-plugin/actions';
 
   // nextGate: the workflow gate to move to WHEN the chat confirmation posts —
@@ -1201,29 +1200,18 @@ function watchWorkflowCompletion(featureId, stage) {
             return;
           }
         } else {
-          const deploymentStatus = String(feature.deploymentStatus || '').trim();
-          // Fully live: merged AND the production deployment carrying the
-          // feature is serving. This is the real finish line.
-          if (status === 'deployed' || deploymentStatus === 'deployed') {
+          // Merged is the finish line. Deployment-status tracking proved
+          // unreliable (it batch-updates well after the deploy is live), so
+          // the chat just says the deploy takes a minute rather than keeping
+          // a bubble up that outlives the actual deployment.
+          if (status === 'pr_merged' || status === 'deployed') {
             finish(
-              `🎉 \`${featureId}\` is **merged and deployed** — the feature is live now. Refresh the Gmail app tab to see it.`,
-              'Feature deployed and live',
+              `✅ The PR for \`${featureId}\` was **merged into main**. Production deployment is underway — give it a minute or two, then refresh the Gmail app tab to see the feature live.`,
+              'Merged — deploying now',
               'success',
               'merge_done'
             );
             return;
-          }
-          // Merged but still deploying: say so once, keep the wait bubble up,
-          // and keep watching until the deployment actually completes.
-          if (status === 'pr_merged') {
-            if (!mergeAnnounced) {
-              mergeAnnounced = true;
-              addMessage('assistant', `✅ The PR for \`${featureId}\` was merged into main. Production deployment is underway — I'll confirm here the moment it's live.`);
-              const bubble = pipelineWaitBubbles.get(`${featureId}:merge`);
-              const label = bubble?.div?.querySelector('.loading-header span');
-              if (label) label.textContent = 'Deploying to production';
-            }
-            // fall through to keep polling
           }
           if (status === 'deploy_failed' || status === 'error') {
             finish(
