@@ -365,7 +365,7 @@ body.chat-mode .mode-btn.active[data-mode="chat"] {
 .input-wrapper {
   display: flex;
   gap: 12px;
-  align-items: flex-end;
+  align-items: center;
 }
 
 .input-wrapper textarea {
@@ -2957,8 +2957,8 @@ body.chat-mode .mode-btn.active[data-mode="chat"] {
   border-bottom: 1px solid var(--border-color);
 }
 
-/* Composer controls: mode pill + send below the textbox, left-justified */
-.composer-controls-row { display: flex; align-items: center; justify-content: flex-start; gap: 12px; padding: 10px 2px 0; }
+/* (retired) composer controls row */
+.composer-controls-row { display: none; }
 .composer-mode-toggle { background: var(--bg-tertiary); border-radius: 18px; padding: 3px; gap: 0; }
 .composer-mode-toggle .mode-btn { padding: 7px 18px; font-size: 0.92rem; border-radius: 15px; }
 .composer-mode-toggle .mode-btn span { font-size: 0.92rem; }
