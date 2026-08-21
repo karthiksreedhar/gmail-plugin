@@ -27,6 +27,10 @@ merchants and a full transaction table.
   number, chart and table updates to the selected window. Changing the period is
   instant — it re-filters the already-extracted transactions and never re-runs
   the LLM.
+- **Rearranges to your liking.** Every widget (Overview stats, monthly chart,
+  category breakdown, top merchants, transactions table) can be dragged by its
+  header to reorder the dashboard. Your layout is saved per user and restored on
+  future visits — it survives period changes and inbox rescans.
 - **Caches results** per user so the dashboard opens instantly after the first
   run. It only re-runs the extraction when your receipt set changes or you press
   **Rescan inbox**.
@@ -38,7 +42,9 @@ merchants and a full transaction table.
    are served from cache.
 3. Use the **Period** dropdown to filter by time duration (defaults to Last 12
    months).
-4. Use **Rescan inbox** to force a fresh extraction after new receipts arrive.
+4. Drag any widget by its header to rearrange the dashboard; the order is saved
+   automatically.
+5. Use **Rescan inbox** to force a fresh extraction after new receipts arrive.
 
 ## Categories
 
@@ -58,6 +64,8 @@ Travel, Transportation, Subscriptions, Utilities, Entertainment, Health, Other.
 - `GET /api/spend-dashboard/summary` — returns aggregated spend data.
   - `?range=` filters by period: `30d`, `90d`, `6m`, `12m` (default), `ytd`, `all`.
   - `?refresh=1` forces re-extraction.
+- `GET /api/spend-dashboard/layout` — returns the saved widget order.
+- `POST /api/spend-dashboard/layout` — saves the widget order (`{ order: [...] }`).
 - `GET /spend-dashboard` — the dashboard page.
 
 ## Notes & limits
@@ -65,7 +73,8 @@ Travel, Transportation, Subscriptions, Utilities, Entertainment, Health, Other.
 - Processing is batched at 30 emails per LLM call, up to 5 batches (150 receipts
   max) to stay within token limits.
 - Extracted data lives in the `spend_dashboard_data` MongoDB collection, keyed by
-  user.
+  user. The widget layout is stored separately in `spend_dashboard_layout` so it
+  is never wiped by a rescan.
 - If receipts span multiple currencies, amounts are summed and shown in your most
   common currency with an on-screen warning; convert manually for exact figures.
 - Accuracy depends on the receipt emails themselves — the amount shown is the

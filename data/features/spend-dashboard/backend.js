@@ -45,6 +45,24 @@ module.exports = {
       'Other'
     ];
 
+    // Movable dashboard widgets, in their default order.
+    const KNOWN_WIDGETS = ['stats', 'month', 'category', 'merchants', 'transactions'];
+
+    // Keep only known widget ids (deduped) and ensure every widget stays present.
+    function sanitizeOrder(order) {
+      const seen = new Set();
+      const out = [];
+      (Array.isArray(order) ? order : []).forEach(id => {
+        const s = String(id || '').trim();
+        if (KNOWN_WIDGETS.includes(s) && !seen.has(s)) {
+          seen.add(s);
+          out.push(s);
+        }
+      });
+      KNOWN_WIDGETS.forEach(id => { if (!seen.has(id)) out.push(id); });
+      return out;
+    }
+
     // Heuristic that identifies receipt-like emails before we spend any tokens.
     const RECEIPT_RE = /(receipt|invoice|order\s*(confirmation|#|number|placed|summary)|your order|purchase|payment\s*(received|confirmation|succeeded|success)|thank you for your (order|purchase|payment)|thanks for your (order|purchase)|subscription\s*(renewal|confirmation|receipt)|billing statement|has been charged|amount\s*(charged|paid|due)|transaction\s*(confirmation|receipt)|order\s*total)/i;
     const RECEIPT_SENDER_RE = /(orders?|receipts?|billing|invoices?|payments?|noreply|no-reply)/i;
@@ -544,6 +562,37 @@ module.exports = {
       }
     });
 
+    // --- API: dashboard widget layout (per-user, survives rescans) ---
+    app.get('/api/spend-dashboard/layout', async (req, res) => {
+      try {
+        const user = getCurrentUser();
+        let order = KNOWN_WIDGETS.slice();
+        try {
+          const doc = await getUserDoc('spend_dashboard_layout', user);
+          if (doc && Array.isArray(doc.order)) order = sanitizeOrder(doc.order);
+        } catch (_) {}
+        return res.json({ success: true, order });
+      } catch (error) {
+        console.error('Spend Dashboard: load layout failed:', error);
+        return res.status(500).json({ success: false, error: 'Failed to load layout' });
+      }
+    });
+
+    app.post('/api/spend-dashboard/layout', async (req, res) => {
+      try {
+        const user = getCurrentUser();
+        const order = sanitizeOrder(req.body && req.body.order);
+        await setUserDoc('spend_dashboard_layout', user, {
+          order,
+          updatedAt: new Date().toISOString()
+        });
+        return res.json({ success: true, order });
+      } catch (error) {
+        console.error('Spend Dashboard: save layout failed:', error);
+        return res.status(500).json({ success: false, error: 'Failed to save layout' });
+      }
+    });
+
     // --- Dedicated dashboard page ---
     // NOTE: the client script below deliberately avoids template literals so the
     // outer Node template literal needs no escaping/interpolation.
@@ -564,12 +613,18 @@ module.exports = {
     .btn:hover { background:#f1f3f4; }
     .controls { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
     .range-select { border:1px solid #dadce0; border-radius:18px; background:#fff; color:#1f1f1f; padding:8px 12px; cursor:pointer; font-size:13px; }
-    .cards { display:grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap:14px; margin-bottom:20px; }
-    .stat { background:#fff; border:1px solid #e5e9ef; border-radius:12px; padding:16px 18px; }
+    .hint { color:#5f6368; font-size:12px; margin-bottom:14px; }
+    .cards { display:grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap:14px; }
+    .stat { background:#f8fafd; border:1px solid #e5e9ef; border-radius:12px; padding:16px 18px; }
     .stat .label { color:#5f6368; font-size:12px; text-transform:uppercase; letter-spacing:.4px; }
     .stat .value { font-size:26px; font-weight:700; margin-top:6px; }
-    .panel { background:#fff; border:1px solid #e5e9ef; border-radius:12px; padding:16px 18px; margin-bottom:20px; }
-    .panel h2 { font-size:15px; margin:0 0 14px; color:#3c4043; }
+    .widget { background:#fff; border:1px solid #e5e9ef; border-radius:12px; margin-bottom:16px; overflow:hidden; }
+    .widget.dragging { opacity:.45; outline:2px dashed #1a73e8; }
+    .widget-head { display:flex; align-items:center; gap:8px; padding:11px 16px; border-bottom:1px solid #eef1f4; cursor:grab; background:#fbfcfe; user-select:none; }
+    .widget-head:active { cursor:grabbing; }
+    .grip { color:#9aa0a6; font-size:15px; line-height:1; }
+    .widget-title { font-size:14px; font-weight:600; color:#3c4043; }
+    .widget-body { padding:16px 18px; }
     .bar-row { display:flex; align-items:center; gap:10px; margin-bottom:9px; font-size:13px; }
     .bar-label { width:150px; color:#3c4043; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
     .bar-track { flex:1; background:#eef1f4; border-radius:6px; overflow:hidden; height:18px; }
@@ -610,6 +665,7 @@ module.exports = {
         <button id="refreshBtn" class="btn">Rescan inbox</button>
       </div>
     </div>
+    <div class="hint">Tip: drag a widget by its header to rearrange the dashboard. Your layout is saved automatically.</div>
     <div id="content" class="empty">Analyzing receipts in your inbox&hellip; this can take a moment on first run.</div>
   </div>
 
@@ -618,6 +674,9 @@ module.exports = {
     var refreshBtn = document.getElementById('refreshBtn');
     var subline = document.getElementById('subline');
     var rangeSelect = document.getElementById('rangeSelect');
+
+    var DEFAULT_ORDER = ['stats', 'month', 'category', 'merchants', 'transactions'];
+    var savedOrder = DEFAULT_ORDER.slice();
 
     function esc(v) {
       return String(v == null ? '' : v).replace(/[&<>"']/g, function (s) {
@@ -672,6 +731,14 @@ module.exports = {
       }).join('') + '</div>';
     }
 
+    function widget(id, title, bodyHtml) {
+      return '<section class="widget" data-widget="' + id + '" draggable="false">' +
+        '<div class="widget-head"><span class="grip" aria-hidden="true">\u2630</span>' +
+        '<span class="widget-title">' + esc(title) + '</span></div>' +
+        '<div class="widget-body">' + bodyHtml + '</div>' +
+        '</section>';
+    }
+
     function render(data) {
       var agg = data.aggregates || {};
       var tx = data.transactions || [];
@@ -698,18 +765,12 @@ module.exports = {
           '). Totals below are summed and shown in ' + esc(cur) + '; convert manually for exact figures.</div>';
       }
 
-      html += '<div class="cards">' +
+      var cardsHtml = '<div class="cards">' +
         '<div class="stat"><div class="label">Total Spend</div><div class="value">' + esc(money(agg.totalSpend, cur)) + '</div></div>' +
         '<div class="stat"><div class="label">Transactions</div><div class="value">' + esc(agg.transactionCount || 0) + '</div></div>' +
         '<div class="stat"><div class="label">Merchants</div><div class="value">' + esc(agg.merchantCount || 0) + '</div></div>' +
         '<div class="stat"><div class="label">Categories</div><div class="value">' + esc((agg.byCategory || []).length) + '</div></div>' +
         '</div>';
-
-      html += '<div class="panel"><h2>Spend by month (' + esc(rangeLabel) + ')</h2>' + monthChart(agg.byMonth || [], cur) + '</div>';
-
-      html += '<div class="panel"><h2>Spend by category</h2>' + barRows(agg.byCategory || [], cur) + '</div>';
-
-      html += '<div class="panel"><h2>Top merchants</h2>' + barRows(agg.topMerchants || [], cur) + '</div>';
 
       var rows = tx.map(function (t) {
         return '<tr>' +
@@ -721,16 +782,111 @@ module.exports = {
           '</tr>';
       }).join('');
 
-      html += '<div class="panel"><h2>Transactions (' + esc(tx.length) + ') \u2014 ' + esc(rangeLabel) + '</h2>' +
-        '<table><thead><tr><th>Date</th><th>Merchant</th><th>Category</th><th>Email</th><th class="amt">Amount</th></tr></thead>' +
-        '<tbody>' + rows + '</tbody></table></div>';
+      var tableHtml = '<table><thead><tr><th>Date</th><th>Merchant</th><th>Category</th><th>Email</th><th class="amt">Amount</th></tr></thead>' +
+        '<tbody>' + rows + '</tbody></table>';
+
+      // Each movable widget keyed by a stable id.
+      var widgetsById = {
+        stats: widget('stats', 'Overview', cardsHtml),
+        month: widget('month', 'Spend by month (' + rangeLabel + ')', monthChart(agg.byMonth || [], cur)),
+        category: widget('category', 'Spend by category', barRows(agg.byCategory || [], cur)),
+        merchants: widget('merchants', 'Top merchants', barRows(agg.topMerchants || [], cur)),
+        transactions: widget('transactions', 'Transactions (' + tx.length + ') \u2014 ' + rangeLabel, tableHtml)
+      };
+
+      // Assemble in the saved order, appending any widget not covered.
+      var order = savedOrder.filter(function (id) { return widgetsById[id]; });
+      DEFAULT_ORDER.forEach(function (id) { if (order.indexOf(id) < 0) order.push(id); });
+      var widgetsHtml = order.map(function (id) { return widgetsById[id]; }).join('');
+
+      html += '<div id="widgets">' + widgetsHtml + '</div>';
 
       content.innerHTML = html;
+
+      var container = document.getElementById('widgets');
+      if (container) makeDraggable(container);
 
       if (data.updatedAt) {
         subline.innerHTML = 'Showing <strong>' + esc(rangeLabel) + '</strong>. Last updated ' +
           esc(fmtDate(data.updatedAt)) + (data.cached ? ' (cached)' : '') + '.';
       }
+    }
+
+    // --- Drag-and-drop reordering (HTML5 DnD, no external libraries) ---
+    function getDragAfterElement(container, y) {
+      var els = Array.prototype.slice.call(container.querySelectorAll('.widget:not(.dragging)'));
+      var closest = { offset: -Infinity, element: null };
+      els.forEach(function (child) {
+        var box = child.getBoundingClientRect();
+        var offset = y - box.top - box.height / 2;
+        if (offset < 0 && offset > closest.offset) {
+          closest = { offset: offset, element: child };
+        }
+      });
+      return closest.element;
+    }
+
+    function persistOrder(container) {
+      var ids = Array.prototype.map.call(container.querySelectorAll('.widget'), function (w) {
+        return w.getAttribute('data-widget');
+      });
+      savedOrder = ids.slice();
+      fetch('/api/spend-dashboard/layout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ order: ids })
+      }).catch(function () {});
+    }
+
+    function makeDraggable(container) {
+      var widgets = container.querySelectorAll('.widget');
+      Array.prototype.forEach.call(widgets, function (w) {
+        var head = w.querySelector('.widget-head');
+        if (head) {
+          // Only start a drag when grabbing the header, so table text stays selectable.
+          head.addEventListener('mousedown', function () { w.setAttribute('draggable', 'true'); });
+        }
+        w.addEventListener('dragstart', function (e) {
+          w.classList.add('dragging');
+          if (e.dataTransfer) {
+            e.dataTransfer.effectAllowed = 'move';
+            try { e.dataTransfer.setData('text/plain', w.getAttribute('data-widget') || ''); } catch (_) {}
+          }
+        });
+        w.addEventListener('dragend', function () {
+          w.classList.remove('dragging');
+          w.setAttribute('draggable', 'false');
+          persistOrder(container);
+        });
+      });
+
+      container.addEventListener('dragover', function (e) {
+        e.preventDefault();
+        var dragging = container.querySelector('.dragging');
+        if (!dragging) return;
+        var after = getDragAfterElement(container, e.clientY);
+        if (after == null) container.appendChild(dragging);
+        else container.insertBefore(dragging, after);
+      });
+      container.addEventListener('drop', function (e) { e.preventDefault(); });
+
+      // Reset draggable after a plain click (no drag) so text stays selectable.
+      if (!window.__spendDragMouseup) {
+        window.__spendDragMouseup = true;
+        document.addEventListener('mouseup', function () {
+          var pending = document.querySelectorAll('.widget[draggable="true"]');
+          Array.prototype.forEach.call(pending, function (w) { w.setAttribute('draggable', 'false'); });
+        });
+      }
+    }
+
+    function fetchLayout() {
+      return fetch('/api/spend-dashboard/layout')
+        .then(function (r) { return r.json(); })
+        .then(function (d) {
+          if (d && d.success && Array.isArray(d.order) && d.order.length) savedOrder = d.order;
+        })
+        .catch(function () {});
     }
 
     function currentRange() {
@@ -765,7 +921,8 @@ module.exports = {
 
     refreshBtn.addEventListener('click', function () { load(true); });
     if (rangeSelect) rangeSelect.addEventListener('change', function () { load(false); });
-    load(false);
+    // Load the saved widget order first, then render.
+    fetchLayout().then(function () { load(false); });
   </script>
 </body>
 </html>`);
