@@ -1,5 +1,31 @@
 # Gmail Plugin Setup Instructions
 
+## Required environment variables
+
+These are read from `.env` (or the host's env in production).
+
+| Variable | Required | Purpose |
+| --- | --- | --- |
+| `MONGODB_URI` | yes | Atlas connection string. There is no longer a hardcoded fallback — the server refuses to boot without it. |
+| `MONGODB_DB` | no | Database name (default `gmail_plugin`). |
+| `SESSION_SECRET` | yes in production | Signs session ids and the `user_email` identity cookie. Generate with `openssl rand -hex 32`. Changing it logs everyone out. In production the server refuses to boot without it. |
+| `CRON_SECRET` | yes to use cron | Bearer token required by `/api/cron/auto-sync`. Without it that endpoint always returns 401. |
+| `ANTHROPIC_API_KEY` | yes | Classification and generation. |
+| `OPENAI_API_KEY` | no | Only for embeddings-backed search ranking and the limited classifier. |
+| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` / `GOOGLE_REDIRECT_URI` | yes | Gmail OAuth. Without these, login and all Gmail features are unavailable. |
+| `SESSION_TTL_MS` | no | Session lifetime (default 30 days). |
+| `ONBOARDING_TARGET_EMAILS` | no | Messages loaded on first login (default 500). |
+| `ONBOARDING_CHUNK_SIZE` | no | Messages per onboarding request (default 50, max 200). |
+| `MAX_OUTGOING_ATTACHMENT_BYTES` | no | Outgoing attachment cap (default 25MB). |
+
+### Vercel cron
+
+`/api/cron/auto-sync` is only invoked if a `vercel.json` declares a cron job.
+There is currently no `vercel.json` in the repo, so background sync does not run
+in production — mail is only fetched while a browser tab is open. To enable it,
+add a cron entry and set `CRON_SECRET` in the project's environment.
+
+
 This guide provides complete setup instructions for new users to get the Gmail plugin system running on their own computer.
 
 ## Prerequisites

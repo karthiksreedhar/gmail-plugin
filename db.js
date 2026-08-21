@@ -1,8 +1,13 @@
 const { MongoClient } = require('mongodb');
 require('dotenv').config({ path: ['.env.local', '.env'] });
 
-// Connection string: prefer env, else provided default from user
-const MONGODB_URI = process.env.MONGODB_URI || 'mongodb+srv://ks4190_db_user:pulY33BbK3UQRjKW@please-god.erkorn3.mongodb.net/?appName=please-god';
+// Connection string: required. A hardcoded fallback used to live here, which
+// meant the credentials shipped in git and every checkout pointed at the same
+// production cluster. Fail fast instead so a missing env var is obvious.
+const MONGODB_URI = process.env.MONGODB_URI;
+if (!MONGODB_URI) {
+  throw new Error('MONGODB_URI is required. Set it in .env (see SETUP_INSTRUCTIONS.md).');
+}
 // Database name: prefer env, else sensible default
 const DB_NAME = process.env.MONGODB_DB || 'gmail_plugin';
 // Pool defaults: 3 connections proved too small — request bursts (registry +
@@ -279,8 +284,127 @@ async function getVisibleDeployedFeaturesForUser(userEmail) {
   });
 }
 
+// --- Session store ---
+// express-session's default MemoryStore is per-process. On Vercel that meant
+// every cold start dropped every session, so identity silently fell back to a
+// plaintext cookie. Sessions live in Mongo instead: they survive restarts and
+// are shared across instances. A TTL index expires them server-side.
+const SESSIONS_COLLECTION = 'sessions';
+const DEFAULT_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+
+function createMongoSessionStore(session, options = {}) {
+  const ttlMs = Number.isFinite(options.ttlMs) && options.ttlMs > 0
+    ? options.ttlMs
+    : DEFAULT_SESSION_TTL_MS;
+
+  class MongoSessionStore extends session.Store {
+    constructor() {
+      super();
+      // Kick off index creation once; every operation awaits initMongo anyway.
+      this.indexReady = initMongo()
+        .then(db => db.collection(SESSIONS_COLLECTION).createIndex(
+          { expiresAt: 1 },
+          { expireAfterSeconds: 0 }
+        ))
+        .catch(err => {
+          console.warn('[SessionStore] TTL index creation failed:', err?.message || err);
+        });
+    }
+
+    async collection() {
+      await initMongo();
+      return getDb().collection(SESSIONS_COLLECTION);
+    }
+
+    expiryFor(sess) {
+      const cookieExpires = sess?.cookie?.expires;
+      if (cookieExpires) {
+        const parsed = new Date(cookieExpires);
+        if (!Number.isNaN(parsed.getTime())) return parsed;
+      }
+      return new Date(Date.now() + ttlMs);
+    }
+
+    get(sid, callback) {
+      this.collection()
+        .then(coll => coll.findOne({ _id: sid }))
+        .then(doc => {
+          if (!doc) return callback(null, null);
+          // Mongo's TTL reaper runs about once a minute, so an expired doc can
+          // still be readable. Treat it as absent rather than honoring it.
+          if (doc.expiresAt && doc.expiresAt.getTime() <= Date.now()) {
+            return callback(null, null);
+          }
+          let parsed = null;
+          try {
+            parsed = typeof doc.session === 'string' ? JSON.parse(doc.session) : doc.session;
+          } catch (err) {
+            return callback(null, null);
+          }
+          return callback(null, parsed || null);
+        })
+        .catch(err => {
+          // Erroring here would 500 every request while Mongo is unreachable.
+          // Report "no session" instead and let the signed identity cookie
+          // carry the request.
+          console.warn('[SessionStore] get failed:', err?.message || err);
+          callback(null, null);
+        });
+    }
+
+    set(sid, sess, callback) {
+      let serialized;
+      try {
+        serialized = JSON.stringify(sess);
+      } catch (err) {
+        return callback(err);
+      }
+      this.collection()
+        .then(coll => coll.updateOne(
+          { _id: sid },
+          {
+            $set: {
+              session: serialized,
+              expiresAt: this.expiryFor(sess),
+              updatedAt: new Date()
+            }
+          },
+          { upsert: true }
+        ))
+        .then(() => callback(null))
+        .catch(err => {
+          console.warn('[SessionStore] set failed:', err?.message || err);
+          callback(null);
+        });
+    }
+
+    touch(sid, sess, callback) {
+      this.collection()
+        .then(coll => coll.updateOne(
+          { _id: sid },
+          { $set: { expiresAt: this.expiryFor(sess), updatedAt: new Date() } }
+        ))
+        .then(() => callback(null))
+        .catch(err => {
+          console.warn('[SessionStore] touch failed:', err?.message || err);
+          callback(null);
+        });
+    }
+
+    destroy(sid, callback) {
+      this.collection()
+        .then(coll => coll.deleteOne({ _id: sid }))
+        .then(() => callback(null))
+        .catch(err => callback(err));
+    }
+  }
+
+  return new MongoSessionStore();
+}
+
 module.exports = {
   initMongo,
+  createMongoSessionStore,
   getDb,
   getUserDoc,
   setUserDoc,

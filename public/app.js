@@ -1961,7 +1961,9 @@ async function updateEmailCategory(emailId, newCategory, oldCategory) {
                 const resp = await fetch('/api/search-emails', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ query, limit: 10 })
+                    // Searches the whole mailbox, not just the synced window,
+                    // so Gmail operators like from: and has:attachment work.
+                    body: JSON.stringify({ query, limit: 25, mailboxWide: true })
                 });
                 const data = await resp.json().catch(() => ({}));
 
@@ -1974,9 +1976,18 @@ async function updateEmailCategory(emailId, newCategory, oldCategory) {
                 lastSearchQuery = query;
                 currentFilter = `search:${query}`;
 
-                // Update header and render results in same format
+                // Update header and render results in same format. Say where
+                // the results came from, so "3 in your inbox, 12 elsewhere in
+                // Gmail" is legible rather than a surprising mixed list.
                 const cf = document.getElementById('currentFilter');
-                if (cf) cf.textContent = `Search: "${query}"`;
+                if (cf) {
+                    const mailboxCount = Number(data.mailboxCount) || 0;
+                    const scopeNote = mailboxCount > 0 ? ` — ${mailboxCount} from elsewhere in Gmail` : '';
+                    cf.textContent = `Search: "${query}"${scopeNote}`;
+                }
+                if (data.gmailSearchError) {
+                    console.warn('Mailbox-wide search unavailable:', data.gmailSearchError);
+                }
 
                 displayEmails(results);
                 updateDisplayStats(results);
@@ -2209,6 +2220,150 @@ async function updateEmailCategory(emailId, newCategory, oldCategory) {
         // Render the thread inside the RHS pane (Gmail-like): chronological order,
         // only the newest (last) message expanded by default, earlier ones
         // collapsed to a one-line summary that expands on click.
+        // Restore a message's real body from Gmail after render.
+        //
+        // Two cases, one request:
+        //   - `bodyTruncated`: compaction cut the stored text to stay under
+        //     MongoDB's document limit, so what we rendered is only a prefix.
+        //     The rest exists ONLY in Gmail.
+        //   - `hasHtml`: the message has an HTML alternative, which is never
+        //     stored at all.
+        //
+        // Failures are silent by design: the stored text is already showing and
+        // is correct as far as it goes, so a fetch error should degrade to
+        // "shorter but accurate" rather than disturbing the reader. Truncated
+        // messages get a visible marker instead (see renderThreadInPane).
+        const bodyRestoresInFlight = new Set();
+        function scheduleBodyRestore(slotId, message) {
+            const rawId = String(message.gmailMessageId || message.id || '');
+            const messageId = rawId.startsWith('original-') ? rawId.slice('original-'.length) : rawId;
+            if (!messageId || bodyRestoresInFlight.has(slotId)) return;
+            bodyRestoresInFlight.add(slotId);
+
+            // If the restore fails we must SAY so. Leaving a "restoring…"
+            // notice up forever, or removing it and showing the prefix as if it
+            // were the whole message, both mislead the reader about what they
+            // are looking at.
+            const markRestoreFailed = (reason) => {
+                const notice = document.getElementById(slotId + '_trunc');
+                if (!notice) return;
+                notice.classList.add('failed');
+                notice.textContent = reason === 'auth'
+                    ? 'This message is shortened. Sign in to Gmail again to load the full text.'
+                    : 'This message is shortened and the full text could not be loaded from Gmail right now.';
+            };
+
+            setTimeout(() => {
+                fetch(`/api/message-body/${encodeURIComponent(messageId)}`)
+                    .then(r => {
+                        if (r.status === 401) { markRestoreFailed('auth'); return null; }
+                        if (!r.ok) { markRestoreFailed('error'); return null; }
+                        return r.json();
+                    })
+                    .then(data => {
+                        if (!data || !data.success) return;
+                        const slot = document.getElementById(slotId);
+                        if (!slot) return;
+
+                        if (data.html) {
+                            slot.className = 'msg-html-body';
+                            slot.innerHTML = sanitizeIncomingEmailHtml(data.html);
+                        } else if (data.text) {
+                            slot.className = '';
+                            slot.textContent = data.text;
+                        } else {
+                            markRestoreFailed('error');
+                            return;
+                        }
+
+                        // Full text is in, so the notice no longer applies.
+                        const notice = document.getElementById(slotId + '_trunc');
+                        if (notice && notice.parentNode) notice.parentNode.removeChild(notice);
+
+                        // Keep the reply composer's source text in sync: reply
+                        // generation posts whatever is in #emailBodyInput, and
+                        // drafting from a truncated prefix produces worse replies.
+                        if (data.text && message.__isPrimaryMessage) {
+                            const bodyInput = document.getElementById('emailBodyInput');
+                            if (bodyInput) bodyInput.value = data.text;
+                        }
+                    })
+                    .catch(() => markRestoreFailed('error'))
+                    .finally(() => bodyRestoresInFlight.delete(slotId));
+            }, 0);
+        }
+
+        // Sanitize an incoming HTML email body before it goes into the DOM.
+        // Sender-controlled markup is hostile input: scripts, event handlers,
+        // javascript: URLs and framed content all have to go. Remote images are
+        // left intact (they load as they would in any mail client), but forms
+        // are neutered so nothing can be submitted from our origin.
+        function sanitizeIncomingEmailHtml(html) {
+            const holder = document.createElement('div');
+            holder.innerHTML = String(html || '');
+
+            holder.querySelectorAll('script, iframe, object, embed, link, meta, base, form, input, button, textarea, select')
+                .forEach(node => node.remove());
+
+            holder.querySelectorAll('*').forEach(node => {
+                Array.from(node.attributes).forEach(attr => {
+                    const name = attr.name.toLowerCase();
+                    const value = String(attr.value || '').trim();
+                    if (name.startsWith('on')) { node.removeAttribute(attr.name); return; }
+                    if ((name === 'href' || name === 'src' || name === 'action' || name === 'formaction')
+                        && /^(javascript|data|vbscript):/i.test(value)) {
+                        node.removeAttribute(attr.name);
+                    }
+                });
+                // Anything that survives and navigates should open away from
+                // the app, without handing the opener window to the target.
+                if (node.tagName === 'A' && node.getAttribute('href')) {
+                    node.setAttribute('target', '_blank');
+                    node.setAttribute('rel', 'noopener noreferrer nofollow');
+                }
+            });
+            return holder.innerHTML;
+        }
+
+        function formatAttachmentSize(bytes) {
+            const n = Number(bytes) || 0;
+            if (n <= 0) return '';
+            if (n < 1024) return n + ' B';
+            if (n < 1024 * 1024) return (n / 1024).toFixed(0) + ' KB';
+            return (n / (1024 * 1024)).toFixed(1) + ' MB';
+        }
+
+        // Attachment chips under a message. Each links to the server, which
+        // fetches the bytes from Gmail on demand.
+        function renderMessageAttachments(message) {
+            const files = Array.isArray(message && message.attachments) ? message.attachments : [];
+            // Inline images are part of the HTML body, not separate downloads.
+            const visible = files.filter(f => f && !f.inline && f.attachmentId);
+            if (!visible.length) return '';
+
+            // Prefer the explicit Gmail id; legacy records prefix theirs with
+            // "original-", which Gmail would not recognize.
+            const rawId = String(message.gmailMessageId || message.id || '');
+            const messageId = rawId.startsWith('original-') ? rawId.slice('original-'.length) : rawId;
+            if (!messageId) return '';
+            const chips = visible.map(file => {
+                const query = new URLSearchParams({
+                    filename: file.filename || 'attachment',
+                    mimeType: file.mimeType || 'application/octet-stream'
+                }).toString();
+                const href = `/api/attachment/${encodeURIComponent(messageId)}/${encodeURIComponent(file.attachmentId)}?${query}`;
+                const size = formatAttachmentSize(file.sizeBytes);
+                return `
+                    <a class="msg-attachment" href="${escapeHtml(href)}" download="${escapeHtml(file.filename || 'attachment')}">
+                        <span>📎</span>
+                        <span class="name">${escapeHtml(file.filename || 'attachment')}</span>
+                        ${size ? `<span class="size">${size}</span>` : ''}
+                    </a>
+                `;
+            }).join('');
+            return `<div class="msg-attachments">${chips}</div>`;
+        }
+
         function renderThreadInPane(subject, messages, category) {
             const threadPane = document.getElementById('threadView');
             if (!threadPane) return;
@@ -2222,7 +2377,21 @@ async function updateEmailCategory(emailId, newCategory, oldCategory) {
                 const fromSafe = (typeof escapeHtml === 'function') ? escapeHtml(m.from || 'Unknown Sender') : (m.from || 'Unknown Sender');
                 const toSafe = (typeof escapeHtml === 'function') ? escapeHtml(toList) : toList;
                 const badge = m.isResponse ? '<span class="response-badge">Your Response</span>' : '';
-                const bodyHtml = m.body != null ? String(m.body) : '';
+                // Render the stored plain text immediately, then upgrade to the
+                // real HTML body in place once it arrives. HTML is fetched on
+                // demand rather than stored, so the text is what we have now.
+                const plainBody = m.body != null ? String(m.body) : '';
+                const htmlSlotId = `msgBody_${idx}_${String(m.id || '').replace(/[^A-Za-z0-9_-]/g, '')}`;
+                // A truncated body says so, so a shortened message is never
+                // mistaken for a complete one if the restore fails.
+                const truncNotice = m.bodyTruncated
+                    ? `<div id="${htmlSlotId}_trunc" class="msg-truncated-note">Shortened for storage — restoring the full message from Gmail…</div>`
+                    : '';
+                const bodyHtml = `<div id="${htmlSlotId}">${plainBody}</div>${truncNotice}`;
+                // The last message is the one the composer replies to.
+                if (idx === lastIdx) m.__isPrimaryMessage = true;
+                if (m.hasHtml || m.bodyTruncated) scheduleBodyRestore(htmlSlotId, m);
+                const attachmentsHtml = renderMessageAttachments(m);
                 const senderName = (m.from || 'Unknown Sender').split('<')[0].trim() || 'Unknown Sender';
                 const initial = senderName.charAt(0).toUpperCase() || '?';
                 const avatarColor = threadAvatarColorFor(senderName);
@@ -2244,7 +2413,7 @@ async function updateEmailCategory(emailId, newCategory, oldCategory) {
                                 <div class="message-to">To: ${toSafe}</div>
                                 <div class="message-date">${new Date(m.date).toLocaleString()}</div>
                             </div>
-                            <div class="message-body">${bodyHtml}</div>
+                            <div class="message-body">${bodyHtml}${attachmentsHtml}</div>
                         </div>
                     </div>
                 `;
@@ -2432,8 +2601,11 @@ async function updateEmailCategory(emailId, newCategory, oldCategory) {
                             </div>
 
                             <div id="gcTemplateSuggestion" class="gc-template-suggestion" style="display:none;"></div>
+                            <div id="gcAttachmentTray" class="gc-attachment-tray" style="display:none;"></div>
+                            <input type="file" id="gcAttachmentInput" multiple style="display:none;" onchange="gcHandleAttachmentPick(event)">
                             <div class="gc-actions">
                                 <button type="button" class="gc-send-btn" onclick="gcSendReply()">Send</button>
+                                <button type="button" class="gc-save-draft-btn" onclick="document.getElementById('gcAttachmentInput').click()" title="Attach a file">📎 Attach</button>
                                 <button type="button" class="gc-save-draft-btn" onclick="gcSaveDraft()" title="Save this reply as a draft">Save as Draft</button>
                                 <button type="button" class="gc-save-draft-btn gc-template-btn" onclick="showTemplatePicker('reply', event)" title="Insert one of your saved response templates">📝 Templates</button>
                                 <button type="submit" class="generate-submit-btn gc-generate-btn" title="Generate an AI response draft">
@@ -2575,6 +2747,106 @@ async function updateEmailCategory(emailId, newCategory, oldCategory) {
             if (input) { input.style.display = 'inline-block'; input.focus(); }
         }
 
+        // --- Composer attachments -------------------------------------------
+        // Files are held in memory as base64 until send. The cap mirrors the
+        // server's limit so an oversized file is rejected before the upload.
+        const GC_MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
+        let gcAttachments = [];
+
+        function gcFormatBytes(bytes) {
+            if (bytes < 1024) return bytes + ' B';
+            if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(0) + ' KB';
+            return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+        }
+
+        function gcRenderAttachmentTray() {
+            const tray = document.getElementById('gcAttachmentTray');
+            if (!tray) return;
+            if (!gcAttachments.length) {
+                tray.style.display = 'none';
+                tray.innerHTML = '';
+                return;
+            }
+            tray.style.display = 'block';
+            tray.innerHTML = gcAttachments.map((file, index) => `
+                <span class="gc-attachment-pill">
+                    📎 ${escapeHtml(file.filename)}
+                    <span class="gc-attachment-size">${gcFormatBytes(file.sizeBytes)}</span>
+                    <button type="button" title="Remove" onclick="gcRemoveAttachment(${index})">&times;</button>
+                </span>
+            `).join('');
+        }
+
+        function gcRemoveAttachment(index) {
+            gcAttachments.splice(index, 1);
+            gcRenderAttachmentTray();
+        }
+
+        function gcClearAttachments() {
+            gcAttachments = [];
+            gcRenderAttachmentTray();
+            const input = document.getElementById('gcAttachmentInput');
+            if (input) input.value = '';
+        }
+
+        function gcHandleAttachmentPick(event) {
+            const files = Array.from((event && event.target && event.target.files) || []);
+            if (!files.length) return;
+
+            let total = gcAttachments.reduce((sum, a) => sum + a.sizeBytes, 0);
+            const readers = files.map(file => new Promise((resolve) => {
+                total += file.size;
+                if (total > GC_MAX_ATTACHMENT_BYTES) {
+                    showErrorPopup(`${escapeHtml(file.name)} would push the total over 25MB. Gmail rejects messages that large.`, 'Attachment Too Large');
+                    return resolve(null);
+                }
+                const reader = new FileReader();
+                reader.onload = () => {
+                    // readAsDataURL gives "data:<type>;base64,<payload>".
+                    const payload = String(reader.result || '').split(',')[1] || '';
+                    resolve({
+                        filename: file.name,
+                        mimeType: file.type || 'application/octet-stream',
+                        sizeBytes: file.size,
+                        contentBase64: payload
+                    });
+                };
+                reader.onerror = () => {
+                    showErrorPopup(`Could not read ${escapeHtml(file.name)}.`, 'Attachment Failed');
+                    resolve(null);
+                };
+                reader.readAsDataURL(file);
+            }));
+
+            Promise.all(readers).then(results => {
+                results.filter(Boolean).forEach(file => gcAttachments.push(file));
+                gcRenderAttachmentTray();
+                // Reset so picking the same file twice in a row still fires.
+                const input = document.getElementById('gcAttachmentInput');
+                if (input) input.value = '';
+            });
+        }
+
+        // Strip anything executable before the composer's markup leaves the
+        // browser. The recipient's client would likely strip it too, but this
+        // keeps us from ever transmitting script we did not intend to.
+        function gcSanitizeOutgoingHtml(html) {
+            const holder = document.createElement('div');
+            holder.innerHTML = String(html || '');
+            holder.querySelectorAll('script, style, iframe, object, embed, link, meta').forEach(node => node.remove());
+            holder.querySelectorAll('*').forEach(node => {
+                Array.from(node.attributes).forEach(attr => {
+                    const name = attr.name.toLowerCase();
+                    const value = String(attr.value || '');
+                    if (name.startsWith('on')) node.removeAttribute(attr.name);
+                    if ((name === 'href' || name === 'src') && /^\s*javascript:/i.test(value)) {
+                        node.removeAttribute(attr.name);
+                    }
+                });
+            });
+            return holder.innerHTML;
+        }
+
         // Send the drafted reply through the server's Gmail integration.
         // Always confirms with the user first and guards against double-sends.
         let gcSendInFlight = false;
@@ -2598,11 +2870,24 @@ async function updateEmailCategory(emailId, newCategory, oldCategory) {
             const subject = (document.getElementById('gcSubjectInput')?.value
                 || document.getElementById('subjectInput')?.value || '').trim();
 
+            // The composer is contenteditable, so it already holds real markup.
+            // Send it as the HTML alternative and keep innerText as the plain
+            // fallback, rather than discarding the user's formatting.
+            const html = bodyEl ? gcSanitizeOutgoingHtml(bodyEl.innerHTML) : '';
+            const attachments = gcAttachments.map(a => ({
+                filename: a.filename,
+                mimeType: a.mimeType,
+                contentBase64: a.contentBase64
+            }));
+
             const preview = text.length > 200 ? text.slice(0, 200) + '…' : text;
             const recipientSummary = to + (cc ? ` (cc: ${cc})` : '') + (bcc ? ` (bcc: ${bcc})` : '');
+            const attachmentNote = attachments.length
+                ? `<br><br><strong>${attachments.length} attachment${attachments.length === 1 ? '' : 's'}:</strong> ${escapeHtml(attachments.map(a => a.filename).join(', '))}`
+                : '';
             showConfirmPopup(
-                `Send this reply to ${escapeHtml(recipientSummary)}?<br><br><em>"${escapeHtml(preview)}"</em>`,
-                () => gcPerformSend({ to, cc, bcc, subject, body: text }),
+                `Send this reply to ${escapeHtml(recipientSummary)}?<br><br><em>"${escapeHtml(preview)}"</em>${attachmentNote}`,
+                () => gcPerformSend({ to, cc, bcc, subject, body: text, bodyHtml: html, attachments }),
                 () => {},
                 'Send Email?'
             );
@@ -2706,6 +2991,7 @@ async function updateEmailCategory(emailId, newCategory, oldCategory) {
                 } catch (_) {}
                 const gcBody = document.getElementById('gcBody');
                 if (gcBody) gcBody.innerHTML = '';
+                gcClearAttachments();
                 const composer = document.getElementById('inlineReplyCompose');
                 if (composer) composer.style.display = 'none';
 
