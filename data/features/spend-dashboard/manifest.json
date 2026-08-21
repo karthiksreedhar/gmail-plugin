@@ -1,0 +1,13 @@
+{
+  "id": "spend-dashboard",
+  "name": "Spend Dashboard",
+  "version": "1.0.0",
+  "description": "Scans receipts, order confirmations and invoices in your inbox and shows a spending dashboard with totals, monthly trends, categories and top merchants.",
+  "author": "Feature Generator Agent",
+  "backend": "backend.js",
+  "frontend": "frontend.js",
+  "permissions": [
+    "emails:read",
+    "api:custom"
+  ]
+}
