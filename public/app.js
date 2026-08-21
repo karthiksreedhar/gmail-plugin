@@ -2397,7 +2397,15 @@ async function updateEmailCategory(emailId, newCategory, oldCategory) {
                 // Render the stored plain text immediately, then upgrade to the
                 // real HTML body in place once it arrives. HTML is fetched on
                 // demand rather than stored, so the text is what we have now.
-                const plainBody = m.body != null ? String(m.body) : '';
+                // Stored bodies are DATA, not markup: escape them. Two bugs
+                // rode on the old unescaped interpolation: legacy records that
+                // hold raw HTML (the extractEmailBody bug) rendered their
+                // preheader/spacer junk as blank space at the top of the
+                // message, and any stored body could inject live markup into
+                // the pane. Real HTML rendering only ever happens through
+                // sanitizeIncomingEmailHtml after the Gmail refetch.
+                const plainBodyRaw = m.body != null ? String(m.body) : '';
+                const plainBody = (typeof escapeHtml === 'function') ? escapeHtml(plainBodyRaw) : plainBodyRaw;
                 const htmlSlotId = `msgBody_${idx}_${String(m.id || '').replace(/[^A-Za-z0-9_-]/g, '')}`;
                 // A truncated body says so, so a shortened message is never
                 // mistaken for a complete one if the restore fails.
