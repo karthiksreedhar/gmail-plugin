@@ -27,7 +27,12 @@ function setWorkflowGate(next) {
 }
 let availableExistingFeatures = [];
 let existingFeaturesLoaded = false;
-const URL_USER_EMAIL = String(new URLSearchParams(window.location.search).get('userEmail') || '').trim().toLowerCase();
+const URL_PARAMS = new URLSearchParams(window.location.search);
+const URL_USER_EMAIL = String(URL_PARAMS.get('userEmail') || '').trim().toLowerCase();
+// Signed identity from the Gmail app; sent with every chat call so the server
+// can verify WHO is acting. Without a valid signature the server refuses.
+const URL_IDENTITY_EXP = String(URL_PARAMS.get('identityExp') || '').trim();
+const URL_IDENTITY_SIG = String(URL_PARAMS.get('identitySig') || '').trim();
 
 // DOM Elements
 const chatMessages = document.getElementById('chatMessages');
@@ -78,10 +83,16 @@ Just ask me anything about your emails!`
 };
 
 function getActorUserEmail() {
-  const selected = String(selectedUserDropdown?.value || '').trim().toLowerCase();
-  if (selected) return selected;
-  if (URL_USER_EMAIL) return URL_USER_EMAIL;
-  return '';
+  // Identity comes ONLY from the signed handoff in the URL. The dropdown that
+  // used to let anyone act as any user is gone.
+  return URL_USER_EMAIL;
+}
+
+function attachIdentity(requestBody) {
+  if (URL_USER_EMAIL) requestBody.userEmail = URL_USER_EMAIL;
+  if (URL_IDENTITY_EXP) requestBody.identityExp = URL_IDENTITY_EXP;
+  if (URL_IDENTITY_SIG) requestBody.identitySig = URL_IDENTITY_SIG;
+  return requestBody;
 }
 
 // Initialize
@@ -90,7 +101,6 @@ document.addEventListener('DOMContentLoaded', () => {
   setupEventListeners();
   initRHSElements();
   setupRHSEventListeners();
-  refreshAvailableUsers();
   // Opened from the Gmail page (?userEmail=...): land on the chat window
   // regardless of the mode remembered from a previous visit.
   setMode(URL_USER_EMAIL ? 'chat' : currentMode);
@@ -286,7 +296,8 @@ function setMode(mode) {
   
   // Show/hide user selector based on mode
   if (userSelector) {
-    userSelector.style.display = mode === 'chat' ? 'flex' : 'none';
+    // Users act only as themselves now; the account picker is retired.
+    userSelector.style.display = 'none';
   }
   if (existingFeatureSelector) {
     existingFeatureSelector.style.display = mode === 'generate' ? 'flex' : 'none';
@@ -430,7 +441,7 @@ async function loadFeatureIntoSession(featureId) {
     const response = await fetch(`/api/session/${encodeURIComponent(sessionId)}/load-feature`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ featureId, userEmail: actorUserEmail })
+      body: JSON.stringify(attachIdentity({ featureId }))
     });
 
     const data = await response.json().catch(() => ({}));
@@ -574,8 +585,7 @@ async function runGeneratePreflight(message) {
 
   try {
     const requestBody = { sessionId, message };
-    const actorUserEmail = getActorUserEmail();
-    if (actorUserEmail) requestBody.userEmail = actorUserEmail;
+    attachIdentity(requestBody);
 
     const response = await fetch('/api/chat/preflight', {
       method: 'POST',
@@ -695,6 +705,17 @@ async function runChatRequest(message) {
     // result arrives (it has the same shape as the synchronous response).
     if (data.success && data.pending) {
       data = await pollForChatResult(loadingMsg);
+    }
+
+    // The server asked whether this is a brand-new feature (vs a change to
+    // the one loaded in this session). Render the question with one-click
+    // answers; either button just sends a normal chat message.
+    if (data.success && data.confirmNewFeature) {
+      loadingMsg.remove();
+      addMessage('assistant', data.response);
+      addNewFeatureConfirmButtons();
+      setGenerating(false);
+      return;
     }
 
     // Remove loading message
@@ -1651,6 +1672,30 @@ function truncateEmail(email) {
   return email;
 }
 
+// Quick-reply buttons under a new-feature confirmation question. Clicking
+// one sends it as an ordinary chat message, so the server-side flow stays a
+// plain text conversation.
+function addNewFeatureConfirmButtons() {
+  const wrap = document.createElement('div');
+  wrap.className = 'confirm-new-feature-buttons';
+  wrap.style.cssText = 'display:flex; gap:8px; margin:4px 0 12px 44px;';
+  const mk = (label, text) => {
+    const btn = document.createElement('button');
+    btn.textContent = label;
+    btn.style.cssText = 'padding:6px 14px; border-radius:16px; border:1px solid #dadce0; background:#fff; cursor:pointer; font-size:13px;';
+    btn.addEventListener('click', () => {
+      wrap.remove();
+      messageInput.value = text;
+      handleSend();
+    });
+    return btn;
+  };
+  wrap.appendChild(mk('✨ Yes, build it as a new feature', 'Yes, build it as a new feature'));
+  wrap.appendChild(mk('✏️ No — modify the current feature', 'No, apply this as a change to the current feature'));
+  chatMessages.appendChild(wrap);
+  scrollToBottom();
+}
+
 // Add loading message. The returned element exposes setProgress(progress) so
 // the poll loop can stream live Claude Code activity into the bubble, and its
 // remove() also stops the elapsed-time ticker.
@@ -1704,17 +1749,33 @@ function addLoadingMessage() {
     activityEl.textContent = '⚙️ Starting a Claude Code session in a sandbox…';
   }
 
+  // Claude-Code-style running log: completed steps stay visible with a check,
+  // the current step animates at the bottom. Steps arrive via
+  // progress.recentActivities (deduped server-side); we accumulate the full
+  // list here so nothing scrolls away between polls.
+  const seenSteps = [];
   messageDiv.setProgress = (progress) => {
     if (!progress) return;
-    if (progress.currentActivity) {
+    for (const step of (Array.isArray(progress.recentActivities) ? progress.recentActivities : [])) {
+      if (!seenSteps.includes(step)) seenSteps.push(step);
+    }
+    if (progress.currentActivity && !seenSteps.includes(progress.currentActivity)) {
+      seenSteps.push(progress.currentActivity);
+    }
+    if (seenSteps.length) {
       activityEl.style.display = '';
-      const steps = progress.toolUseCount ? ` · ${progress.toolUseCount} step${progress.toolUseCount === 1 ? '' : 's'} so far` : '';
-      activityEl.textContent = `⚙️ ${progress.currentActivity}${steps}`;
+      activityEl.innerHTML = seenSteps.map((step, i) => {
+        const isCurrent = i === seenSteps.length - 1;
+        const icon = isCurrent ? '⚙️' : '<span style="color:#188038;">✓</span>';
+        const style = isCurrent ? '' : 'color:#5f6368;';
+        return `<div style="${style} padding:1px 0;">${icon} ${step}</div>`;
+      }).join('');
     }
     if (progress.lastMessage) {
       noteEl.style.display = '';
       noteEl.textContent = progress.lastMessage;
     }
+    scrollToBottom();
   };
 
   const originalRemove = messageDiv.remove.bind(messageDiv);

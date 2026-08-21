@@ -284,12 +284,15 @@ function initializeFeatures(options = {}) {
               }
             } catch (error) {
               console.error(`  ✗ Failed to initialize backend for ${featureName}:`, error.message);
+              recordFeatureError(manifest.id || featureName, 'load', error);
             }
           }
         }
 
         const afterLayers = stack ? stack.slice() : [];
         const addedLayers = afterLayers.filter(layer => !beforeLayers.includes(layer));
+        // Attribute runtime throws in this feature's own routes to the feature.
+        wrapFeatureLayersForErrorCapture(manifest.id || featureName, addedLayers);
 
         loadedFeatures.push({
           id: manifest.id || featureName,
@@ -307,6 +310,7 @@ function initializeFeatures(options = {}) {
         console.log(`  ✓ Feature ${manifest.name || featureName} loaded successfully`);
       } catch (error) {
         console.error(`Failed to load feature ${featureName}:`, error.message);
+        recordFeatureError(featureName, 'load', error);
       }
     });
 
@@ -335,6 +339,73 @@ function shouldAllowFeatureRegistryWrite(req) {
   }
   const ip = String(req.ip || req.connection?.remoteAddress || '');
   return ip === '127.0.0.1' || ip === '::1' || ip.endsWith('127.0.0.1');
+}
+
+// --- Feature error capture ---
+// Errors from generated features (load failures, runtime throws in their
+// routes, frontend script errors) get recorded per-feature in Mongo so the
+// feature-generator agent can SEE what actually broke instead of diagnosing
+// from the user's description of a symptom. Fire-and-forget: error capture
+// must never take down the request that tripped the error.
+const FEATURE_ERRORS_COLLECTION = 'feature_errors';
+const MAX_STORED_FEATURE_ERRORS = 20;
+
+function recordFeatureError(featureId, kind, error, extra = {}) {
+  const safeId = String(featureId || '').trim();
+  if (!safeId) return;
+  const entry = {
+    kind: String(kind || 'runtime'),
+    message: String(error?.message || error || '').slice(0, 2000),
+    stack: String(error?.stack || '').split('\n').slice(0, 8).join('\n').slice(0, 4000),
+    at: new Date(),
+    ...extra
+  };
+  (async () => {
+    await initMongo();
+    await getDb().collection(FEATURE_ERRORS_COLLECTION).updateOne(
+      { _id: safeId },
+      {
+        $push: { errors: { $each: [entry], $slice: -MAX_STORED_FEATURE_ERRORS } },
+        $set: { updatedAt: new Date() }
+      },
+      { upsert: true }
+    );
+  })().catch(err => console.warn(`[FeatureErrors] failed to record for ${safeId}:`, err?.message || err));
+  console.error(`[FeatureError] ${safeId} (${entry.kind}): ${entry.message}`);
+}
+
+// Wrap the Express layers a feature registered so anything its handlers throw
+// (sync or async) is recorded under that feature's id. next(err) is still
+// called, so Express error handling behaves exactly as before.
+function wrapFeatureLayersForErrorCapture(featureId, layers) {
+  const wrapHandle = (owner, key) => {
+    const original = owner[key];
+    if (typeof original !== 'function' || original.__featureWrapped) return;
+    const wrapped = function (req, res, next) {
+      try {
+        const out = original.apply(this, arguments);
+        if (out && typeof out.catch === 'function') {
+          out.catch(err => {
+            recordFeatureError(featureId, 'runtime', err, { route: req?.path });
+            if (typeof next === 'function') next(err);
+          });
+        }
+        return out;
+      } catch (err) {
+        recordFeatureError(featureId, 'runtime', err, { route: req?.path });
+        throw err;
+      }
+    };
+    wrapped.__featureWrapped = true;
+    owner[key] = wrapped;
+  };
+  (layers || []).forEach(layer => {
+    if (layer?.route?.stack) {
+      layer.route.stack.forEach(routeLayer => wrapHandle(routeLayer, 'handle'));
+    } else if (layer && typeof layer.handle === 'function') {
+      wrapHandle(layer, 'handle');
+    }
+  });
 }
 
 function shouldAllowFeatureExport(req) {
@@ -508,6 +579,37 @@ function shouldExposeFeature(entry) {
     entry.preferences.visible !== false &&
     entry.preferences.enabled !== false;
 }
+
+// Signed Feature Generator link for the logged-in user. The FG app has no
+// login of its own; this HMAC (keyed with the shared FEATURE_EXPORT_TOKEN) is
+// what makes "?userEmail=" trustworthy there. Session-authed on purpose --
+// the identity being signed is the session's own, never caller-chosen.
+app.get('/api/feature-generator-link', async (req, res) => {
+  try {
+    const userEmail = getEffectiveUserEmailForRequest(req);
+    if (!userEmail) {
+      return res.status(401).json({ success: false, error: 'Authentication required' });
+    }
+    if (!FEATURE_GENERATOR_URL) {
+      return res.status(404).json({ success: false, error: 'Feature generator URL is not configured' });
+    }
+    if (!FEATURE_EXPORT_TOKEN) {
+      return res.status(500).json({ success: false, error: 'FEATURE_EXPORT_TOKEN is not configured' });
+    }
+    const exp = Date.now() + 24 * 60 * 60 * 1000;
+    const sig = crypto.createHmac('sha256', FEATURE_EXPORT_TOKEN)
+      .update(`${userEmail}.${exp}`)
+      .digest('hex');
+    const url = new URL(FEATURE_GENERATOR_URL);
+    url.searchParams.set('userEmail', userEmail);
+    url.searchParams.set('identityExp', String(exp));
+    url.searchParams.set('identitySig', sig);
+    return res.json({ success: true, url: url.toString() });
+  } catch (error) {
+    console.error('Failed to build feature generator link:', error);
+    return res.status(500).json({ success: false, error: 'Failed to build link' });
+  }
+});
 
 // Client config endpoint for hosted feature-generator URL
 app.get('/api/config/feature-generator-url', (req, res) => {
@@ -699,7 +801,13 @@ app.post('/api/internal/generated-features/save-draft', async (req, res) => {
     // Internal endpoint called by the hosted agent without a browser session:
     // fall back to the process-level user for attribution when the payload
     // doesn't name one.
-    const actorEmail = String(req.body?.createdBy || '').trim().toLowerCase() || getEffectiveUserEmailForRequest(req) || getRequestUserEmail();
+    // Authorship must be explicit. The old fallback chain ended in
+    // getRequestUserEmail() -- the "most recent login" global -- which stamped
+    // whoever logged in last as the feature's author.
+    const actorEmail = String(req.body?.createdBy || '').trim().toLowerCase();
+    if (!actorEmail || !actorEmail.includes('@')) {
+      return res.status(400).json({ success: false, error: 'createdBy is required: feature saves must carry the verified author' });
+    }
     const name = String(req.body?.name || featureId).trim();
     const description = String(req.body?.description || '').trim();
     const requestPrompt = String(req.body?.requestPrompt || '').trim();
@@ -822,6 +930,48 @@ app.post('/api/internal/sent-replies', async (req, res) => {
   } catch (error) {
     console.error('Error fetching sent replies:', error);
     res.status(500).json({ success: false, error: error.message || 'Failed to fetch sent replies' });
+  }
+});
+
+// Browser-side feature errors, reported by the frontend feature loader.
+// Behind the normal session gate (not public), so reports carry a real user.
+app.post('/api/feature-error', async (req, res) => {
+  try {
+    const featureId = sanitizeFeatureId(String(req.body?.featureId || ''));
+    const message = String(req.body?.message || '').trim();
+    if (!featureId || !message) {
+      return res.status(400).json({ success: false, error: 'featureId and message are required' });
+    }
+    recordFeatureError(featureId, 'frontend', {
+      message,
+      stack: String(req.body?.stack || '')
+    }, { reportedBy: getEffectiveUserEmailForRequest(req) });
+    return res.json({ success: true });
+  } catch (error) {
+    return res.status(500).json({ success: false, error: 'Failed to record feature error' });
+  }
+});
+
+// Recent captured errors for one feature, for the feature-generator agent.
+// Same token auth as feature export: this is the agent's debugging feed.
+app.get('/api/internal/feature-errors/:featureId', async (req, res) => {
+  try {
+    if (!shouldAllowFeatureExport(req)) {
+      return res.status(401).json({ success: false, error: 'Unauthorized' });
+    }
+    const featureId = sanitizeFeatureId(req.params.featureId);
+    if (!featureId) {
+      return res.status(400).json({ success: false, error: 'Invalid featureId' });
+    }
+    await initMongo();
+    const doc = await getDb().collection(FEATURE_ERRORS_COLLECTION).findOne({ _id: featureId });
+    return res.json({
+      success: true,
+      featureId,
+      errors: (doc?.errors || []).slice(-10)
+    });
+  } catch (error) {
+    return res.status(500).json({ success: false, error: 'Failed to load feature errors' });
   }
 });
 
