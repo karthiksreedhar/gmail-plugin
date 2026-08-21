@@ -153,7 +153,7 @@ async function countEvents(anthropicSessionId) {
  * which events belong to this turn. The heavy agentic work happens on
  * Anthropic's side after this returns.
  */
-async function startTurn(session, message) {
+async function startTurn(session, message, options = {}) {
   const client = getClient();
   const { anthropicSessionId, isNewRemote } = await ensureRemoteSession(session);
 
@@ -165,6 +165,10 @@ async function startTurn(session, message) {
     session.generatedFiles && Object.keys(session.generatedFiles).length > 0;
   if (needsFileSync) {
     pieces.push(renderCurrentFilesBlock(session.generatedFiles, session.featureId));
+  }
+  // Caller-supplied context (captured runtime errors, repair instructions).
+  for (const block of (Array.isArray(options.contextBlocks) ? options.contextBlocks : [])) {
+    if (block && typeof block === 'string') pieces.push(block);
   }
   pieces.push(message);
 

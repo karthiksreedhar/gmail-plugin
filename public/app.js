@@ -149,6 +149,12 @@
                         if (loadedFeatureScriptIds.has(feature.id)) {
                             continue;
                         }
+                        // Report this feature's browser errors to the server so
+                        // the feature-generator agent can read the real stack
+                        // instead of relying on the user's description. Global
+                        // listener installed once; errors are attributed to a
+                        // feature by their script URL.
+                        installFeatureErrorReporter();
                         // Check if feature has frontend component
                         const scriptPath = `/data/features/${feature.id}/frontend.js`;
                         const script = document.createElement('script');
@@ -197,6 +203,17 @@
 
         async function openFeatureGenerator() {
             try {
+                // Server-signed link: carries userEmail + expiry + HMAC so the
+                // feature generator can trust the identity instead of a bare
+                // query param anyone could edit.
+                const resp = await fetch('/api/feature-generator-link');
+                const data = await resp.json().catch(() => ({}));
+                if (resp.ok && data && data.success && data.url) {
+                    window.open(data.url, '_blank', 'noopener');
+                    return;
+                }
+                // Fallback for older deployments: unsigned link (the FG will
+                // refuse to act on it, but at least the page opens).
                 const targetUrl = await getFeatureGeneratorUrl();
                 const currentUserEmail = getActualCurrentUserEmail().toLowerCase();
                 const url = new URL(targetUrl);
@@ -2339,6 +2356,41 @@ async function updateEmailCategory(emailId, newCategory, oldCategory) {
         // javascript: URLs and framed content all have to go. Remote images are
         // left intact (they load as they would in any mail client), but forms
         // are neutered so nothing can be submitted from our origin.
+        // One global error listener that forwards errors originating from a
+        // generated feature's script (or its async handlers) to the server.
+        // Deduped and capped so a render-loop error cannot flood the backend.
+        let featureErrorReporterInstalled = false;
+        const reportedFeatureErrors = new Set();
+        function reportFeatureError(featureId, message, stack) {
+            const key = featureId + '|' + String(message).slice(0, 120);
+            if (reportedFeatureErrors.has(key) || reportedFeatureErrors.size > 30) return;
+            reportedFeatureErrors.add(key);
+            fetch('/api/feature-error', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ featureId, message: String(message).slice(0, 2000), stack: String(stack || '').slice(0, 4000) })
+            }).catch(() => {});
+        }
+        function featureIdFromUrl(url) {
+            const m = /\/data\/features\/([^\/]+)\//.exec(String(url || ''));
+            return m ? m[1] : null;
+        }
+        function installFeatureErrorReporter() {
+            if (featureErrorReporterInstalled) return;
+            featureErrorReporterInstalled = true;
+            window.addEventListener('error', (event) => {
+                const fromFile = featureIdFromUrl(event.filename);
+                const fromStack = featureIdFromUrl(event.error && event.error.stack);
+                const featureId = fromFile || fromStack;
+                if (featureId) reportFeatureError(featureId, event.message, event.error && event.error.stack);
+            });
+            window.addEventListener('unhandledrejection', (event) => {
+                const reason = event.reason || {};
+                const featureId = featureIdFromUrl(reason.stack);
+                if (featureId) reportFeatureError(featureId, reason.message || String(reason), reason.stack);
+            });
+        }
+
         function sanitizeIncomingEmailHtml(html) {
             const holder = document.createElement('div');
             holder.innerHTML = String(html || '');

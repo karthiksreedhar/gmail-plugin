@@ -6,11 +6,12 @@
 
 require('dotenv').config();
 const express = require('express');
+const crypto = require('crypto');
 const cors = require('cors');
 const path = require('path');
 const archiver = require('archiver');
 const { v4: uuidv4 } = require('uuid');
-const { FeatureGeneratorAgent } = require('./agent');
+const { FeatureGeneratorAgent, validateGeneratedFile } = require('./agent');
 const managedAgent = require('./agent/managed');
 const { invokeAnthropic, getAnthropicModel } = require('./anthropic');
 
@@ -324,6 +325,44 @@ function resolveActorEmail(candidate) {
   );
 }
 
+// --- Signed identity handoff ---
+// This app has no login of its own; identity arrives from the Gmail app as
+// userEmail + exp + an HMAC signature over both, keyed with the
+// FEATURE_EXPORT_TOKEN the two apps already share. A bare ?userEmail= (or a
+// dropdown pick) is NOT identity -- it is exactly how features ended up
+// recorded under the wrong author. Once verified, the identity is bound to
+// the chat session so later turns don't depend on the link's expiry.
+function verifyIdentitySignature(email, exp, sig) {
+  const normalized = normalizeEmail(email);
+  const expMs = Number(exp);
+  if (!normalized || !Number.isFinite(expMs) || !sig) return null;
+  if (Date.now() > expMs) return null;
+  if (!FEATURE_EXPORT_TOKEN) return null;
+  const expected = crypto.createHmac('sha256', FEATURE_EXPORT_TOKEN)
+    .update(`${normalized}.${expMs}`)
+    .digest('hex');
+  const provided = String(sig).trim();
+  if (provided.length !== expected.length) return null;
+  try {
+    if (!crypto.timingSafeEqual(Buffer.from(provided), Buffer.from(expected))) return null;
+  } catch (_) {
+    return null;
+  }
+  return normalized;
+}
+
+// Resolve the VERIFIED actor for a request: a valid signature binds (or
+// re-binds) the session; otherwise fall back to a previously bound session
+// identity. Returns null when neither exists -- callers must refuse to act.
+function resolveVerifiedActor(session, body) {
+  const fromSig = verifyIdentitySignature(body?.userEmail, body?.identityExp, body?.identitySig);
+  if (fromSig) {
+    session.verifiedActorEmail = fromSig;
+    return fromSig;
+  }
+  return normalizeEmail(session?.verifiedActorEmail) || null;
+}
+
 function clampLogLimit(rawLimit, fallback = 50) {
   const n = Number(rawLimit);
   if (!Number.isFinite(n) || n <= 0) return fallback;
@@ -461,7 +500,12 @@ async function persistSessionToMongo(session) {
           anthropicSessionId: session.anthropicSessionId || null,
           managedTurn: session.managedTurn || null,
           managedNeedsFileSync: !!session.managedNeedsFileSync,
-          lastManagedResult: session.lastManagedResult || null
+          lastManagedResult: session.lastManagedResult || null,
+          // Identity + pivot-confirmation state must survive instance
+          // recycles: losing verifiedActorEmail would 400 the user's next
+          // message, losing pendingNewFeature would swallow the confirmation.
+          verifiedActorEmail: session.verifiedActorEmail || null,
+          pendingNewFeature: session.pendingNewFeature || null
         }
       },
       { upsert: true }
@@ -488,6 +532,8 @@ async function restoreSessionFromMongo(sessionId) {
       managedTurn: doc.managedTurn || null,
       managedNeedsFileSync: !!doc.managedNeedsFileSync,
       lastManagedResult: doc.lastManagedResult || null,
+      verifiedActorEmail: doc.verifiedActorEmail || null,
+      pendingNewFeature: doc.pendingNewFeature || null,
       lastAccess: Date.now()
     };
   } catch (error) {
@@ -657,7 +703,9 @@ async function saveDraftFeatureToMainSystem(featureId, files, requestPrompt = ''
         files,
         manifest,
         requestPrompt,
-        createdBy: normalizeEmail(actorEmail) || FEATURE_GENERATOR_CREATED_BY || undefined,
+        // Never defaulted: an unknown author must fail loudly at the main
+        // system rather than be silently attributed to the operator.
+        createdBy: normalizeEmail(actorEmail) || undefined,
         name: manifest?.name || featureId,
         description: manifest?.description || ''
       })
@@ -898,7 +946,84 @@ async function exportFeatureFromMainSystem(featureId) {
   return data.feature;
 }
 
+// Recent runtime/load/frontend errors captured by the main system for a
+// feature. This is the agent's debugging feed: when a user says "it broke",
+// the actual stack traces ride along with the refinement request. Any failure
+// here degrades to "no error context", never to a failed chat turn.
+async function fetchRecentFeatureErrors(featureId) {
+  if (!FEATURE_EXPORT_TOKEN || !featureId) return [];
+  try {
+    const endpoint = `${MAIN_SYSTEM_BASE_URL}/api/internal/feature-errors/${encodeURIComponent(featureId)}`;
+    const response = await fetch(endpoint, {
+      headers: { 'x-feature-export-token': FEATURE_EXPORT_TOKEN }
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !data.success) return [];
+    return Array.isArray(data.errors) ? data.errors : [];
+  } catch (_) {
+    return [];
+  }
+}
+
+function buildFeatureErrorsBlock(errors) {
+  if (!errors.length) return null;
+  const lines = errors.slice(-5).map(e => {
+    const when = e.at ? new Date(e.at).toISOString() : 'unknown time';
+    const stack = e.stack ? `\n${String(e.stack).split('\n').slice(0, 5).join('\n')}` : '';
+    return `- [${e.kind || 'runtime'}] ${when}${e.route ? ` route=${e.route}` : ''}: ${e.message}${stack}`;
+  });
+  return `CAPTURED ERRORS from the deployed feature (real stack traces recorded by the main system -- use these to diagnose rather than guessing from the user's description):\n${lines.join('\n')}`;
+}
+
+// A session that already holds feature A must notice when the user pivots to
+// asking for a DIFFERENT feature, instead of silently morphing A into it.
+// Conservative: anything ambiguous stays a refinement.
+async function classifyWarmSessionIntent(message, session) {
+  const manifest = parseManifestFromFiles(session.generatedFiles);
+  const currentName = manifest?.name || session.featureId || 'the current feature';
+  const currentDescription = manifest?.description || '';
+  const prompt = `A user is in a feature-builder chat session that currently contains ONE feature:
+
+CURRENT FEATURE: ${currentName} (id: ${session.featureId || 'unsaved'})
+${currentDescription ? `DESCRIPTION: ${currentDescription}` : ''}
+
+Their new message:
+${message}
+
+Decide whether this message is:
+- "refine": a change, fix, styling tweak, bug report, or extension of the CURRENT feature above
+- "new": a request for a clearly DIFFERENT feature with its own separate purpose
+
+Rules:
+- Bug reports, complaints, and vague messages are "refine"
+- Only answer "new" when the message describes distinctly different functionality that stands on its own
+Respond with ONLY this JSON: {"intent": "refine" | "new"}`;
+  try {
+    const response = await invokeAnthropic({
+      model: getAnthropicModel(),
+      temperature: 0,
+      maxOutputTokens: 60,
+      messages: [{ role: 'user', content: prompt }]
+    });
+    for (const candidate of parseJsonCandidates(response.content)) {
+      try {
+        const parsed = JSON.parse(candidate);
+        if (parsed?.intent === 'new') return 'new';
+        if (parsed?.intent === 'refine') return 'refine';
+      } catch (_) {}
+    }
+  } catch (error) {
+    console.warn('Warm-session intent classification failed (treating as refinement):', error.message);
+  }
+  return 'refine';
+}
+
+function looksLikeNewFeatureConfirmation(message) {
+  return /^\s*(yes|yep|yeah|yup|sure|ok(ay)?|go ahead|do it|new( feature)?|start (fresh|new|over))\b/i.test(String(message || ''));
+}
+
 // Decide whether a message in a file-less session is really a modification
+
 // request for an already-saved feature. Conservative by design: any failure
 // (registry unreachable, model error, ambiguous answer) returns null and the
 // message is treated as a new-feature request, exactly as before.
@@ -1181,7 +1306,17 @@ app.post('/api/chat', async (req, res) => {
 
   try {
     const { session } = await getSession(sessionId);
-    const actorEmail = resolveActorEmail(userEmail || session.actorEmail);
+    // Feature authorship must come from a VERIFIED identity: a signed handoff
+    // from the Gmail app, or one already bound to this session. Guessing here
+    // (env default, last login, raw query param) is how wrong authors were
+    // recorded. No identity -> refuse, with a pointer to the right entry path.
+    const actorEmail = resolveVerifiedActor(session, req.body);
+    if (!actorEmail) {
+      return res.status(400).json({
+        success: false,
+        error: 'Your identity could not be verified. Open the Feature Generator from the Gmail app (the "Open Feature Generator" button) so it knows who you are.'
+      });
+    }
     session.actorEmail = actorEmail;
 
     // Add user message to history
@@ -1191,6 +1326,54 @@ app.post('/api/chat', async (req, res) => {
       timestamp: Date.now()
     });
 
+    // The message the pipeline acts on. Differs from the raw message only
+    // when the user just confirmed "yes, build the new feature" -- then we
+    // act on their ORIGINAL request, not the word "yes".
+    let effectiveMessage = message;
+
+    // Step 1 of the pivot flow: a confirmation question is outstanding.
+    if (session.pendingNewFeature) {
+      const pending = session.pendingNewFeature;
+      session.pendingNewFeature = null;
+      if (looksLikeNewFeatureConfirmation(message)) {
+        // Confirmed: reset to a clean slate. The remote session is dropped
+        // too, so the old feature's context cannot bleed into the new one.
+        session.generatedFiles = null;
+        session.featureId = null;
+        session.anthropicSessionId = null;
+        session.managedNeedsFileSync = false;
+        effectiveMessage = pending.request;
+        console.log('🆕 User confirmed new feature; session reset. Building from original request.');
+      }
+      // Not a confirmation: fall through with the new message against the
+      // still-loaded feature (the user is clarifying, not confirming).
+    } else if (session.generatedFiles !== null) {
+      // Step 0: session already holds a feature. Detect a pivot to a
+      // different feature BEFORE silently morphing the current one into it.
+      const intent = await classifyWarmSessionIntent(message, session);
+      if (intent === 'new') {
+        const manifest = parseManifestFromFiles(session.generatedFiles);
+        const currentName = manifest?.name || session.featureId || 'your current feature';
+        session.pendingNewFeature = { request: message, at: Date.now() };
+        const confirmText = `That sounds like a **new feature** rather than a change to **${currentName}**.\n\n` +
+          `- Reply **"yes"** and I'll build it as a separate feature (${currentName} stays saved and deployed as-is).\n` +
+          `- Or clarify if you meant this as a change to ${currentName}.`;
+        session.chatHistory.push({
+          role: 'assistant',
+          content: confirmText,
+          timestamp: Date.now()
+        });
+        await persistSessionToMongo(session);
+        return res.json({
+          success: true,
+          sessionId: session.id,
+          response: confirmText,
+          confirmNewFeature: true,
+          featureId: session.featureId
+        });
+      }
+    }
+
     // If the session has no files, the message may still be a modification
     // request for an already-saved feature (typical after a deploy: the user
     // comes back and types "make the button blue"). Match it against the
@@ -1198,7 +1381,7 @@ app.post('/api/chat', async (req, res) => {
     // generating a brand-new feature from the modification text.
     let autoLoadedFeatureId = null;
     if (session.generatedFiles === null) {
-      const matchedFeatureId = await matchMessageToExistingFeature(message);
+      const matchedFeatureId = await matchMessageToExistingFeature(effectiveMessage);
       if (matchedFeatureId) {
         try {
           const exported = await exportFeatureFromMainSystem(matchedFeatureId);
@@ -1231,7 +1414,15 @@ app.post('/api/chat', async (req, res) => {
     // legacy pipeline below stays as the fallback whenever FEATURE_AGENT_ID /
     // FEATURE_AGENT_ENV_ID are not configured.
     if (managedAgent.isManagedAgentEnabled()) {
-      await managedAgent.startTurn(session, message);
+      // Refinements ride with any errors the main system captured for this
+      // feature, so the agent debugs from real stack traces.
+      const contextBlocks = [];
+      if (isRefinement && session.featureId) {
+        const recentErrors = await fetchRecentFeatureErrors(session.featureId);
+        const errorsBlock = buildFeatureErrorsBlock(recentErrors);
+        if (errorsBlock) contextBlocks.push(errorsBlock);
+      }
+      await managedAgent.startTurn(session, effectiveMessage, { contextBlocks });
       session.managedTurn.autoLoadedFeatureId = autoLoadedFeatureId;
       session.lastManagedResult = null;
       await persistSessionToMongo(session);
@@ -1247,16 +1438,23 @@ app.post('/api/chat', async (req, res) => {
     const previousFeatureId = isRefinement ? (session.featureId || autoLoadedFeatureId || null) : null;
 
     if (isRefinement) {
-      // Refinement mode - fix/modify existing files
+      // Refinement mode - fix/modify existing files. Captured runtime errors
+      // (if any) are appended so the fix targets the real failure.
+      let feedbackWithErrors = effectiveMessage;
+      if (session.featureId) {
+        const recentErrors = await fetchRecentFeatureErrors(session.featureId);
+        const errorsBlock = buildFeatureErrorsBlock(recentErrors);
+        if (errorsBlock) feedbackWithErrors = `${effectiveMessage}\n\n${errorsBlock}`;
+      }
       result = await session.agent.refineFeature(
-        message,
+        feedbackWithErrors,
         session.generatedFiles,
         session.featureId,
         session.chatHistory
       );
     } else {
       // Initial generation mode
-      result = await session.agent.generateFeature(message);
+      result = await session.agent.generateFeature(effectiveMessage);
       session.featureId = result.featureId;
     }
 
@@ -1272,7 +1470,7 @@ app.post('/api/chat', async (req, res) => {
       result.response = `🔁 I recognized this as a change to your existing feature \`${autoLoadedFeatureId}\`, so I loaded its current files and modified them in place (no new feature was created).\n\n${result.response}`;
     }
 
-    const draftSaveResult = await saveDraftFeatureToMainSystem(session.featureId, session.generatedFiles, message, session.actorEmail);
+    const draftSaveResult = await saveDraftFeatureToMainSystem(session.featureId, session.generatedFiles, effectiveMessage, session.actorEmail);
 
     // Add assistant response to history
     session.chatHistory.push({
@@ -1414,8 +1612,49 @@ app.get('/api/chat/poll/:sessionId', async (req, res) => {
       return res.json(session.lastManagedResult);
     }
 
-    // Turn finished successfully -- merge the sandbox output files into the
-    // session, resolve the feature id from manifest.json, and save the draft.
+    // Turn finished successfully. Before anything is merged or saved, every
+    // produced file must parse: the legacy pipeline always validated syntax,
+    // but managed-agent output used to be saved as-is -- one malformed file
+    // would ride into a draft and crash the feature loader on deploy. Invalid
+    // files bounce back to the agent as a repair turn (twice, then give up).
+    const invalidFiles = Object.entries(poll.files || {})
+      .map(([name, content]) => ({ name, error: validateGeneratedFile(name, content) }))
+      .filter(f => f.error);
+    if (invalidFiles.length > 0) {
+      const attempts = (turn.repairAttempts || 0) + 1;
+      if (attempts <= 2) {
+        const repairMessage = `The following file(s) you wrote fail to parse. Fix ONLY these syntax errors without changing behavior, and rewrite the complete corrected file(s) to /mnt/session/outputs/ under the same names:\n` +
+          invalidFiles.map(f => `- ${f.name}: ${f.error}`).join('\n');
+        console.warn(`⚠️ Managed output failed validation (attempt ${attempts}): ${invalidFiles.map(f => f.name).join(', ')}`);
+        await managedAgent.startTurn(session, repairMessage);
+        session.managedTurn.repairAttempts = attempts;
+        session.managedTurn.autoLoadedFeatureId = turn.autoLoadedFeatureId || null;
+        session.managedTurn.isRefinement = turn.isRefinement;
+        session.managedTurn.message = turn.message;
+        await persistSessionToMongo(session);
+        return res.json({
+          success: true,
+          pending: true,
+          status: 'running',
+          progress: {
+            currentActivity: `Fixing a syntax error in ${invalidFiles[0].name}`,
+            recentActivities: [`Validating generated files`, `Fixing a syntax error in ${invalidFiles[0].name}`],
+            toolUseCount: 0,
+            elapsedMs: Date.now() - (turn.startedAt || Date.now())
+          }
+        });
+      }
+      const detail = invalidFiles.map(f => `${f.name} (${f.error})`).join('; ');
+      const error = `Generated files still have syntax errors after repair attempts: ${detail}. Nothing was saved -- please rephrase the request and try again.`;
+      session.chatHistory.push({ role: 'assistant', content: `Error: ${error}`, timestamp: Date.now(), isError: true });
+      session.managedTurn = null;
+      session.lastManagedResult = { success: false, error };
+      await persistSessionToMongo(session);
+      return res.json(session.lastManagedResult);
+    }
+
+    // Merge the sandbox output files into the session, resolve the feature
+    // id from manifest.json, and save the draft.
     const isRefinement = !!turn.isRefinement;
     const hasNewFiles = poll.files && Object.keys(poll.files).length > 0;
     const previousFeatureId = session.featureId || turn.autoLoadedFeatureId || null;
@@ -1760,17 +1999,10 @@ app.delete('/api/session/:sessionId', async (req, res) => {
 
 // List chat users dynamically so newly-authenticated users appear in UI.
 app.get('/api/users', async (req, res) => {
-  try {
-    const users = await getAvailableUsers(true);
-    res.json({ success: true, users });
-  } catch (error) {
-    console.error('Failed to list available users:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message || 'Failed to load users',
-      users: DEFAULT_AVAILABLE_USERS.slice()
-    });
-  }
+  // Retired: this fed the account-picker dropdown, and doubled as
+  // unauthenticated enumeration of every user's email. Users act only as
+  // themselves now (signed identity from the Gmail app).
+  return res.status(410).json({ success: false, error: 'User selection has been removed; identity comes from the Gmail app.' });
 });
 
 // =====================================================

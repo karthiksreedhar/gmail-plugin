@@ -463,4 +463,4 @@ Output ONLY the markdown content, no code blocks wrapping it.` }
   }
 }
 
-module.exports = { FeatureGeneratorAgent };
+module.exports = { FeatureGeneratorAgent, validateGeneratedFile };
