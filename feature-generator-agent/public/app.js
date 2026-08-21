@@ -1844,7 +1844,7 @@ function addChatPipelineButtons(actions, opts = {}) {
         chipWrap.style.cssText = 'margin:2px 0 10px 44px;';
         const chip = document.createElement('button');
         chip.innerHTML = primary.label;
-        chip.style.cssText = 'padding:4px 14px; border-radius:14px; border:1px solid #dadce0; background:#fff; color:#3c4043; cursor:pointer; font-size:12px;';
+        chip.className = 'chat-chip';
         chip.addEventListener('click', async () => {
           chip.disabled = true; chip.style.opacity = '0.5';
           try { await primary.run(); } finally { chipWrap.remove(); }
@@ -1880,7 +1880,7 @@ function addNewFeatureConfirmButtons() {
   const mk = (label, text) => {
     const btn = document.createElement('button');
     btn.textContent = label;
-    btn.style.cssText = 'padding:6px 14px; border-radius:16px; border:1px solid #dadce0; background:#fff; cursor:pointer; font-size:13px;';
+    btn.className = 'chat-chip';
     btn.addEventListener('click', () => {
       wrap.remove();
       messageInput.value = text;
@@ -3353,21 +3353,22 @@ function addCategorySuggestionTrigger() {
   if (!chipRow) {
     chipRow = document.createElement('div');
     chipRow.id = 'chatQuickActions';
-    chipRow.style.cssText = 'display:flex; gap:8px; padding:6px 16px; flex-wrap:wrap;';
+    // Styled like the feature-selector bar (theme vars, not hardcoded white).
+    chipRow.className = 'chat-quick-actions';
     const mkChip = (id, label, onClick) => {
       const chip = document.createElement('button');
       chip.id = id;
       chip.innerHTML = label;
-      chip.style.cssText = 'padding:4px 12px; border-radius:14px; border:1px solid #dadce0; background:#fff; color:#3c4043; cursor:pointer; font-size:12px; line-height:18px;';
-      chip.addEventListener('mouseenter', () => { chip.style.background = '#f1f3f4'; });
-      chip.addEventListener('mouseleave', () => { chip.style.background = '#fff'; });
+      chip.className = 'chat-chip';
       chip.addEventListener('click', onClick);
       return chip;
     };
     chipRow.appendChild(mkChip('categorySuggestionTriggerBtn', '📂 Suggest categories', triggerCategorySuggestions));
     chipRow.appendChild(mkChip('responseTemplateTriggerBtn', '📝 Response templates', triggerResponseTemplateSuggestions));
-    const userSelector = document.getElementById('userSelector');
-    userSelector.parentNode.insertBefore(chipRow, userSelector.nextSibling);
+    // Chips take the same slot the feature dropdown uses in Build mode:
+    // the contextual bar directly above the composer.
+    const inputArea = document.querySelector('.input-area');
+    inputArea.parentNode.insertBefore(chipRow, inputArea);
   }
   chipRow.style.display = currentMode === 'chat' ? 'flex' : 'none';
 }
