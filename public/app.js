@@ -201,51 +201,11 @@
             return resolvedFeatureGeneratorUrl;
         }
 
-        // The signed link is prefetched so the click usually opens instantly.
-        // Signed links carry a 24h expiry, so a page left open for days still
-        // refreshes it on demand.
-        let prefetchedFgLink = null;
-        let prefetchedFgLinkAt = 0;
-        async function fetchSignedFgLink() {
-            const resp = await fetch('/api/feature-generator-link');
-            const data = await resp.json().catch(() => ({}));
-            if (resp.ok && data && data.success && data.url) {
-                prefetchedFgLink = data.url;
-                prefetchedFgLinkAt = Date.now();
-                return data.url;
-            }
-            return null;
-        }
-        // Warm it shortly after load; failures are fine (click path refetches).
-        setTimeout(() => { fetchSignedFgLink().catch(() => {}); }, 3000);
-
-        async function openFeatureGenerator() {
-            // Open the tab SYNCHRONOUSLY in the click gesture: an await before
-            // window.open both feels laggy and risks the popup blocker. The
-            // tab shows about:blank for the instant the link fetch needs.
-            const linkIsFresh = prefetchedFgLink && (Date.now() - prefetchedFgLinkAt) < 12 * 60 * 60 * 1000;
-            if (linkIsFresh) {
-                window.open(prefetchedFgLink, '_blank', 'noopener');
-                fetchSignedFgLink().catch(() => {});
-                return;
-            }
-            const tab = window.open('about:blank', '_blank');
-            try {
-                const url = await fetchSignedFgLink();
-                if (url && tab) { tab.location = url; return; }
-                // Fallback for older deployments: unsigned link (the FG will
-                // refuse to act on it, but at least the page opens).
-                const targetUrl = await getFeatureGeneratorUrl();
-                const currentUserEmail = getActualCurrentUserEmail().toLowerCase();
-                const fallback = new URL(targetUrl);
-                if (currentUserEmail && currentUserEmail.includes('@')) {
-                    fallback.searchParams.set('userEmail', currentUserEmail);
-                }
-                if (tab) tab.location = fallback.toString();
-            } catch (error) {
-                if (tab) tab.close();
-                console.error('Failed to open feature generator:', error);
-            }
+        function openFeatureGenerator() {
+            // Same-origin server route that 302s to the signed FG link:
+            // synchronous open (no popup-blocker risk, no about:blank limbo),
+            // and the signature is minted fresh on every click.
+            window.open('/open-feature-generator', '_blank');
         }
 
         function featureStatusLabel(feature) {
