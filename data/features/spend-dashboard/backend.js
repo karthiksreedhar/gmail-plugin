@@ -639,6 +639,11 @@ module.exports = {
     th, td { text-align:left; padding:10px 12px; border-bottom:1px solid #eef1f4; font-size:13px; }
     th { color:#5f6368; font-weight:600; font-size:11px; text-transform:uppercase; letter-spacing:.4px; background:#fbfcfe; }
     td.amt, th.amt { text-align:right; font-variant-numeric: tabular-nums; }
+    th.sortable { cursor:pointer; user-select:none; white-space:nowrap; }
+    th.sortable:hover { color:#1a73e8; }
+    th.sortable.active { color:#1a73e8; }
+    th.sortable .arrow { font-size:10px; color:#9aa0a6; }
+    th.sortable.active .arrow { color:#1a73e8; }
     .pill { display:inline-block; padding:2px 8px; border-radius:999px; background:#e8f0fe; color:#1a56c4; font-size:11px; font-weight:600; }
     .muted { color:#5f6368; font-size:12px; }
     .warn { background:#fef7e0; border:1px solid #fde293; color:#8a6d00; padding:10px 14px; border-radius:8px; margin-bottom:16px; font-size:13px; }
@@ -677,6 +682,12 @@ module.exports = {
 
     var DEFAULT_ORDER = ['stats', 'month', 'category', 'merchants', 'transactions'];
     var savedOrder = DEFAULT_ORDER.slice();
+
+    // Transactions-table sort state (kept across re-renders).
+    var txData = [];
+    var txCurrency = 'USD';
+    var sortKey = 'date';
+    var sortDir = 'desc';
 
     function esc(v) {
       return String(v == null ? '' : v).replace(/[&<>"']/g, function (s) {
@@ -739,6 +750,76 @@ module.exports = {
         '</section>';
     }
 
+    // --- Sortable transactions table ---
+    function txCompare(a, b) {
+      var dir = sortDir === 'asc' ? 1 : -1;
+      if (sortKey === 'amount') {
+        return ((Number(a.amount) || 0) - (Number(b.amount) || 0)) * dir;
+      }
+      if (sortKey === 'date') {
+        var da = new Date(a.date || 0).getTime() || 0;
+        var db = new Date(b.date || 0).getTime() || 0;
+        return (da - db) * dir;
+      }
+      var va = String(a[sortKey] || '').toLowerCase();
+      var vb = String(b[sortKey] || '').toLowerCase();
+      if (va < vb) return -1 * dir;
+      if (va > vb) return 1 * dir;
+      return 0;
+    }
+
+    function txHeaderHtml() {
+      function th(label, key, extraClass) {
+        var active = (key === sortKey);
+        var arrow = active ? (sortDir === 'asc' ? '\u25B2' : '\u25BC') : '\u21C5';
+        var cls = 'sortable' + (extraClass ? (' ' + extraClass) : '') + (active ? ' active' : '');
+        var title = 'Sort by ' + label + (active ? (sortDir === 'asc' ? ' (ascending)' : ' (descending)') : '');
+        return '<th class="' + cls + '" data-sort="' + key + '" title="' + esc(title) + '">' +
+          esc(label) + ' <span class="arrow">' + arrow + '</span></th>';
+      }
+      return '<tr>' + th('Date', 'date') + th('Merchant', 'merchant') + th('Category', 'category') +
+        '<th>Email</th>' + th('Amount', 'amount', 'amt') + '</tr>';
+    }
+
+    function txRowsHtml() {
+      var sorted = txData.slice().sort(txCompare);
+      return sorted.map(function (t) {
+        return '<tr>' +
+          '<td>' + esc(fmtDate(t.date)) + '</td>' +
+          '<td>' + esc(t.merchant) + '</td>' +
+          '<td><span class="pill">' + esc(t.category) + '</span></td>' +
+          '<td class="muted">' + esc(t.subject) + '</td>' +
+          '<td class="amt">' + esc(money(t.amount, t.currency || txCurrency)) + '</td>' +
+          '</tr>';
+      }).join('');
+    }
+
+    function bindTxSort() {
+      var ths = document.querySelectorAll('#txHead th.sortable');
+      Array.prototype.forEach.call(ths, function (th) {
+        th.addEventListener('click', function () {
+          var key = th.getAttribute('data-sort');
+          if (key === sortKey) {
+            sortDir = (sortDir === 'asc') ? 'desc' : 'asc';
+          } else {
+            sortKey = key;
+            // Numeric/date columns default to descending, text to ascending.
+            sortDir = (key === 'date' || key === 'amount') ? 'desc' : 'asc';
+          }
+          applyTxSort();
+        });
+      });
+    }
+
+    // Re-sort in place so the widget's position (drag order) is preserved.
+    function applyTxSort() {
+      var head = document.getElementById('txHead');
+      var body = document.getElementById('txTbody');
+      if (head) head.innerHTML = txHeaderHtml();
+      if (body) body.innerHTML = txRowsHtml();
+      bindTxSort();
+    }
+
     function render(data) {
       var agg = data.aggregates || {};
       var tx = data.transactions || [];
@@ -772,18 +853,11 @@ module.exports = {
         '<div class="stat"><div class="label">Categories</div><div class="value">' + esc((agg.byCategory || []).length) + '</div></div>' +
         '</div>';
 
-      var rows = tx.map(function (t) {
-        return '<tr>' +
-          '<td>' + esc(fmtDate(t.date)) + '</td>' +
-          '<td>' + esc(t.merchant) + '</td>' +
-          '<td><span class="pill">' + esc(t.category) + '</span></td>' +
-          '<td class="muted">' + esc(t.subject) + '</td>' +
-          '<td class="amt">' + esc(money(t.amount, t.currency || cur)) + '</td>' +
-          '</tr>';
-      }).join('');
-
-      var tableHtml = '<table><thead><tr><th>Date</th><th>Merchant</th><th>Category</th><th>Email</th><th class="amt">Amount</th></tr></thead>' +
-        '<tbody>' + rows + '</tbody></table>';
+      // Feed the sortable-table helpers, then build the table from current sort state.
+      txData = tx;
+      txCurrency = cur;
+      var tableHtml = '<table><thead id="txHead">' + txHeaderHtml() + '</thead>' +
+        '<tbody id="txTbody">' + txRowsHtml() + '</tbody></table>';
 
       // Each movable widget keyed by a stable id.
       var widgetsById = {
@@ -805,6 +879,7 @@ module.exports = {
 
       var container = document.getElementById('widgets');
       if (container) makeDraggable(container);
+      bindTxSort();
 
       if (data.updatedAt) {
         subline.innerHTML = 'Showing <strong>' + esc(rangeLabel) + '</strong>. Last updated ' +
