@@ -31,6 +31,11 @@ merchants and a full transaction table.
   category breakdown, top merchants, transactions table) can be dragged by its
   header to reorder the dashboard. Your layout is saved per user and restored on
   future visits — it survives period changes and inbox rescans.
+- **Sortable transactions.** Click any of the **Date**, **Merchant**,
+  **Category** or **Amount** column headers to sort the transactions table.
+  Clicking again toggles ascending/descending (an arrow shows the active column).
+  Date and Amount start descending (newest / largest first); text columns start
+  ascending. Sorting happens in place, so it never disturbs your widget order.
 - **Caches results** per user so the dashboard opens instantly after the first
   run. It only re-runs the extraction when your receipt set changes or you press
   **Rescan inbox**.
@@ -44,7 +49,9 @@ merchants and a full transaction table.
    months).
 4. Drag any widget by its header to rearrange the dashboard; the order is saved
    automatically.
-5. Use **Rescan inbox** to force a fresh extraction after new receipts arrive.
+5. Click the **Date**, **Merchant**, **Category** or **Amount** header in the
+   transactions table to sort by that column; click again to reverse the order.
+6. Use **Rescan inbox** to force a fresh extraction after new receipts arrive.
 
 ## Categories
 
