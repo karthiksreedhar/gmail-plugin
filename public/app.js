@@ -2271,14 +2271,31 @@ async function updateEmailCategory(emailId, newCategory, oldCategory) {
                         } else if (data.text) {
                             slot.className = '';
                             slot.textContent = data.text;
-                        } else {
-                            markRestoreFailed('error');
-                            return;
+                        }
+                        // No text and no html is not an error here: the fetch
+                        // may still have produced attachments, handled below.
+
+                        // Attachments the stored record never knew about.
+                        if (Array.isArray(data.attachments) && data.attachments.length) {
+                            const attSlot = document.getElementById(slotId + '_att');
+                            if (attSlot && !attSlot.innerHTML.trim()) {
+                                attSlot.innerHTML = renderMessageAttachments({
+                                    ...message,
+                                    attachments: data.attachments,
+                                    gmailMessageId: data.messageId || message.gmailMessageId
+                                });
+                            }
                         }
 
-                        // Full text is in, so the notice no longer applies.
-                        const notice = document.getElementById(slotId + '_trunc');
-                        if (notice && notice.parentNode) notice.parentNode.removeChild(notice);
+                        // Clear the "shortened" notice ONLY if real content
+                        // actually arrived. Removing it after an empty response
+                        // would present the stored prefix as the whole message.
+                        if (data.html || data.text) {
+                            const notice = document.getElementById(slotId + '_trunc');
+                            if (notice && notice.parentNode) notice.parentNode.removeChild(notice);
+                        } else if (message.bodyTruncated) {
+                            markRestoreFailed('error');
+                        }
 
                         // Keep the reply composer's source text in sync: reply
                         // generation posts whatever is in #emailBodyInput, and
@@ -2390,8 +2407,12 @@ async function updateEmailCategory(emailId, newCategory, oldCategory) {
                 const bodyHtml = `<div id="${htmlSlotId}">${plainBody}</div>${truncNotice}`;
                 // The last message is the one the composer replies to.
                 if (idx === lastIdx) m.__isPrimaryMessage = true;
-                if (m.hasHtml || m.bodyTruncated) scheduleBodyRestore(htmlSlotId, m);
-                const attachmentsHtml = renderMessageAttachments(m);
+                // Always restore, not just when we know there is something to
+                // get. Records synced before attachment parsing existed carry
+                // no `attachments` at all, so "fetch only if we already know"
+                // would leave every old email looking like it had none.
+                scheduleBodyRestore(htmlSlotId, m);
+                const attachmentsHtml = `<div id="${htmlSlotId}_att">${renderMessageAttachments(m)}</div>`;
                 const senderName = (m.from || 'Unknown Sender').split('<')[0].trim() || 'Unknown Sender';
                 const initial = senderName.charAt(0).toUpperCase() || '?';
                 const avatarColor = threadAvatarColorFor(senderName);

@@ -6892,7 +6892,12 @@ app.get('/api/message-body/:messageId', async (req, res) => {
       // this is transport, not trust.
       text,
       html,
-      hasHtml: !!html
+      hasHtml: !!html,
+      // Attachment metadata comes from this same payload. Returning it here is
+      // what lets messages synced BEFORE attachment parsing existed still show
+      // their files -- otherwise only newly-synced mail would have any, and
+      // every old email would look like it had none.
+      attachments: extractAttachmentsFromPayload(payload)
     });
   } catch (error) {
     console.error('Error fetching message body:', error);
