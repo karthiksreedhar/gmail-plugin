@@ -4778,7 +4778,7 @@ app.delete('/api/debug/category-suggestion-runs/:runId', async (req, res) => {
 const TEMPLATE_SUGGESTION_MAX_REPLIES = Math.min(1000,
   parseInt(process.env.TEMPLATE_SUGGESTION_MAX_REPLIES || '500', 10) || 500);
 const TEMPLATE_SUGGESTION_SENT_FETCH = Math.min(1000,
-  parseInt(process.env.TEMPLATE_SUGGESTION_SENT_FETCH || '800', 10) || 800);
+  parseInt(process.env.TEMPLATE_SUGGESTION_SENT_FETCH || '1000', 10) || 1000);
 const TEMPLATE_SUGGESTION_MIN_REPLIES_PER_TEMPLATE = 3;
 const TEMPLATE_SUGGESTION_MIN_REPLY_WORDS = 6;
 
