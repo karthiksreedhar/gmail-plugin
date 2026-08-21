@@ -686,19 +686,15 @@ async function runChatRequest(message) {
     // Use different endpoints based on mode
     const endpoint = currentMode === 'chat' ? '/api/email-chat' : '/api/chat';
     
-    // Build request body - include selected user for chat mode
-    const requestBody = { sessionId, message };
-    if (currentMode === 'chat' && selectedUserDropdown) {
-      const chatUser = requireSelectedUser('chatting about email data');
-      if (!chatUser) {
-        try { loadingMsg?.remove?.(); } catch (_) {}
-        setGenerating(false);
-        return;
-      }
-      requestBody.userEmail = chatUser;
-    } else {
-      const actorUserEmail = getActorUserEmail();
-      if (actorUserEmail) requestBody.userEmail = actorUserEmail;
+    // Build request body. Identity (userEmail + signed handoff) rides on
+    // EVERY send: /api/chat verifies the signature, and email-chat mode needs
+    // the user's own address now that the account picker is gone.
+    const requestBody = attachIdentity({ sessionId, message });
+    if (currentMode === 'chat' && !requestBody.userEmail) {
+      try { loadingMsg?.remove?.(); } catch (_) {}
+      addMessage('assistant', 'I could not tell whose emails to look at. Open this page from the Gmail app (the "Open Feature Generator" button) and try again.');
+      setGenerating(false);
+      return;
     }
     
     const response = await fetch(endpoint, {
