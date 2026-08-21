@@ -621,33 +621,6 @@ function shouldExposeFeature(entry) {
 // login of its own; this HMAC (keyed with the shared FEATURE_EXPORT_TOKEN) is
 // what makes "?userEmail=" trustworthy there. Session-authed on purpose --
 // the identity being signed is the session's own, never caller-chosen.
-app.get('/api/feature-generator-link', async (req, res) => {
-  try {
-    const userEmail = getEffectiveUserEmailForRequest(req);
-    if (!userEmail) {
-      return res.status(401).json({ success: false, error: 'Authentication required' });
-    }
-    if (!FEATURE_GENERATOR_URL) {
-      return res.status(404).json({ success: false, error: 'Feature generator URL is not configured' });
-    }
-    if (!FEATURE_EXPORT_TOKEN) {
-      return res.status(500).json({ success: false, error: 'FEATURE_EXPORT_TOKEN is not configured' });
-    }
-    const exp = Date.now() + 24 * 60 * 60 * 1000;
-    const sig = crypto.createHmac('sha256', FEATURE_EXPORT_TOKEN)
-      .update(`${userEmail}.${exp}`)
-      .digest('hex');
-    const url = new URL(FEATURE_GENERATOR_URL);
-    url.searchParams.set('userEmail', userEmail);
-    url.searchParams.set('identityExp', String(exp));
-    url.searchParams.set('identitySig', sig);
-    return res.json({ success: true, url: url.toString() });
-  } catch (error) {
-    console.error('Failed to build feature generator link:', error);
-    return res.status(500).json({ success: false, error: 'Failed to build link' });
-  }
-});
-
 // Client config endpoint for hosted feature-generator URL
 app.get('/api/config/feature-generator-url', (req, res) => {
   res.json({
@@ -752,6 +725,57 @@ app.use((req, res, next) => {
 
   return requestUserContext.run({ userEmail }, next);
 });
+
+// Browser-navigable variant: the button opens THIS same-origin path in a
+// new tab (instant, no fetch-then-navigate dance, immune to stale app.js),
+// and the server redirects to the freshly signed FG link.
+app.get('/open-feature-generator', (req, res) => {
+  try {
+    const userEmail = getEffectiveUserEmailForRequest(req);
+    if (!userEmail) return res.redirect('/api/auth/login');
+    if (!FEATURE_GENERATOR_URL || !FEATURE_EXPORT_TOKEN) {
+      return res.status(500).send('Feature generator is not configured (FEATURE_GENERATOR_URL / FEATURE_EXPORT_TOKEN).');
+    }
+    const exp = Date.now() + 24 * 60 * 60 * 1000;
+    const sig = crypto.createHmac('sha256', FEATURE_EXPORT_TOKEN).update(`${userEmail}.${exp}`).digest('hex');
+    const url = new URL(FEATURE_GENERATOR_URL);
+    url.searchParams.set('userEmail', userEmail);
+    url.searchParams.set('identityExp', String(exp));
+    url.searchParams.set('identitySig', sig);
+    return res.redirect(url.toString());
+  } catch (error) {
+    console.error('open-feature-generator redirect failed:', error);
+    return res.status(500).send('Failed to open the feature generator.');
+  }
+});
+
+app.get('/api/feature-generator-link', async (req, res) => {
+  try {
+    const userEmail = getEffectiveUserEmailForRequest(req);
+    if (!userEmail) {
+      return res.status(401).json({ success: false, error: 'Authentication required' });
+    }
+    if (!FEATURE_GENERATOR_URL) {
+      return res.status(404).json({ success: false, error: 'Feature generator URL is not configured' });
+    }
+    if (!FEATURE_EXPORT_TOKEN) {
+      return res.status(500).json({ success: false, error: 'FEATURE_EXPORT_TOKEN is not configured' });
+    }
+    const exp = Date.now() + 24 * 60 * 60 * 1000;
+    const sig = crypto.createHmac('sha256', FEATURE_EXPORT_TOKEN)
+      .update(`${userEmail}.${exp}`)
+      .digest('hex');
+    const url = new URL(FEATURE_GENERATOR_URL);
+    url.searchParams.set('userEmail', userEmail);
+    url.searchParams.set('identityExp', String(exp));
+    url.searchParams.set('identitySig', sig);
+    return res.json({ success: true, url: url.toString() });
+  } catch (error) {
+    console.error('Failed to build feature generator link:', error);
+    return res.status(500).json({ success: false, error: 'Failed to build link' });
+  }
+});
+
 
 app.get('/api/features', async (req, res) => {
   try {
