@@ -629,13 +629,13 @@ async function handleSend() {
       ? 'That looks like a **feature request**. Want me to send it to **Build**?'
       : 'That looks like a **question about your emails**. Want me to send it to **Chat**?');
     addChatPipelineButtons([
-      { label: `↪ Send in ${targetLabel}`, run: async () => {
+      { label: `↪ Send in ${targetLabel}`, kind: 'primary', run: async () => {
           setMode(misroute);
           addMessage('user', message);
           if (misroute === 'generate') { await runGeneratePreflight(message); }
           else { await runChatRequest(message); }
         } },
-      { label: 'Send here anyway', run: async () => {
+      { label: 'Send here anyway', kind: 'neutral', run: async () => {
           handleSend._overrideOnce = true;
           try {
             if (currentMode === 'generate') { await runGeneratePreflight(message); }
@@ -855,7 +855,10 @@ async function runChatRequest(message) {
             currentDraftSaved = true;
             updateCreatePrButton();
             addMessage('assistant', `Saved feature \`${data.featureId}\` as a draft in the main system.\n\n${draftMsg}\n\nNext step: create a GitHub pull request from this saved draft so it can be reviewed and deployed.`);
-            addChatPipelineButtons([{ label: '🔀 Create pull request', run: handleCreatePr }]);
+            addChatPipelineButtons(
+              [{ label: '🔀 Create pull request', run: handleCreatePr }],
+              { title: 'Draft saved — ready for review', text: 'Open a GitHub pull request from this draft so it can be approved and deployed.' }
+            );
             showToast('Feature draft saved', 'success');
           } else if (data.draftSave && !data.draftSave.success) {
             const err = data.draftSave.error || 'Draft save failed';
@@ -1176,7 +1179,10 @@ function watchWorkflowCompletion(featureId, stage) {
               'success',
               'pr_confirmed'
             );
-            addChatPipelineButtons([{ label: '🚀 Approve merge + deploy', run: handleApproveDeploy }]);
+            addChatPipelineButtons(
+              [{ label: '🚀 Approve merge + deploy', run: handleApproveDeploy }],
+              { title: 'Pull request is open', text: 'Approving merges it into main and deploys the feature to production.' }
+            );
             return;
           }
           if (status === 'error') {
@@ -1804,25 +1810,50 @@ function truncateEmail(email) {
 // actually ready (draft saved -> Create PR; PR open -> Approve + Deploy).
 // They reuse the same handlers and gate state as the header buttons, so
 // clicking either place is equivalent and gates stay authoritative.
-function addChatPipelineButtons(actions) {
-  const wrap = document.createElement('div');
-  wrap.className = 'chat-pipeline-buttons';
-  wrap.style.cssText = 'display:flex; gap:8px; margin:4px 0 12px 44px; flex-wrap:wrap;';
-  actions.forEach(({ label, run }) => {
+function addChatPipelineButtons(actions, opts = {}) {
+  // Rendered as a full confirmation card -- same visual weight as the
+  // Proceed/Cancel check before the agent runs -- so pipeline steps read as
+  // real decisions, not incidental links.
+  const messageDiv = document.createElement('div');
+  messageDiv.className = 'message assistant-message confirmation-message';
+
+  const avatar = document.createElement('div');
+  avatar.className = 'message-avatar';
+  avatar.textContent = '🤖';
+
+  const contentDiv = document.createElement('div');
+  contentDiv.className = 'message-content confirmation-content';
+
+  if (opts.title || opts.text) {
+    const summaryText = document.createElement('div');
+    summaryText.className = 'confirmation-text';
+    summaryText.innerHTML = `${opts.title ? `<strong>${opts.title}</strong>` : ''}${opts.text ? `<br>${opts.text}` : ''}`;
+    contentDiv.appendChild(summaryText);
+  }
+
+  const buttonsDiv = document.createElement('div');
+  buttonsDiv.className = 'confirmation-buttons';
+  actions.forEach(({ label, run, kind }, idx) => {
     const btn = document.createElement('button');
+    btn.className = kind === 'neutral'
+      ? 'btn-neutral'
+      : (idx === 0 ? 'btn-primary approve-btn' : 'btn-secondary cancel-btn');
     btn.innerHTML = label;
-    btn.style.cssText = 'padding:7px 16px; border-radius:16px; border:1px solid #1a73e8; background:#1a73e8; color:#fff; cursor:pointer; font-size:13px; font-weight:500;';
     btn.addEventListener('click', async () => {
-      // One shot: the workflow watcher posts the next step's buttons when
-      // this step actually completes.
-      wrap.querySelectorAll('button').forEach(b => { b.disabled = true; b.style.opacity = '0.5'; });
-      try { await run(); } finally { wrap.remove(); }
+      // One shot: the workflow watcher posts the next step's card when this
+      // step actually completes.
+      buttonsDiv.querySelectorAll('button').forEach(b => { b.disabled = true; b.style.opacity = '0.5'; });
+      try { await run(); } finally { messageDiv.remove(); }
     });
-    wrap.appendChild(btn);
+    buttonsDiv.appendChild(btn);
   });
-  chatMessages.appendChild(wrap);
+  contentDiv.appendChild(buttonsDiv);
+
+  messageDiv.appendChild(avatar);
+  messageDiv.appendChild(contentDiv);
+  chatMessages.appendChild(messageDiv);
   scrollToBottom();
-  return wrap;
+  return messageDiv;
 }
 
 // Quick-reply buttons under a new-feature confirmation question. Clicking
