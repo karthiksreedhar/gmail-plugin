@@ -912,6 +912,8 @@ function handleDownload() {
 }
 
 function updateCreatePrButton() {
+  // Pipeline actions live in the chat now; no header buttons remain.
+  return;
   if (!createPrBtn) return;
   const shouldShow = currentMode === 'generate' && !!currentFeatureId && currentDraftSaved;
   createPrBtn.style.display = shouldShow ? 'inline-flex' : 'none';
@@ -941,13 +943,44 @@ function updateCreatePrButton() {
   }
 }
 
+// Waiting bubble shown in the chat while a GitHub workflow runs. Keyed per
+// feature+stage so the workflow watcher can remove it when it posts the
+// completion message (or the timeout notice).
+const pipelineWaitBubbles = new Map();
+function showPipelineWait(featureId, stage, label) {
+  removePipelineWait(featureId, stage);
+  const div = document.createElement('div');
+  div.className = 'message assistant-message';
+  div.innerHTML = `
+    <div class="message-avatar">🤖</div>
+    <div class="message-content loading-message">
+      <div class="loading-header">
+        <span>${label}</span>
+        <div class="loading-dots"><span></span><span></span><span></span></div>
+        <span class="pipeline-elapsed" style="color:#5f6368; font-size:12px;"></span>
+      </div>
+    </div>`;
+  chatMessages.appendChild(div);
+  scrollToBottom();
+  const startedAt = Date.now();
+  const timer = setInterval(() => {
+    const el = div.querySelector('.pipeline-elapsed');
+    if (!el) return;
+    const secs = Math.floor((Date.now() - startedAt) / 1000);
+    el.textContent = secs >= 60 ? `${Math.floor(secs / 60)}m ${secs % 60}s` : `${secs}s`;
+  }, 1000);
+  pipelineWaitBubbles.set(`${featureId}:${stage}`, { div, timer });
+}
+function removePipelineWait(featureId, stage) {
+  const entry = pipelineWaitBubbles.get(`${featureId}:${stage}`);
+  if (!entry) return;
+  clearInterval(entry.timer);
+  entry.div.remove();
+  pipelineWaitBubbles.delete(`${featureId}:${stage}`);
+}
+
 async function handleCreatePr() {
-  if (!currentFeatureId || !createPrBtn) return;
-
-  const originalHtml = createPrBtn.innerHTML;
-  createPrBtn.disabled = true;
-  createPrBtn.innerHTML = '<span class="spinner"></span> Creating PR...';
-
+  if (!currentFeatureId) return;
   try {
     const response = await fetch(`/api/features/${encodeURIComponent(currentFeatureId)}/create-pr`, {
       method: 'POST',
@@ -963,26 +996,19 @@ async function handleCreatePr() {
       `⏳ PR creation started for \`${currentFeatureId}\`.\n\nGitHub Actions is creating a branch from \`${data.baseBranch || 'main'}\`, committing the generated files, and opening a pull request. This usually takes about a minute.\n\n**I'll post a message here the moment the workflow finishes** — no need to watch the repository. (Progress, if you're curious: ${data.workflowUrl || 'https://github.com/karthiksreedhar/gmail-plugin/actions'})`
     );
     setWorkflowGate('pr_running');
+    showPipelineWait(currentFeatureId, 'pr', 'Creating the pull request on GitHub');
     watchWorkflowCompletion(currentFeatureId, 'pr');
     showToast('PR creation requested', 'success');
   } catch (error) {
-    addMessage('assistant', `Failed to request a PR for \`${currentFeatureId}\`.\n\nError: ${error.message}`);
-    showToast(error.message || 'Failed to create PR', 'error');
-  } finally {
-    createPrBtn.innerHTML = originalHtml;
-    // Gate decides clickability: stays locked while the workflow runs,
-    // unlocks (or not) when the chat confirmation arrives.
-    updateCreatePrButton();
+    addMessage('assistant', `⚠️ The PR request hit an error (${error.message}), but the workflow may still be running on GitHub — checking the real status now, I'll confirm here either way.`);
+    setWorkflowGate('pr_running');
+    showPipelineWait(currentFeatureId, 'pr', 'Verifying PR status on GitHub');
+    watchWorkflowCompletion(currentFeatureId, 'pr');
   }
 }
 
 async function handleApproveDeploy() {
-  if (!currentFeatureId || !approveDeployBtn) return;
-
-  const originalHtml = approveDeployBtn.innerHTML;
-  approveDeployBtn.disabled = true;
-  approveDeployBtn.innerHTML = '<span class="spinner"></span> Approving...';
-
+  if (!currentFeatureId) return;
   try {
     const response = await fetch(`/api/features/${encodeURIComponent(currentFeatureId)}/approve-and-deploy`, {
       method: 'POST',
@@ -992,20 +1018,19 @@ async function handleApproveDeploy() {
     if (!response.ok || !data.success) {
       throw new Error(data.error || 'Failed to approve and deploy');
     }
-
-    addMessage(
-      'assistant',
-      `⏳ Approval accepted for \`${currentFeatureId}\`.\n\nGitHub Actions is validating and merging the generated PR into \`${data.productionBranch || 'main'}\`.\n\n**I'll post a message here when the merge workflow completes** — no need to watch the repository. (Progress, if you're curious: ${data.workflowUrl || 'https://github.com/karthiksreedhar/gmail-plugin/actions'})`
-    );
     setWorkflowGate('merge_running');
+    showPipelineWait(currentFeatureId, 'merge', 'Merging the pull request and deploying');
     watchWorkflowCompletion(currentFeatureId, 'merge');
     showToast('Approve + deploy requested', 'success');
   } catch (error) {
-    addMessage('assistant', `Failed to approve/deploy \`${currentFeatureId}\`.\n\nError: ${error.message}`);
-    showToast(error.message || 'Failed to approve/deploy', 'error');
-  } finally {
-    approveDeployBtn.innerHTML = originalHtml;
-    updateCreatePrButton();
+    // The dispatch REQUEST failing does not mean the workflow failed: GitHub
+    // may already be running it (this exact false alarm happened -- "failed"
+    // in chat, merged on GitHub). Say so honestly and watch anyway; the
+    // watcher will report the real outcome either way.
+    addMessage('assistant', `⚠️ The approve request hit an error (${error.message}), but the workflow may still be running on GitHub — checking the real status now, I'll confirm here either way.`);
+    setWorkflowGate('merge_running');
+    showPipelineWait(currentFeatureId, 'merge', 'Verifying merge status on GitHub');
+    watchWorkflowCompletion(currentFeatureId, 'merge');
   }
 }
 
@@ -1032,6 +1057,7 @@ function watchWorkflowCompletion(featureId, stage) {
   // before the completion message exists in the chat.
   const finish = (message, toast, toastType, nextGate) => {
     activePipelineWatchers.delete(key);
+    removePipelineWait(featureId, stage);
     if (nextGate) setWorkflowGate(nextGate);
     addMessage('assistant', message);
     if (toast) showToast(toast, toastType);
@@ -1083,7 +1109,9 @@ function watchWorkflowCompletion(featureId, stage) {
             return;
           }
         } else {
-          if (status === 'pr_merged') {
+          // 'deployed' counts too: the status can jump past 'pr_merged'
+          // between polls, and missing that window must not read as failure.
+          if (status === 'pr_merged' || status === 'deployed') {
             finish(
               `✅ The **${stageLabel}** GitHub Action is complete for \`${featureId}\` — the PR was merged into main.\n\nProduction deployment is now underway and typically finishes within a couple of minutes; after that the feature is live.`,
               'PR merged — deployment underway',
