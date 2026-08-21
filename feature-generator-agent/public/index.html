@@ -31,6 +31,17 @@
     <main class="main-content">
       <!-- Chat Section -->
       <section class="chat-section">
+        <!-- Mode pill: centered at the top of the chat panel -->
+        <div class="chat-panel-mode-bar">
+          <div class="mode-toggle composer-mode-toggle">
+            <button id="chatModeBtn" class="mode-btn" data-mode="chat" title="Ask about your emails (⌘J to switch)">
+              <span>💬</span> Chat
+            </button>
+            <button id="generateModeBtn" class="mode-btn active" data-mode="generate" title="Build or modify a feature (⌘J to switch)">
+              <span>🔧</span> Build
+            </button>
+          </div>
+        </div>
         <!-- User Selection (for Chat mode) -->
         <div id="userSelector" class="user-selector" style="display: none;">
           <label for="selectedUser">Query data for:</label>
@@ -40,16 +51,6 @@
         </div>
 
         <!-- Existing Feature Selection (for Generate mode) -->
-        <div id="existingFeatureSelector" class="feature-selector" style="display: none;">
-          <label for="existingFeatureDropdown">Edit existing feature:</label>
-          <select id="existingFeatureDropdown" class="user-dropdown">
-            <option value="">Select a feature...</option>
-          </select>
-          <button id="loadExistingFeatureBtn" class="btn btn-secondary" type="button">
-            Load Feature
-          </button>
-        </div>
-        
         <div id="chatMessages" class="chat-messages">
           <!-- Welcome message -->
           <div class="message assistant-message">
@@ -69,24 +70,27 @@
         </div>
 
         <!-- Input Area -->
+        <!-- Contextual bar hugs the composer: feature dropdown in Build,
+             quick-action chips in Chat (inserted here by the script). -->
+        <div id="existingFeatureSelector" class="feature-selector" style="display: none;">
+          <label for="existingFeatureDropdown">Edit existing feature:</label>
+          <select id="existingFeatureDropdown" class="user-dropdown">
+            <option value="">Select a feature...</option>
+          </select>
+          <button id="loadExistingFeatureBtn" class="btn btn-secondary" type="button">
+            Load Feature
+          </button>
+        </div>
         <div class="input-area">
-          <!-- Mode pill lives at the point of use: pick where you type. -->
-          <div class="composer-mode-row">
-            <div class="mode-toggle composer-mode-toggle">
-              <button id="chatModeBtn" class="mode-btn" data-mode="chat" title="Ask about your emails (⌘J to switch)">
-                <span>💬</span> Chat
-              </button>
-              <button id="generateModeBtn" class="mode-btn active" data-mode="generate" title="Build or modify a feature (⌘J to switch)">
-                <span>🔧</span> Build
-              </button>
-            </div>
-          </div>
           <div class="input-wrapper">
             <textarea 
               id="messageInput" 
               placeholder="Describe your feature... (e.g., 'Create a feature that shows email statistics by category with a chart')"
               rows="3"
             ></textarea>
+          </div>
+          <!-- Send sits below the textbox, left-justified. -->
+          <div class="composer-controls-row">
             <button id="sendBtn" class="btn btn-primary">
               <span class="btn-text">Generate</span>
               <span class="btn-loading" style="display: none;">
